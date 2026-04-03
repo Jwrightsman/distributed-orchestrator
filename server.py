@@ -33,8 +33,11 @@ from ollama_client import OLLAMA_URL, generate
 
 from dashboard import router as dashboard_router
 
-app = FastAPI(title="Distributed AI Orchestrator", version="0.2.0")
+app = FastAPI(title="Distributed AI Orchestrator", version="0.3.0")
 app.include_router(dashboard_router)
+
+# ── Pipeline event log (for dashboard live updates) ──────────────────
+pipeline_events: list[dict] = []   # recent events for SSE streaming
 
 # ── In-memory state ──────────────────────────────────────────────────
 nodes: dict[str, dict] = {}          # node_id -> info
@@ -86,15 +89,70 @@ async def health():
         raise HTTPException(status_code=503, detail=f"Ollama unavailable: {e}")
 
 
-# ── Local pipeline (same as before) ─────────────────────────────────
+# ── Local pipeline ───────────────────────────────────────────────────
+def _emit(event_type: str, data: dict):
+    """Push an event to the pipeline log for the dashboard."""
+    pipeline_events.append({
+        "type": event_type,
+        "time": datetime.now(timezone.utc).isoformat(),
+        **data,
+    })
+    # Keep only last 100 events
+    if len(pipeline_events) > 100:
+        pipeline_events.pop(0)
+
+
 @app.post("/pitch", response_model=PitchResponse)
 async def pitch(req: PitchRequest):
     """Run the full pipeline locally (no distributed execution)."""
     if not req.task.strip():
         raise HTTPException(status_code=400, detail="Task cannot be empty")
-    result = await run_pipeline(req.task)
+
+    _emit("pitch", {"task": req.task})
+
+    def on_plan(subtasks):
+        _emit("plan", {"task": req.task, "subtasks": [s["title"] for s in subtasks]})
+
+    def on_build(subtask, output):
+        _emit("build", {"task": req.task, "subtask": subtask["title"], "subtask_id": subtask["id"]})
+
+    def on_review_start():
+        _emit("review_start", {"task": req.task})
+
+    result = await run_pipeline(req.task, on_plan=on_plan, on_build=on_build, on_review_start=on_review_start)
     result["results"] = {str(k): v for k, v in result["results"].items()}
+    _emit("complete", {"task": req.task, "project_dir": result["project_dir"]})
     return result
+
+
+@app.get("/events")
+async def get_events(since: int = 0):
+    """Get recent pipeline events (for dashboard polling)."""
+    return {"events": pipeline_events[since:]}
+
+
+@app.get("/history")
+async def history():
+    """List past pipeline runs from the output folder."""
+    runs = []
+    if OUTPUT_DIR.exists():
+        for d in sorted(OUTPUT_DIR.iterdir(), reverse=True):
+            if d.is_dir():
+                log_file = d / "full_log.json"
+                if log_file.exists():
+                    try:
+                        log = json.loads(log_file.read_text())
+                        runs.append({
+                            "timestamp": log.get("timestamp", d.name),
+                            "task": log.get("task", "Unknown"),
+                            "subtask_count": len(log.get("plan", [])),
+                            "dir": str(d),
+                        })
+                    except json.JSONDecodeError:
+                        pass
+            if len(runs) >= 20:
+                break
+    return {"runs": runs, "count": len(runs)}
 
 
 # ── Node management ──────────────────────────────────────────────────

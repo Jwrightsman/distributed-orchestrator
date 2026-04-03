@@ -326,12 +326,20 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <button class="pitch-btn" id="pitch-btn" onclick="pitchTask()">Pitch</button>
     </div>
 
-    <h2>Pipeline Activity</h2>
+    <h2>Live Activity</h2>
+    <div id="event-log" style="margin-bottom:24px;max-height:200px;overflow-y:auto;"></div>
+
+    <h2>Pipeline Runs</h2>
     <div id="pipeline-log">
       <div class="empty-state">
         <div class="icon">-</div>
         <p>No active pipelines.<br>Pitch a task above to see agents work.</p>
       </div>
+    </div>
+
+    <h2 style="margin-top:24px">History</h2>
+    <div id="history-list">
+      <div class="empty-state"><p>No past runs yet.</p></div>
     </div>
   </div>
 </div>
@@ -453,9 +461,76 @@ document.getElementById('pitch-input').addEventListener('keydown', e => {
   if (e.key === 'Enter') pitchTask();
 });
 
+// ── Event log (live updates during pipeline runs) ──
+let eventCursor = 0;
+const EVENT_LABELS = {
+  pitch: {agent: 'PITCH', color: '#E8FF47'},
+  plan: {agent: 'PLANNER', color: '#E8FF47'},
+  build: {agent: 'BUILDER', color: '#00FFAA'},
+  review_start: {agent: 'REVIEWER', color: '#AA77FF'},
+  complete: {agent: 'DONE', color: '#00FF88'},
+};
+
+async function pollEvents() {
+  try {
+    const resp = await fetch(`/events?since=${eventCursor}`);
+    const data = await resp.json();
+    const log = document.getElementById('event-log');
+
+    data.events.forEach(ev => {
+      const label = EVENT_LABELS[ev.type] || {agent: ev.type.toUpperCase(), color: '#888'};
+      const t = new Date(ev.time).toLocaleTimeString();
+      let msg = '';
+      if (ev.type === 'pitch') msg = `Task pitched: "${ev.task}"`;
+      else if (ev.type === 'plan') msg = `Decomposed into ${ev.subtasks.length} subtasks: ${ev.subtasks.join(', ')}`;
+      else if (ev.type === 'build') msg = `Subtask ${ev.subtask_id} complete: ${ev.subtask}`;
+      else if (ev.type === 'review_start') msg = 'Reviewing combined output...';
+      else if (ev.type === 'complete') msg = `Pipeline complete. Saved to ${ev.project_dir}`;
+
+      log.innerHTML += `<div class="log-entry">
+        <span class="log-time">${t}</span>
+        <span class="log-agent" style="color:${label.color}">${label.agent}</span>
+        <span class="log-event"> ${msg}</span>
+      </div>`;
+    });
+
+    eventCursor += data.events.length;
+    if (data.events.length > 0) log.scrollTop = log.scrollHeight;
+  } catch(e) {}
+}
+
+// ── History ──
+async function loadHistory() {
+  try {
+    const resp = await fetch('/history');
+    const data = await resp.json();
+    const el = document.getElementById('history-list');
+
+    if (data.count === 0) {
+      el.innerHTML = '<div class="empty-state"><p>No past runs yet.</p></div>';
+      return;
+    }
+
+    el.innerHTML = data.runs.map(r => `
+      <div class="pipeline-card" style="padding:12px 16px;margin-bottom:6px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <div style="font-size:13px;color:#BBBBBB;flex:1;">${r.task}</div>
+          <div style="display:flex;gap:12px;align-items:center;">
+            <span style="font-family:Consolas,monospace;font-size:11px;color:#555;">${r.subtask_count} subtasks</span>
+            <span style="font-family:Consolas,monospace;font-size:11px;color:#444;">${r.timestamp}</span>
+          </div>
+        </div>
+      </div>
+    `).join('');
+  } catch(e) {}
+}
+
 // Start polling
 refresh();
+loadHistory();
 setInterval(refresh, 3000);
+setInterval(pollEvents, 2000);
+setInterval(loadHistory, 15000);
 </script>
 </body>
 </html>"""
