@@ -11,56 +11,61 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ollama_client import generate
+from config import get as get_config
 
 OUTPUT_DIR = Path("output")
 
 # ── System prompts for each agent role ──────────────────────────────────
 
-PLANNER_SYSTEM = """You are a task planner. Given a project description, break it down into 3-5 concrete subtasks that can each be completed independently by a builder agent.
+PLANNER_SYSTEM = """You are a task planner for an AI agent system. Given a project description, decompose it into 3-5 subtasks.
 
-Return ONLY a JSON array of objects, each with:
+IMPORTANT RULES:
+- Each subtask must be specific enough that a separate AI agent can complete it
+- Each subtask prompt must be detailed: explain exactly what to produce, what format, what constraints
+- Use depends_on to link tasks that need output from earlier tasks
+- Keep subtask count between 3 and 5. Do not exceed 5.
+
+Return ONLY valid JSON. No text before or after. No markdown fences.
+
+Format: a JSON array of objects with these exact keys:
 - "id": integer starting at 1
-- "title": short name for the subtask
-- "prompt": a detailed instruction that a builder agent can execute to produce the deliverable
-- "depends_on": array of subtask ids this depends on (empty array if none)
+- "title": short name (2-5 words)
+- "prompt": detailed instruction for the builder agent (at least 2 sentences)
+- "depends_on": array of integer ids this depends on (use [] if none)
 
-Example output:
-[
-  {"id": 1, "title": "Design data model", "prompt": "Design a data model for...", "depends_on": []},
-  {"id": 2, "title": "Build API endpoint", "prompt": "Create a REST API...", "depends_on": [1]}
-]
+Example:
+[{"id":1,"title":"Design data model","prompt":"Design a data model with tables, columns, and relationships for a task management app. Include user, task, and category tables with appropriate foreign keys.","depends_on":[]},{"id":2,"title":"Build API","prompt":"Create a REST API with endpoints for CRUD operations on tasks. Use the data model from the previous subtask as the foundation.","depends_on":[1]}]"""
 
-Return ONLY the JSON array. No markdown, no explanation."""
+BUILDER_SYSTEM = """You are a builder agent in a distributed AI system. You receive a task and produce the complete deliverable.
 
-BUILDER_SYSTEM = """You are a builder agent. You receive a specific task and produce the deliverable.
+RULES:
+- Produce the COMPLETE deliverable. No shortcuts, no "add more here" comments.
+- If the task asks for code: write real, runnable code with all imports and functions.
+- If the task asks for text: write polished, complete content.
+- If you receive context from previous subtasks, BUILD ON IT. Don't ignore or duplicate it.
+- Output ONLY the deliverable itself. No explanations like "here is the code" or "this implements...".
+- No TODOs, no placeholders, no "you can customize this later" comments."""
 
-Rules:
-- Be thorough and produce complete, working output
-- If the task asks for code, write real, functional code
-- If the task asks for text/copy, write polished content
-- Include everything needed — no placeholders or TODOs
-- Output ONLY the deliverable, no meta-commentary"""
-
-REVIEWER_SYSTEM = """You are a quality reviewer. You receive:
-1. The original project description
-2. The subtasks that were planned
-3. The output from each builder agent
+REVIEWER_SYSTEM = """You are a quality reviewer for an AI agent system. You receive the original task, the plan, and all builder outputs.
 
 Your job:
-- Check if the combined output actually fulfills the original request
-- Identify any gaps, errors, or inconsistencies
-- Provide a final assembled version that combines and polishes all builder outputs into a cohesive deliverable
-- Rate the overall quality: PASS, NEEDS_WORK, or FAIL
+1. Check if the combined output fulfills the original request
+2. Identify gaps, errors, or inconsistencies between builders
+3. Produce a FINAL ASSEMBLED version that merges all builder outputs into one cohesive deliverable
+4. Rate quality: PASS, NEEDS_WORK, or FAIL
 
-Format your response as:
+IMPORTANT: The Final Assembled Output must be COMPLETE and USABLE. Combine all builder outputs into a single, working result. If builders produced code, merge it into one script/file. If they produced text, merge it into one document.
+
+Format your response EXACTLY as:
+
 ## Quality Rating
-[PASS/NEEDS_WORK/FAIL]
+PASS
 
 ## Issues Found
-[list any issues, or "None"]
+None
 
 ## Final Assembled Output
-[the complete, polished deliverable combining all builder outputs]"""
+[the complete merged deliverable here]"""
 
 
 # ── Pipeline functions ──────────────────────────────────────────────────
@@ -80,8 +85,10 @@ def _extract_json(text: str) -> list:
     return json.loads(text[start : end + 1])
 
 
-async def plan(task: str, max_retries: int = 3) -> list[dict]:
+async def plan(task: str, max_retries: int | None = None) -> list[dict]:
     """Decompose a task into subtasks using the planner agent."""
+    if max_retries is None:
+        max_retries = get_config()["planner_retries"]
     for attempt in range(max_retries):
         raw = await generate(task, system=PLANNER_SYSTEM)
         try:

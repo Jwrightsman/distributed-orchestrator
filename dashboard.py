@@ -341,6 +341,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <div id="history-list">
       <div class="empty-state"><p>No past runs yet.</p></div>
     </div>
+
+    <!-- Output viewer modal -->
+    <div id="output-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.85);z-index:100;overflow-y:auto;">
+      <div style="max-width:800px;margin:40px auto;padding:28px;background:#0D0F14;border:1px solid rgba(255,255,255,0.1);border-radius:12px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+          <h2 id="modal-title" style="font-size:18px;font-weight:700;color:#F0F0F0;margin:0;"></h2>
+          <button onclick="closeModal()" style="background:none;border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:6px 14px;color:#888;cursor:pointer;font-size:12px;">Close</button>
+        </div>
+        <div id="modal-plan" style="margin-bottom:20px;"></div>
+        <div id="modal-review" style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:8px;padding:16px 20px;white-space:pre-wrap;font-family:Consolas,monospace;font-size:12.5px;color:#BBBBBB;line-height:1.6;max-height:500px;overflow-y:auto;"></div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -461,6 +473,39 @@ document.getElementById('pitch-input').addEventListener('keydown', e => {
   if (e.key === 'Enter') pitchTask();
 });
 
+// ── Output viewer modal ──
+async function viewRun(timestamp) {
+  try {
+    const resp = await fetch(`/history/${timestamp}`);
+    const data = await resp.json();
+
+    document.getElementById('modal-title').textContent = data.task;
+
+    let planHtml = '<div style="margin-bottom:12px;">';
+    data.plan.forEach(st => {
+      planHtml += `<div style="display:flex;gap:8px;padding:4px 0;">
+        <span style="font-family:Consolas,monospace;font-size:11px;color:#555;min-width:20px;">${st.id}</span>
+        <span style="font-size:13px;color:#00FFAA;font-weight:600;">${st.title}</span>
+      </div>`;
+    });
+    planHtml += '</div>';
+    document.getElementById('modal-plan').innerHTML = planHtml;
+
+    document.getElementById('modal-review').textContent = data.review || 'No review output.';
+    document.getElementById('output-modal').style.display = 'block';
+  } catch(e) {
+    console.error('Failed to load run:', e);
+  }
+}
+
+function closeModal() {
+  document.getElementById('output-modal').style.display = 'none';
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeModal();
+});
+
 // ── Event log (live updates during pipeline runs) ──
 let eventCursor = 0;
 const EVENT_LABELS = {
@@ -512,12 +557,13 @@ async function loadHistory() {
     }
 
     el.innerHTML = data.runs.map(r => `
-      <div class="pipeline-card" style="padding:12px 16px;margin-bottom:6px;">
+      <div class="pipeline-card" style="padding:12px 16px;margin-bottom:6px;cursor:pointer;" onclick="viewRun('${r.timestamp}')">
         <div style="display:flex;justify-content:space-between;align-items:center;">
           <div style="font-size:13px;color:#BBBBBB;flex:1;">${r.task}</div>
           <div style="display:flex;gap:12px;align-items:center;">
             <span style="font-family:Consolas,monospace;font-size:11px;color:#555;">${r.subtask_count} subtasks</span>
             <span style="font-family:Consolas,monospace;font-size:11px;color:#444;">${r.timestamp}</span>
+            <span style="font-size:11px;color:#00FFAA;">view</span>
           </div>
         </div>
       </div>

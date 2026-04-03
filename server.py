@@ -155,6 +155,34 @@ async def history():
     return {"runs": runs, "count": len(runs)}
 
 
+@app.get("/history/{timestamp}")
+async def history_detail(timestamp: str):
+    """Get full details of a past pipeline run."""
+    run_dir = OUTPUT_DIR / timestamp
+    if not run_dir.exists():
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    log_file = run_dir / "full_log.json"
+    if not log_file.exists():
+        raise HTTPException(status_code=404, detail="Log file not found")
+
+    try:
+        log = json.loads(log_file.read_text())
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=500, detail="Corrupt log file")
+
+    review_file = run_dir / "review.md"
+    review_content = review_file.read_text() if review_file.exists() else ""
+
+    return {
+        "task": log.get("task"),
+        "timestamp": log.get("timestamp"),
+        "plan": log.get("plan", []),
+        "results": log.get("results", {}),
+        "review": review_content,
+    }
+
+
 # ── Node management ──────────────────────────────────────────────────
 @app.post("/nodes/register")
 async def register_node(reg: NodeRegistration):
