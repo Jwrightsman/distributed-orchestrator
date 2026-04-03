@@ -1,5 +1,5 @@
 # Distributed AI Orchestrator
-experimental, not secure, trusted-network only.
+# Experimental, not secure, trusted-network only.
 A collectively-owned AI system powered by consumer hardware. Pitch an idea, watch AI agents decompose it into subtasks, build each piece, and assemble a final deliverable — all running on local machines, no cloud APIs.
 
 ## How it works
