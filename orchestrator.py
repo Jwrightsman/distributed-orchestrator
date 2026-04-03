@@ -80,10 +80,19 @@ def _extract_json(text: str) -> list:
     return json.loads(text[start : end + 1])
 
 
-async def plan(task: str) -> list[dict]:
+async def plan(task: str, max_retries: int = 3) -> list[dict]:
     """Decompose a task into subtasks using the planner agent."""
-    raw = await generate(task, system=PLANNER_SYSTEM)
-    return _extract_json(raw)
+    for attempt in range(max_retries):
+        raw = await generate(task, system=PLANNER_SYSTEM)
+        try:
+            subtasks = _extract_json(raw)
+            if not subtasks:
+                raise ValueError("Planner returned empty subtask list")
+            return subtasks
+        except (ValueError, json.JSONDecodeError) as e:
+            if attempt == max_retries - 1:
+                raise ValueError(f"Planner failed to produce valid JSON after {max_retries} attempts: {e}")
+    return []
 
 
 async def build(subtask: dict, context: str = "") -> str:
@@ -110,13 +119,20 @@ async def review(task: str, subtasks: list[dict], results: dict[int, str]) -> st
 
 # ── Full pipeline ───────────────────────────────────────────────────────
 
-async def run_pipeline(task: str) -> dict:
+async def run_pipeline(task: str, on_plan=None, on_build=None, on_review_start=None) -> dict:
     """Run the full planner -> builder -> reviewer pipeline.
+
+    Optional callbacks for live progress:
+      on_plan(subtasks)          — called after planning completes
+      on_build(subtask, output)  — called after each builder finishes
+      on_review_start()          — called when reviewer begins
 
     Returns a dict with the plan, individual results, and final review.
     """
     # 1. Plan
     subtasks = await plan(task)
+    if on_plan:
+        on_plan(subtasks)
 
     # 2. Build (respecting dependencies)
     results: dict[int, str] = {}
@@ -130,8 +146,12 @@ async def run_pipeline(task: str) -> dict:
                 context_parts.append(f"[{label}]:\n{results[dep_id]}")
         context = "\n\n".join(context_parts)
         results[st["id"]] = await build(st, context)
+        if on_build:
+            on_build(st, results[st["id"]])
 
     # 3. Review
+    if on_review_start:
+        on_review_start()
     review_output = await review(task, subtasks, results)
 
     # 4. Save everything
