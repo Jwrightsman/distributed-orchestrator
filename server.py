@@ -31,7 +31,10 @@ import httpx
 from orchestrator import run_pipeline, plan, review, BUILDER_SYSTEM
 from ollama_client import OLLAMA_URL, generate
 
+from dashboard import router as dashboard_router
+
 app = FastAPI(title="Distributed AI Orchestrator", version="0.2.0")
+app.include_router(dashboard_router)
 
 # ── In-memory state ──────────────────────────────────────────────────
 nodes: dict[str, dict] = {}          # node_id -> info
