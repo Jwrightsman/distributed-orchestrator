@@ -71,11 +71,21 @@ async def register(server: str, node_id: str) -> dict:
 
 
 async def poll_and_execute(server: str, node_id: str, session: dict) -> str | None:
-    """Poll the orchestrator for tasks, execute them, return task_id or None."""
+    """Poll the orchestrator for tasks, execute them, return task_id or None.
+
+    The server long-polls up to 25s before returning 204, so this call
+    blocks for up to ~25s when there's no work — no tight polling loop needed.
+    """
     async with httpx.AsyncClient(timeout=600) as client:
         resp = await client.get(f"{server}/tasks/next", params={"node_id": node_id})
         if resp.status_code == 204:
-            return None  # No work available
+            return None  # No work available (long-poll timed out)
+        if resp.status_code == 429:
+            # Circuit breaker tripped — back off for the indicated duration
+            retry_after = resp.json().get("retry_after", 60)
+            console.print(f"[yellow]Circuit breaker open — sitting out {retry_after}s[/yellow]")
+            await asyncio.sleep(retry_after)
+            return None
 
         resp.raise_for_status()
         task = resp.json()
@@ -181,14 +191,15 @@ async def main():
                 console.print(f"[green]Reconnected.[/green] {reg.get('message', '')}\n")
                 registered = True
 
-            task_id = await poll_and_execute(server, node_id, session)
-            if task_id is None:
-                await asyncio.sleep(3)
+            # Server long-polls up to 25s — this call already blocks while waiting.
+            # No sleep needed between polls; just loop immediately.
+            await poll_and_execute(server, node_id, session)
 
         except httpx.ConnectError:
             if registered:
                 console.print("[yellow]Lost connection to orchestrator. Retrying...[/yellow]")
             registered = False
+            idle_streak = 0
             await asyncio.sleep(10)
 
         except KeyboardInterrupt:

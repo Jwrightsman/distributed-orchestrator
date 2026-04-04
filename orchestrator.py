@@ -5,6 +5,7 @@ Takes a natural language task, decomposes it into subtasks (planner),
 executes each subtask (builder), and reviews the assembled output (reviewer).
 """
 
+import asyncio
 import json
 import re
 from datetime import datetime, timezone
@@ -21,13 +22,15 @@ OUTPUT_DIR = Path("output")
 
 # ── System prompts for each agent role ──────────────────────────────────
 
-PLANNER_SYSTEM = """You are a task planner for an AI agent system. Given a project description, decompose it into 3-5 subtasks.
+PLANNER_SYSTEM = """You are a task planner for a distributed AI agent system. Given a project description, decompose it into 3-5 subtasks that can be executed by separate AI agents — ideally in parallel.
 
 IMPORTANT RULES:
-- Each subtask must be specific enough that a separate AI agent can complete it
-- Each subtask prompt must be detailed: explain exactly what to produce, what format, what constraints
-- Use depends_on to link tasks that need output from earlier tasks
+- Maximize parallelism: prefer independent subtasks (depends_on: []) wherever possible. Only add a dependency when a task genuinely needs the output of a previous one.
+- Each subtask must be specific enough that a separate AI agent can complete it without asking follow-up questions.
+- Each subtask prompt must be detailed: explain exactly what to produce, what format, what constraints.
 - Keep subtask count between 3 and 5. Do not exceed 5.
+- Bad plan: 1→2→3→4→5 (fully sequential, no parallelism)
+- Good plan: [1,2,3] run in parallel, then 4 depends on 1+2, then 5 depends on 3+4
 
 Return ONLY valid JSON. No text before or after. No markdown fences.
 
@@ -35,10 +38,10 @@ Format: a JSON array of objects with these exact keys:
 - "id": integer starting at 1
 - "title": short name (2-5 words)
 - "prompt": detailed instruction for the builder agent (at least 2 sentences)
-- "depends_on": array of integer ids this depends on (use [] if none)
+- "depends_on": array of integer ids this depends on (use [] if none — prefer [] when possible)
 
 Example:
-[{"id":1,"title":"Design data model","prompt":"Design a data model with tables, columns, and relationships for a task management app. Include user, task, and category tables with appropriate foreign keys.","depends_on":[]},{"id":2,"title":"Build API","prompt":"Create a REST API with endpoints for CRUD operations on tasks. Use the data model from the previous subtask as the foundation.","depends_on":[1]}]"""
+[{"id":1,"title":"Design data model","prompt":"Design a data model with tables, columns, and relationships for a task management app. Include user, task, and category tables with appropriate foreign keys.","depends_on":[]},{"id":2,"title":"Write API spec","prompt":"Write an OpenAPI spec for a task management REST API with CRUD endpoints. Define request/response schemas for tasks, users, and categories.","depends_on":[]},{"id":3,"title":"Build API","prompt":"Implement the REST API using the data model from subtask 1 and the spec from subtask 2. Write complete, runnable Python/FastAPI code.","depends_on":[1,2]}]"""
 
 BUILDER_SYSTEM = """You are a builder agent in a distributed AI system. You receive a task and produce the complete deliverable.
 
@@ -131,7 +134,7 @@ def _validate_subtasks(subtasks: list) -> list:
         if not prompt:
             raise ValueError(f"Subtask {task_id} is missing a prompt")
 
-        # Only keep deps that reference IDs we've already seen
+        # Only keep deps that reference IDs we've already seen (no forward refs)
         raw_deps = st.get("depends_on", [])
         if not isinstance(raw_deps, list):
             raw_deps = []
@@ -151,6 +154,28 @@ def _validate_subtasks(subtasks: list) -> list:
             "prompt": prompt,
             "depends_on": depends_on,
         })
+
+    # Cycle detection via topological sort (Kahn's algorithm)
+    id_set = {st["id"] for st in cleaned}
+    in_degree = {st["id"]: 0 for st in cleaned}
+    for st in cleaned:
+        for dep in st["depends_on"]:
+            if dep in id_set:
+                in_degree[st["id"]] += 1
+
+    queue = [sid for sid, deg in in_degree.items() if deg == 0]
+    visited = 0
+    while queue:
+        node = queue.pop()
+        visited += 1
+        for st in cleaned:
+            if node in st["depends_on"]:
+                in_degree[st["id"]] -= 1
+                if in_degree[st["id"]] == 0:
+                    queue.append(st["id"])
+
+    if visited != len(cleaned):
+        raise ValueError("Planner returned a dependency cycle — retrying")
 
     return cleaned
 
@@ -303,10 +328,12 @@ async def run_pipeline(task: str, on_plan=None, on_build=None, on_review_start=N
     if on_plan:
         on_plan(subtasks)
 
-    # 2. Build (respecting dependencies)
+    # 2. Build in parallel waves — independent subtasks run concurrently.
+    #    Each wave contains all tasks whose dependencies are already resolved.
+    #    Pattern borrowed from swarms/open-multi-agent DAG execution.
     results: dict[int, str] = {}
-    for st in sorted(subtasks, key=lambda s: s["id"]):
-        # Gather context from dependencies
+
+    async def _build_one(st: dict) -> tuple[int, str]:
         context_parts = []
         for dep_id in st.get("depends_on", []):
             if dep_id in results:
@@ -314,10 +341,23 @@ async def run_pipeline(task: str, on_plan=None, on_build=None, on_review_start=N
                 label = dep_task["title"] if dep_task else f"Subtask {dep_id}"
                 context_parts.append(f"[{label}]:\n{results[dep_id]}")
         context = "\n\n".join(context_parts)
-        results[st["id"]] = await build(st, context)
+        output = await build(st, context)
         log_contribution(node_id, "compute", credits=5, task=st["title"])
         if on_build:
-            on_build(st, results[st["id"]])
+            on_build(st, output)
+        return st["id"], output
+
+    remaining = {st["id"]: st for st in subtasks}
+    while remaining:
+        # All tasks whose deps are fully resolved can run this wave
+        wave = [st for st in remaining.values()
+                if all(dep_id in results for dep_id in st.get("depends_on", []))]
+        if not wave:
+            break  # shouldn't happen — cycle detection already ran
+        wave_results = await asyncio.gather(*[_build_one(st) for st in wave])
+        for st_id, output in wave_results:
+            results[st_id] = output
+            remaining.pop(st_id)
 
     # 3. Review
     if on_review_start:
@@ -325,15 +365,27 @@ async def run_pipeline(task: str, on_plan=None, on_build=None, on_review_start=N
     review_output = await review(task, subtasks, results, memory_context=memory_context)
     log_contribution(node_id, "compute", credits=3, task="review", details=task[:100])
 
-    # 4. Revision pass if reviewer found issues
+    # 4. Revision passes — up to 2 rounds of targeted fixes when reviewer says NEEDS_WORK.
+    #    Each pass feeds the previous output back to the reviser with the outstanding issues.
+    #    Stops early if the reviser produces a blank/truncated response (sanity check).
     rating = _extract_rating(review_output)
     final_output = _extract_final_output(review_output)
     issues = _extract_issues(review_output)
 
-    if rating == "NEEDS_WORK" and issues and final_output:
+    _MAX_REVISIONS = 2
+    for _rev_pass in range(_MAX_REVISIONS):
+        if rating != "NEEDS_WORK" or not issues or not final_output:
+            break
         revised = await revise(task, issues, final_output)
-        if len(revised.strip()) > len(final_output) // 2:  # sanity: not a blank response
-            final_output = revised
+        if len(revised.strip()) <= len(final_output) // 2:
+            break  # revision came back mostly empty — don't replace
+        final_output = revised
+        # Re-extract issues from the revised text in case it introduced new markers
+        issues = _extract_issues(revised)
+        # A revision pass clears NEEDS_WORK — if issues are gone, we're done
+        if not issues:
+            rating = "PASS"
+            break
 
     # 5. Save everything
     OUTPUT_DIR.mkdir(exist_ok=True)
