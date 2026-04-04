@@ -84,8 +84,71 @@ def _init_db() -> None:
                 data TEXT NOT NULL
             )
         """)
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS jobs (
+                job_id      TEXT PRIMARY KEY,
+                task        TEXT,
+                project_id  TEXT,
+                status      TEXT,
+                submitted_at TEXT,
+                finished_at TEXT,
+                error       TEXT,
+                project_dir TEXT,
+                rating      TEXT,
+                trace_id    TEXT
+            )
+        """)
         con.commit()
         con.close()
+
+
+def _db_write_job(job: dict) -> None:
+    with _db_lock:
+        con = sqlite3.connect(_DB_PATH)
+        con.execute(
+            """INSERT OR REPLACE INTO jobs
+               (job_id, task, project_id, status, submitted_at, finished_at, error, project_dir, rating, trace_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                job["job_id"], job.get("task"), job.get("project_id"),
+                job.get("status"), job.get("submitted_at"), job.get("finished_at"),
+                job.get("error"),
+                job["result"]["project_dir"] if job.get("result") else None,
+                job["result"].get("rating") if job.get("result") else None,
+                job.get("trace_id"),
+            ),
+        )
+        con.commit()
+        con.close()
+
+
+def _db_load_jobs() -> None:
+    """Populate in-memory jobs dict from SQLite on startup (last 200 jobs)."""
+    try:
+        with _db_lock:
+            con = sqlite3.connect(_DB_PATH)
+            con.row_factory = sqlite3.Row
+            rows = con.execute(
+                "SELECT * FROM jobs ORDER BY submitted_at DESC LIMIT 200"
+            ).fetchall()
+            con.close()
+        for row in rows:
+            jid = row["job_id"]
+            if jid not in jobs:
+                jobs[jid] = {
+                    "job_id": jid,
+                    "task": row["task"],
+                    "project_id": row["project_id"],
+                    "status": row["status"],
+                    "submitted_at": row["submitted_at"],
+                    "finished_at": row["finished_at"],
+                    "error": row["error"],
+                    "result": {"project_dir": row["project_dir"], "rating": row["rating"]}
+                             if row["project_dir"] else None,
+                    "trace_id": row["trace_id"],
+                }
+    except Exception:
+        pass  # non-fatal — in-memory state is still usable
 
 def _db_write_event(event_type: str, event_time: str, data: dict) -> int:
     blob = {k: v for k, v in data.items() if k not in ("type", "time")}
@@ -213,6 +276,7 @@ class TaskResult(BaseModel):
 @app.on_event("startup")
 async def _start_background_tasks():
     _init_db()
+    _db_load_jobs()
     asyncio.create_task(_cleanup_stale_nodes())
 
 
@@ -402,6 +466,7 @@ async def pitch_async(req: PitchRequest, request: Request):
         "error": None,
         "trace_id": trace_id,
     }
+    _db_write_job(jobs[job_id])
     asyncio.create_task(_run_job(job_id, req.task, req.project_id, trace_id))
     return {"job_id": job_id, "status": "queued", "project_id": req.project_id, "trace_id": trace_id}
 
@@ -442,12 +507,38 @@ async def _run_job(job_id: str, task: str, project_id: str | None = None, trace_
         _emit("error", {"task": task, "job_id": job_id, "message": str(e), "trace_id": trace_id})
 
     jobs[job_id]["finished_at"] = datetime.now(timezone.utc).isoformat()
+    _db_write_job(jobs[job_id])
 
 
 @app.get("/jobs/{job_id}")
 async def get_job(job_id: str):
-    """Get the status and result of an async job."""
+    """Get the status and result of an async job.
+
+    Falls back to SQLite for jobs not in the current in-memory store
+    (e.g. jobs that completed before the last server restart).
+    """
     if job_id not in jobs:
+        # Try SQLite
+        try:
+            with _db_lock:
+                con = sqlite3.connect(_DB_PATH)
+                con.row_factory = sqlite3.Row
+                row = con.execute("SELECT * FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
+                con.close()
+            if row:
+                return {
+                    "job_id": row["job_id"],
+                    "task": row["task"],
+                    "status": row["status"],
+                    "submitted_at": row["submitted_at"],
+                    "finished_at": row["finished_at"],
+                    "error": row["error"],
+                    "project_dir": row["project_dir"],
+                    "plan": None,
+                    "rating": row["rating"],
+                }
+        except Exception:
+            pass
         raise HTTPException(status_code=404, detail="Job not found")
     job = jobs[job_id]
     # Don't return the full results dict in the status response — keep it light
