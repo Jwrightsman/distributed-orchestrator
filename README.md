@@ -31,6 +31,24 @@ pip install fastapi uvicorn httpx rich
 ollama pull gemma3:4b
 ```
 
+### Verify your setup
+
+After installing, run this to confirm everything is wired up correctly:
+
+```
+python status.py
+```
+
+Expected output:
+
+```
+Ollama        ✓  running at http://localhost:11434
+Model         ✓  gemma3:4b loaded
+Config        ✓  timeout=600s, retries=3
+```
+
+If Ollama isn't running, start it with `ollama serve` and re-run. If the model is missing, run `ollama pull gemma3:4b`.
+
 ### CLI
 
 ```bash
