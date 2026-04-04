@@ -1,5 +1,6 @@
 """Thin wrapper around the Ollama HTTP API."""
 
+import json as _json
 import httpx
 
 from config import get as get_config
@@ -132,3 +133,51 @@ async def generate(prompt: str, system: str = "", model: str | None = None, role
         resp = await client.post(f"{OLLAMA_URL}/api/generate", json=payload)
         resp.raise_for_status()
         return resp.json()["response"]
+
+
+async def generate_stream(prompt: str, system: str = "", model: str | None = None, role: str | None = None):
+    """Stream tokens from Ollama one at a time (async generator).
+
+    Yields individual token strings as they arrive. If an external provider is
+    configured for this role, falls back to a single yield of the full response
+    (providers don't expose Ollama's streaming protocol).
+    """
+    _sync_globals()
+    cfg = get_config()
+
+    # External provider — no token streaming, yield the full response as one chunk
+    provider = cfg.get("provider")
+    if (
+        provider
+        and cfg.get("provider_api_key")
+        and cfg.get("provider_model")
+        and role
+        and role in cfg.get("provider_roles", [])
+    ):
+        result = await _generate_provider(prompt, system, cfg)
+        yield result
+        return
+
+    if model is None:
+        model = DEFAULT_MODEL
+
+    payload = {"model": model, "prompt": prompt, "stream": True}
+    if system:
+        payload["system"] = system
+
+    _, _, timeout = _cfg()
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        async with client.stream("POST", f"{OLLAMA_URL}/api/generate", json=payload) as resp:
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if not line:
+                    continue
+                try:
+                    chunk = _json.loads(line)
+                except _json.JSONDecodeError:
+                    continue
+                token = chunk.get("response", "")
+                if token:
+                    yield token
+                if chunk.get("done"):
+                    break

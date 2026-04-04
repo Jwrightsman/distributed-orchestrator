@@ -18,14 +18,18 @@ Usage:
 """
 
 import asyncio
+import io
 import json
+import sqlite3
+import threading
 import time
 import uuid
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, field_validator
 
 import httpx
@@ -56,8 +60,44 @@ _LONG_POLL_TIMEOUT = 25   # seconds to hold GET /tasks/next open waiting for wor
 _FAILURE_THRESHOLD = 3    # consecutive failures before blacklisting
 _BLACKLIST_DURATION = 60  # seconds a blacklisted node sits out
 
+# ── Pitch rate limiting (per IP) ──────────────────────────────────────────
+_RATE_WINDOW = 60         # seconds
+_RATE_MAX = 5             # max pitches per IP per window
+_pitch_timestamps: dict[str, list[float]] = {}   # ip -> list of recent timestamps
+
 # ── Pipeline event log (for dashboard live updates) ──────────────────
 pipeline_events: list[dict] = []   # recent events for polling fallback
+
+# ── SQLite event persistence ──────────────────────────────────────────
+_DB_PATH = Path("events.db")
+_db_lock = threading.Lock()
+
+def _init_db() -> None:
+    with _db_lock:
+        con = sqlite3.connect(_DB_PATH)
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS events (
+                id   INTEGER PRIMARY KEY,
+                type TEXT NOT NULL,
+                time TEXT NOT NULL,
+                data TEXT NOT NULL
+            )
+        """)
+        con.commit()
+        con.close()
+
+def _db_write_event(event_type: str, event_time: str, data: dict) -> int:
+    blob = {k: v for k, v in data.items() if k not in ("type", "time")}
+    with _db_lock:
+        con = sqlite3.connect(_DB_PATH)
+        cur = con.execute(
+            "INSERT INTO events (type, time, data) VALUES (?, ?, ?)",
+            (event_type, event_time, json.dumps(blob)),
+        )
+        rowid = cur.lastrowid
+        con.commit()
+        con.close()
+    return rowid
 
 # ── WebSocket connection manager ──────────────────────────────────────
 class _WSManager:
@@ -91,12 +131,21 @@ ws_manager = _WSManager()
 async def ws_events(websocket: WebSocket):
     """WebSocket endpoint — clients receive pipeline events in real time."""
     await ws_manager.connect(websocket)
-    # Send recent history so the client doesn't start blind
-    for event in pipeline_events[-20:]:
-        try:
-            await websocket.send_json(event)
-        except Exception:
-            break
+    # Replay last 20 persisted events from SQLite so new clients aren't blind
+    try:
+        with _db_lock:
+            con = sqlite3.connect(_DB_PATH)
+            con.row_factory = sqlite3.Row
+            rows = con.execute(
+                "SELECT id, type, time, data FROM events ORDER BY id DESC LIMIT 20"
+            ).fetchall()
+            con.close()
+        for row in reversed(rows):
+            blob = json.loads(row["data"])
+            blob.update({"id": row["id"], "type": row["type"], "time": row["time"]})
+            await websocket.send_json(blob)
+    except Exception:
+        pass
     try:
         while True:
             # Keep alive — ignore any incoming messages
@@ -162,6 +211,7 @@ class TaskResult(BaseModel):
 # ── Background: clean up stale nodes ────────────────────────────────────
 @app.on_event("startup")
 async def _start_background_tasks():
+    _init_db()
     asyncio.create_task(_cleanup_stale_nodes())
 
 
@@ -244,22 +294,40 @@ async def health():
 
 # ── Local pipeline ───────────────────────────────────────────────────
 def _emit(event_type: str, data: dict):
-    """Push an event to the pipeline log and broadcast to WebSocket clients."""
+    """Push an event to the pipeline log, SQLite, and broadcast to WebSocket clients."""
     event = {
         "type": event_type,
         "time": datetime.now(timezone.utc).isoformat(),
         **data,
     }
-    pipeline_events.append(event)
-    if len(pipeline_events) > 100:
-        pipeline_events.pop(0)
-    # Fire-and-forget broadcast — don't await in a sync context
+    # Token events are high-frequency — broadcast only, don't pollute the event log
+    if event_type != "token":
+        pipeline_events.append(event)
+        if len(pipeline_events) > 100:
+            pipeline_events.pop(0)
+        event["id"] = _db_write_event(event_type, event["time"], data)
     asyncio.get_event_loop().create_task(ws_manager.broadcast(event))
 
 
+def _check_rate_limit(request: Request) -> None:
+    """Raise 429 if this IP has exceeded _RATE_MAX pitches in the last _RATE_WINDOW seconds."""
+    ip = request.client.host if request.client else "unknown"
+    now = time.time()
+    window_start = now - _RATE_WINDOW
+    timestamps = [t for t in _pitch_timestamps.get(ip, []) if t > window_start]
+    if len(timestamps) >= _RATE_MAX:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit: max {_RATE_MAX} pitches per {_RATE_WINDOW}s. Try again shortly.",
+        )
+    timestamps.append(now)
+    _pitch_timestamps[ip] = timestamps
+
+
 @app.post("/pitch", response_model=PitchResponse)
-async def pitch(req: PitchRequest):
+async def pitch(req: PitchRequest, request: Request):
     """Run the full pipeline locally (no distributed execution)."""
+    _check_rate_limit(request)
     trace_id = str(uuid.uuid4())
     _emit("pitch", {"task": req.task, "trace_id": trace_id})
 
@@ -285,19 +353,42 @@ async def pitch(req: PitchRequest):
 
 @app.get("/events")
 async def get_events(since: int = 0):
-    """Get recent pipeline events (for dashboard polling)."""
-    return {"events": pipeline_events[since:]}
+    """Get pipeline events. since=0 returns last 100; since=N returns events with id > N."""
+    with _db_lock:
+        con = sqlite3.connect(_DB_PATH)
+        con.row_factory = sqlite3.Row
+        if since == 0:
+            rows = con.execute(
+                "SELECT id, type, time, data FROM events ORDER BY id DESC LIMIT 100"
+            ).fetchall()
+            rows = list(reversed(rows))
+        else:
+            rows = con.execute(
+                "SELECT id, type, time, data FROM events WHERE id > ? ORDER BY id",
+                (since,),
+            ).fetchall()
+        con.close()
+
+    events = []
+    for row in rows:
+        blob = json.loads(row["data"])
+        blob["id"]   = row["id"]
+        blob["type"] = row["type"]
+        blob["time"] = row["time"]
+        events.append(blob)
+    return {"events": events}
 
 
 # ── Async job system ─────────────────────────────────────────────────
 
 @app.post("/pitch/async")
-async def pitch_async(req: PitchRequest):
+async def pitch_async(req: PitchRequest, request: Request):
     """Submit a task and return immediately with a job_id.
 
     Poll GET /jobs/{job_id} for status and results.
     WebSocket clients on /ws/events receive live events as the job runs.
     """
+    _check_rate_limit(request)
     job_id = f"job_{int(time.time() * 1000)}"
     trace_id = str(uuid.uuid4())
     jobs[job_id] = {
@@ -330,8 +421,16 @@ async def _run_job(job_id: str, task: str, project_id: str | None = None, trace_
     def on_review_start():
         _emit("review_start", {"task": task, "job_id": job_id, "trace_id": trace_id})
 
+    def on_token(token: str, subtask: dict):
+        _emit("token", {
+            "token": token,
+            "subtask_id": subtask["id"],
+            "job_id": job_id,
+            "trace_id": trace_id,
+        })
+
     try:
-        result = await run_pipeline(task, on_plan=on_plan, on_build=on_build, on_review_start=on_review_start, project_id=project_id)
+        result = await run_pipeline(task, on_plan=on_plan, on_build=on_build, on_review_start=on_review_start, on_token=on_token, project_id=project_id)
         result["results"] = {str(k): v for k, v in result["results"].items()}
         jobs[job_id]["status"] = "complete"
         jobs[job_id]["result"] = result
@@ -462,6 +561,27 @@ async def history_detail(timestamp: str):
     }
 
 
+@app.get("/history/{timestamp}/download")
+async def download_history(timestamp: str):
+    """Download all files from a run as a ZIP archive."""
+    run_dir = OUTPUT_DIR / timestamp
+    if not run_dir.exists():
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for file_path in sorted(run_dir.rglob("*")):
+            if file_path.is_file():
+                zf.write(file_path, file_path.relative_to(run_dir))
+    zip_buffer.seek(0)
+
+    return StreamingResponse(
+        iter([zip_buffer.getvalue()]),
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename=output_{timestamp}.zip"},
+    )
+
+
 # ── Gallery ──────────────────────────────────────────────────────────
 @app.get("/gallery")
 async def gallery(limit: int = 30):
@@ -510,6 +630,36 @@ async def gallery(limit: int = 30):
 async def standings():
     """Get contributor standings sorted by credits."""
     return {"standings": get_standings()}
+
+
+@app.get("/metrics")
+async def metrics():
+    """Operational snapshot — queue depth, latency, node count, job status."""
+    s = get_standings()
+    tasks_completed_total = sum(c["compute_tasks"] for c in s)
+
+    elapsed_values = [
+        r["elapsed_seconds"]
+        for r in task_results.values()
+        if r.get("elapsed_seconds") and r["elapsed_seconds"] > 0
+    ]
+    avg_latency = round(sum(elapsed_values) / len(elapsed_values), 1) if elapsed_values else None
+
+    blacklisted_nodes = [
+        nid for nid, until in node_blacklist.items()
+        if time.time() < until
+    ]
+
+    return {
+        "tasks_completed_total": tasks_completed_total,
+        "tasks_in_queue":        len(task_queue),
+        "tasks_inflight":        len(task_inflight),
+        "nodes_online":          len(nodes),
+        "nodes_blacklisted":     len(blacklisted_nodes),
+        "jobs_running":          sum(1 for j in jobs.values() if j["status"] == "running"),
+        "jobs_queued":           sum(1 for j in jobs.values() if j["status"] == "queued"),
+        "avg_task_latency_seconds": avg_latency,
+    }
 
 
 @app.get("/ledger")

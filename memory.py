@@ -34,6 +34,34 @@ PROJECTS_DIR = Path("projects")
 # Max chars of memory context injected into prompts — keep it tight
 _MAX_MEMORY_CHARS = 2000
 
+# When memory.md exceeds this, run an auto-summarization pass
+SUMMARIZE_THRESHOLD = 3000
+
+_SUMMARIZE_SYSTEM = """You are a project memory compressor. You receive a running project memory log and compress it into a tight, factual summary that preserves all critical information: what was built, key decisions made, current state, and what still needs to be done.
+
+RULES:
+- Keep the ## Goal section intact at the top
+- Summarize all iteration entries into a single ## History section (max 800 chars)
+- Preserve the most recent iteration in full
+- Output ONLY the compressed memory document — no preamble, no "here is the summary"
+- Result must be under 1500 chars total"""
+
+
+async def _summarize_memory(content: str) -> str:
+    """Compress memory.md via Ollama when it grows too large.
+
+    Returns compressed content, or original if compression failed/truncated.
+    """
+    try:
+        from ollama_client import generate
+        compressed = await generate(content, system=_SUMMARIZE_SYSTEM)
+        compressed = compressed.strip()
+        if len(compressed) < 200:
+            return content  # sanity check — suspiciously short, keep original
+        return compressed
+    except Exception:
+        return content  # never block on memory failure
+
 
 # ── Project lifecycle ────────────────────────────────────────────────
 

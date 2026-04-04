@@ -150,6 +150,19 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  .node-breaker-badge {
+    display: inline-block;
+    font-family: 'Consolas', monospace;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    padding: 2px 7px;
+    border-radius: 3px;
+    margin-top: 4px;
+    color: #FF5555;
+    background: rgba(255,85,85,0.1);
+    border: 1px solid rgba(255,85,85,0.25);
+  }
   .credit-flash {
     position: absolute;
     right: 14px;
@@ -556,6 +569,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <span class="stat-value" id="stat-status">-</span>
     <span class="stat-label">Ollama</span>
   </div>
+  <div class="stat">
+    <span class="stat-value" id="stat-done">-</span>
+    <span class="stat-label">Tasks Done</span>
+  </div>
+  <div class="stat">
+    <span class="stat-value" id="stat-latency">-</span>
+    <span class="stat-label">Avg Latency</span>
+  </div>
 </div>
 
 <div class="main">
@@ -573,7 +594,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="empty-state"><p>No contributions yet.</p></div>
     </div>
 
-    <h2 style="margin-top:24px">Projects</h2>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:24px;margin-bottom:14px;">
+      <h2 style="margin:0;">Projects</h2>
+      <button onclick="promptNewProject()" style="background:rgba(0,255,170,0.08);border:1px solid rgba(0,255,170,0.2);border-radius:5px;padding:3px 10px;font-size:10px;font-weight:700;color:#00FFAA;cursor:pointer;">+ New</button>
+    </div>
     <div id="projects-list">
       <div class="empty-state"><p>No projects yet.</p></div>
     </div>
@@ -599,6 +623,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                placeholder="Describe what you want built...">
         <button class="pitch-btn" id="pitch-btn" onclick="pitchTask()">Pitch</button>
       </div>
+      <!-- Quick-start templates -->
+      <div id="task-templates" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:20px;"></div>
 
       <h2>Live Activity</h2>
       <div id="event-log" style="margin-bottom:24px;max-height:200px;overflow-y:auto;"></div>
@@ -633,7 +659,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div style="max-width:800px;margin:40px auto;padding:28px;background:#0D0F14;border:1px solid rgba(255,255,255,0.1);border-radius:12px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
           <h2 id="modal-title" style="font-size:18px;font-weight:700;color:#F0F0F0;margin:0;"></h2>
-          <button onclick="closeModal()" style="background:none;border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:6px 14px;color:#888;cursor:pointer;font-size:12px;">Close</button>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <button id="modal-download-btn" onclick="downloadOutput()" style="background:rgba(0,255,170,0.08);border:1px solid rgba(0,255,170,0.2);border-radius:6px;padding:6px 14px;color:#00FFAA;cursor:pointer;font-size:11px;font-weight:600;">Download</button>
+            <button onclick="closeModal()" style="background:none;border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:6px 14px;color:#888;cursor:pointer;font-size:12px;">Close</button>
+          </div>
         </div>
         <div id="modal-plan" style="margin-bottom:20px;"></div>
         <div id="modal-files" style="margin-bottom:16px;display:none;"></div>
@@ -644,18 +673,25 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 </div>
 
 <script>
-// Poll health + nodes every 3 seconds
+// Poll health + nodes + metrics every 3 seconds
 async function refresh() {
   try {
-    const [health, nodes] = await Promise.all([
+    const [health, nodes, met] = await Promise.all([
       fetch('/health').then(r => r.json()),
       fetch('/nodes').then(r => r.json()),
+      fetch('/metrics').then(r => r.json()).catch(() => null),
     ]);
 
     document.getElementById('stat-nodes').textContent = nodes.count;
     document.getElementById('stat-tasks').textContent = health.tasks_pending;
     document.getElementById('stat-models').textContent = health.models.length;
     document.getElementById('stat-status').textContent = health.ollama;
+    if (met) {
+      const latEl = document.getElementById('stat-latency');
+      if (latEl) latEl.textContent = met.avg_task_latency_seconds != null ? met.avg_task_latency_seconds + 's' : '-';
+      const doneEl = document.getElementById('stat-done');
+      if (doneEl) doneEl.textContent = met.tasks_completed_total;
+    }
 
     const nodesList = document.getElementById('nodes-list');
     if (nodes.count === 0) {
@@ -737,6 +773,11 @@ async function pitchTask() {
         <div class="pipeline-status status-running" id="pstatus-${pipelineId}">PLANNING</div>
       </div>
       <div id="pstages-${pipelineId}">${stageBarHtml(false, false, false)}</div>
+      <pre id="token-stream-${pipelineId}"
+           style="margin-top:8px;padding:8px 10px;background:rgba(0,255,136,0.03);
+                  border:1px solid rgba(0,255,136,0.1);border-radius:4px;
+                  font-size:11px;color:#888;max-height:120px;overflow-y:auto;
+                  white-space:pre-wrap;word-break:break-word;display:none;"></pre>
     </div>`;
 
   // Remove empty state if present
@@ -759,8 +800,8 @@ async function pitchTask() {
         }
         if (ev.type === 'build') buildCount++;
         if (ev.type === 'review_start') buildDone = true;
+        if (ev.id && ev.id > stageCursor) stageCursor = ev.id;
       });
-      stageCursor += d.events.length;
 
       const statusEl = document.getElementById(`pstatus-${pipelineId}`);
       const stagesEl = document.getElementById(`pstages-${pipelineId}`);
@@ -795,6 +836,12 @@ async function pitchTask() {
       body: JSON.stringify(body),
     });
     const data = await resp.json();
+
+    // Re-key the token stream element so _appendToken can find it by server job_id
+    if (data.job_id) {
+      const tsEl = document.getElementById(`token-stream-${pipelineId}`);
+      if (tsEl) tsEl.id = `token-stream-${data.job_id}`;
+    }
 
     // Distributed pitch returns full result synchronously (nodes do the work)
     // Async pitch returns {job_id, status:"queued"} and we poll for completion
@@ -946,6 +993,7 @@ function copyCode(btn) {
 
 async function viewRun(timestamp) {
   try {
+    _currentModalTimestamp = timestamp;
     const resp = await fetch(`/history/${timestamp}`);
     const data = await resp.json();
 
@@ -1004,6 +1052,8 @@ document.addEventListener('keydown', e => {
 });
 
 // ── Event log — WebSocket with polling fallback ──
+// eventCursor tracks the last SQLite rowid seen, not a count.
+// Events from /events now carry an "id" field (rowid). We set cursor = max(id seen).
 let eventCursor = 0;
 let wsConnected = false;
 
@@ -1016,7 +1066,20 @@ const EVENT_LABELS = {
   error:        {agent: 'ERROR',    color: '#FF5555'},
 };
 
+function _appendToken(ev) {
+  const el = document.getElementById(`token-stream-${ev.job_id}`);
+  if (!el) return;
+  if (el.style.display === 'none') el.style.display = 'block';
+  el.textContent += ev.token;
+  el.scrollTop = el.scrollHeight;
+}
+
 function appendEvent(ev) {
+  // Token events — route to the live stream display, never to the log
+  if (ev.type === 'token') {
+    _appendToken(ev);
+    return;
+  }
   // Handle node activity events — update node cards directly, skip log entry
   if (ev.type === 'node_busy') {
     _setNodeBusy(ev.node_id, ev.task_title);
@@ -1025,6 +1088,10 @@ function appendEvent(ev) {
   if (ev.type === 'node_idle') {
     _setNodeIdle(ev.node_id, ev.credits_earned);
     if (ev.credits_earned > 0) loadStandings();
+    return;
+  }
+  if (ev.type === 'node_blacklisted') {
+    _setNodeBlacklisted(ev.node_id, ev.blacklist_seconds);
     return;
   }
 
@@ -1080,6 +1147,26 @@ function _setNodeIdle(nodeId, creditsEarned) {
   }
 }
 
+function _setNodeBlacklisted(nodeId, seconds) {
+  const card = document.getElementById(`nodecard-${nodeId}`);
+  if (!card) return;
+  const dot = card.querySelector('.node-dot');
+  if (dot) { dot.className = 'node-dot'; dot.style.background = '#FF5555'; dot.style.boxShadow = '0 0 8px rgba(255,85,85,0.4)'; }
+  // Show or update circuit breaker badge
+  let badge = card.querySelector('.node-breaker-badge');
+  if (!badge) {
+    badge = document.createElement('div');
+    badge.className = 'node-breaker-badge';
+    card.appendChild(badge);
+  }
+  badge.textContent = `CIRCUIT OPEN — ${seconds}s`;
+  // Auto-remove badge after the blacklist expires
+  setTimeout(() => {
+    badge.remove();
+    if (dot) { dot.style.background = ''; dot.style.boxShadow = ''; }
+  }, seconds * 1000);
+}
+
 function connectWebSocket() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const ws = new WebSocket(`${proto}://${location.host}/ws/events`);
@@ -1092,7 +1179,8 @@ function connectWebSocket() {
     try {
       const ev = JSON.parse(e.data);
       appendEvent(ev);
-      eventCursor++;
+      // Track highest rowid seen so polling fallback has a correct cursor
+      if (ev.id && ev.id > eventCursor) eventCursor = ev.id;
     } catch(_) {}
   };
 
@@ -1113,7 +1201,10 @@ async function pollEvents() {
   try {
     const resp = await fetch(`/events?since=${eventCursor}`);
     const data = await resp.json();
-    data.events.forEach(ev => { appendEvent(ev); eventCursor++; });
+    data.events.forEach(ev => {
+      appendEvent(ev);
+      if (ev.id && ev.id > eventCursor) eventCursor = ev.id;
+    });
   } catch(e) {}
 }
 
@@ -1209,6 +1300,23 @@ async function loadProjects() {
   } catch(e) {}
 }
 
+async function promptNewProject() {
+  const name = prompt('Project name:');
+  if (!name || !name.trim()) return;
+  try {
+    const resp = await fetch('/projects', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: name.trim(), initial_task: ''}),
+    });
+    const data = await resp.json();
+    if (data.project_id) {
+      await loadProjects();
+      continueProject(data.project_id, data.name);
+    }
+  } catch(e) { console.error('Failed to create project', e); }
+}
+
 function continueProject(projectId, projectName) {
   document.getElementById('active-project-id').value = projectId;
   document.getElementById('project-context-name').textContent = projectName;
@@ -1280,6 +1388,43 @@ function forkTask(task) {
   input.value = task;
   input.focus();
   input.select();
+}
+
+// ── Task templates ──
+const _TEMPLATES = [
+  'Build a REST API with FastAPI and SQLite',
+  'Write a Python web scraper with BeautifulSoup',
+  'Create a CLI tool in Python with argparse',
+  'Write a data analysis script for a CSV file',
+  'Build a React component library starter',
+];
+(function renderTemplates() {
+  const el = document.getElementById('task-templates');
+  if (!el) return;
+  const label = document.createElement('span');
+  label.textContent = 'Try:';
+  label.style.cssText = 'font-size:10px;color:#444;letter-spacing:1px;text-transform:uppercase;align-self:center;margin-right:4px;white-space:nowrap;';
+  el.appendChild(label);
+  _TEMPLATES.forEach(t => {
+    const btn = document.createElement('button');
+    btn.textContent = t;
+    btn.style.cssText = 'background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:5px;padding:4px 10px;font-size:11px;color:#666;cursor:pointer;transition:all 0.15s;';
+    btn.onmouseover = () => { btn.style.borderColor='rgba(0,255,170,0.25)'; btn.style.color='#00FFAA'; };
+    btn.onmouseout  = () => { btn.style.borderColor='rgba(255,255,255,0.08)'; btn.style.color='#666'; };
+    btn.onclick = () => { document.getElementById('pitch-input').value = t; document.getElementById('pitch-input').focus(); };
+    el.appendChild(btn);
+  });
+})();
+
+// ── Output download ──
+let _currentModalTimestamp = null;
+
+function downloadOutput() {
+  if (!_currentModalTimestamp) return;
+  const a = document.createElement('a');
+  a.href = `/history/${_currentModalTimestamp}/download`;
+  a.download = `output_${_currentModalTimestamp}.zip`;
+  a.click();
 }
 
 // Start
