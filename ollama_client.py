@@ -11,16 +11,6 @@ def _cfg():
     return c["ollama_url"], c["model"], c["timeout"]
 
 
-# Expose these for other modules that import them
-@property
-def OLLAMA_URL():
-    return get_config()["ollama_url"]
-
-@property
-def DEFAULT_MODEL():
-    return get_config()["model"]
-
-# Keep module-level names for backwards compat with node.py / server.py
 OLLAMA_URL = "http://localhost:11434"
 DEFAULT_MODEL = "gemma3:4b"
 
