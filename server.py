@@ -103,6 +103,11 @@ nodes: dict[str, dict] = {}          # node_id -> info
 task_queue: list[dict] = []          # pending tasks for workers
 task_results: dict[str, dict] = {}   # task_id -> result
 task_inflight: dict[str, dict] = {}  # task_id -> task (assigned but not yet returned)
+
+# ── Async job store ──────────────────────────────────────────────────
+# Jobs allow /pitch/async to return immediately with a job_id.
+# Status: "queued" | "running" | "complete" | "failed"
+jobs: dict[str, dict] = {}          # job_id -> job record
 OUTPUT_DIR = Path("output")
 
 
@@ -240,6 +245,95 @@ async def pitch(req: PitchRequest):
 async def get_events(since: int = 0):
     """Get recent pipeline events (for dashboard polling)."""
     return {"events": pipeline_events[since:]}
+
+
+# ── Async job system ─────────────────────────────────────────────────
+
+@app.post("/pitch/async")
+async def pitch_async(req: PitchRequest):
+    """Submit a task and return immediately with a job_id.
+
+    Poll GET /jobs/{job_id} for status and results.
+    WebSocket clients on /ws/events receive live events as the job runs.
+    """
+    job_id = f"job_{int(time.time() * 1000)}"
+    jobs[job_id] = {
+        "job_id": job_id,
+        "task": req.task,
+        "status": "queued",
+        "submitted_at": datetime.now(timezone.utc).isoformat(),
+        "result": None,
+        "error": None,
+    }
+    asyncio.create_task(_run_job(job_id, req.task))
+    return {"job_id": job_id, "status": "queued"}
+
+
+async def _run_job(job_id: str, task: str):
+    """Background task: run the full pipeline for a job."""
+    jobs[job_id]["status"] = "running"
+    _emit("pitch", {"task": task, "job_id": job_id})
+
+    def on_plan(subtasks):
+        _emit("plan", {"task": task, "job_id": job_id, "subtasks": [s["title"] for s in subtasks]})
+
+    def on_build(subtask, output):
+        _emit("build", {"task": task, "job_id": job_id, "subtask": subtask["title"], "subtask_id": subtask["id"]})
+
+    def on_review_start():
+        _emit("review_start", {"task": task, "job_id": job_id})
+
+    try:
+        result = await run_pipeline(task, on_plan=on_plan, on_build=on_build, on_review_start=on_review_start)
+        result["results"] = {str(k): v for k, v in result["results"].items()}
+        jobs[job_id]["status"] = "complete"
+        jobs[job_id]["result"] = result
+        _emit("complete", {"task": task, "job_id": job_id, "project_dir": result["project_dir"]})
+    except Exception as e:
+        jobs[job_id]["status"] = "failed"
+        jobs[job_id]["error"] = str(e)
+        _emit("error", {"task": task, "job_id": job_id, "message": str(e)})
+
+    jobs[job_id]["finished_at"] = datetime.now(timezone.utc).isoformat()
+
+
+@app.get("/jobs/{job_id}")
+async def get_job(job_id: str):
+    """Get the status and result of an async job."""
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    job = jobs[job_id]
+    # Don't return the full results dict in the status response — keep it light
+    return {
+        "job_id": job["job_id"],
+        "task": job["task"],
+        "status": job["status"],
+        "submitted_at": job["submitted_at"],
+        "finished_at": job.get("finished_at"),
+        "error": job.get("error"),
+        "project_dir": job["result"]["project_dir"] if job["result"] else None,
+        "plan": job["result"]["plan"] if job["result"] else None,
+        "rating": job["result"].get("rating") if job["result"] else None,
+    }
+
+
+@app.get("/jobs")
+async def list_jobs(limit: int = 20):
+    """List recent async jobs."""
+    recent = list(jobs.values())[-limit:]
+    return {
+        "jobs": [
+            {
+                "job_id": j["job_id"],
+                "task": j["task"],
+                "status": j["status"],
+                "submitted_at": j["submitted_at"],
+                "finished_at": j.get("finished_at"),
+            }
+            for j in reversed(recent)
+        ],
+        "count": len(recent),
+    }
 
 
 @app.get("/history")
