@@ -42,21 +42,23 @@ async def ensure_ollama():
 
 
 async def main():
-    if len(sys.argv) < 2:
-        console.print("[bold]Usage:[/bold] py join.py http://ORCHESTRATOR_IP:8000")
-        console.print("\nExample:")
-        console.print("  [dim]py join.py http://192.168.1.50:8000[/dim]")
-        sys.exit(1)
+    import argparse
+    parser = argparse.ArgumentParser(description="Join the network as a worker node (one-command setup)")
+    parser.add_argument("server", help="Orchestrator URL (e.g. http://192.168.1.50:8000)")
+    parser.add_argument("--secret", default="", help="Shared secret if the orchestrator has node_secret set in config.json")
+    args = parser.parse_args()
 
-    server = sys.argv[1].rstrip("/")
+    server = args.server.rstrip("/")
     console.print(f"Joining network at [cyan]{server}[/cyan]\n")
 
     if not await ensure_ollama():
         sys.exit(1)
 
     # Delegate entirely to node.main() — it handles register, poll, Rich output
-    import sys as _sys
-    _sys.argv = ["node.py", "--server", server]
+    node_argv = ["node.py", "--server", server]
+    if args.secret:
+        node_argv += ["--secret", args.secret]
+    sys.argv = node_argv
     from node import main as node_main
     await node_main()
 

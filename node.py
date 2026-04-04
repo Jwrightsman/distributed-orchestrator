@@ -53,7 +53,12 @@ def _hardware_info() -> dict:
     return info
 
 
-async def register(server: str, node_id: str) -> dict:
+def _auth_headers(secret: str) -> dict:
+    """Build auth headers — empty dict when no secret is set."""
+    return {"X-Node-Secret": secret} if secret else {}
+
+
+async def register(server: str, node_id: str, secret: str = "") -> dict:
     """Register this node with the orchestrator."""
     hw = _hardware_info()
     info = {
@@ -65,19 +70,19 @@ async def register(server: str, node_id: str) -> dict:
         **hw,
     }
     async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.post(f"{server}/nodes/register", json=info)
+        resp = await client.post(f"{server}/nodes/register", json=info, headers=_auth_headers(secret))
         resp.raise_for_status()
         return resp.json()
 
 
-async def poll_and_execute(server: str, node_id: str, session: dict) -> str | None:
+async def poll_and_execute(server: str, node_id: str, session: dict, secret: str = "") -> str | None:
     """Poll the orchestrator for tasks, execute them, return task_id or None.
 
     The server long-polls up to 25s before returning 204, so this call
     blocks for up to ~25s when there's no work — no tight polling loop needed.
     """
     async with httpx.AsyncClient(timeout=600) as client:
-        resp = await client.get(f"{server}/tasks/next", params={"node_id": node_id})
+        resp = await client.get(f"{server}/tasks/next", params={"node_id": node_id}, headers=_auth_headers(secret))
         if resp.status_code == 204:
             return None  # No work available (long-poll timed out)
         if resp.status_code == 429:
@@ -113,6 +118,7 @@ async def poll_and_execute(server: str, node_id: str, session: dict) -> str | No
                     "output": result,
                     "elapsed_seconds": elapsed,
                 },
+                headers=_auth_headers(secret),
             )
             credits = 0
             if submit_resp.status_code == 200:
@@ -139,6 +145,7 @@ async def poll_and_execute(server: str, node_id: str, session: dict) -> str | No
                     "error": str(e),
                     "elapsed_seconds": time.time() - start,
                 },
+                headers=_auth_headers(secret),
             )
             console.print(f"[red bold]FAILED[/red bold]  {title}: {e}\n")
             return None
@@ -148,10 +155,12 @@ async def main():
     parser = argparse.ArgumentParser(description="Join the network as a worker node")
     parser.add_argument("--server", required=True, help="Orchestrator URL (e.g. http://192.168.1.50:8000)")
     parser.add_argument("--node-id", default=None, help="Custom node ID (defaults to hostname)")
+    parser.add_argument("--secret", default="", help="Shared secret for node authentication (set node_secret in orchestrator config.json)")
     args = parser.parse_args()
 
     node_id = args.node_id or platform.node()
     server = args.server.rstrip("/")
+    secret = args.secret
 
     # Pre-flight: check local Ollama
     status = await check_ollama()
@@ -169,7 +178,7 @@ async def main():
 
     # Register with orchestrator
     try:
-        reg = await register(server, node_id)
+        reg = await register(server, node_id, secret=secret)
         console.print(f"[green]Connected.[/green] {reg.get('message', '')}\n")
     except Exception as e:
         console.print(f"[red bold]Could not connect to orchestrator at {server}[/red bold]")
@@ -187,13 +196,13 @@ async def main():
         try:
             # Re-register if we lost and regained connection
             if not registered:
-                reg = await register(server, node_id)
+                reg = await register(server, node_id, secret=secret)
                 console.print(f"[green]Reconnected.[/green] {reg.get('message', '')}\n")
                 registered = True
 
             # Server long-polls up to 25s — this call already blocks while waiting.
             # No sleep needed between polls; just loop immediately.
-            await poll_and_execute(server, node_id, session)
+            await poll_and_execute(server, node_id, session, secret=secret)
 
         except httpx.ConnectError:
             if registered:

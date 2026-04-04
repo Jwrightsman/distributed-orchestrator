@@ -37,6 +37,7 @@ import httpx
 from orchestrator import run_pipeline, plan, review, BUILDER_SYSTEM
 from ollama_client import OLLAMA_URL, generate
 from ledger import get_standings, get_history, log_contribution
+from config import get as get_config
 
 from dashboard import router as dashboard_router
 
@@ -707,9 +708,25 @@ async def get_project(project_id: str):
     return {**meta, "memory_context": memory, "iterations": iterations}
 
 
+# ── Node auth ────────────────────────────────────────────────────────
+def _check_node_auth(request: Request):
+    """Raise 401 if node_secret is configured and the request doesn't present it.
+
+    Nodes must include 'X-Node-Secret: <value>' in their request headers.
+    When node_secret is empty in config, all nodes are allowed (trusted-network mode).
+    """
+    secret = get_config().get("node_secret", "")
+    if not secret:
+        return  # auth disabled
+    provided = request.headers.get("X-Node-Secret", "")
+    if provided != secret:
+        raise HTTPException(status_code=401, detail="Invalid or missing X-Node-Secret header")
+
+
 # ── Node management ──────────────────────────────────────────────────
 @app.post("/nodes/register")
-async def register_node(reg: NodeRegistration):
+async def register_node(reg: NodeRegistration, request: Request):
+    _check_node_auth(request)
     nodes[reg.node_id] = {
         "node_id": reg.node_id,
         "model": reg.model,
@@ -735,7 +752,7 @@ async def list_nodes():
 
 # ── Task distribution ────────────────────────────────────────────────
 @app.get("/tasks/next")
-async def next_task(node_id: str):
+async def next_task(node_id: str, request: Request):
     """Worker asks for the next available task.
 
     Long-polls up to _LONG_POLL_TIMEOUT seconds — holds the connection open
@@ -744,6 +761,7 @@ async def next_task(node_id: str):
 
     Returns 429 if the node is circuit-breaker blacklisted.
     """
+    _check_node_auth(request)
     if node_id in nodes:
         nodes[node_id]["last_seen"] = time.time()
 
@@ -780,7 +798,8 @@ async def next_task(node_id: str):
 
 
 @app.post("/tasks/{task_id}/result")
-async def submit_result(task_id: str, result: TaskResult):
+async def submit_result(task_id: str, result: TaskResult, request: Request):
+    _check_node_auth(request)
     """Worker submits completed task."""
     task = task_inflight.pop(task_id, None)
     trace_id = task.get("trace_id", "") if task else ""
