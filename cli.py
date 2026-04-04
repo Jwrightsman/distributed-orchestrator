@@ -71,6 +71,12 @@ async def run_task(task: str):
         border_style="magenta",
     ))
 
+    # Show extracted code files
+    if result.get("code_files"):
+        console.print(f"\n[bold green]Extracted {len(result['code_files'])} runnable file(s):[/bold green]")
+        for f in result["code_files"]:
+            console.print(f"  [dim]{f}[/dim]")
+
     elapsed = time.time() - start
     console.print(f"\n[dim]Completed in {elapsed:.0f}s — output saved to: {result['project_dir']}[/dim]")
 

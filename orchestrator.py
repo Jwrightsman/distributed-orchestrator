@@ -15,6 +15,7 @@ import platform
 from ollama_client import generate
 from config import get as get_config
 from ledger import log_contribution
+from extract import extract_code_files
 
 OUTPUT_DIR = Path("output")
 
@@ -196,9 +197,13 @@ async def run_pipeline(task: str, on_plan=None, on_build=None, on_review_start=N
     }
     (project_dir / "full_log.json").write_text(json.dumps(log, indent=2))
 
+    # Extract runnable code files from the review output
+    code_files = extract_code_files(review_output, project_dir)
+
     return {
         "project_dir": str(project_dir),
         "plan": subtasks,
         "results": results,
         "review": review_output,
+        "code_files": code_files,
     }
