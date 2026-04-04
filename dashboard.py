@@ -421,6 +421,114 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     white-space: pre-wrap;
     font-family: 'Segoe UI', system-ui, sans-serif;
   }
+
+  /* Tab navigation */
+  .tab-nav {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 20px;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    padding-bottom: 0;
+  }
+  .tab-btn {
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 8px 16px;
+    font-size: 11px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: #555;
+    cursor: pointer;
+    font-weight: 600;
+    margin-bottom: -1px;
+    transition: color 0.2s, border-color 0.2s;
+  }
+  .tab-btn:hover { color: #888; }
+  .tab-btn.active { color: #00FFAA; border-bottom-color: #00FFAA; }
+
+  /* Gallery grid */
+  .gallery-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 14px;
+  }
+  .gallery-card {
+    background: rgba(255,255,255,0.025);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 10px;
+    padding: 16px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    transition: border-color 0.2s, background 0.2s;
+  }
+  .gallery-card:hover {
+    border-color: rgba(0,255,170,0.2);
+    background: rgba(255,255,255,0.035);
+  }
+  .gallery-task {
+    font-size: 13px;
+    font-weight: 700;
+    color: #E0E0E0;
+    line-height: 1.4;
+  }
+  .gallery-meta {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .gallery-preview {
+    font-family: 'Consolas', monospace;
+    font-size: 11px;
+    color: #666;
+    line-height: 1.5;
+    max-height: 80px;
+    overflow: hidden;
+    position: relative;
+  }
+  .gallery-preview::after {
+    content: '';
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 24px;
+    background: linear-gradient(transparent, rgba(8,9,12,0.95));
+  }
+  .gallery-files {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .gallery-file-chip {
+    background: rgba(0,255,170,0.08);
+    border: 1px solid rgba(0,255,170,0.18);
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-family: 'Consolas', monospace;
+    font-size: 10px;
+    color: #00FFAA;
+  }
+  .gallery-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 2px;
+  }
+  .gallery-btn {
+    flex: 1;
+    background: none;
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 11px;
+    color: #666;
+    cursor: pointer;
+    transition: all 0.15s;
+    font-weight: 600;
+  }
+  .gallery-btn:hover { border-color: rgba(0,255,170,0.3); color: #00FFAA; }
+  .gallery-btn.fork { border-color: rgba(0,255,170,0.2); color: #00FFAA; }
+  .gallery-btn.fork:hover { background: rgba(0,255,170,0.08); }
 </style>
 </head>
 <body>
@@ -472,33 +580,52 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   </div>
 
   <div class="content">
-    <h2>Pitch a Task</h2>
-    <!-- Hidden project context — set when "Continue" is clicked -->
-    <div id="project-context" style="display:none;margin-bottom:10px;padding:8px 12px;background:rgba(0,255,170,0.06);border:1px solid rgba(0,255,170,0.2);border-radius:6px;justify-content:space-between;align-items:center;">
-      <span style="font-size:12px;color:#00FFAA;">Continuing project: <strong id="project-context-name"></strong></span>
-      <button onclick="clearProjectContext()" style="background:none;border:none;color:#555;cursor:pointer;font-size:11px;">✕ clear</button>
-    </div>
-    <input type="hidden" id="active-project-id" value="">
-    <div class="pitch-form">
-      <input type="text" class="pitch-input" id="pitch-input"
-             placeholder="Describe what you want built...">
-      <button class="pitch-btn" id="pitch-btn" onclick="pitchTask()">Pitch</button>
+    <div class="tab-nav">
+      <button class="tab-btn active" id="tab-live" onclick="showTab('live')">Live</button>
+      <button class="tab-btn" id="tab-gallery" onclick="showTab('gallery')">Gallery</button>
     </div>
 
-    <h2>Live Activity</h2>
-    <div id="event-log" style="margin-bottom:24px;max-height:200px;overflow-y:auto;"></div>
+    <!-- ── LIVE TAB ── -->
+    <div id="view-live">
+      <h2>Pitch a Task</h2>
+      <!-- Hidden project context — set when "Continue" is clicked -->
+      <div id="project-context" style="display:none;margin-bottom:10px;padding:8px 12px;background:rgba(0,255,170,0.06);border:1px solid rgba(0,255,170,0.2);border-radius:6px;justify-content:space-between;align-items:center;">
+        <span style="font-size:12px;color:#00FFAA;">Continuing project: <strong id="project-context-name"></strong></span>
+        <button onclick="clearProjectContext()" style="background:none;border:none;color:#555;cursor:pointer;font-size:11px;">✕ clear</button>
+      </div>
+      <input type="hidden" id="active-project-id" value="">
+      <div class="pitch-form">
+        <input type="text" class="pitch-input" id="pitch-input"
+               placeholder="Describe what you want built...">
+        <button class="pitch-btn" id="pitch-btn" onclick="pitchTask()">Pitch</button>
+      </div>
 
-    <h2>Pipeline Runs</h2>
-    <div id="pipeline-log">
-      <div class="empty-state">
-        <div class="icon">-</div>
-        <p>No active pipelines.<br>Pitch a task above to see agents work.</p>
+      <h2>Live Activity</h2>
+      <div id="event-log" style="margin-bottom:24px;max-height:200px;overflow-y:auto;"></div>
+
+      <h2>Pipeline Runs</h2>
+      <div id="pipeline-log">
+        <div class="empty-state">
+          <div class="icon">-</div>
+          <p>No active pipelines.<br>Pitch a task above to see agents work.</p>
+        </div>
+      </div>
+
+      <h2 style="margin-top:24px">History</h2>
+      <div id="history-list">
+        <div class="empty-state"><p>No past runs yet.</p></div>
       </div>
     </div>
 
-    <h2 style="margin-top:24px">History</h2>
-    <div id="history-list">
-      <div class="empty-state"><p>No past runs yet.</p></div>
+    <!-- ── GALLERY TAB ── -->
+    <div id="view-gallery" style="display:none;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <h2 style="margin-bottom:0;">Swarm Gallery</h2>
+        <span style="font-size:11px;color:#444;">Tasks completed by the network</span>
+      </div>
+      <div id="gallery-grid" class="gallery-grid">
+        <div class="empty-state" style="grid-column:1/-1;"><p>No completed tasks yet.</p></div>
+      </div>
     </div>
 
     <!-- Output viewer modal -->
@@ -1094,6 +1221,65 @@ function clearProjectContext() {
   document.getElementById('active-project-id').value = '';
   document.getElementById('project-context').style.display = 'none';
   document.getElementById('pitch-input').placeholder = 'Describe what you want built...';
+}
+
+// ── Tab switching ──
+function showTab(name) {
+  document.getElementById('view-live').style.display    = name === 'live'    ? '' : 'none';
+  document.getElementById('view-gallery').style.display = name === 'gallery' ? '' : 'none';
+  document.getElementById('tab-live').classList.toggle('active',    name === 'live');
+  document.getElementById('tab-gallery').classList.toggle('active', name === 'gallery');
+  if (name === 'gallery') loadGallery();
+}
+
+// ── Gallery ──
+async function loadGallery() {
+  try {
+    const resp = await fetch('/gallery');
+    const data = await resp.json();
+    const el = document.getElementById('gallery-grid');
+
+    if (!data.cards || data.cards.length === 0) {
+      el.innerHTML = '<div class="empty-state" style="grid-column:1/-1;"><p>No completed tasks yet.<br>Pitch one from the Live tab to populate the gallery.</p></div>';
+      return;
+    }
+
+    const ratingColor = {PASS: '#00FF88', NEEDS_WORK: '#E8FF47', FAIL: '#FF5555'};
+
+    el.innerHTML = data.cards.map(c => {
+      const color = ratingColor[c.rating] || '#555';
+      const ratingHtml = c.rating && c.rating !== '?'
+        ? `<span style="font-family:Consolas,monospace;font-size:10px;font-weight:700;color:${color};background:${color}18;border:1px solid ${color}30;border-radius:4px;padding:2px 8px;">${escHtml(c.rating)}</span>`
+        : '';
+      const subtasksHtml = `<span style="font-family:Consolas,monospace;font-size:10px;color:#555;">${c.subtask_count} tasks</span>`;
+      const timeHtml = `<span style="font-family:Consolas,monospace;font-size:10px;color:#444;">${relativeTime(c.timestamp)}</span>`;
+      const previewHtml = c.preview
+        ? `<div class="gallery-preview">${escHtml(c.preview)}</div>`
+        : '';
+      const filesHtml = c.code_files && c.code_files.length > 0
+        ? `<div class="gallery-files">${c.code_files.map(f => `<span class="gallery-file-chip">${escHtml(f)}</span>`).join('')}</div>`
+        : '';
+      return `
+        <div class="gallery-card">
+          <div class="gallery-task">${escHtml(c.task)}</div>
+          <div class="gallery-meta">${ratingHtml}${subtasksHtml}${timeHtml}</div>
+          ${previewHtml}
+          ${filesHtml}
+          <div class="gallery-actions">
+            <button class="gallery-btn" onclick="viewRun('${escHtml(c.timestamp)}')">View Output</button>
+            <button class="gallery-btn fork" onclick="forkTask('${escHtml(c.task.replace(/'/g, "\\'"))}')">Fork this</button>
+          </div>
+        </div>`;
+    }).join('');
+  } catch(e) {}
+}
+
+function forkTask(task) {
+  showTab('live');
+  const input = document.getElementById('pitch-input');
+  input.value = task;
+  input.focus();
+  input.select();
 }
 
 // Start

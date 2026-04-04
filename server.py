@@ -417,6 +417,49 @@ async def history_detail(timestamp: str):
     }
 
 
+# ── Gallery ──────────────────────────────────────────────────────────
+@app.get("/gallery")
+async def gallery(limit: int = 30):
+    """Return completed runs as gallery cards — for the Swarm Gallery page."""
+    cards = []
+    if OUTPUT_DIR.exists():
+        for d in sorted(OUTPUT_DIR.iterdir(), reverse=True):
+            if not d.is_dir():
+                continue
+            log_file = d / "full_log.json"
+            if not log_file.exists():
+                continue
+            try:
+                log = json.loads(log_file.read_text())
+                rating = log.get("rating", "?")
+                # Read first 300 chars of final output as preview
+                preview = ""
+                output_file = d / "output.md"
+                if output_file.exists():
+                    preview = output_file.read_text(errors="ignore")[:300]
+                elif log.get("review"):
+                    from orchestrator import _extract_final_output
+                    fo = _extract_final_output(log["review"])
+                    preview = (fo or "")[:300]
+                # Code file list
+                code_dir = d / "code"
+                code_files = [f.name for f in sorted(code_dir.iterdir())] if code_dir.exists() else []
+                cards.append({
+                    "timestamp": log.get("timestamp", d.name),
+                    "task": log.get("task", "Unknown"),
+                    "rating": rating,
+                    "subtask_count": len(log.get("plan", [])),
+                    "preview": preview.strip(),
+                    "code_files": code_files,
+                    "project_id": log.get("project_id") or None,
+                })
+            except (json.JSONDecodeError, OSError):
+                pass
+            if len(cards) >= limit:
+                break
+    return {"cards": cards, "count": len(cards)}
+
+
 # ── Ledger / Standings ───────────────────────────────────────────────
 @app.get("/standings")
 async def standings():

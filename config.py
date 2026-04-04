@@ -10,9 +10,10 @@ from pathlib import Path
 CONFIG_FILE = Path("config.json")
 
 DEFAULTS = {
-    # Model to use for inference. Must be pulled in Ollama.
+    # ── Local inference (Ollama) ──────────────────────────────────────
+    # Model to use for all agents by default.
     # Good options by RAM:
-    #   8GB:  gemma3:4b (fast, decent quality)
+    #   8GB:  gemma3:4b (fast, decent quality, CPU-only safe)
     #   16GB: gemma4 (slower, much better quality)
     #   16GB: qwen3:8b (good balance)
     "model": "gemma3:4b",
@@ -27,7 +28,32 @@ DEFAULTS = {
     # Max planner retries when model returns bad JSON
     "planner_retries": 3,
 
-    # Server port
+    # ── External provider (optional) ─────────────────────────────────
+    # Set provider + api_key to route planner/reviewer to a stronger model.
+    # Any OpenAI-compatible API works: xai (Grok), openai, together, groq, etc.
+    #
+    # Example for Grok:
+    #   "provider": "xai",
+    #   "provider_api_key": "xai-...",
+    #   "provider_model": "grok-3-mini",
+    #   "provider_base_url": "https://api.x.ai/v1",
+    #
+    # Example for OpenAI:
+    #   "provider": "openai",
+    #   "provider_api_key": "sk-...",
+    #   "provider_model": "gpt-4o-mini",
+    #
+    # Leave provider as null to use Ollama for everything.
+    "provider": None,              # null = use Ollama only
+    "provider_api_key": None,
+    "provider_model": None,
+    "provider_base_url": None,     # null = auto (OpenAI default)
+
+    # Which agent roles use the external provider (when configured).
+    # "planner" and "reviewer" benefit most — builders can stay local.
+    "provider_roles": ["planner", "reviewer"],
+
+    # ── Server ───────────────────────────────────────────────────────
     "port": 8000,
 }
 

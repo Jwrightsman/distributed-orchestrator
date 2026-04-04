@@ -229,7 +229,7 @@ async def plan(task: str, max_retries: int | None = None, memory_context: str = 
 
     last_err: Exception = ValueError("no attempts made")
     for attempt in range(max_retries):
-        raw = await generate(task, system=system)
+        raw = await generate(task, system=system, role="planner")
         try:
             subtasks = _extract_json(raw)
             return _validate_subtasks(subtasks)
@@ -271,7 +271,7 @@ async def review(task: str, subtasks: list[dict], results: dict[int, str], memor
         parts.append(f"### Output for Subtask {st['id']}: {st['title']}\n{output}\n")
 
     combined = "\n".join(parts)
-    return await generate(combined, system=REVIEWER_SYSTEM)
+    return await generate(combined, system=REVIEWER_SYSTEM, role="reviewer")
 
 
 # ── Full pipeline ───────────────────────────────────────────────────────
