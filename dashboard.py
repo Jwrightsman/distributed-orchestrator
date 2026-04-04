@@ -316,6 +316,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <p>No nodes connected yet.<br>Run <code style="color:#00FFAA">py node.py --server http://YOUR_IP:8000</code> on another machine to join.</p>
       </div>
     </div>
+
+    <h2 style="margin-top:24px">Guild Standings</h2>
+    <div id="standings-list">
+      <div class="empty-state"><p>No contributions yet.</p></div>
+    </div>
   </div>
 
   <div class="content">
@@ -571,12 +576,43 @@ async function loadHistory() {
   } catch(e) {}
 }
 
+// ── Standings ──
+async function loadStandings() {
+  try {
+    const resp = await fetch('/standings');
+    const data = await resp.json();
+    const el = document.getElementById('standings-list');
+
+    if (!data.standings.length) {
+      el.innerHTML = '<div class="empty-state"><p>No contributions yet.</p></div>';
+      return;
+    }
+
+    el.innerHTML = data.standings.map((s, i) => `
+      <div class="node-card" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+        <div>
+          <div class="node-name" style="font-size:12px;">
+            <span style="color:${i===0?'#E8FF47':i===1?'#00FFAA':'#888'};margin-right:6px;">#${i+1}</span>
+            ${s.contributor}
+          </div>
+          <div class="node-meta">${s.compute_tasks} tasks / ${s.pitches} pitches</div>
+        </div>
+        <div style="font-family:Consolas,monospace;font-size:16px;font-weight:700;color:#E8FF47;">
+          ${s.total_credits.toFixed(0)}
+        </div>
+      </div>
+    `).join('');
+  } catch(e) {}
+}
+
 // Start polling
 refresh();
 loadHistory();
+loadStandings();
 setInterval(refresh, 3000);
 setInterval(pollEvents, 2000);
 setInterval(loadHistory, 15000);
+setInterval(loadStandings, 10000);
 </script>
 </body>
 </html>"""

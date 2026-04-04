@@ -30,6 +30,7 @@ import httpx
 
 from orchestrator import run_pipeline, plan, review, BUILDER_SYSTEM
 from ollama_client import OLLAMA_URL, generate
+from ledger import get_standings, get_history, log_contribution
 
 from dashboard import router as dashboard_router
 
@@ -183,6 +184,19 @@ async def history_detail(timestamp: str):
     }
 
 
+# ── Ledger / Standings ───────────────────────────────────────────────
+@app.get("/standings")
+async def standings():
+    """Get contributor standings sorted by credits."""
+    return {"standings": get_standings()}
+
+
+@app.get("/ledger")
+async def ledger(contributor: str | None = None, limit: int = 50):
+    """Get recent ledger entries."""
+    return {"entries": get_history(contributor, limit)}
+
+
 # ── Node management ──────────────────────────────────────────────────
 @app.post("/nodes/register")
 async def register_node(reg: NodeRegistration):
@@ -234,6 +248,9 @@ async def submit_result(task_id: str, result: TaskResult):
     if result.node_id in nodes:
         nodes[result.node_id]["tasks_completed"] += 1
         nodes[result.node_id]["last_seen"] = time.time()
+    # Log to ledger
+    if result.output and not result.error:
+        log_contribution(result.node_id, "compute", credits=5, task=task_id)
     return {"status": "accepted"}
 
 

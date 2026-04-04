@@ -10,8 +10,11 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
+import platform
+
 from ollama_client import generate
 from config import get as get_config
+from ledger import log_contribution
 
 OUTPUT_DIR = Path("output")
 
@@ -136,8 +139,11 @@ async def run_pipeline(task: str, on_plan=None, on_build=None, on_review_start=N
 
     Returns a dict with the plan, individual results, and final review.
     """
+    node_id = platform.node()  # this machine's hostname
+
     # 1. Plan
     subtasks = await plan(task)
+    log_contribution(node_id, "pitch", credits=1, task=task[:100])
     if on_plan:
         on_plan(subtasks)
 
@@ -153,6 +159,7 @@ async def run_pipeline(task: str, on_plan=None, on_build=None, on_review_start=N
                 context_parts.append(f"[{label}]:\n{results[dep_id]}")
         context = "\n\n".join(context_parts)
         results[st["id"]] = await build(st, context)
+        log_contribution(node_id, "compute", credits=5, task=st["title"])
         if on_build:
             on_build(st, results[st["id"]])
 
@@ -160,6 +167,7 @@ async def run_pipeline(task: str, on_plan=None, on_build=None, on_review_start=N
     if on_review_start:
         on_review_start()
     review_output = await review(task, subtasks, results)
+    log_contribution(node_id, "compute", credits=3, task="review", details=task[:100])
 
     # 4. Save everything
     OUTPUT_DIR.mkdir(exist_ok=True)

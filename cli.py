@@ -20,6 +20,7 @@ from rich.table import Table
 
 from orchestrator import run_pipeline, OUTPUT_DIR
 from ollama_client import check_ollama, auto_detect_model, DEFAULT_MODEL
+from ledger import get_standings
 
 console = Console()
 
@@ -113,11 +114,38 @@ def show_history():
     console.print(table)
 
 
+def show_standings():
+    """Show guild standings — who contributed what."""
+    standings = get_standings()
+    if not standings:
+        console.print("[dim]No contributions recorded yet.[/dim]")
+        return
+
+    table = Table(title="Guild Standings", border_style="dim")
+    table.add_column("Rank", justify="center", style="bold")
+    table.add_column("Contributor", style="cyan")
+    table.add_column("Credits", justify="right", style="yellow")
+    table.add_column("Tasks", justify="center")
+    table.add_column("Pitches", justify="center")
+
+    for i, s in enumerate(standings):
+        rank = str(i + 1)
+        table.add_row(
+            rank,
+            s["contributor"],
+            f"{s['total_credits']:.0f}",
+            str(s["compute_tasks"]),
+            str(s["pitches"]),
+        )
+
+    console.print(table)
+
+
 async def interactive():
     """Interactive mode — keep pitching tasks."""
     console.print(Panel(
         "[bold]Distributed AI Orchestrator[/bold]\n"
-        "[dim]Type a task and press Enter. Type 'history' to see past runs. Ctrl+C to quit.[/dim]",
+        "[dim]Commands: 'history' | 'standings' | 'quit' — or just type a task[/dim]",
         border_style="cyan",
     ))
 
@@ -133,6 +161,9 @@ async def interactive():
                 continue
             if task.lower() in ("history", "h"):
                 show_history()
+                continue
+            if task.lower() in ("standings", "s", "guild"):
+                show_standings()
                 continue
             if task.lower() in ("quit", "exit", "q"):
                 break
@@ -150,9 +181,12 @@ async def main():
         console.print(f"[red bold]ERROR:[/red bold] {status['error']}")
         sys.exit(1)
 
-    # --history flag
+    # flags
     if "--history" in sys.argv:
         show_history()
+        return
+    if "--standings" in sys.argv:
+        show_standings()
         return
 
     # Direct task from command line
