@@ -34,7 +34,11 @@ from pydantic import BaseModel, field_validator
 
 import httpx
 
-from orchestrator import run_pipeline, plan, review, BUILDER_SYSTEM
+from orchestrator import (
+    run_pipeline, plan, review, revise, BUILDER_SYSTEM,
+    _extract_rating, _extract_final_output, _extract_issues,
+)
+from extract import extract_code_files
 from ollama_client import OLLAMA_URL, generate
 from ledger import get_standings, get_history, log_contribution
 from config import get as get_config
@@ -264,6 +268,9 @@ class NodeRegistration(BaseModel):
     cpu_count: int | None = None
     ram_gb: float | None = None
     gpu: str | None = None
+    # Optional capability tags — e.g. ["code", "large-context"] or ["gpu", "fast"]
+    # Used by the dispatcher to match tasks to capable nodes.
+    capabilities: list[str] = []
 
 class TaskResult(BaseModel):
     node_id: str
@@ -827,6 +834,7 @@ async def register_node(reg: NodeRegistration, request: Request):
         "cpu_count": reg.cpu_count,
         "ram_gb": reg.ram_gb,
         "gpu": reg.gpu,
+        "capabilities": reg.capabilities,
         "registered_at": datetime.now(timezone.utc).isoformat(),
         "last_seen": time.time(),
         "tasks_completed": 0,
@@ -869,11 +877,22 @@ async def next_task(node_id: str, request: Request):
             node_blacklist.pop(node_id, None)
             node_failure_count[node_id] = 0
 
+    # Collect this node's capabilities for task matching
+    node_caps: set[str] = set(nodes[node_id].get("capabilities", [])) if node_id in nodes else set()
+
+    def _pick_task() -> dict | None:
+        """Return the first task this node can handle, respecting capability requirements."""
+        for i, t in enumerate(task_queue):
+            required = set(t.get("requires", []))
+            if not required or required.issubset(node_caps):
+                return task_queue.pop(i)
+        return None
+
     # Long-poll: wait up to _LONG_POLL_TIMEOUT for a task to appear
     deadline = time.time() + _LONG_POLL_TIMEOUT
     while True:
-        if task_queue:
-            task = task_queue.pop(0)
+        task = _pick_task()
+        if task:
             task["assigned_to"] = node_id
             task["assigned_at"] = time.time()
             if node_id in nodes:
@@ -1000,61 +1019,86 @@ async def _dispatch_subtask(
 async def pitch_distributed(req: PitchRequest):
     """Pitch a task that gets distributed across connected nodes.
 
-    The planner and reviewer run locally on the orchestrator.
-    Builder subtasks get pushed to the task queue for worker nodes.
-    Falls back to local execution if no nodes are connected.
+    Planner and reviewer run locally. Builder subtasks go to the worker
+    task queue and execute in parallel across connected nodes. Falls back
+    to local run_pipeline if no nodes are connected.
+
+    Full feature parity with /pitch: project memory, reviser pass, code
+    extraction, rating, events, and ZIP-downloadable output.
     """
-    # 1. Plan (runs locally on orchestrator)
+    trace_id = str(uuid.uuid4())
+
+    # Load project memory context
+    memory_context = ""
+    if req.project_id:
+        try:
+            from memory import get_memory_context
+            memory_context = get_memory_context(req.project_id)
+        except Exception:
+            pass
+
+    _emit("pitch", {"task": req.task, "trace_id": trace_id, "mode": "distributed"})
+
+    # 1. Plan
     try:
-        subtasks = await plan(req.task)
+        subtasks = await plan(req.task, memory_context=memory_context)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
+    _emit("plan", {"task": req.task, "subtasks": [s["title"] for s in subtasks], "trace_id": trace_id})
 
-    # 2. If no worker nodes, fall back to local
+    # 2. If no worker nodes connected, fall back to full local pipeline
     if not nodes:
         try:
-            result = await run_pipeline(req.task)
+            result = await run_pipeline(req.task, project_id=req.project_id)
         except ValueError as e:
             raise HTTPException(status_code=422, detail=str(e))
         result["results"] = {str(k): v for k, v in result["results"].items()}
         result["mode"] = "local"
         return result
 
-    # 3. Distribute builder tasks to worker nodes (parallel waves by dependency level)
-    from orchestrator import _MAX_CONTEXT_CHARS
-
-    results: dict[int, str] = {}
-    nodes_used: set[str] = set()
-
+    # 3. Distribute builder tasks across worker nodes (parallel waves)
     if len(task_queue) >= _MAX_TASK_QUEUE:
         raise HTTPException(status_code=503, detail="Task queue is full — too many pending tasks")
 
+    results: dict[int, str] = {}
+    nodes_used: set[str] = set()
     remaining = {st["id"]: st for st in subtasks}
 
     while remaining:
-        # Find subtasks whose dependencies are all resolved
-        ready = [
-            st for st in remaining.values()
-            if all(dep_id in results for dep_id in st.get("depends_on", []))
-        ]
+        ready = [st for st in remaining.values()
+                 if all(dep_id in results for dep_id in st.get("depends_on", []))]
         if not ready:
-            break  # shouldn't happen with valid dep graph
-
-        # Launch all ready tasks in parallel
+            break
         wave_results = await asyncio.gather(*[
-            _dispatch_subtask(st, subtasks, results, nodes_used)
-            for st in ready
+            _dispatch_subtask(st, subtasks, results, nodes_used) for st in ready
         ])
         for subtask_id, output in wave_results:
             results[subtask_id] = output
             remaining.pop(subtask_id, None)
+            _emit("build", {"task": req.task, "subtask_id": subtask_id, "trace_id": trace_id})
 
-    # 4. Review (runs locally on orchestrator)
-    review_output = await review(req.task, subtasks, results)
+    # 4. Review
+    _emit("review_start", {"task": req.task, "trace_id": trace_id})
+    review_output = await review(req.task, subtasks, results, memory_context=memory_context)
 
-    # 5. Save
-    import re
-    from orchestrator import _extract_final_output
+    # 5. Reviser pass (up to 2 rounds, same as local pipeline)
+    rating = _extract_rating(review_output)
+    final_output = _extract_final_output(review_output)
+    issues = _extract_issues(review_output)
+    for _ in range(2):
+        if rating != "NEEDS_WORK" or not issues or not final_output:
+            break
+        revised = await revise(req.task, issues, final_output)
+        if len(revised.strip()) <= len(final_output) // 2:
+            break
+        final_output = revised
+        issues = _extract_issues(revised)
+        if not issues:
+            rating = "PASS"
+            break
+
+    # 6. Save output files
+    import re as _re
     OUTPUT_DIR.mkdir(exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     project_dir = OUTPUT_DIR / timestamp
@@ -1062,12 +1106,14 @@ async def pitch_distributed(req: PitchRequest):
 
     (project_dir / "plan.json").write_text(json.dumps(subtasks, indent=2))
     for st in subtasks:
-        safe_title = re.sub(r"[^\w\s-]", "", st["title"]).strip().replace(" ", "_")
+        safe_title = _re.sub(r"[^\w\s-]", "", st["title"]).strip().replace(" ", "_")
         (project_dir / f"builder_{st['id']}_{safe_title}.md").write_text(results[st["id"]])
     (project_dir / "review.md").write_text(review_output)
-    final_output = _extract_final_output(review_output)
     if final_output:
         (project_dir / "output.md").write_text(final_output)
+
+    extract_source = final_output or review_output
+    code_files = extract_code_files(extract_source, project_dir)
 
     log = {
         "task": req.task,
@@ -1075,15 +1121,48 @@ async def pitch_distributed(req: PitchRequest):
         "plan": subtasks,
         "results": {str(k): v for k, v in results.items()},
         "review": review_output,
+        "rating": rating,
+        "code_files": [str(f) for f in code_files],
         "mode": "distributed",
+        "nodes_used": list(nodes_used),
+        "project_id": req.project_id or "",
     }
     (project_dir / "full_log.json").write_text(json.dumps(log, indent=2))
+
+    # 7. Save iteration to project memory, auto-summarize if grown large
+    if req.project_id:
+        try:
+            from memory import add_iteration, _summarize_memory, SUMMARIZE_THRESHOLD, PROJECTS_DIR as _PROJ_DIR
+            add_iteration(req.project_id, {
+                "project_dir": str(project_dir),
+                "plan": subtasks,
+                "final_output": final_output or "",
+                "rating": rating,
+            }, req.task)
+            memory_file = _PROJ_DIR / req.project_id / "memory.md"
+            if memory_file.exists():
+                raw = memory_file.read_text(errors="ignore")
+                if len(raw) > SUMMARIZE_THRESHOLD:
+                    compressed = await _summarize_memory(raw)
+                    if compressed and compressed != raw:
+                        memory_file.write_text(compressed)
+        except Exception:
+            pass
+
+    _emit("complete", {
+        "task": req.task, "project_dir": str(project_dir),
+        "rating": rating, "trace_id": trace_id, "mode": "distributed",
+    })
 
     return {
         "project_dir": str(project_dir),
         "plan": subtasks,
         "results": {str(k): v for k, v in results.items()},
         "review": review_output,
+        "final_output": final_output or "",
+        "rating": rating,
+        "code_files": [str(f) for f in code_files],
         "mode": "distributed",
         "nodes_used": len(nodes_used),
+        "project_id": req.project_id or "",
     }
