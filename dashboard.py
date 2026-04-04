@@ -1375,19 +1375,25 @@ async function loadGallery() {
           ${filesHtml}
           <div class="gallery-actions">
             <button class="gallery-btn" onclick="viewRun('${escHtml(c.timestamp)}')">View Output</button>
-            <button class="gallery-btn fork" onclick="forkTask('${escHtml(c.task.replace(/'/g, "\\'"))}')">Fork this</button>
+            <button class="gallery-btn fork" onclick="forkTask('${escHtml(c.task.replace(/'/g, "\\'"))}','${escHtml((c.project_id||'').replace(/'/g,"\\'"))}')">Fork this</button>
           </div>
         </div>`;
     }).join('');
   } catch(e) {}
 }
 
-function forkTask(task) {
+function forkTask(task, projectId) {
   showTab('live');
-  const input = document.getElementById('pitch-input');
-  input.value = task;
-  input.focus();
-  input.select();
+  // If this run belongs to a project, continue it so the AI loads the memory context.
+  // Otherwise just load the task text for a fresh pitch.
+  if (projectId) {
+    continueProject(projectId, task);
+  } else {
+    const input = document.getElementById('pitch-input');
+    input.value = task;
+    input.focus();
+    input.select();
+  }
 }
 
 // ── Task templates ──
