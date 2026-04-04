@@ -42,9 +42,16 @@ python status.py
 Expected output:
 
 ```
-Ollama        ✓  running at http://localhost:11434
-Model         ✓  gemma3:4b loaded
-Config        ✓  timeout=600s, retries=3
+Ollama
+  Status:  running
+  URL:     http://localhost:11434
+  Models:  gemma3:4b
+  Active:  gemma3:4b
+
+Config
+  Model:    gemma3:4b
+  Timeout:  600s
+  Retries:  3
 ```
 
 If Ollama isn't running, start it with `ollama serve` and re-run. If the model is missing, run `ollama pull gemma3:4b`.
