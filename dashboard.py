@@ -714,12 +714,16 @@ async function refresh() {
         const hwHtml = hwParts.length
           ? `<div class="node-meta" style="color:#444;">${hwParts.join(' &middot; ')}</div>`
           : '';
+        const capsHtml = (n.capabilities && n.capabilities.length)
+          ? n.capabilities.map(c => `<span style="background:rgba(0,255,170,0.08);border:1px solid rgba(0,255,170,0.2);border-radius:3px;padding:1px 5px;font-size:9px;color:#00FFAA;margin-right:3px;">${escHtml(c)}</span>`).join('')
+          : '';
+        const capsRow = capsHtml ? `<div class="node-meta" style="margin-top:3px;">${capsHtml}</div>` : '';
         return `
           <div class="node-card active" id="nodecard-${escHtml(n.node_id)}" style="position:relative;">
             <div class="node-name"><span class="${dotClass}"></span>${escHtml(n.node_id)}</div>
             <div class="node-meta">${escHtml(n.platform)} / ${escHtml(n.machine)}</div>
             <div class="node-meta">${escHtml(n.model)}</div>
-            ${hwHtml}
+            ${hwHtml}${capsRow}
             <div class="node-tasks">${n.tasks_completed} tasks &middot; ${n.credits_earned || 0} credits</div>
             ${activeHtml}
           </div>`;
