@@ -271,12 +271,14 @@ def _flag_value(flag: str) -> str | None:
     return None
 
 
-async def run_demo():
+async def run_demo(fast: bool = False):
     """Demo mode — shows the full project memory flow in two pitches.
 
     Perfect for screen recording: creates a project, runs the first task,
     pauses so the viewer can read, then continues with a follow-up task
     that proves the AI remembers what it already built.
+
+    Pass fast=True (--demo-fast) to skip the inter-pitch pause.
     """
     console.print(Panel(
         "[bold cyan]DEMO MODE[/bold cyan] — showing project memory in action\n\n"
@@ -298,8 +300,9 @@ async def run_demo():
 
     console.print()
     console.print("[bold cyan]─" * 60 + "[/bold cyan]")
-    console.print("[dim]Pausing 2 seconds before continuation pitch...[/dim]")
-    await asyncio.sleep(2)
+    if not fast:
+        console.print("[dim]Pausing 2 seconds before continuation pitch...[/dim]")
+        await asyncio.sleep(2)
     console.print("[bold cyan]─" * 60 + "[/bold cyan]")
     console.print()
 
@@ -372,6 +375,9 @@ async def main():
         return
 
     # ── Demo mode — two-pitch project memory showcase ──
+    if "--demo-fast" in sys.argv:
+        await run_demo(fast=True)
+        return
     if "--demo" in sys.argv:
         await run_demo()
         return
