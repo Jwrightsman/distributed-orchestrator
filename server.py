@@ -253,10 +253,20 @@ async def history():
                 if log_file.exists():
                     try:
                         log = json.loads(log_file.read_text())
+                        # Quick rating check from review.md if available
+                        rating = log.get("rating", "?")
+                        if rating == "?":
+                            review_f = d / "review.md"
+                            if review_f.exists():
+                                for line in review_f.read_text(errors="ignore").splitlines():
+                                    if line.strip() in ("PASS", "NEEDS_WORK", "FAIL"):
+                                        rating = line.strip()
+                                        break
                         runs.append({
                             "timestamp": log.get("timestamp", d.name),
                             "task": log.get("task", "Unknown"),
                             "subtask_count": len(log.get("plan", [])),
+                            "rating": rating,
                             "dir": str(d),
                         })
                     except json.JSONDecodeError:
@@ -288,6 +298,17 @@ async def history_detail(timestamp: str):
     output_file = run_dir / "output.md"
     final_output = output_file.read_text() if output_file.exists() else ""
 
+    # Derive rating from review file (most reliable source)
+    rating = "?"
+    for line in review_content.splitlines():
+        if line.strip() in ("PASS", "NEEDS_WORK", "FAIL"):
+            rating = line.strip()
+            break
+
+    # Build code file list from the code/ subdir
+    code_dir = run_dir / "code"
+    code_files = [f.name for f in sorted(code_dir.iterdir())] if code_dir.exists() else []
+
     return {
         "task": log.get("task"),
         "timestamp": log.get("timestamp"),
@@ -295,6 +316,8 @@ async def history_detail(timestamp: str):
         "results": log.get("results", {}),
         "review": review_content,
         "final_output": final_output,
+        "rating": rating,
+        "code_files": code_files,
     }
 
 

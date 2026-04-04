@@ -498,6 +498,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <button onclick="closeModal()" style="background:none;border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:6px 14px;color:#888;cursor:pointer;font-size:12px;">Close</button>
         </div>
         <div id="modal-plan" style="margin-bottom:20px;"></div>
+        <div id="modal-files" style="margin-bottom:16px;display:none;"></div>
         <div id="modal-review" style="max-height:520px;overflow-y:auto;"></div>
       </div>
     </div>
@@ -781,6 +782,29 @@ async function viewRun(timestamp) {
     planHtml += '</div>';
     document.getElementById('modal-plan').innerHTML = planHtml;
 
+    // Rating badge in title area
+    const ratingColors = {PASS: '#00FF88', NEEDS_WORK: '#E8FF47', FAIL: '#FF5555'};
+    const ratingEl = document.getElementById('modal-title');
+    const ratingBadge = data.rating && data.rating !== '?'
+      ? ` <span style="font-size:11px;font-family:Consolas,monospace;color:${ratingColors[data.rating]||'#888'};font-weight:600;">${escHtml(data.rating)}</span>`
+      : '';
+    ratingEl.innerHTML = escHtml(data.task) + ratingBadge;
+
+    // Code files section
+    const filesEl = document.getElementById('modal-files');
+    if (data.code_files && data.code_files.length > 0) {
+      filesEl.style.display = 'block';
+      filesEl.innerHTML = `
+        <div style="font-size:10px;color:#666;letter-spacing:2px;text-transform:uppercase;margin-bottom:8px;font-family:Consolas,monospace;">Extracted Files</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;">
+          ${data.code_files.map(f => `
+            <span style="background:rgba(0,255,170,0.08);border:1px solid rgba(0,255,170,0.2);border-radius:4px;padding:3px 10px;font-family:Consolas,monospace;font-size:11px;color:#00FFAA;">${escHtml(f)}</span>
+          `).join('')}
+        </div>`;
+    } else {
+      filesEl.style.display = 'none';
+    }
+
     // Prefer the clean final output over the full review blob
     const outputContent = (data.final_output && data.final_output.trim())
       ? data.final_output
@@ -928,18 +952,22 @@ async function loadHistory() {
       return;
     }
 
-    el.innerHTML = data.runs.map(r => `
-      <div class="pipeline-card" style="padding:12px 16px;margin-bottom:6px;cursor:pointer;" onclick="viewRun('${escHtml(r.timestamp)}')">
-        <div style="display:flex;justify-content:space-between;align-items:center;">
-          <div style="font-size:13px;color:#BBBBBB;flex:1;padding-right:12px;">${escHtml(r.task)}</div>
-          <div style="display:flex;gap:12px;align-items:center;flex-shrink:0;">
-            <span style="font-family:Consolas,monospace;font-size:11px;color:#555;">${r.subtask_count} subtasks</span>
-            <span style="font-family:Consolas,monospace;font-size:11px;color:#444;">${relativeTime(r.timestamp)}</span>
-            <span style="font-size:11px;color:#00FFAA;">view</span>
+    const ratingColor = {PASS: '#00FF88', NEEDS_WORK: '#E8FF47', FAIL: '#FF5555'};
+    el.innerHTML = data.runs.map(r => {
+      const color = ratingColor[r.rating] || '#555';
+      return `
+        <div class="pipeline-card" style="padding:12px 16px;margin-bottom:6px;cursor:pointer;" onclick="viewRun('${escHtml(r.timestamp)}')">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div style="font-size:13px;color:#BBBBBB;flex:1;padding-right:12px;">${escHtml(r.task)}</div>
+            <div style="display:flex;gap:10px;align-items:center;flex-shrink:0;">
+              <span style="font-family:Consolas,monospace;font-size:10px;color:${color};">${escHtml(r.rating || '?')}</span>
+              <span style="font-family:Consolas,monospace;font-size:11px;color:#555;">${r.subtask_count} tasks</span>
+              <span style="font-family:Consolas,monospace;font-size:11px;color:#444;">${relativeTime(r.timestamp)}</span>
+              <span style="font-size:11px;color:#00FFAA;">view</span>
+            </div>
           </div>
-        </div>
-      </div>
-    `).join('');
+        </div>`;
+    }).join('');
   } catch(e) {}
 }
 

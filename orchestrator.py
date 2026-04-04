@@ -50,6 +50,17 @@ RULES:
 - Output ONLY the deliverable itself. No explanations like "here is the code" or "this implements...".
 - No TODOs, no placeholders, no "you can customize this later" comments."""
 
+REVISER_SYSTEM = """You are a code/content reviser. You receive the original task, a list of specific issues found by a reviewer, and the current assembled output.
+
+Your job: produce a REVISED version of the output that fixes every listed issue.
+
+RULES:
+- Output ONLY the revised content — no preamble, no "here's what I changed"
+- Keep everything that was working. Only fix what the issues list points to.
+- If the issues mention missing code, add it. If they mention errors, fix them.
+- The output must be complete and self-contained."""
+
+
 REVIEWER_SYSTEM = """You are a quality reviewer for an AI agent system. You receive the original task, the plan, and all builder outputs.
 
 Your job:
@@ -153,6 +164,39 @@ def _extract_final_output(review_text: str) -> str | None:
     return review_text[idx + len(marker):].strip()
 
 
+def _extract_rating(review_text: str) -> str:
+    """Return 'PASS', 'NEEDS_WORK', or 'FAIL' from a reviewer response."""
+    for line in review_text.splitlines():
+        stripped = line.strip()
+        if stripped in ("PASS", "NEEDS_WORK", "FAIL"):
+            return stripped
+    return "PASS"  # default if we can't find it
+
+
+def _extract_issues(review_text: str) -> str:
+    """Pull the Issues Found section, returning empty string if 'None'."""
+    start_marker = "## Issues Found"
+    end_marker = "## Final Assembled Output"
+    start = review_text.find(start_marker)
+    if start == -1:
+        return ""
+    end = review_text.find(end_marker, start)
+    section = review_text[start + len(start_marker): end if end != -1 else None].strip()
+    if section.lower() in ("none", "none.", "n/a", ""):
+        return ""
+    return section
+
+
+async def revise(task: str, issues: str, current_output: str) -> str:
+    """Run one targeted revision pass to fix issues identified by the reviewer."""
+    prompt = (
+        f"## Original Task\n{task}\n\n"
+        f"## Issues to Fix\n{issues}\n\n"
+        f"## Current Output (fix this)\n{current_output}"
+    )
+    return await generate(prompt, system=REVISER_SYSTEM)
+
+
 # Max chars of a single builder output included in the review prompt.
 # Keeps the combined review prompt from growing huge on CPU-memory-limited machines.
 _MAX_BUILDER_CHARS_IN_REVIEW = 3000
@@ -254,41 +298,47 @@ async def run_pipeline(task: str, on_plan=None, on_build=None, on_review_start=N
     review_output = await review(task, subtasks, results)
     log_contribution(node_id, "compute", credits=3, task="review", details=task[:100])
 
-    # 4. Save everything
+    # 4. Revision pass if reviewer found issues
+    rating = _extract_rating(review_output)
+    final_output = _extract_final_output(review_output)
+    issues = _extract_issues(review_output)
+
+    if rating == "NEEDS_WORK" and issues and final_output:
+        revised = await revise(task, issues, final_output)
+        if len(revised.strip()) > len(final_output) // 2:  # sanity: not a blank response
+            final_output = revised
+
+    # 5. Save everything
     OUTPUT_DIR.mkdir(exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     project_dir = OUTPUT_DIR / f"{timestamp}"
     project_dir.mkdir()
 
-    # Save plan
     (project_dir / "plan.json").write_text(json.dumps(subtasks, indent=2))
 
-    # Save each builder output
     for st in subtasks:
         safe_title = re.sub(r"[^\w\s-]", "", st["title"]).strip().replace(" ", "_")
         (project_dir / f"builder_{st['id']}_{safe_title}.md").write_text(results[st["id"]])
 
-    # Save review
     (project_dir / "review.md").write_text(review_output)
 
-    # Save the final assembled output separately for easy access
-    final_output = _extract_final_output(review_output)
     if final_output:
         (project_dir / "output.md").write_text(final_output)
 
-    # Save full log
+    # Extract runnable code files from the final (possibly revised) output
+    extract_source = final_output if final_output else review_output
+    code_files = extract_code_files(extract_source, project_dir)
+
     log = {
         "task": task,
         "timestamp": timestamp,
         "plan": subtasks,
         "results": {str(k): v for k, v in results.items()},
         "review": review_output,
+        "rating": rating,
+        "code_files": [str(f) for f in code_files],
     }
     (project_dir / "full_log.json").write_text(json.dumps(log, indent=2))
-
-    # Extract runnable code files — prefer the cleaner final output if available
-    extract_source = final_output if final_output else review_output
-    code_files = extract_code_files(extract_source, project_dir)
 
     return {
         "project_dir": str(project_dir),
@@ -296,5 +346,6 @@ async def run_pipeline(task: str, on_plan=None, on_build=None, on_review_start=N
         "results": results,
         "review": review_output,
         "final_output": final_output or "",
+        "rating": rating,
         "code_files": code_files,
     }
