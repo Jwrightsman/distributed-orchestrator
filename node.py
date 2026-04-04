@@ -16,8 +16,14 @@ import platform
 import time
 
 import httpx
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+from rich import box
 
 from ollama_client import generate, check_ollama, DEFAULT_MODEL
+
+console = Console()
 
 
 async def register(server: str, node_id: str) -> dict:
@@ -35,10 +41,9 @@ async def register(server: str, node_id: str) -> dict:
         return resp.json()
 
 
-async def poll_and_execute(server: str, node_id: str):
-    """Poll the orchestrator for tasks, execute them, return results."""
+async def poll_and_execute(server: str, node_id: str, session: dict) -> str | None:
+    """Poll the orchestrator for tasks, execute them, return task_id or None."""
     async with httpx.AsyncClient(timeout=600) as client:
-        # Ask for work
         resp = await client.get(f"{server}/tasks/next", params={"node_id": node_id})
         if resp.status_code == 204:
             return None  # No work available
@@ -47,19 +52,22 @@ async def poll_and_execute(server: str, node_id: str):
         task = resp.json()
 
         task_id = task["task_id"]
+        title = task.get("title", "unnamed")
         prompt = task["prompt"]
         system = task.get("system", "")
 
-        print(f"  Running task {task_id}: {task.get('title', 'unnamed')}")
-        start = time.time()
+        console.print(Panel(
+            f"[dim]{task_id}[/dim]",
+            title=f"[bold yellow]TASK[/bold yellow]  {title}",
+            border_style="yellow",
+        ))
 
+        start = time.time()
         try:
             result = await generate(prompt, system=system)
             elapsed = time.time() - start
-            print(f"  Completed in {elapsed:.0f}s")
 
-            # Send result back
-            await client.post(
+            submit_resp = await client.post(
                 f"{server}/tasks/{task_id}/result",
                 json={
                     "node_id": node_id,
@@ -67,9 +75,23 @@ async def poll_and_execute(server: str, node_id: str):
                     "elapsed_seconds": elapsed,
                 },
             )
+            credits = 0
+            if submit_resp.status_code == 200:
+                credits = submit_resp.json().get("credits_earned", 0)
+
+            session["tasks"] += 1
+            session["credits"] += credits
+
+            console.print(
+                f"[bold green]DONE[/bold green]  {title} "
+                f"[dim]({elapsed:.0f}s)[/dim]  "
+                f"[bold yellow]+{credits} credits[/bold yellow]  "
+                f"[dim]session total: {session['credits']} credits[/dim]"
+            )
+            console.print()
             return task_id
+
         except Exception as e:
-            # Report failure
             await client.post(
                 f"{server}/tasks/{task_id}/result",
                 json={
@@ -79,7 +101,7 @@ async def poll_and_execute(server: str, node_id: str):
                     "elapsed_seconds": time.time() - start,
                 },
             )
-            print(f"  Task failed: {e}")
+            console.print(f"[red bold]FAILED[/red bold]  {title}: {e}\n")
             return None
 
 
@@ -95,39 +117,57 @@ async def main():
     # Pre-flight: check local Ollama
     status = await check_ollama()
     if not status["ok"]:
-        print(f"ERROR: {status['error']}")
+        console.print(f"[red bold]ERROR:[/red bold] {status['error']}")
         return
 
-    print(f"Node: {node_id}")
-    print(f"Model: {DEFAULT_MODEL}")
-    print(f"Connecting to: {server}")
-    print()
+    console.print(Panel(
+        f"[bold]Node ID:[/bold]   {node_id}\n"
+        f"[bold]Model:[/bold]     {DEFAULT_MODEL}\n"
+        f"[bold]Orchestrator:[/bold] {server}",
+        title="[bold cyan]Distributed AI Node[/bold cyan]",
+        border_style="cyan",
+    ))
 
     # Register with orchestrator
     try:
         reg = await register(server, node_id)
-        print(f"Registered with orchestrator. {reg.get('message', '')}")
+        console.print(f"[green]Connected.[/green] {reg.get('message', '')}\n")
     except Exception as e:
-        print(f"Failed to register: {e}")
-        print("Is the orchestrator running? Start it with: python -m uvicorn server:app --host 0.0.0.0 --port 8000")
+        console.print(f"[red bold]Could not connect to orchestrator at {server}[/red bold]")
+        console.print(f"[dim]{e}[/dim]")
+        console.print("\nMake sure the orchestrator is running:")
+        console.print("  [dim]py -m uvicorn server:app --host 0.0.0.0 --port 8000[/dim]")
         return
 
-    # Main loop: poll for work
-    print("Waiting for tasks...\n")
+    console.print("[dim]Waiting for tasks... (Ctrl+C to stop)[/dim]\n")
+
+    session = {"tasks": 0, "credits": 0}
+
     while True:
         try:
-            task_id = await poll_and_execute(server, node_id)
+            task_id = await poll_and_execute(server, node_id, session)
             if task_id is None:
                 await asyncio.sleep(3)  # No work, wait and retry
         except httpx.ConnectError:
-            print("Lost connection to orchestrator. Retrying in 10s...")
+            console.print("[yellow]Lost connection to orchestrator. Retrying in 10s...[/yellow]")
             await asyncio.sleep(10)
         except KeyboardInterrupt:
-            print("\nShutting down node.")
+            _print_session_summary(node_id, session)
             break
         except Exception as e:
-            print(f"Error: {e}. Retrying in 5s...")
+            console.print(f"[red]Error:[/red] {e}. Retrying in 5s...")
             await asyncio.sleep(5)
+
+
+def _print_session_summary(node_id: str, session: dict):
+    table = Table(title="Session Summary", box=box.SIMPLE, border_style="dim")
+    table.add_column("Node")
+    table.add_column("Tasks Completed", justify="center")
+    table.add_column("Credits Earned", justify="right", style="yellow")
+    table.add_row(node_id, str(session["tasks"]), str(session["credits"]))
+    console.print()
+    console.print(table)
+    console.print("[dim]Thanks for contributing to the network.[/dim]\n")
 
 
 if __name__ == "__main__":

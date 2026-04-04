@@ -127,10 +127,46 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     margin-right: 6px;
     box-shadow: 0 0 8px rgba(0,255,136,0.4);
   }
+  .node-dot.busy {
+    background: #E8FF47;
+    box-shadow: 0 0 8px rgba(232,255,71,0.5);
+    animation: dotPulse 1s ease-in-out infinite;
+  }
+  @keyframes dotPulse {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.4; }
+  }
   .node-tasks {
     font-size: 11px;
     color: #00FFAA;
     margin-top: 4px;
+  }
+  .node-active-task {
+    font-size: 11px;
+    color: #E8FF47;
+    margin-top: 3px;
+    font-family: 'Consolas', monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .credit-flash {
+    position: absolute;
+    right: 14px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-family: 'Consolas', monospace;
+    font-size: 12px;
+    font-weight: 700;
+    color: #E8FF47;
+    pointer-events: none;
+    animation: creditPop 1.8s ease-out forwards;
+  }
+  @keyframes creditPop {
+    0%   { opacity: 0; transform: translateY(-50%) scale(0.8); }
+    20%  { opacity: 1; transform: translateY(-50%) scale(1.1); }
+    70%  { opacity: 1; transform: translateY(-60%); }
+    100% { opacity: 0; transform: translateY(-80%); }
   }
 
   .content {
@@ -487,17 +523,24 @@ async function refresh() {
       nodesList.innerHTML = `
         <div class="empty-state">
           <div class="icon">-</div>
-          <p>No nodes connected yet.<br>Run <code style="color:#00FFAA">py node.py --server http://YOUR_IP:8000</code> on another machine to join.</p>
+          <p>No nodes connected yet.<br>Run <code style="color:#00FFAA">py join.py http://YOUR_IP:8000</code> on another machine to join.</p>
         </div>`;
     } else {
-      nodesList.innerHTML = nodes.nodes.map(n => `
-        <div class="node-card active">
-          <div class="node-name"><span class="node-dot"></span>${n.node_id}</div>
-          <div class="node-meta">${n.platform} / ${n.machine}</div>
-          <div class="node-meta">${n.model}</div>
-          <div class="node-tasks">${n.tasks_completed} tasks completed</div>
-        </div>
-      `).join('');
+      nodesList.innerHTML = nodes.nodes.map(n => {
+        const busy = n.current_task;
+        const dotClass = busy ? 'node-dot busy' : 'node-dot';
+        const activeHtml = busy
+          ? `<div class="node-active-task">&#9654; ${escHtml(n.current_task)}</div>`
+          : '';
+        return `
+          <div class="node-card active" id="nodecard-${escHtml(n.node_id)}" style="position:relative;">
+            <div class="node-name"><span class="${dotClass}"></span>${escHtml(n.node_id)}</div>
+            <div class="node-meta">${escHtml(n.platform)} / ${escHtml(n.machine)}</div>
+            <div class="node-meta">${escHtml(n.model)}</div>
+            <div class="node-tasks">${n.tasks_completed} tasks &middot; ${n.credits_earned || 0} credits</div>
+            ${activeHtml}
+          </div>`;
+      }).join('');
     }
   } catch(e) {
     document.getElementById('stat-status').textContent = 'offline';
@@ -652,6 +695,22 @@ function escHtml(str) {
   return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+function relativeTime(ts) {
+  // ts format: 20240101_120000
+  try {
+    const s = ts.replace('_', 'T') + 'Z';
+    const d = new Date(
+      s.slice(0,4)+'-'+s.slice(4,6)+'-'+s.slice(6,8)+'T'+
+      s.slice(9,11)+':'+s.slice(11,13)+':'+s.slice(13,15)+'Z'
+    );
+    const delta = Math.floor((Date.now() - d.getTime()) / 1000);
+    if (delta < 60)    return 'just now';
+    if (delta < 3600)  return `${Math.floor(delta/60)}m ago`;
+    if (delta < 86400) return `${Math.floor(delta/3600)}h ago`;
+    return `${Math.floor(delta/86400)}d ago`;
+  } catch(_) { return ts; }
+}
+
 // Enter key to pitch
 document.getElementById('pitch-input').addEventListener('keydown', e => {
   if (e.key === 'Enter') pitchTask();
@@ -714,7 +773,11 @@ async function viewRun(timestamp) {
     planHtml += '</div>';
     document.getElementById('modal-plan').innerHTML = planHtml;
 
-    document.getElementById('modal-review').innerHTML = renderOutput(data.review);
+    // Prefer the clean final output over the full review blob
+    const outputContent = (data.final_output && data.final_output.trim())
+      ? data.final_output
+      : data.review;
+    document.getElementById('modal-review').innerHTML = renderOutput(outputContent);
     document.getElementById('output-modal').style.display = 'block';
   } catch(e) {
     console.error('Failed to load run:', e);
@@ -743,6 +806,17 @@ const EVENT_LABELS = {
 };
 
 function appendEvent(ev) {
+  // Handle node activity events — update node cards directly, skip log entry
+  if (ev.type === 'node_busy') {
+    _setNodeBusy(ev.node_id, ev.task_title);
+    return;
+  }
+  if (ev.type === 'node_idle') {
+    _setNodeIdle(ev.node_id, ev.credits_earned);
+    if (ev.credits_earned > 0) loadStandings();
+    return;
+  }
+
   const label = EVENT_LABELS[ev.type] || {agent: ev.type.toUpperCase(), color: '#888'};
   const t = new Date(ev.time).toLocaleTimeString();
   let msg = '';
@@ -752,6 +826,7 @@ function appendEvent(ev) {
   else if (ev.type === 'review_start') msg = 'Reviewing combined output...';
   else if (ev.type === 'complete') msg = `Pipeline complete \u2192 ${escHtml(ev.project_dir)}`;
   else if (ev.type === 'error') msg = `Error: ${escHtml(ev.message || '')}`;
+  else return; // skip unknown events
 
   const log = document.getElementById('event-log');
   log.insertAdjacentHTML('beforeend', `<div class="log-entry">
@@ -760,6 +835,38 @@ function appendEvent(ev) {
     <span class="log-event"> ${msg}</span>
   </div>`);
   log.scrollTop = log.scrollHeight;
+}
+
+function _setNodeBusy(nodeId, taskTitle) {
+  const card = document.getElementById(`nodecard-${nodeId}`);
+  if (!card) return;
+  const dot = card.querySelector('.node-dot');
+  if (dot) { dot.className = 'node-dot busy'; }
+  let active = card.querySelector('.node-active-task');
+  if (!active) {
+    active = document.createElement('div');
+    active.className = 'node-active-task';
+    card.appendChild(active);
+  }
+  active.textContent = '\u25b6 ' + taskTitle;
+}
+
+function _setNodeIdle(nodeId, creditsEarned) {
+  const card = document.getElementById(`nodecard-${nodeId}`);
+  if (!card) return;
+  const dot = card.querySelector('.node-dot');
+  if (dot) { dot.className = 'node-dot'; }
+  const active = card.querySelector('.node-active-task');
+  if (active) active.remove();
+
+  // Flash credit earned
+  if (creditsEarned > 0) {
+    const flash = document.createElement('div');
+    flash.className = 'credit-flash';
+    flash.textContent = `+${creditsEarned}`;
+    card.appendChild(flash);
+    setTimeout(() => flash.remove(), 2000);
+  }
 }
 
 function connectWebSocket() {
@@ -814,12 +921,12 @@ async function loadHistory() {
     }
 
     el.innerHTML = data.runs.map(r => `
-      <div class="pipeline-card" style="padding:12px 16px;margin-bottom:6px;cursor:pointer;" onclick="viewRun('${r.timestamp}')">
+      <div class="pipeline-card" style="padding:12px 16px;margin-bottom:6px;cursor:pointer;" onclick="viewRun('${escHtml(r.timestamp)}')">
         <div style="display:flex;justify-content:space-between;align-items:center;">
-          <div style="font-size:13px;color:#BBBBBB;flex:1;">${r.task}</div>
-          <div style="display:flex;gap:12px;align-items:center;">
+          <div style="font-size:13px;color:#BBBBBB;flex:1;padding-right:12px;">${escHtml(r.task)}</div>
+          <div style="display:flex;gap:12px;align-items:center;flex-shrink:0;">
             <span style="font-family:Consolas,monospace;font-size:11px;color:#555;">${r.subtask_count} subtasks</span>
-            <span style="font-family:Consolas,monospace;font-size:11px;color:#444;">${r.timestamp}</span>
+            <span style="font-family:Consolas,monospace;font-size:11px;color:#444;">${relativeTime(r.timestamp)}</span>
             <span style="font-size:11px;color:#00FFAA;">view</span>
           </div>
         </div>

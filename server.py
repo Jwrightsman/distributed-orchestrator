@@ -266,12 +266,16 @@ async def history_detail(timestamp: str):
     review_file = run_dir / "review.md"
     review_content = review_file.read_text() if review_file.exists() else ""
 
+    output_file = run_dir / "output.md"
+    final_output = output_file.read_text() if output_file.exists() else ""
+
     return {
         "task": log.get("task"),
         "timestamp": log.get("timestamp"),
         "plan": log.get("plan", []),
         "results": log.get("results", {}),
         "review": review_content,
+        "final_output": final_output,
     }
 
 
@@ -300,6 +304,8 @@ async def register_node(reg: NodeRegistration):
         "registered_at": datetime.now(timezone.utc).isoformat(),
         "last_seen": time.time(),
         "tasks_completed": 0,
+        "credits_earned": 0,
+        "current_task": None,
     }
     return {"message": f"Welcome, {reg.node_id}. You are node #{len(nodes)} in the network."}
 
@@ -322,6 +328,11 @@ async def next_task(node_id: str):
     task = task_queue.pop(0)
     task["assigned_to"] = node_id
     task["assigned_at"] = time.time()
+
+    if node_id in nodes:
+        nodes[node_id]["current_task"] = task.get("title", task["task_id"])
+    _emit("node_busy", {"node_id": node_id, "task_title": task.get("title", task["task_id"])})
+
     return task
 
 
@@ -336,13 +347,23 @@ async def submit_result(task_id: str, result: TaskResult):
         "elapsed_seconds": result.elapsed_seconds,
         "completed_at": time.time(),
     }
+    credits_earned = 0
     if result.node_id in nodes:
         nodes[result.node_id]["tasks_completed"] += 1
         nodes[result.node_id]["last_seen"] = time.time()
-    # Log to ledger
+        nodes[result.node_id]["current_task"] = None
     if result.output and not result.error:
-        log_contribution(result.node_id, "compute", credits=5, task=task_id)
-    return {"status": "accepted"}
+        credits_earned = 5
+        log_contribution(result.node_id, "compute", credits=credits_earned, task=task_id)
+        if result.node_id in nodes:
+            nodes[result.node_id]["credits_earned"] = nodes[result.node_id].get("credits_earned", 0) + credits_earned
+    _emit("node_idle", {
+        "node_id": result.node_id,
+        "credits_earned": credits_earned,
+        "elapsed_seconds": result.elapsed_seconds,
+        "success": bool(result.output and not result.error),
+    })
+    return {"status": "accepted", "credits_earned": credits_earned}
 
 
 # ── Distributed pipeline ────────────────────────────────────────────

@@ -11,6 +11,7 @@ import asyncio
 import sys
 import time
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 from rich.console import Console
@@ -65,9 +66,11 @@ async def run_task(task: str):
         console.print(f"[red bold]Unexpected error:[/red bold] {e}")
         return
 
+    # Show the clean final output if available, otherwise fall back to full review
+    output_content = result.get("final_output") or result["review"]
     console.print(Panel(
-        Markdown(result["review"]),
-        title="[bold magenta]REVIEWER[/bold magenta]",
+        Markdown(output_content),
+        title="[bold magenta]OUTPUT[/bold magenta]",
         border_style="magenta",
     ))
 
@@ -81,6 +84,22 @@ async def run_task(task: str):
     console.print(f"\n[dim]Completed in {elapsed:.0f}s — output saved to: {result['project_dir']}[/dim]")
 
 
+def _relative_time(timestamp_str: str) -> str:
+    """Turn a YYYYmmdd_HHMMSS timestamp into a human-readable relative time."""
+    try:
+        dt = datetime.strptime(timestamp_str, "%Y%m%d_%H%M%S").replace(tzinfo=timezone.utc)
+        delta = int(time.time() - dt.timestamp())
+        if delta < 60:
+            return "just now"
+        if delta < 3600:
+            return f"{delta // 60}m ago"
+        if delta < 86400:
+            return f"{delta // 3600}h ago"
+        return f"{delta // 86400}d ago"
+    except ValueError:
+        return timestamp_str
+
+
 def show_history():
     """Show past pipeline runs."""
     if not OUTPUT_DIR.exists():
@@ -88,11 +107,12 @@ def show_history():
         return
 
     table = Table(title="Past Runs", border_style="dim")
-    table.add_column("Time", style="dim")
+    table.add_column("When", style="dim", min_width=10)
     table.add_column("Task", style="cyan")
     table.add_column("Subtasks", justify="center")
     table.add_column("Rating", justify="center")
 
+    count = 0
     for d in sorted(OUTPUT_DIR.iterdir(), reverse=True):
         if not d.is_dir():
             continue
@@ -105,19 +125,31 @@ def show_history():
             if len(task) > 60:
                 task = task[:57] + "..."
             subtask_count = str(len(log.get("plan", [])))
-            review = log.get("review", "")
+            ts = log.get("timestamp", d.name)
+            when = _relative_time(ts)
+
+            # Check review file for rating
+            review_file = d / "review.md"
             rating = "?"
-            if "PASS" in review:
-                rating = "[green]PASS[/green]"
-            elif "NEEDS_WORK" in review:
-                rating = "[yellow]NEEDS_WORK[/yellow]"
-            elif "FAIL" in review:
-                rating = "[red]FAIL[/red]"
-            table.add_row(d.name, task, subtask_count, rating)
+            if review_file.exists():
+                review = review_file.read_text(errors="ignore")
+                if "PASS" in review:
+                    rating = "[green]PASS[/green]"
+                elif "NEEDS_WORK" in review:
+                    rating = "[yellow]NEEDS_WORK[/yellow]"
+                elif "FAIL" in review:
+                    rating = "[red]FAIL[/red]"
+            table.add_row(when, task, subtask_count, rating)
+            count += 1
         except (json.JSONDecodeError, OSError):
             pass
+        if count >= 20:
+            break
 
-    console.print(table)
+    if count == 0:
+        console.print("[dim]No past runs yet.[/dim]")
+    else:
+        console.print(table)
 
 
 def show_standings():
