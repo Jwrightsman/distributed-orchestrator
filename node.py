@@ -22,7 +22,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich import box
 
-from ollama_client import generate, check_ollama, DEFAULT_MODEL
+from ollama_client import generate, generate_stream, check_ollama, DEFAULT_MODEL
 
 console = Console()
 
@@ -118,7 +118,41 @@ async def poll_and_execute(server: str, node_id: str, session: dict, secret: str
 
         start = time.time()
         try:
-            result = await generate(prompt, system=system)
+            # Stream tokens from Ollama, batch them, and relay to the orchestrator
+            # so the dashboard shows live output from remote workers.
+            _BATCH_TOKENS = 20      # flush after this many tokens …
+            _BATCH_INTERVAL = 0.3   # … or after this many seconds, whichever comes first
+
+            collected: list[str] = []
+            batch: list[str] = []
+            last_flush = time.time()
+
+            async def _flush_batch(client_: httpx.AsyncClient, batch_: list[str]):
+                if not batch_:
+                    return
+                text = "".join(batch_)
+                try:
+                    await client_.post(
+                        f"{server}/tasks/{task_id}/stream",
+                        json={"node_id": node_id, "tokens": text},
+                        headers=_auth_headers(secret),
+                    )
+                except Exception:
+                    pass  # token relay is best-effort; don't fail the task
+
+            async with httpx.AsyncClient(timeout=600) as stream_client:
+                async for token in generate_stream(prompt, system=system):
+                    collected.append(token)
+                    batch.append(token)
+                    now_t = time.time()
+                    if len(batch) >= _BATCH_TOKENS or (now_t - last_flush) >= _BATCH_INTERVAL:
+                        await _flush_batch(stream_client, batch)
+                        batch = []
+                        last_flush = now_t
+                # flush any remaining tokens
+                await _flush_batch(stream_client, batch)
+
+            result = "".join(collected)
             elapsed = time.time() - start
 
             submit_resp = await client.post(
