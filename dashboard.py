@@ -464,10 +464,21 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <div id="standings-list">
       <div class="empty-state"><p>No contributions yet.</p></div>
     </div>
+
+    <h2 style="margin-top:24px">Projects</h2>
+    <div id="projects-list">
+      <div class="empty-state"><p>No projects yet.</p></div>
+    </div>
   </div>
 
   <div class="content">
     <h2>Pitch a Task</h2>
+    <!-- Hidden project context — set when "Continue" is clicked -->
+    <div id="project-context" style="display:none;margin-bottom:10px;padding:8px 12px;background:rgba(0,255,170,0.06);border:1px solid rgba(0,255,170,0.2);border-radius:6px;justify-content:space-between;align-items:center;">
+      <span style="font-size:12px;color:#00FFAA;">Continuing project: <strong id="project-context-name"></strong></span>
+      <button onclick="clearProjectContext()" style="background:none;border:none;color:#555;cursor:pointer;font-size:11px;">✕ clear</button>
+    </div>
+    <input type="hidden" id="active-project-id" value="">
     <div class="pitch-form">
       <input type="text" class="pitch-input" id="pitch-input"
              placeholder="Describe what you want built...">
@@ -582,6 +593,7 @@ async function pitchTask() {
   const btn = document.getElementById('pitch-btn');
   const task = input.value.trim();
   if (!task) return;
+  const activeProjectId = document.getElementById('active-project-id').value || null;
 
   btn.disabled = true;
   btn.textContent = 'Pitching...';
@@ -648,10 +660,12 @@ async function pitchTask() {
     // Use async endpoint — returns job_id immediately, result arrives via WebSocket
     const endpoint = document.getElementById('stat-nodes').textContent !== '0'
       ? '/pitch/distributed' : '/pitch/async';
+    const body = {task};
+    if (activeProjectId) body.project_id = activeProjectId;
     const resp = await fetch(endpoint, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({task}),
+      body: JSON.stringify(body),
     });
     const data = await resp.json();
 
@@ -697,6 +711,7 @@ async function _pollJobCompletion(jobId, pipelineId, task, stageWatcher) {
           status: job.status,
         });
         loadHistory();
+        loadProjects();
         return;
       }
     } catch(_) {}
@@ -1037,14 +1052,60 @@ async function loadStandings() {
   } catch(e) {}
 }
 
+// ── Projects ──
+async function loadProjects() {
+  try {
+    const resp = await fetch('/projects');
+    const data = await resp.json();
+    const el = document.getElementById('projects-list');
+
+    if (!data.projects || data.projects.length === 0) {
+      el.innerHTML = '<div class="empty-state"><p>No projects yet.</p></div>';
+      return;
+    }
+
+    el.innerHTML = data.projects.map(p => `
+      <div class="node-card" style="margin-bottom:6px;cursor:pointer;padding:10px 12px;">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+          <div style="flex:1;min-width:0;">
+            <div class="node-name" style="font-size:12px;margin-bottom:2px;">${escHtml(p.name)}</div>
+            <div class="node-meta" style="font-size:10px;">${escHtml(p.project_id)}</div>
+            <div class="node-meta" style="margin-top:3px;">${p.iteration_count} iteration${p.iteration_count !== 1 ? 's' : ''}</div>
+          </div>
+          <button onclick="continueProject('${escHtml(p.project_id)}','${escHtml(p.name)}')"
+            style="background:rgba(0,255,170,0.1);border:1px solid rgba(0,255,170,0.25);border-radius:5px;padding:4px 10px;color:#00FFAA;font-size:10px;font-weight:700;cursor:pointer;white-space:nowrap;margin-left:8px;flex-shrink:0;">
+            Continue
+          </button>
+        </div>
+      </div>
+    `).join('');
+  } catch(e) {}
+}
+
+function continueProject(projectId, projectName) {
+  document.getElementById('active-project-id').value = projectId;
+  document.getElementById('project-context-name').textContent = projectName;
+  document.getElementById('project-context').style.display = 'flex';
+  document.getElementById('pitch-input').placeholder = `What's next for ${projectName}?`;
+  document.getElementById('pitch-input').focus();
+}
+
+function clearProjectContext() {
+  document.getElementById('active-project-id').value = '';
+  document.getElementById('project-context').style.display = 'none';
+  document.getElementById('pitch-input').placeholder = 'Describe what you want built...';
+}
+
 // Start
 refresh();
 loadHistory();
 loadStandings();
+loadProjects();
 setInterval(refresh, 3000);
 setInterval(pollEvents, 3000);   // fallback only — no-ops when WS is connected
 setInterval(loadHistory, 15000);
 setInterval(loadStandings, 10000);
+setInterval(loadProjects, 20000);
 </script>
 </body>
 </html>"""

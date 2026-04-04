@@ -208,13 +208,28 @@ _MAX_CONTEXT_CHARS = 2000
 _MIN_BUILDER_OUTPUT = 50
 
 
-async def plan(task: str, max_retries: int | None = None) -> list[dict]:
+PLANNER_MEMORY_PREFIX = """You are continuing work on an existing project. Here is the project memory — what has been built so far:
+
+{memory}
+
+---
+
+Based on this history, decompose the NEXT task into subtasks. Build on existing work; don't repeat what's already been done.
+
+"""
+
+
+async def plan(task: str, max_retries: int | None = None, memory_context: str = "") -> list[dict]:
     """Decompose a task into subtasks using the planner agent."""
     if max_retries is None:
         max_retries = get_config()["planner_retries"]
+    system = PLANNER_SYSTEM
+    if memory_context:
+        system = PLANNER_MEMORY_PREFIX.format(memory=memory_context) + PLANNER_SYSTEM
+
     last_err: Exception = ValueError("no attempts made")
     for attempt in range(max_retries):
-        raw = await generate(task, system=PLANNER_SYSTEM)
+        raw = await generate(task, system=system)
         try:
             subtasks = _extract_json(raw)
             return _validate_subtasks(subtasks)
@@ -239,9 +254,12 @@ async def build(subtask: dict, context: str = "", max_retries: int = 2) -> str:
     return output  # return last attempt regardless
 
 
-async def review(task: str, subtasks: list[dict], results: dict[int, str]) -> str:
+async def review(task: str, subtasks: list[dict], results: dict[int, str], memory_context: str = "") -> str:
     """Review all builder outputs against the original task."""
-    parts = [f"## Original Project Description\n{task}\n"]
+    parts = []
+    if memory_context:
+        parts.append(f"## Project History (for context)\n{memory_context}\n")
+    parts.append(f"## Current Task\n{task}\n")
     parts.append("## Planned Subtasks")
     for st in subtasks:
         parts.append(f"### Subtask {st['id']}: {st['title']}\n{st['prompt']}\n")
@@ -258,7 +276,7 @@ async def review(task: str, subtasks: list[dict], results: dict[int, str]) -> st
 
 # ── Full pipeline ───────────────────────────────────────────────────────
 
-async def run_pipeline(task: str, on_plan=None, on_build=None, on_review_start=None) -> dict:
+async def run_pipeline(task: str, on_plan=None, on_build=None, on_review_start=None, project_id: str | None = None) -> dict:
     """Run the full planner -> builder -> reviewer pipeline.
 
     Optional callbacks for live progress:
@@ -270,8 +288,17 @@ async def run_pipeline(task: str, on_plan=None, on_build=None, on_review_start=N
     """
     node_id = platform.node()  # this machine's hostname
 
+    # Load project memory if continuing an existing project
+    memory_context = ""
+    if project_id:
+        try:
+            from memory import get_memory_context
+            memory_context = get_memory_context(project_id)
+        except (ImportError, FileNotFoundError):
+            pass
+
     # 1. Plan
-    subtasks = await plan(task)
+    subtasks = await plan(task, memory_context=memory_context)
     log_contribution(node_id, "pitch", credits=1, task=task[:100])
     if on_plan:
         on_plan(subtasks)
@@ -295,7 +322,7 @@ async def run_pipeline(task: str, on_plan=None, on_build=None, on_review_start=N
     # 3. Review
     if on_review_start:
         on_review_start()
-    review_output = await review(task, subtasks, results)
+    review_output = await review(task, subtasks, results, memory_context=memory_context)
     log_contribution(node_id, "compute", credits=3, task="review", details=task[:100])
 
     # 4. Revision pass if reviewer found issues
@@ -338,9 +365,10 @@ async def run_pipeline(task: str, on_plan=None, on_build=None, on_review_start=N
         "rating": rating,
         "code_files": [str(f) for f in code_files],
     }
+    log["project_id"] = project_id or ""
     (project_dir / "full_log.json").write_text(json.dumps(log, indent=2))
 
-    return {
+    result = {
         "project_dir": str(project_dir),
         "plan": subtasks,
         "results": results,
@@ -348,4 +376,15 @@ async def run_pipeline(task: str, on_plan=None, on_build=None, on_review_start=N
         "final_output": final_output or "",
         "rating": rating,
         "code_files": code_files,
+        "project_id": project_id or "",
     }
+
+    # Save iteration to project memory
+    if project_id:
+        try:
+            from memory import add_iteration
+            add_iteration(project_id, result, task)
+        except Exception:
+            pass  # memory write failure never blocks the pipeline
+
+    return result

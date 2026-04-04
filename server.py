@@ -114,6 +114,7 @@ OUTPUT_DIR = Path("output")
 # ── Models ───────────────────────────────────────────────────────────
 class PitchRequest(BaseModel):
     task: str
+    project_id: str | None = None   # optional: continue an existing project
 
     @field_validator("task")
     @classmethod
@@ -231,7 +232,7 @@ async def pitch(req: PitchRequest):
         _emit("review_start", {"task": req.task})
 
     try:
-        result = await run_pipeline(req.task, on_plan=on_plan, on_build=on_build, on_review_start=on_review_start)
+        result = await run_pipeline(req.task, on_plan=on_plan, on_build=on_build, on_review_start=on_review_start, project_id=req.project_id)
     except ValueError as e:
         _emit("error", {"task": req.task, "message": str(e)})
         raise HTTPException(status_code=422, detail=str(e))
@@ -260,16 +261,17 @@ async def pitch_async(req: PitchRequest):
     jobs[job_id] = {
         "job_id": job_id,
         "task": req.task,
+        "project_id": req.project_id,
         "status": "queued",
         "submitted_at": datetime.now(timezone.utc).isoformat(),
         "result": None,
         "error": None,
     }
-    asyncio.create_task(_run_job(job_id, req.task))
-    return {"job_id": job_id, "status": "queued"}
+    asyncio.create_task(_run_job(job_id, req.task, req.project_id))
+    return {"job_id": job_id, "status": "queued", "project_id": req.project_id}
 
 
-async def _run_job(job_id: str, task: str):
+async def _run_job(job_id: str, task: str, project_id: str | None = None):
     """Background task: run the full pipeline for a job."""
     jobs[job_id]["status"] = "running"
     _emit("pitch", {"task": task, "job_id": job_id})
@@ -284,7 +286,7 @@ async def _run_job(job_id: str, task: str):
         _emit("review_start", {"task": task, "job_id": job_id})
 
     try:
-        result = await run_pipeline(task, on_plan=on_plan, on_build=on_build, on_review_start=on_review_start)
+        result = await run_pipeline(task, on_plan=on_plan, on_build=on_build, on_review_start=on_review_start, project_id=project_id)
         result["results"] = {str(k): v for k, v in result["results"].items()}
         jobs[job_id]["status"] = "complete"
         jobs[job_id]["result"] = result
@@ -426,6 +428,45 @@ async def standings():
 async def ledger(contributor: str | None = None, limit: int = 50):
     """Get recent ledger entries."""
     return {"entries": get_history(contributor, limit)}
+
+
+# ── Projects ─────────────────────────────────────────────────────────
+
+class NewProjectRequest(BaseModel):
+    name: str
+    initial_task: str
+
+
+@app.get("/projects")
+async def get_projects():
+    """List all projects."""
+    from memory import list_projects
+    return {"projects": list_projects()}
+
+
+@app.post("/projects")
+async def create_new_project(req: NewProjectRequest):
+    """Create a new project and return its ID."""
+    from memory import create_project
+    if not req.name.strip():
+        raise HTTPException(status_code=400, detail="Project name cannot be empty")
+    project_id = create_project(req.name.strip(), req.initial_task.strip())
+    return {"project_id": project_id, "name": req.name.strip()}
+
+
+@app.get("/projects/{project_id}")
+async def get_project(project_id: str):
+    """Get project metadata and memory."""
+    from memory import load_project, get_memory_context, PROJECTS_DIR
+    try:
+        meta = load_project(project_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Project not found")
+    memory = get_memory_context(project_id)
+    # List iteration dirs
+    iter_dir = PROJECTS_DIR / project_id / "iterations"
+    iterations = sorted([d.name for d in iter_dir.iterdir() if d.is_dir()], key=lambda x: int(x)) if iter_dir.exists() else []
+    return {**meta, "memory_context": memory, "iterations": iterations}
 
 
 # ── Node management ──────────────────────────────────────────────────
