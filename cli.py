@@ -82,15 +82,32 @@ async def run_task(task: str, project_id: str | None = None):
             console.print(f"  [{st['id']}] {st['title']}{deps}")
         console.print()
 
+    # Track which subtasks are currently streaming so we can print headers once
+    _streaming_subtask: dict = {}
+
+    def on_token(token: str, subtask: dict):
+        sid = subtask["id"]
+        if sid not in _streaming_subtask:
+            _streaming_subtask[sid] = True
+            console.print(f"\n[bold green]BUILDER {sid}: {subtask['title']}[/bold green]")
+        # Write token directly — no newline, no markup parsing
+        console.file.write(token)
+        console.file.flush()
+
     def on_build(subtask, output):
-        console.print(Panel(
-            Markdown(output),
-            title=f"[bold green]BUILDER {subtask['id']}: {subtask['title']}[/bold green]",
-            border_style="green",
-        ))
+        # Token stream already printed the content; just close it with a blank line
+        if subtask["id"] in _streaming_subtask:
+            console.print()  # newline after streamed content
+        else:
+            # No streaming happened (e.g. distributed node) — show the full output
+            console.print(Panel(
+                Markdown(output),
+                title=f"[bold green]BUILDER {subtask['id']}: {subtask['title']}[/bold green]",
+                border_style="green",
+            ))
 
     def on_review_start():
-        console.print("[bold magenta]REVIEWER[/bold magenta] Checking combined output...\n")
+        console.print("\n[bold magenta]REVIEWER[/bold magenta] Checking combined output...\n")
 
     console.print("[bold yellow]PLANNER[/bold yellow] Decomposing task into subtasks...\n")
 
@@ -100,6 +117,7 @@ async def run_task(task: str, project_id: str | None = None):
             on_plan=on_plan,
             on_build=on_build,
             on_review_start=on_review_start,
+            on_token=on_token,
             project_id=project_id,
         )
     except ValueError as e:
