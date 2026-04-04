@@ -5,6 +5,7 @@ Takes a natural language task, decomposes it into subtasks (planner),
 executes each subtask (builder), and reviews the assembled output (reviewer).
 """
 
+import asyncio
 import json
 import re
 from datetime import datetime, timezone
@@ -131,7 +132,7 @@ def _validate_subtasks(subtasks: list) -> list:
         if not prompt:
             raise ValueError(f"Subtask {task_id} is missing a prompt")
 
-        # Only keep deps that reference IDs we've already seen
+        # Only keep deps that reference IDs we've already seen (no forward refs)
         raw_deps = st.get("depends_on", [])
         if not isinstance(raw_deps, list):
             raw_deps = []
@@ -151,6 +152,28 @@ def _validate_subtasks(subtasks: list) -> list:
             "prompt": prompt,
             "depends_on": depends_on,
         })
+
+    # Cycle detection via topological sort (Kahn's algorithm)
+    id_set = {st["id"] for st in cleaned}
+    in_degree = {st["id"]: 0 for st in cleaned}
+    for st in cleaned:
+        for dep in st["depends_on"]:
+            if dep in id_set:
+                in_degree[st["id"]] += 1
+
+    queue = [sid for sid, deg in in_degree.items() if deg == 0]
+    visited = 0
+    while queue:
+        node = queue.pop()
+        visited += 1
+        for st in cleaned:
+            if node in st["depends_on"]:
+                in_degree[st["id"]] -= 1
+                if in_degree[st["id"]] == 0:
+                    queue.append(st["id"])
+
+    if visited != len(cleaned):
+        raise ValueError("Planner returned a dependency cycle — retrying")
 
     return cleaned
 
@@ -303,10 +326,12 @@ async def run_pipeline(task: str, on_plan=None, on_build=None, on_review_start=N
     if on_plan:
         on_plan(subtasks)
 
-    # 2. Build (respecting dependencies)
+    # 2. Build in parallel waves — independent subtasks run concurrently.
+    #    Each wave contains all tasks whose dependencies are already resolved.
+    #    Pattern borrowed from swarms/open-multi-agent DAG execution.
     results: dict[int, str] = {}
-    for st in sorted(subtasks, key=lambda s: s["id"]):
-        # Gather context from dependencies
+
+    async def _build_one(st: dict) -> tuple[int, str]:
         context_parts = []
         for dep_id in st.get("depends_on", []):
             if dep_id in results:
@@ -314,10 +339,23 @@ async def run_pipeline(task: str, on_plan=None, on_build=None, on_review_start=N
                 label = dep_task["title"] if dep_task else f"Subtask {dep_id}"
                 context_parts.append(f"[{label}]:\n{results[dep_id]}")
         context = "\n\n".join(context_parts)
-        results[st["id"]] = await build(st, context)
+        output = await build(st, context)
         log_contribution(node_id, "compute", credits=5, task=st["title"])
         if on_build:
-            on_build(st, results[st["id"]])
+            on_build(st, output)
+        return st["id"], output
+
+    remaining = {st["id"]: st for st in subtasks}
+    while remaining:
+        # All tasks whose deps are fully resolved can run this wave
+        wave = [st for st in remaining.values()
+                if all(dep_id in results for dep_id in st.get("depends_on", []))]
+        if not wave:
+            break  # shouldn't happen — cycle detection already ran
+        wave_results = await asyncio.gather(*[_build_one(st) for st in wave])
+        for st_id, output in wave_results:
+            results[st_id] = output
+            remaining.pop(st_id)
 
     # 3. Review
     if on_review_start:

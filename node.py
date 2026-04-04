@@ -172,6 +172,8 @@ async def main():
 
     session = {"tasks": 0, "credits": 0}
     registered = True
+    idle_streak = 0          # consecutive idle polls
+    _IDLE_BACKOFF = [3, 3, 5, 5, 10, 10, 15, 20, 30]  # seconds to sleep by streak
 
     while True:
         try:
@@ -180,15 +182,22 @@ async def main():
                 reg = await register(server, node_id)
                 console.print(f"[green]Reconnected.[/green] {reg.get('message', '')}\n")
                 registered = True
+                idle_streak = 0
 
             task_id = await poll_and_execute(server, node_id, session)
             if task_id is None:
-                await asyncio.sleep(3)
+                # Exponential-ish backoff when idle — saves network, still responsive
+                sleep_s = _IDLE_BACKOFF[min(idle_streak, len(_IDLE_BACKOFF) - 1)]
+                idle_streak += 1
+                await asyncio.sleep(sleep_s)
+            else:
+                idle_streak = 0  # got work — reset backoff
 
         except httpx.ConnectError:
             if registered:
                 console.print("[yellow]Lost connection to orchestrator. Retrying...[/yellow]")
             registered = False
+            idle_streak = 0
             await asyncio.sleep(10)
 
         except KeyboardInterrupt:

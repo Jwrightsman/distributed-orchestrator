@@ -155,15 +155,20 @@ async def _start_background_tasks():
     asyncio.create_task(_cleanup_stale_nodes())
 
 
-async def _cleanup_stale_nodes():
-    """Remove nodes that haven't checked in within _NODE_TIMEOUT seconds.
+_JOB_TTL = 7 * 24 * 3600    # keep finished jobs for 7 days
+_RESULT_TTL = 3600           # keep raw task results for 1 hour
 
-    Any in-flight tasks assigned to a dead node are returned to the queue
-    so another node (or local fallback) can pick them up.
+async def _cleanup_stale_nodes():
+    """Remove stale nodes, reclaim their in-flight tasks, and prune old records.
+
+    Runs every 30 seconds.
     """
     while True:
         await asyncio.sleep(30)
-        cutoff = time.time() - _NODE_TIMEOUT
+        now = time.time()
+
+        # 1. Dead nodes
+        cutoff = now - _NODE_TIMEOUT
         stale = [nid for nid, n in nodes.items() if n.get("last_seen", 0) < cutoff]
         for nid in stale:
             nodes.pop(nid, None)
@@ -178,6 +183,31 @@ async def _cleanup_stale_nodes():
                 task.pop("assigned_at", None)
                 task_queue.append(task)
                 _emit("task_reclaimed", {"task_id": tid, "node_id": nid})
+
+        # 2. Old task results (only needed long enough for the caller to collect them)
+        result_cutoff = now - _RESULT_TTL
+        stale_results = [
+            tid for tid, r in task_results.items()
+            if r.get("completed_at", now) < result_cutoff
+        ]
+        for tid in stale_results:
+            task_results.pop(tid, None)
+
+        # 3. Old async jobs (finished jobs older than 7 days)
+        job_cutoff = now - _JOB_TTL
+        stale_jobs = []
+        for jid, job in jobs.items():
+            finished = job.get("finished_at")
+            if finished and job["status"] in ("complete", "failed"):
+                try:
+                    from datetime import datetime, timezone
+                    finished_ts = datetime.fromisoformat(finished).timestamp()
+                    if finished_ts < job_cutoff:
+                        stale_jobs.append(jid)
+                except Exception:
+                    pass
+        for jid in stale_jobs:
+            jobs.pop(jid, None)
 
 
 # ── Health ───────────────────────────────────────────────────────────
