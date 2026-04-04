@@ -127,10 +127,46 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     margin-right: 6px;
     box-shadow: 0 0 8px rgba(0,255,136,0.4);
   }
+  .node-dot.busy {
+    background: #E8FF47;
+    box-shadow: 0 0 8px rgba(232,255,71,0.5);
+    animation: dotPulse 1s ease-in-out infinite;
+  }
+  @keyframes dotPulse {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.4; }
+  }
   .node-tasks {
     font-size: 11px;
     color: #00FFAA;
     margin-top: 4px;
+  }
+  .node-active-task {
+    font-size: 11px;
+    color: #E8FF47;
+    margin-top: 3px;
+    font-family: 'Consolas', monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .credit-flash {
+    position: absolute;
+    right: 14px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-family: 'Consolas', monospace;
+    font-size: 12px;
+    font-weight: 700;
+    color: #E8FF47;
+    pointer-events: none;
+    animation: creditPop 1.8s ease-out forwards;
+  }
+  @keyframes creditPop {
+    0%   { opacity: 0; transform: translateY(-50%) scale(0.8); }
+    20%  { opacity: 1; transform: translateY(-50%) scale(1.1); }
+    70%  { opacity: 1; transform: translateY(-60%); }
+    100% { opacity: 0; transform: translateY(-80%); }
   }
 
   .content {
@@ -274,10 +310,117 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     color: #888;
     padding: 4px 0;
     border-bottom: 1px solid rgba(255,255,255,0.03);
+    animation: fadeIn 0.3s ease;
   }
   .log-time { color: #555; margin-right: 8px; }
   .log-agent { color: #00FFAA; font-weight: 600; }
   .log-event { color: #AAAAAA; }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes pulseBorder {
+    0%, 100% { border-color: rgba(232,255,71,0.2); box-shadow: none; }
+    50%       { border-color: rgba(232,255,71,0.5); box-shadow: 0 0 16px rgba(232,255,71,0.08); }
+  }
+  .pipeline-card { animation: fadeIn 0.25s ease; }
+  .pipeline-card.running { animation: fadeIn 0.25s ease, pulseBorder 2s ease-in-out infinite; }
+
+  /* Stage progress shown while pipeline runs */
+  .stage-bar {
+    display: flex;
+    gap: 6px;
+    margin: 10px 0 4px;
+  }
+  .stage {
+    flex: 1;
+    height: 3px;
+    border-radius: 2px;
+    background: rgba(255,255,255,0.06);
+    position: relative;
+    overflow: hidden;
+  }
+  .stage.done   { background: #00FF88; }
+  .stage.active { background: rgba(232,255,71,0.3); }
+  .stage.active::after {
+    content: '';
+    position: absolute;
+    left: -60%;
+    top: 0;
+    width: 60%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, #E8FF47, transparent);
+    animation: shimmer 1.4s ease-in-out infinite;
+  }
+  @keyframes shimmer {
+    from { left: -60%; }
+    to   { left: 160%; }
+  }
+  .stage-labels {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+  .stage-label {
+    flex: 1;
+    font-family: 'Consolas', monospace;
+    font-size: 9px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: #444;
+    text-align: center;
+    transition: color 0.3s;
+  }
+  .stage-label.done   { color: #00FF88; }
+  .stage-label.active { color: #E8FF47; }
+
+  /* Code blocks in the output modal */
+  .code-block {
+    margin: 10px 0;
+    border-radius: 6px;
+    overflow: hidden;
+    border: 1px solid rgba(255,255,255,0.08);
+  }
+  .code-block-header {
+    background: rgba(255,255,255,0.05);
+    padding: 5px 12px;
+    font-family: 'Consolas', monospace;
+    font-size: 10px;
+    color: #666;
+    letter-spacing: 1px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .code-block-copy {
+    background: none;
+    border: none;
+    color: #555;
+    cursor: pointer;
+    font-size: 10px;
+    padding: 0;
+    transition: color 0.2s;
+  }
+  .code-block-copy:hover { color: #00FFAA; }
+  .code-block pre {
+    margin: 0;
+    padding: 14px 16px;
+    background: rgba(0,0,0,0.3);
+    overflow-x: auto;
+    font-family: 'Consolas', monospace;
+    font-size: 12.5px;
+    color: #C8E6C9;
+    line-height: 1.55;
+    white-space: pre;
+  }
+  .prose-text {
+    font-size: 13px;
+    color: #BBBBBB;
+    line-height: 1.7;
+    white-space: pre-wrap;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+  }
 </style>
 </head>
 <body>
@@ -355,7 +498,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <button onclick="closeModal()" style="background:none;border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:6px 14px;color:#888;cursor:pointer;font-size:12px;">Close</button>
         </div>
         <div id="modal-plan" style="margin-bottom:20px;"></div>
-        <div id="modal-review" style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:8px;padding:16px 20px;white-space:pre-wrap;font-family:Consolas,monospace;font-size:12.5px;color:#BBBBBB;line-height:1.6;max-height:500px;overflow-y:auto;"></div>
+        <div id="modal-files" style="margin-bottom:16px;display:none;"></div>
+        <div id="modal-review" style="max-height:520px;overflow-y:auto;"></div>
       </div>
     </div>
   </div>
@@ -380,21 +524,57 @@ async function refresh() {
       nodesList.innerHTML = `
         <div class="empty-state">
           <div class="icon">-</div>
-          <p>No nodes connected yet.<br>Run <code style="color:#00FFAA">py node.py --server http://YOUR_IP:8000</code> on another machine to join.</p>
+          <p>No nodes connected yet.<br>Run <code style="color:#00FFAA">py join.py http://YOUR_IP:8000</code> on another machine to join.</p>
         </div>`;
     } else {
-      nodesList.innerHTML = nodes.nodes.map(n => `
-        <div class="node-card active">
-          <div class="node-name"><span class="node-dot"></span>${n.node_id}</div>
-          <div class="node-meta">${n.platform} / ${n.machine}</div>
-          <div class="node-meta">${n.model}</div>
-          <div class="node-tasks">${n.tasks_completed} tasks completed</div>
-        </div>
-      `).join('');
+      nodesList.innerHTML = nodes.nodes.map(n => {
+        const busy = n.current_task;
+        const dotClass = busy ? 'node-dot busy' : 'node-dot';
+        const activeHtml = busy
+          ? `<div class="node-active-task">&#9654; ${escHtml(n.current_task)}</div>`
+          : '';
+        const hwParts = [];
+        if (n.cpu_count) hwParts.push(`${n.cpu_count} CPU`);
+        if (n.ram_gb)    hwParts.push(`${n.ram_gb}GB RAM`);
+        if (n.gpu)       hwParts.push(escHtml(n.gpu));
+        const hwHtml = hwParts.length
+          ? `<div class="node-meta" style="color:#444;">${hwParts.join(' &middot; ')}</div>`
+          : '';
+        return `
+          <div class="node-card active" id="nodecard-${escHtml(n.node_id)}" style="position:relative;">
+            <div class="node-name"><span class="${dotClass}"></span>${escHtml(n.node_id)}</div>
+            <div class="node-meta">${escHtml(n.platform)} / ${escHtml(n.machine)}</div>
+            <div class="node-meta">${escHtml(n.model)}</div>
+            ${hwHtml}
+            <div class="node-tasks">${n.tasks_completed} tasks &middot; ${n.credits_earned || 0} credits</div>
+            ${activeHtml}
+          </div>`;
+      }).join('');
     }
   } catch(e) {
     document.getElementById('stat-status').textContent = 'offline';
   }
+}
+
+// Stage bar helpers
+function stageBarHtml(planDone, buildDone, reviewDone, buildLabel) {
+  const planClass   = planDone   ? 'done' : (!planDone && !buildDone && !reviewDone ? 'active' : '');
+  const buildClass  = planDone && !buildDone ? 'active' : (buildDone ? 'done' : '');
+  const reviewClass = buildDone && !reviewDone ? 'active' : (reviewDone ? 'done' : '');
+  const planLbl   = planClass   === 'active' ? 'active' : (planDone   ? 'done' : '');
+  const buildLbl  = buildClass  === 'active' ? 'active' : (buildDone  ? 'done' : '');
+  const reviewLbl = reviewClass === 'active' ? 'active' : (reviewDone ? 'done' : '');
+  return `
+    <div class="stage-bar">
+      <div class="stage ${planClass}"></div>
+      <div class="stage ${buildClass}"></div>
+      <div class="stage ${reviewClass}"></div>
+    </div>
+    <div class="stage-labels">
+      <div class="stage-label ${planLbl}">Plan</div>
+      <div class="stage-label ${buildLbl}">${buildLabel || 'Build'}</div>
+      <div class="stage-label ${reviewLbl}">Review</div>
+    </div>`;
 }
 
 async function pitchTask() {
@@ -404,25 +584,65 @@ async function pitchTask() {
   if (!task) return;
 
   btn.disabled = true;
-  btn.textContent = 'Working...';
+  btn.textContent = 'Pitching...';
 
   const pipelineLog = document.getElementById('pipeline-log');
   const pipelineId = Date.now();
+  const startCursor = eventCursor;
 
-  // Show running state
-  pipelineLog.innerHTML = `
-    <div class="pipeline-card" id="pipeline-${pipelineId}">
+  // Show running card with stage bar in PLAN phase
+  const runningCard = `
+    <div class="pipeline-card running" id="pipeline-${pipelineId}">
       <div class="pipeline-header">
-        <div class="pipeline-task">${task}</div>
-        <div class="pipeline-status status-running">RUNNING</div>
+        <div class="pipeline-task">${escHtml(task)}</div>
+        <div class="pipeline-status status-running" id="pstatus-${pipelineId}">PLANNING</div>
       </div>
-      <div class="log-entry">
-        <span class="log-time">${new Date().toLocaleTimeString()}</span>
-        <span class="log-agent">PLANNER</span>
-        <span class="log-event"> Decomposing task...</span>
-      </div>
-    </div>
-  ` + pipelineLog.innerHTML;
+      <div id="pstages-${pipelineId}">${stageBarHtml(false, false, false)}</div>
+    </div>`;
+
+  // Remove empty state if present
+  const empty = pipelineLog.querySelector('.empty-state');
+  if (empty) pipelineLog.innerHTML = '';
+  pipelineLog.insertAdjacentHTML('afterbegin', runningCard);
+
+  // Watch events to update the stage bar while the request is in flight.
+  // Uses its own cursor so it doesn't conflict with the WebSocket log.
+  let planDone = false, buildDone = false, buildCount = 0, totalSubtasks = 0;
+  let stageCursor = eventCursor;
+  const stageWatcher = setInterval(async () => {
+    try {
+      const r = await fetch(`/events?since=${stageCursor}`);
+      const d = await r.json();
+      d.events.forEach(ev => {
+        if (ev.type === 'plan') {
+          planDone = true;
+          totalSubtasks = ev.subtasks ? ev.subtasks.length : 0;
+        }
+        if (ev.type === 'build') buildCount++;
+        if (ev.type === 'review_start') buildDone = true;
+      });
+      stageCursor += d.events.length;
+
+      const statusEl = document.getElementById(`pstatus-${pipelineId}`);
+      const stagesEl = document.getElementById(`pstages-${pipelineId}`);
+      if (!statusEl) return;
+
+      const buildLabel = totalSubtasks > 0
+        ? `Build ${Math.min(buildCount, totalSubtasks)}/${totalSubtasks}`
+        : 'Build';
+
+      if (!planDone) {
+        statusEl.textContent = 'PLANNING';
+        stagesEl.innerHTML = stageBarHtml(false, false, false, buildLabel);
+      } else if (!buildDone) {
+        statusEl.textContent = buildLabel.toUpperCase();
+        stagesEl.innerHTML = stageBarHtml(true, false, false, buildLabel);
+      } else {
+        statusEl.textContent = 'REVIEWING';
+        stagesEl.innerHTML = stageBarHtml(true, true, false, buildLabel);
+      }
+    } catch(e) {}
+  }, 1000);
 
   try {
     const endpoint = document.getElementById('stat-nodes').textContent !== '0'
@@ -434,37 +654,44 @@ async function pitchTask() {
     });
     const result = await resp.json();
 
+    clearInterval(stageWatcher);
+
     // Show completed state
     const card = document.getElementById(`pipeline-${pipelineId}`);
     if (card) {
+      card.classList.remove('running');
       let subtasksHtml = '<div class="subtask-list">';
       result.plan.forEach(st => {
         subtasksHtml += `
           <div class="subtask">
-            <span class="subtask-id">${st.id}</span>
-            <span class="subtask-title">${st.title}</span>
-            <span class="subtask-check">done</span>
+            <span class="subtask-id">${escHtml(String(st.id))}</span>
+            <span class="subtask-title">${escHtml(st.title)}</span>
+            <span class="subtask-check" style="color:#00FF88;">&#10003;</span>
           </div>`;
       });
       subtasksHtml += '</div>';
 
       card.innerHTML = `
         <div class="pipeline-header">
-          <div class="pipeline-task">${task}</div>
+          <div class="pipeline-task">${escHtml(task)}</div>
           <div class="pipeline-status status-complete">${result.mode === 'distributed' ? 'DISTRIBUTED' : 'COMPLETE'}</div>
         </div>
+        ${stageBarHtml(true, true, true)}
         ${subtasksHtml}
-        <div class="log-entry">
+        <div class="log-entry" style="margin-top:8px;">
           <span class="log-time">${new Date().toLocaleTimeString()}</span>
-          <span class="log-event">Output saved to ${result.project_dir}</span>
+          <span class="log-event">&#8594; ${escHtml(result.project_dir)}</span>
         </div>
       `;
     }
+    loadHistory();
   } catch(e) {
+    clearInterval(stageWatcher);
     const card = document.getElementById(`pipeline-${pipelineId}`);
     if (card) {
-      card.querySelector('.pipeline-status').className = 'pipeline-status status-pending';
-      card.querySelector('.pipeline-status').textContent = 'FAILED';
+      card.classList.remove('running');
+      const s = document.getElementById(`pstatus-${pipelineId}`);
+      if (s) { s.className = 'pipeline-status status-pending'; s.textContent = 'FAILED'; }
     }
   }
 
@@ -473,12 +700,71 @@ async function pitchTask() {
   input.value = '';
 }
 
+function escHtml(str) {
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function relativeTime(ts) {
+  // ts format: 20240101_120000
+  try {
+    const s = ts.replace('_', 'T') + 'Z';
+    const d = new Date(
+      s.slice(0,4)+'-'+s.slice(4,6)+'-'+s.slice(6,8)+'T'+
+      s.slice(9,11)+':'+s.slice(11,13)+':'+s.slice(13,15)+'Z'
+    );
+    const delta = Math.floor((Date.now() - d.getTime()) / 1000);
+    if (delta < 60)    return 'just now';
+    if (delta < 3600)  return `${Math.floor(delta/60)}m ago`;
+    if (delta < 86400) return `${Math.floor(delta/3600)}h ago`;
+    return `${Math.floor(delta/86400)}d ago`;
+  } catch(_) { return ts; }
+}
+
 // Enter key to pitch
 document.getElementById('pitch-input').addEventListener('keydown', e => {
   if (e.key === 'Enter') pitchTask();
 });
 
 // ── Output viewer modal ──
+function renderOutput(text) {
+  if (!text) return '<div class="prose-text">No review output.</div>';
+
+  const parts = [];
+  const codeRe = /```(\\w*)\\n([\\s\\S]*?)```/g;
+  let last = 0, m;
+
+  while ((m = codeRe.exec(text)) !== null) {
+    if (m.index > last) {
+      parts.push(`<div class="prose-text">${escHtml(text.slice(last, m.index))}</div>`);
+    }
+    const lang = m[1] || 'text';
+    const code = escHtml(m[2]);
+    parts.push(`
+      <div class="code-block">
+        <div class="code-block-header">
+          <span>${lang}</span>
+          <button class="code-block-copy" onclick="copyCode(this)">copy</button>
+        </div>
+        <pre>${code}</pre>
+      </div>`);
+    last = m.index + m[0].length;
+  }
+
+  if (last < text.length) {
+    parts.push(`<div class="prose-text">${escHtml(text.slice(last))}</div>`);
+  }
+
+  return parts.join('') || `<div class="prose-text">${escHtml(text)}</div>`;
+}
+
+function copyCode(btn) {
+  const code = btn.closest('.code-block').querySelector('pre').textContent;
+  navigator.clipboard.writeText(code).then(() => {
+    btn.textContent = 'copied!';
+    setTimeout(() => btn.textContent = 'copy', 1500);
+  });
+}
+
 async function viewRun(timestamp) {
   try {
     const resp = await fetch(`/history/${timestamp}`);
@@ -486,17 +772,44 @@ async function viewRun(timestamp) {
 
     document.getElementById('modal-title').textContent = data.task;
 
-    let planHtml = '<div style="margin-bottom:12px;">';
+    let planHtml = '<div style="margin-bottom:16px;">';
     data.plan.forEach(st => {
-      planHtml += `<div style="display:flex;gap:8px;padding:4px 0;">
-        <span style="font-family:Consolas,monospace;font-size:11px;color:#555;min-width:20px;">${st.id}</span>
-        <span style="font-size:13px;color:#00FFAA;font-weight:600;">${st.title}</span>
+      planHtml += `<div style="display:flex;gap:8px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.04);">
+        <span style="font-family:Consolas,monospace;font-size:11px;color:#555;min-width:20px;">${escHtml(String(st.id))}</span>
+        <span style="font-size:13px;color:#00FFAA;font-weight:600;">${escHtml(st.title)}</span>
       </div>`;
     });
     planHtml += '</div>';
     document.getElementById('modal-plan').innerHTML = planHtml;
 
-    document.getElementById('modal-review').textContent = data.review || 'No review output.';
+    // Rating badge in title area
+    const ratingColors = {PASS: '#00FF88', NEEDS_WORK: '#E8FF47', FAIL: '#FF5555'};
+    const ratingEl = document.getElementById('modal-title');
+    const ratingBadge = data.rating && data.rating !== '?'
+      ? ` <span style="font-size:11px;font-family:Consolas,monospace;color:${ratingColors[data.rating]||'#888'};font-weight:600;">${escHtml(data.rating)}</span>`
+      : '';
+    ratingEl.innerHTML = escHtml(data.task) + ratingBadge;
+
+    // Code files section
+    const filesEl = document.getElementById('modal-files');
+    if (data.code_files && data.code_files.length > 0) {
+      filesEl.style.display = 'block';
+      filesEl.innerHTML = `
+        <div style="font-size:10px;color:#666;letter-spacing:2px;text-transform:uppercase;margin-bottom:8px;font-family:Consolas,monospace;">Extracted Files</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;">
+          ${data.code_files.map(f => `
+            <span style="background:rgba(0,255,170,0.08);border:1px solid rgba(0,255,170,0.2);border-radius:4px;padding:3px 10px;font-family:Consolas,monospace;font-size:11px;color:#00FFAA;">${escHtml(f)}</span>
+          `).join('')}
+        </div>`;
+    } else {
+      filesEl.style.display = 'none';
+    }
+
+    // Prefer the clean final output over the full review blob
+    const outputContent = (data.final_output && data.final_output.trim())
+      ? data.final_output
+      : data.review;
+    document.getElementById('modal-review').innerHTML = renderOutput(outputContent);
     document.getElementById('output-modal').style.display = 'block';
   } catch(e) {
     console.error('Failed to load run:', e);
@@ -511,43 +824,121 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape') closeModal();
 });
 
-// ── Event log (live updates during pipeline runs) ──
+// ── Event log — WebSocket with polling fallback ──
 let eventCursor = 0;
+let wsConnected = false;
+
 const EVENT_LABELS = {
-  pitch: {agent: 'PITCH', color: '#E8FF47'},
-  plan: {agent: 'PLANNER', color: '#E8FF47'},
-  build: {agent: 'BUILDER', color: '#00FFAA'},
+  pitch:        {agent: 'PITCH',    color: '#E8FF47'},
+  plan:         {agent: 'PLANNER',  color: '#E8FF47'},
+  build:        {agent: 'BUILDER',  color: '#00FFAA'},
   review_start: {agent: 'REVIEWER', color: '#AA77FF'},
-  complete: {agent: 'DONE', color: '#00FF88'},
+  complete:     {agent: 'DONE',     color: '#00FF88'},
+  error:        {agent: 'ERROR',    color: '#FF5555'},
 };
 
+function appendEvent(ev) {
+  // Handle node activity events — update node cards directly, skip log entry
+  if (ev.type === 'node_busy') {
+    _setNodeBusy(ev.node_id, ev.task_title);
+    return;
+  }
+  if (ev.type === 'node_idle') {
+    _setNodeIdle(ev.node_id, ev.credits_earned);
+    if (ev.credits_earned > 0) loadStandings();
+    return;
+  }
+
+  const label = EVENT_LABELS[ev.type] || {agent: ev.type.toUpperCase(), color: '#888'};
+  const t = new Date(ev.time).toLocaleTimeString();
+  let msg = '';
+  if (ev.type === 'pitch') msg = `Task pitched: "${escHtml(ev.task)}"`;
+  else if (ev.type === 'plan') msg = `Decomposed into ${ev.subtasks.length} subtasks: ${ev.subtasks.map(escHtml).join(', ')}`;
+  else if (ev.type === 'build') msg = `Subtask ${ev.subtask_id} complete: ${escHtml(ev.subtask)}`;
+  else if (ev.type === 'review_start') msg = 'Reviewing combined output...';
+  else if (ev.type === 'complete') msg = `Pipeline complete \u2192 ${escHtml(ev.project_dir)}`;
+  else if (ev.type === 'error') msg = `Error: ${escHtml(ev.message || '')}`;
+  else return; // skip unknown events
+
+  const log = document.getElementById('event-log');
+  log.insertAdjacentHTML('beforeend', `<div class="log-entry">
+    <span class="log-time">${t}</span>
+    <span class="log-agent" style="color:${label.color}">${label.agent}</span>
+    <span class="log-event"> ${msg}</span>
+  </div>`);
+  log.scrollTop = log.scrollHeight;
+}
+
+function _setNodeBusy(nodeId, taskTitle) {
+  const card = document.getElementById(`nodecard-${nodeId}`);
+  if (!card) return;
+  const dot = card.querySelector('.node-dot');
+  if (dot) { dot.className = 'node-dot busy'; }
+  let active = card.querySelector('.node-active-task');
+  if (!active) {
+    active = document.createElement('div');
+    active.className = 'node-active-task';
+    card.appendChild(active);
+  }
+  active.textContent = '\u25b6 ' + taskTitle;
+}
+
+function _setNodeIdle(nodeId, creditsEarned) {
+  const card = document.getElementById(`nodecard-${nodeId}`);
+  if (!card) return;
+  const dot = card.querySelector('.node-dot');
+  if (dot) { dot.className = 'node-dot'; }
+  const active = card.querySelector('.node-active-task');
+  if (active) active.remove();
+
+  // Flash credit earned
+  if (creditsEarned > 0) {
+    const flash = document.createElement('div');
+    flash.className = 'credit-flash';
+    flash.textContent = `+${creditsEarned}`;
+    card.appendChild(flash);
+    setTimeout(() => flash.remove(), 2000);
+  }
+}
+
+function connectWebSocket() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${proto}://${location.host}/ws/events`);
+
+  ws.onopen = () => {
+    wsConnected = true;
+  };
+
+  ws.onmessage = (e) => {
+    try {
+      const ev = JSON.parse(e.data);
+      appendEvent(ev);
+      eventCursor++;
+    } catch(_) {}
+  };
+
+  ws.onclose = () => {
+    wsConnected = false;
+    // Reconnect after 3s
+    setTimeout(connectWebSocket, 3000);
+  };
+
+  ws.onerror = () => {
+    ws.close();
+  };
+}
+
+// Polling fallback — only used if WebSocket never connects
 async function pollEvents() {
+  if (wsConnected) return;
   try {
     const resp = await fetch(`/events?since=${eventCursor}`);
     const data = await resp.json();
-    const log = document.getElementById('event-log');
-
-    data.events.forEach(ev => {
-      const label = EVENT_LABELS[ev.type] || {agent: ev.type.toUpperCase(), color: '#888'};
-      const t = new Date(ev.time).toLocaleTimeString();
-      let msg = '';
-      if (ev.type === 'pitch') msg = `Task pitched: "${ev.task}"`;
-      else if (ev.type === 'plan') msg = `Decomposed into ${ev.subtasks.length} subtasks: ${ev.subtasks.join(', ')}`;
-      else if (ev.type === 'build') msg = `Subtask ${ev.subtask_id} complete: ${ev.subtask}`;
-      else if (ev.type === 'review_start') msg = 'Reviewing combined output...';
-      else if (ev.type === 'complete') msg = `Pipeline complete. Saved to ${ev.project_dir}`;
-
-      log.innerHTML += `<div class="log-entry">
-        <span class="log-time">${t}</span>
-        <span class="log-agent" style="color:${label.color}">${label.agent}</span>
-        <span class="log-event"> ${msg}</span>
-      </div>`;
-    });
-
-    eventCursor += data.events.length;
-    if (data.events.length > 0) log.scrollTop = log.scrollHeight;
+    data.events.forEach(ev => { appendEvent(ev); eventCursor++; });
   } catch(e) {}
 }
+
+connectWebSocket();
 
 // ── History ──
 async function loadHistory() {
@@ -561,18 +952,22 @@ async function loadHistory() {
       return;
     }
 
-    el.innerHTML = data.runs.map(r => `
-      <div class="pipeline-card" style="padding:12px 16px;margin-bottom:6px;cursor:pointer;" onclick="viewRun('${r.timestamp}')">
-        <div style="display:flex;justify-content:space-between;align-items:center;">
-          <div style="font-size:13px;color:#BBBBBB;flex:1;">${r.task}</div>
-          <div style="display:flex;gap:12px;align-items:center;">
-            <span style="font-family:Consolas,monospace;font-size:11px;color:#555;">${r.subtask_count} subtasks</span>
-            <span style="font-family:Consolas,monospace;font-size:11px;color:#444;">${r.timestamp}</span>
-            <span style="font-size:11px;color:#00FFAA;">view</span>
+    const ratingColor = {PASS: '#00FF88', NEEDS_WORK: '#E8FF47', FAIL: '#FF5555'};
+    el.innerHTML = data.runs.map(r => {
+      const color = ratingColor[r.rating] || '#555';
+      return `
+        <div class="pipeline-card" style="padding:12px 16px;margin-bottom:6px;cursor:pointer;" onclick="viewRun('${escHtml(r.timestamp)}')">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div style="font-size:13px;color:#BBBBBB;flex:1;padding-right:12px;">${escHtml(r.task)}</div>
+            <div style="display:flex;gap:10px;align-items:center;flex-shrink:0;">
+              <span style="font-family:Consolas,monospace;font-size:10px;color:${color};">${escHtml(r.rating || '?')}</span>
+              <span style="font-family:Consolas,monospace;font-size:11px;color:#555;">${r.subtask_count} tasks</span>
+              <span style="font-family:Consolas,monospace;font-size:11px;color:#444;">${relativeTime(r.timestamp)}</span>
+              <span style="font-size:11px;color:#00FFAA;">view</span>
+            </div>
           </div>
-        </div>
-      </div>
-    `).join('');
+        </div>`;
+    }).join('');
   } catch(e) {}
 }
 
@@ -605,12 +1000,12 @@ async function loadStandings() {
   } catch(e) {}
 }
 
-// Start polling
+// Start
 refresh();
 loadHistory();
 loadStandings();
 setInterval(refresh, 3000);
-setInterval(pollEvents, 2000);
+setInterval(pollEvents, 3000);   // fallback only — no-ops when WS is connected
 setInterval(loadHistory, 15000);
 setInterval(loadStandings, 10000);
 </script>

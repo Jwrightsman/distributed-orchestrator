@@ -15,83 +15,50 @@ import asyncio
 import subprocess
 import sys
 
+from rich.console import Console
 from ollama_client import check_ollama, DEFAULT_MODEL
+
+console = Console()
 
 
 async def ensure_ollama():
     """Make sure Ollama is running and has the right model."""
     status = await check_ollama()
     if not status["ok"]:
-        print("Ollama is not running.")
-        print("Start it with: ollama serve")
-        print("Download from: https://ollama.com")
+        console.print(f"[red bold]Ollama is not running.[/red bold]")
+        console.print("Start it with: [dim]ollama serve[/dim]")
+        console.print("Download from: [dim]https://ollama.com[/dim]")
         return False
 
-    # Check if model is available
     if not any(DEFAULT_MODEL in m for m in status["models"]):
-        print(f"Model {DEFAULT_MODEL} not found. Pulling it now...")
-        print(f"This downloads ~2-3GB. Please wait.\n")
-        result = subprocess.run(
-            ["ollama", "pull", DEFAULT_MODEL],
-            capture_output=False,
-        )
+        console.print(f"Model [yellow]{DEFAULT_MODEL}[/yellow] not found. Pulling now (~2-3GB)...")
+        result = subprocess.run(["ollama", "pull", DEFAULT_MODEL], capture_output=False)
         if result.returncode != 0:
-            print(f"Failed to pull {DEFAULT_MODEL}.")
+            console.print(f"[red]Failed to pull {DEFAULT_MODEL}.[/red]")
             return False
-        print(f"\n{DEFAULT_MODEL} ready.\n")
+        console.print(f"[green]{DEFAULT_MODEL} ready.[/green]\n")
 
     return True
 
 
 async def main():
     if len(sys.argv) < 2:
-        print("Usage: python join.py http://ORCHESTRATOR_IP:8000")
-        print()
-        print("Example:")
-        print("  python join.py http://192.168.1.50:8000")
+        console.print("[bold]Usage:[/bold] py join.py http://ORCHESTRATOR_IP:8000")
+        console.print("\nExample:")
+        console.print("  [dim]py join.py http://192.168.1.50:8000[/dim]")
         sys.exit(1)
 
     server = sys.argv[1].rstrip("/")
-    print(f"Joining network at: {server}\n")
+    console.print(f"Joining network at [cyan]{server}[/cyan]\n")
 
-    # Step 1: Ensure Ollama is ready
     if not await ensure_ollama():
         sys.exit(1)
 
-    print("Ollama is ready.\n")
-
-    # Step 2: Import and run node
-    from node import register, poll_and_execute
-    import platform
-
-    node_id = platform.node()
-    print(f"Node ID: {node_id}")
-    print(f"Model: {DEFAULT_MODEL}\n")
-
-    # Register
-    try:
-        reg = await register(server, node_id)
-        print(f"Connected! {reg.get('message', '')}\n")
-    except Exception as e:
-        print(f"Could not connect to orchestrator at {server}")
-        print(f"Error: {e}")
-        print("\nMake sure the orchestrator is running:")
-        print("  python -m uvicorn server:app --host 0.0.0.0 --port 8000")
-        sys.exit(1)
-
-    # Poll for tasks
-    print("Waiting for tasks... (Ctrl+C to stop)\n")
-    while True:
-        try:
-            task_id = await poll_and_execute(server, node_id)
-            if task_id is None:
-                await asyncio.sleep(3)
-        except KeyboardInterrupt:
-            print("\nLeft the network. Thanks for contributing!")
-            break
-        except Exception as e:
-            print(f"Error: {e}. Retrying...")
-            await asyncio.sleep(5)
+    # Delegate entirely to node.main() — it handles register, poll, Rich output
+    import sys as _sys
+    _sys.argv = ["node.py", "--server", server]
+    from node import main as node_main
+    await node_main()
 
 
 if __name__ == "__main__":

@@ -18,20 +18,43 @@ from pathlib import Path
 
 LEDGER_FILE = Path("ledger.json")
 
+# In-memory cache: avoids re-parsing the JSON file on every standings request
+_cache: list[dict] | None = None
+_cache_mtime: float = 0.0
+
 
 def _load() -> list[dict]:
-    """Load the ledger from disk."""
+    """Load ledger from disk, using a simple mtime cache."""
+    global _cache, _cache_mtime
+    try:
+        mtime = LEDGER_FILE.stat().st_mtime if LEDGER_FILE.exists() else 0.0
+    except OSError:
+        mtime = 0.0
+
+    if _cache is not None and mtime == _cache_mtime:
+        return _cache
+
     if LEDGER_FILE.exists():
         try:
-            return json.loads(LEDGER_FILE.read_text())
+            _cache = json.loads(LEDGER_FILE.read_text())
+            _cache_mtime = mtime
+            return _cache
         except (json.JSONDecodeError, OSError):
-            return []
-    return []
+            pass
+    _cache = []
+    _cache_mtime = mtime
+    return _cache
 
 
 def _save(entries: list[dict]):
-    """Save the ledger to disk."""
+    """Save the ledger to disk and invalidate cache."""
+    global _cache, _cache_mtime
     LEDGER_FILE.write_text(json.dumps(entries, indent=2))
+    _cache = entries
+    try:
+        _cache_mtime = LEDGER_FILE.stat().st_mtime
+    except OSError:
+        _cache_mtime = 0.0
 
 
 def log_contribution(
