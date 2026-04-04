@@ -61,6 +61,18 @@ DEFAULTS = {
     # X-Node-Secret: <value> on /nodes/register, /tasks/next, and /tasks/*/result.
     # Leave empty ("") to allow any node to join (default — trusted networks only).
     "node_secret": "",
+
+    # ── Agent specialization (optional) ──────────────────────────────
+    # Route builder tasks to nodes running a specific model.
+    # The dispatcher will prefer nodes whose model matches the value set here.
+    # If no node has the preferred model, any node can pick up the task (soft routing).
+    #
+    # Example — route builders to fast 4b nodes, leave planner/reviewer on the
+    # local machine where a larger model can run:
+    #   "role_model_map": {"builder": "gemma3:4b"}
+    #
+    # Leave empty {} to route tasks to any available node (default).
+    "role_model_map": {},
 }
 
 
