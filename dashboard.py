@@ -553,11 +553,13 @@ async function pitchTask() {
   if (empty) pipelineLog.innerHTML = '';
   pipelineLog.insertAdjacentHTML('afterbegin', runningCard);
 
-  // Watch events to update the stage bar while the request is in flight
+  // Watch events to update the stage bar while the request is in flight.
+  // Uses its own cursor so it doesn't conflict with the WebSocket log.
   let planDone = false, buildDone = false, buildCount = 0, totalSubtasks = 0;
+  let stageCursor = eventCursor;
   const stageWatcher = setInterval(async () => {
     try {
-      const r = await fetch(`/events?since=${eventCursor}`);
+      const r = await fetch(`/events?since=${stageCursor}`);
       const d = await r.json();
       d.events.forEach(ev => {
         if (ev.type === 'plan') {
@@ -567,7 +569,7 @@ async function pitchTask() {
         if (ev.type === 'build') buildCount++;
         if (ev.type === 'review_start') buildDone = true;
       });
-      eventCursor += d.events.length;
+      stageCursor += d.events.length;
 
       const statusEl = document.getElementById(`pstatus-${pipelineId}`);
       const stagesEl = document.getElementById(`pstages-${pipelineId}`);
@@ -727,43 +729,77 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape') closeModal();
 });
 
-// ── Event log (live updates during pipeline runs) ──
+// ── Event log — WebSocket with polling fallback ──
 let eventCursor = 0;
+let wsConnected = false;
+
 const EVENT_LABELS = {
-  pitch: {agent: 'PITCH', color: '#E8FF47'},
-  plan: {agent: 'PLANNER', color: '#E8FF47'},
-  build: {agent: 'BUILDER', color: '#00FFAA'},
+  pitch:        {agent: 'PITCH',    color: '#E8FF47'},
+  plan:         {agent: 'PLANNER',  color: '#E8FF47'},
+  build:        {agent: 'BUILDER',  color: '#00FFAA'},
   review_start: {agent: 'REVIEWER', color: '#AA77FF'},
-  complete: {agent: 'DONE', color: '#00FF88'},
+  complete:     {agent: 'DONE',     color: '#00FF88'},
+  error:        {agent: 'ERROR',    color: '#FF5555'},
 };
 
+function appendEvent(ev) {
+  const label = EVENT_LABELS[ev.type] || {agent: ev.type.toUpperCase(), color: '#888'};
+  const t = new Date(ev.time).toLocaleTimeString();
+  let msg = '';
+  if (ev.type === 'pitch') msg = `Task pitched: "${escHtml(ev.task)}"`;
+  else if (ev.type === 'plan') msg = `Decomposed into ${ev.subtasks.length} subtasks: ${ev.subtasks.map(escHtml).join(', ')}`;
+  else if (ev.type === 'build') msg = `Subtask ${ev.subtask_id} complete: ${escHtml(ev.subtask)}`;
+  else if (ev.type === 'review_start') msg = 'Reviewing combined output...';
+  else if (ev.type === 'complete') msg = `Pipeline complete \u2192 ${escHtml(ev.project_dir)}`;
+  else if (ev.type === 'error') msg = `Error: ${escHtml(ev.message || '')}`;
+
+  const log = document.getElementById('event-log');
+  log.insertAdjacentHTML('beforeend', `<div class="log-entry">
+    <span class="log-time">${t}</span>
+    <span class="log-agent" style="color:${label.color}">${label.agent}</span>
+    <span class="log-event"> ${msg}</span>
+  </div>`);
+  log.scrollTop = log.scrollHeight;
+}
+
+function connectWebSocket() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${proto}://${location.host}/ws/events`);
+
+  ws.onopen = () => {
+    wsConnected = true;
+  };
+
+  ws.onmessage = (e) => {
+    try {
+      const ev = JSON.parse(e.data);
+      appendEvent(ev);
+      eventCursor++;
+    } catch(_) {}
+  };
+
+  ws.onclose = () => {
+    wsConnected = false;
+    // Reconnect after 3s
+    setTimeout(connectWebSocket, 3000);
+  };
+
+  ws.onerror = () => {
+    ws.close();
+  };
+}
+
+// Polling fallback — only used if WebSocket never connects
 async function pollEvents() {
+  if (wsConnected) return;
   try {
     const resp = await fetch(`/events?since=${eventCursor}`);
     const data = await resp.json();
-    const log = document.getElementById('event-log');
-
-    data.events.forEach(ev => {
-      const label = EVENT_LABELS[ev.type] || {agent: ev.type.toUpperCase(), color: '#888'};
-      const t = new Date(ev.time).toLocaleTimeString();
-      let msg = '';
-      if (ev.type === 'pitch') msg = `Task pitched: "${ev.task}"`;
-      else if (ev.type === 'plan') msg = `Decomposed into ${ev.subtasks.length} subtasks: ${ev.subtasks.join(', ')}`;
-      else if (ev.type === 'build') msg = `Subtask ${ev.subtask_id} complete: ${ev.subtask}`;
-      else if (ev.type === 'review_start') msg = 'Reviewing combined output...';
-      else if (ev.type === 'complete') msg = `Pipeline complete. Saved to ${ev.project_dir}`;
-
-      log.innerHTML += `<div class="log-entry">
-        <span class="log-time">${t}</span>
-        <span class="log-agent" style="color:${label.color}">${label.agent}</span>
-        <span class="log-event"> ${msg}</span>
-      </div>`;
-    });
-
-    eventCursor += data.events.length;
-    if (data.events.length > 0) log.scrollTop = log.scrollHeight;
+    data.events.forEach(ev => { appendEvent(ev); eventCursor++; });
   } catch(e) {}
 }
+
+connectWebSocket();
 
 // ── History ──
 async function loadHistory() {
@@ -821,12 +857,12 @@ async function loadStandings() {
   } catch(e) {}
 }
 
-// Start polling
+// Start
 refresh();
 loadHistory();
 loadStandings();
 setInterval(refresh, 3000);
-setInterval(pollEvents, 2000);
+setInterval(pollEvents, 3000);   // fallback only — no-ops when WS is connected
 setInterval(loadHistory, 15000);
 setInterval(loadStandings, 10000);
 </script>

@@ -23,7 +23,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 
@@ -51,7 +51,52 @@ _NODE_TIMEOUT = 90
 _MAX_TASK_QUEUE = 100
 
 # ── Pipeline event log (for dashboard live updates) ──────────────────
-pipeline_events: list[dict] = []   # recent events for SSE streaming
+pipeline_events: list[dict] = []   # recent events for polling fallback
+
+# ── WebSocket connection manager ──────────────────────────────────────
+class _WSManager:
+    def __init__(self):
+        self._connections: list[WebSocket] = []
+
+    async def connect(self, ws: WebSocket):
+        await ws.accept()
+        self._connections.append(ws)
+
+    def disconnect(self, ws: WebSocket):
+        self._connections.discard(ws) if hasattr(self._connections, 'discard') else None
+        if ws in self._connections:
+            self._connections.remove(ws)
+
+    async def broadcast(self, data: dict):
+        dead = []
+        for ws in list(self._connections):
+            try:
+                await ws.send_json(data)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            self.disconnect(ws)
+
+
+ws_manager = _WSManager()
+
+
+@app.websocket("/ws/events")
+async def ws_events(websocket: WebSocket):
+    """WebSocket endpoint — clients receive pipeline events in real time."""
+    await ws_manager.connect(websocket)
+    # Send recent history so the client doesn't start blind
+    for event in pipeline_events[-20:]:
+        try:
+            await websocket.send_json(event)
+        except Exception:
+            break
+    try:
+        while True:
+            # Keep alive — ignore any incoming messages
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        ws_manager.disconnect(websocket)
 
 # ── In-memory state ──────────────────────────────────────────────────
 nodes: dict[str, dict] = {}          # node_id -> info
@@ -134,15 +179,17 @@ async def health():
 
 # ── Local pipeline ───────────────────────────────────────────────────
 def _emit(event_type: str, data: dict):
-    """Push an event to the pipeline log for the dashboard."""
-    pipeline_events.append({
+    """Push an event to the pipeline log and broadcast to WebSocket clients."""
+    event = {
         "type": event_type,
         "time": datetime.now(timezone.utc).isoformat(),
         **data,
-    })
-    # Keep only last 100 events
+    }
+    pipeline_events.append(event)
     if len(pipeline_events) > 100:
         pipeline_events.pop(0)
+    # Fire-and-forget broadcast — don't await in a sync context
+    asyncio.get_event_loop().create_task(ws_manager.broadcast(event))
 
 
 @app.post("/pitch", response_model=PitchResponse)
