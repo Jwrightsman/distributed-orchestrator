@@ -532,11 +532,19 @@ async function refresh() {
         const activeHtml = busy
           ? `<div class="node-active-task">&#9654; ${escHtml(n.current_task)}</div>`
           : '';
+        const hwParts = [];
+        if (n.cpu_count) hwParts.push(`${n.cpu_count} CPU`);
+        if (n.ram_gb)    hwParts.push(`${n.ram_gb}GB RAM`);
+        if (n.gpu)       hwParts.push(escHtml(n.gpu));
+        const hwHtml = hwParts.length
+          ? `<div class="node-meta" style="color:#444;">${hwParts.join(' &middot; ')}</div>`
+          : '';
         return `
           <div class="node-card active" id="nodecard-${escHtml(n.node_id)}" style="position:relative;">
             <div class="node-name"><span class="${dotClass}"></span>${escHtml(n.node_id)}</div>
             <div class="node-meta">${escHtml(n.platform)} / ${escHtml(n.machine)}</div>
             <div class="node-meta">${escHtml(n.model)}</div>
+            ${hwHtml}
             <div class="node-tasks">${n.tasks_completed} tasks &middot; ${n.credits_earned || 0} credits</div>
             ${activeHtml}
           </div>`;

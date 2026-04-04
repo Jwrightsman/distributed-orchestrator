@@ -102,6 +102,7 @@ async def ws_events(websocket: WebSocket):
 nodes: dict[str, dict] = {}          # node_id -> info
 task_queue: list[dict] = []          # pending tasks for workers
 task_results: dict[str, dict] = {}   # task_id -> result
+task_inflight: dict[str, dict] = {}  # task_id -> task (assigned but not yet returned)
 OUTPUT_DIR = Path("output")
 
 
@@ -131,6 +132,9 @@ class NodeRegistration(BaseModel):
     platform: str
     machine: str
     hostname: str
+    cpu_count: int | None = None
+    ram_gb: float | None = None
+    gpu: str | None = None
 
 class TaskResult(BaseModel):
     node_id: str
@@ -146,13 +150,28 @@ async def _start_background_tasks():
 
 
 async def _cleanup_stale_nodes():
-    """Remove nodes that haven't checked in within _NODE_TIMEOUT seconds."""
+    """Remove nodes that haven't checked in within _NODE_TIMEOUT seconds.
+
+    Any in-flight tasks assigned to a dead node are returned to the queue
+    so another node (or local fallback) can pick them up.
+    """
     while True:
         await asyncio.sleep(30)
         cutoff = time.time() - _NODE_TIMEOUT
         stale = [nid for nid, n in nodes.items() if n.get("last_seen", 0) < cutoff]
         for nid in stale:
             nodes.pop(nid, None)
+            # Reclaim any in-flight tasks assigned to this dead node
+            reclaimed = [
+                tid for tid, t in task_inflight.items()
+                if t.get("assigned_to") == nid
+            ]
+            for tid in reclaimed:
+                task = task_inflight.pop(tid)
+                task.pop("assigned_to", None)
+                task.pop("assigned_at", None)
+                task_queue.append(task)
+                _emit("task_reclaimed", {"task_id": tid, "node_id": nid})
 
 
 # ── Health ───────────────────────────────────────────────────────────
@@ -301,6 +320,9 @@ async def register_node(reg: NodeRegistration):
         "platform": reg.platform,
         "machine": reg.machine,
         "hostname": reg.hostname,
+        "cpu_count": reg.cpu_count,
+        "ram_gb": reg.ram_gb,
+        "gpu": reg.gpu,
         "registered_at": datetime.now(timezone.utc).isoformat(),
         "last_seen": time.time(),
         "tasks_completed": 0,
@@ -331,6 +353,7 @@ async def next_task(node_id: str):
 
     if node_id in nodes:
         nodes[node_id]["current_task"] = task.get("title", task["task_id"])
+    task_inflight[task["task_id"]] = task
     _emit("node_busy", {"node_id": node_id, "task_title": task.get("title", task["task_id"])})
 
     return task
@@ -339,6 +362,7 @@ async def next_task(node_id: str):
 @app.post("/tasks/{task_id}/result")
 async def submit_result(task_id: str, result: TaskResult):
     """Worker submits completed task."""
+    task_inflight.pop(task_id, None)
     task_results[task_id] = {
         "task_id": task_id,
         "node_id": result.node_id,

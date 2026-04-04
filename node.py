@@ -12,6 +12,7 @@ Usage:
 
 import argparse
 import asyncio
+import os
 import platform
 import time
 
@@ -26,14 +27,42 @@ from ollama_client import generate, check_ollama, DEFAULT_MODEL
 console = Console()
 
 
+def _hardware_info() -> dict:
+    """Collect basic hardware info to send on registration."""
+    info: dict = {
+        "cpu_count": os.cpu_count(),
+        "ram_gb": None,
+        "gpu": None,
+    }
+    try:
+        import psutil  # type: ignore
+        info["ram_gb"] = round(psutil.virtual_memory().total / 1024 ** 3, 1)
+    except ImportError:
+        pass
+    # Best-effort GPU detection — non-critical
+    try:
+        import subprocess
+        r = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=3,
+        )
+        if r.returncode == 0 and r.stdout.strip():
+            info["gpu"] = r.stdout.strip().splitlines()[0]
+    except Exception:
+        pass
+    return info
+
+
 async def register(server: str, node_id: str) -> dict:
     """Register this node with the orchestrator."""
+    hw = _hardware_info()
     info = {
         "node_id": node_id,
         "model": DEFAULT_MODEL,
         "platform": platform.system(),
         "machine": platform.machine(),
         "hostname": platform.node(),
+        **hw,
     }
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.post(f"{server}/nodes/register", json=info)
@@ -142,18 +171,30 @@ async def main():
     console.print("[dim]Waiting for tasks... (Ctrl+C to stop)[/dim]\n")
 
     session = {"tasks": 0, "credits": 0}
+    registered = True
 
     while True:
         try:
+            # Re-register if we lost and regained connection
+            if not registered:
+                reg = await register(server, node_id)
+                console.print(f"[green]Reconnected.[/green] {reg.get('message', '')}\n")
+                registered = True
+
             task_id = await poll_and_execute(server, node_id, session)
             if task_id is None:
-                await asyncio.sleep(3)  # No work, wait and retry
+                await asyncio.sleep(3)
+
         except httpx.ConnectError:
-            console.print("[yellow]Lost connection to orchestrator. Retrying in 10s...[/yellow]")
+            if registered:
+                console.print("[yellow]Lost connection to orchestrator. Retrying...[/yellow]")
+            registered = False
             await asyncio.sleep(10)
+
         except KeyboardInterrupt:
             _print_session_summary(node_id, session)
             break
+
         except Exception as e:
             console.print(f"[red]Error:[/red] {e}. Retrying in 5s...")
             await asyncio.sleep(5)
