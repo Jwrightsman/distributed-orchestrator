@@ -23,8 +23,9 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Response
-from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, field_validator
 
 import httpx
 
@@ -36,6 +37,18 @@ from dashboard import router as dashboard_router
 
 app = FastAPI(title="Distributed AI Orchestrator", version="0.3.0")
 app.include_router(dashboard_router)
+
+# ── Global exception handler — always return JSON, never leak stack traces ──
+@app.exception_handler(Exception)
+async def _unhandled(request: Request, exc: Exception):
+    return JSONResponse(
+        status_code=500,
+        content={"error": "Internal server error", "detail": str(exc)},
+    )
+
+# ── Node staleness threshold (seconds) ───────────────────────────────────
+_NODE_TIMEOUT = 90
+_MAX_TASK_QUEUE = 100
 
 # ── Pipeline event log (for dashboard live updates) ──────────────────
 pipeline_events: list[dict] = []   # recent events for SSE streaming
@@ -50,6 +63,16 @@ OUTPUT_DIR = Path("output")
 # ── Models ───────────────────────────────────────────────────────────
 class PitchRequest(BaseModel):
     task: str
+
+    @field_validator("task")
+    @classmethod
+    def task_not_empty(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("task cannot be empty")
+        if len(v) > 1000:
+            raise ValueError("task must be 1000 characters or fewer")
+        return v
 
 class PitchResponse(BaseModel):
     project_dir: str
@@ -71,6 +94,22 @@ class TaskResult(BaseModel):
     elapsed_seconds: float = 0
 
 
+# ── Background: clean up stale nodes ────────────────────────────────────
+@app.on_event("startup")
+async def _start_background_tasks():
+    asyncio.create_task(_cleanup_stale_nodes())
+
+
+async def _cleanup_stale_nodes():
+    """Remove nodes that haven't checked in within _NODE_TIMEOUT seconds."""
+    while True:
+        await asyncio.sleep(30)
+        cutoff = time.time() - _NODE_TIMEOUT
+        stale = [nid for nid, n in nodes.items() if n.get("last_seen", 0) < cutoff]
+        for nid in stale:
+            nodes.pop(nid, None)
+
+
 # ── Health ───────────────────────────────────────────────────────────
 @app.get("/health")
 async def health():
@@ -79,15 +118,18 @@ async def health():
             resp = await client.get(f"{OLLAMA_URL}/api/tags")
             resp.raise_for_status()
             models = [m["name"] for m in resp.json().get("models", [])]
-        return {
-            "status": "ok",
-            "ollama": "connected",
-            "models": models,
-            "nodes_online": len(nodes),
-            "tasks_pending": len(task_queue),
-        }
-    except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Ollama unavailable: {e}")
+        ollama_status = "connected"
+    except Exception:
+        models = []
+        ollama_status = "unavailable"
+
+    return {
+        "status": "ok" if ollama_status == "connected" else "degraded",
+        "ollama": ollama_status,
+        "models": models,
+        "nodes_online": len(nodes),
+        "tasks_pending": len(task_queue),
+    }
 
 
 # ── Local pipeline ───────────────────────────────────────────────────
@@ -106,9 +148,6 @@ def _emit(event_type: str, data: dict):
 @app.post("/pitch", response_model=PitchResponse)
 async def pitch(req: PitchRequest):
     """Run the full pipeline locally (no distributed execution)."""
-    if not req.task.strip():
-        raise HTTPException(status_code=400, detail="Task cannot be empty")
-
     _emit("pitch", {"task": req.task})
 
     def on_plan(subtasks):
@@ -120,7 +159,12 @@ async def pitch(req: PitchRequest):
     def on_review_start():
         _emit("review_start", {"task": req.task})
 
-    result = await run_pipeline(req.task, on_plan=on_plan, on_build=on_build, on_review_start=on_review_start)
+    try:
+        result = await run_pipeline(req.task, on_plan=on_plan, on_build=on_build, on_review_start=on_review_start)
+    except ValueError as e:
+        _emit("error", {"task": req.task, "message": str(e)})
+        raise HTTPException(status_code=422, detail=str(e))
+
     result["results"] = {str(k): v for k, v in result["results"].items()}
     _emit("complete", {"task": req.task, "project_dir": result["project_dir"]})
     return result
@@ -263,24 +307,32 @@ async def pitch_distributed(req: PitchRequest):
     Builder subtasks get pushed to the task queue for worker nodes.
     Falls back to local execution if no nodes are connected.
     """
-    if not req.task.strip():
-        raise HTTPException(status_code=400, detail="Task cannot be empty")
-
     # 1. Plan (runs locally on orchestrator)
-    subtasks = await plan(req.task)
+    try:
+        subtasks = await plan(req.task)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
     # 2. If no worker nodes, fall back to local
     if not nodes:
-        result = await run_pipeline(req.task)
+        try:
+            result = await run_pipeline(req.task)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
         result["results"] = {str(k): v for k, v in result["results"].items()}
         result["mode"] = "local"
         return result
 
     # 3. Distribute builder tasks to worker nodes
     results: dict[int, str] = {}
+    nodes_used: set[str] = set()
+
+    if len(task_queue) >= _MAX_TASK_QUEUE:
+        raise HTTPException(status_code=503, detail="Task queue is full — too many pending tasks")
 
     for st in sorted(subtasks, key=lambda s: s["id"]):
-        # Build context from dependencies
+        # Build context from dependencies (reuse the same truncation logic as local)
+        from orchestrator import _MAX_CONTEXT_CHARS
         context_parts = []
         for dep_id in st.get("depends_on", []):
             if dep_id in results:
@@ -288,14 +340,15 @@ async def pitch_distributed(req: PitchRequest):
                 label = dep_task["title"] if dep_task else f"Subtask {dep_id}"
                 context_parts.append(f"[{label}]:\n{results[dep_id]}")
         context = "\n\n".join(context_parts)
+        if len(context) > _MAX_CONTEXT_CHARS:
+            context = "...[truncated]\n\n" + context[-_MAX_CONTEXT_CHARS:]
 
         prompt = st["prompt"]
         if context:
             prompt = f"Context from previous subtasks:\n{context}\n\n---\n\nYour task:\n{prompt}"
 
-        task_id = f"build_{st['id']}_{int(time.time())}"
+        task_id = f"build_{st['id']}_{int(time.time() * 1000)}"
 
-        # Push to queue
         task_queue.append({
             "task_id": task_id,
             "title": st["title"],
@@ -304,36 +357,52 @@ async def pitch_distributed(req: PitchRequest):
         })
 
         # Wait for result (poll)
-        timeout = time.time() + 600
+        deadline = time.time() + 600
         while task_id not in task_results:
-            if time.time() > timeout:
-                # Timeout — fall back to local execution for this task
+            if time.time() > deadline:
+                # Timeout — fall back to local execution for this subtask
                 results[st["id"]] = await generate(prompt, system=BUILDER_SYSTEM)
+                nodes_used.add("local")
                 break
             await asyncio.sleep(1)
         else:
             tr = task_results.pop(task_id)
             if tr.get("error") or not tr.get("output"):
-                # Node failed — run locally
                 results[st["id"]] = await generate(prompt, system=BUILDER_SYSTEM)
+                nodes_used.add("local")
             else:
                 results[st["id"]] = tr["output"]
+                nodes_used.add(tr.get("node_id", "unknown"))
 
     # 4. Review (runs locally on orchestrator)
     review_output = await review(req.task, subtasks, results)
 
     # 5. Save
+    import re
+    from orchestrator import _extract_final_output
     OUTPUT_DIR.mkdir(exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    project_dir = OUTPUT_DIR / f"{timestamp}"
+    project_dir = OUTPUT_DIR / timestamp
     project_dir.mkdir()
 
-    import re
     (project_dir / "plan.json").write_text(json.dumps(subtasks, indent=2))
     for st in subtasks:
         safe_title = re.sub(r"[^\w\s-]", "", st["title"]).strip().replace(" ", "_")
         (project_dir / f"builder_{st['id']}_{safe_title}.md").write_text(results[st["id"]])
     (project_dir / "review.md").write_text(review_output)
+    final_output = _extract_final_output(review_output)
+    if final_output:
+        (project_dir / "output.md").write_text(final_output)
+
+    log = {
+        "task": req.task,
+        "timestamp": timestamp,
+        "plan": subtasks,
+        "results": {str(k): v for k, v in results.items()},
+        "review": review_output,
+        "mode": "distributed",
+    }
+    (project_dir / "full_log.json").write_text(json.dumps(log, indent=2))
 
     return {
         "project_dir": str(project_dir),
@@ -341,8 +410,5 @@ async def pitch_distributed(req: PitchRequest):
         "results": {str(k): v for k, v in results.items()},
         "review": review_output,
         "mode": "distributed",
-        "nodes_used": len(set(
-            task_results.get(f"build_{st['id']}_{int(time.time())}", {}).get("node_id", "local")
-            for st in subtasks
-        )),
+        "nodes_used": len(nodes_used),
     }
