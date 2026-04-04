@@ -645,46 +645,27 @@ async function pitchTask() {
   }, 1000);
 
   try {
+    // Use async endpoint — returns job_id immediately, result arrives via WebSocket
     const endpoint = document.getElementById('stat-nodes').textContent !== '0'
-      ? '/pitch/distributed' : '/pitch';
+      ? '/pitch/distributed' : '/pitch/async';
     const resp = await fetch(endpoint, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({task}),
     });
-    const result = await resp.json();
+    const data = await resp.json();
 
-    clearInterval(stageWatcher);
-
-    // Show completed state
-    const card = document.getElementById(`pipeline-${pipelineId}`);
-    if (card) {
-      card.classList.remove('running');
-      let subtasksHtml = '<div class="subtask-list">';
-      result.plan.forEach(st => {
-        subtasksHtml += `
-          <div class="subtask">
-            <span class="subtask-id">${escHtml(String(st.id))}</span>
-            <span class="subtask-title">${escHtml(st.title)}</span>
-            <span class="subtask-check" style="color:#00FF88;">&#10003;</span>
-          </div>`;
-      });
-      subtasksHtml += '</div>';
-
-      card.innerHTML = `
-        <div class="pipeline-header">
-          <div class="pipeline-task">${escHtml(task)}</div>
-          <div class="pipeline-status status-complete">${result.mode === 'distributed' ? 'DISTRIBUTED' : 'COMPLETE'}</div>
-        </div>
-        ${stageBarHtml(true, true, true)}
-        ${subtasksHtml}
-        <div class="log-entry" style="margin-top:8px;">
-          <span class="log-time">${new Date().toLocaleTimeString()}</span>
-          <span class="log-event">&#8594; ${escHtml(result.project_dir)}</span>
-        </div>
-      `;
+    // Distributed pitch returns full result synchronously (nodes do the work)
+    // Async pitch returns {job_id, status:"queued"} and we poll for completion
+    if (data.job_id && !data.plan) {
+      // Async job — poll until complete
+      btn.textContent = 'Running...';
+      await _pollJobCompletion(data.job_id, pipelineId, task, stageWatcher);
+    } else {
+      // Distributed result came back synchronously
+      clearInterval(stageWatcher);
+      _showCompletedCard(pipelineId, task, data);
     }
-    loadHistory();
   } catch(e) {
     clearInterval(stageWatcher);
     const card = document.getElementById(`pipeline-${pipelineId}`);
@@ -698,6 +679,62 @@ async function pitchTask() {
   btn.disabled = false;
   btn.textContent = 'Pitch';
   input.value = '';
+}
+
+async function _pollJobCompletion(jobId, pipelineId, task, stageWatcher) {
+  // Poll /jobs/{id} until done; WebSocket keeps the stage bar + event log live
+  while (true) {
+    await new Promise(r => setTimeout(r, 3000));
+    try {
+      const r = await fetch(`/jobs/${jobId}`);
+      const job = await r.json();
+      if (job.status === 'complete' || job.status === 'failed') {
+        clearInterval(stageWatcher);
+        _showCompletedCard(pipelineId, task, {
+          plan: job.plan || [],
+          project_dir: job.project_dir || '',
+          rating: job.rating,
+          status: job.status,
+        });
+        loadHistory();
+        return;
+      }
+    } catch(_) {}
+  }
+}
+
+function _showCompletedCard(pipelineId, task, result) {
+  const card = document.getElementById(`pipeline-${pipelineId}`);
+  if (!card) return;
+  card.classList.remove('running');
+
+  const failed = result.status === 'failed';
+  const statusClass = failed ? 'status-pending' : 'status-complete';
+  const statusText = failed ? 'FAILED' : (result.mode === 'distributed' ? 'DISTRIBUTED' : 'COMPLETE');
+
+  let subtasksHtml = '<div class="subtask-list">';
+  (result.plan || []).forEach(st => {
+    subtasksHtml += `
+      <div class="subtask">
+        <span class="subtask-id">${escHtml(String(st.id))}</span>
+        <span class="subtask-title">${escHtml(st.title)}</span>
+        <span class="subtask-check" style="color:#00FF88;">&#10003;</span>
+      </div>`;
+  });
+  subtasksHtml += '</div>';
+
+  card.innerHTML = `
+    <div class="pipeline-header">
+      <div class="pipeline-task">${escHtml(task)}</div>
+      <div class="pipeline-status ${statusClass}">${statusText}</div>
+    </div>
+    ${stageBarHtml(true, true, true)}
+    ${subtasksHtml}
+    ${result.project_dir ? `<div class="log-entry" style="margin-top:8px;">
+      <span class="log-time">${new Date().toLocaleTimeString()}</span>
+      <span class="log-event">&#8594; ${escHtml(result.project_dir)}</span>
+    </div>` : ''}
+  `;
 }
 
 function escHtml(str) {
