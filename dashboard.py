@@ -825,9 +825,9 @@ async function pitchTask() {
   }, 1000);
 
   try {
-    // Use async endpoint — returns job_id immediately, result arrives via WebSocket
-    const endpoint = document.getElementById('stat-nodes').textContent !== '0'
-      ? '/pitch/distributed' : '/pitch/async';
+    // Always use async endpoint — returns job_id immediately, live updates via WebSocket.
+    // /pitch/async falls back to /pitch/distributed internally when nodes are connected.
+    const endpoint = '/pitch/async';
     const body = {task};
     if (activeProjectId) body.project_id = activeProjectId;
     const resp = await fetch(endpoint, {
@@ -843,17 +843,10 @@ async function pitchTask() {
       if (tsEl) tsEl.id = `token-stream-${data.job_id}`;
     }
 
-    // Distributed pitch returns full result synchronously (nodes do the work)
-    // Async pitch returns {job_id, status:"queued"} and we poll for completion
-    if (data.job_id && !data.plan) {
-      // Async job — poll until complete
-      btn.textContent = 'Running...';
-      await _pollJobCompletion(data.job_id, pipelineId, task, stageWatcher);
-    } else {
-      // Distributed result came back synchronously
-      clearInterval(stageWatcher);
-      _showCompletedCard(pipelineId, task, data);
-    }
+    // /pitch/async always returns {job_id, status:"queued"} — poll until done
+    if (!data.job_id) throw new Error('Unexpected response: ' + JSON.stringify(data));
+    btn.textContent = 'Running...';
+    await _pollJobCompletion(data.job_id, pipelineId, task, stageWatcher);
   } catch(e) {
     clearInterval(stageWatcher);
     const card = document.getElementById(`pipeline-${pipelineId}`);
