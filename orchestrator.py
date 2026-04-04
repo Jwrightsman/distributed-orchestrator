@@ -13,7 +13,7 @@ from pathlib import Path
 
 import platform
 
-from ollama_client import generate
+from ollama_client import generate, generate_stream
 from config import get as get_config
 from ledger import log_contribution
 from extract import extract_code_files
@@ -263,8 +263,12 @@ async def plan(task: str, max_retries: int | None = None, memory_context: str = 
     raise ValueError(f"Planner failed after {max_retries} attempts: {last_err}")
 
 
-async def build(subtask: dict, context: str = "", max_retries: int = 2) -> str:
-    """Execute a single subtask using the builder agent."""
+async def build(subtask: dict, context: str = "", max_retries: int = 2, on_token=None) -> str:
+    """Execute a single subtask using the builder agent.
+
+    on_token(token: str) — optional callback fired for each streamed token.
+    When provided, uses Ollama's streaming API for live output.
+    """
     prompt = subtask["prompt"]
     if context:
         if len(context) > _MAX_CONTEXT_CHARS:
@@ -272,10 +276,17 @@ async def build(subtask: dict, context: str = "", max_retries: int = 2) -> str:
         prompt = f"Context from previous subtasks:\n{context}\n\n---\n\nYour task:\n{prompt}"
 
     for attempt in range(max_retries):
-        output = await generate(prompt, system=BUILDER_SYSTEM)
+        if on_token is not None:
+            chunks = []
+            async for token in generate_stream(prompt, system=BUILDER_SYSTEM):
+                on_token(token)
+                chunks.append(token)
+            output = "".join(chunks)
+        else:
+            output = await generate(prompt, system=BUILDER_SYSTEM)
+
         if len(output.strip()) >= _MIN_BUILDER_OUTPUT:
             return output
-        # Output suspiciously short — retry
     return output  # return last attempt regardless
 
 
@@ -301,13 +312,14 @@ async def review(task: str, subtasks: list[dict], results: dict[int, str], memor
 
 # ── Full pipeline ───────────────────────────────────────────────────────
 
-async def run_pipeline(task: str, on_plan=None, on_build=None, on_review_start=None, project_id: str | None = None) -> dict:
+async def run_pipeline(task: str, on_plan=None, on_build=None, on_review_start=None, on_token=None, project_id: str | None = None) -> dict:
     """Run the full planner -> builder -> reviewer pipeline.
 
     Optional callbacks for live progress:
-      on_plan(subtasks)          — called after planning completes
-      on_build(subtask, output)  — called after each builder finishes
-      on_review_start()          — called when reviewer begins
+      on_plan(subtasks)               — called after planning completes
+      on_build(subtask, output)       — called after each builder finishes
+      on_review_start()               — called when reviewer begins
+      on_token(token, subtask)        — called per streamed token from a builder
 
     Returns a dict with the plan, individual results, and final review.
     """
@@ -341,7 +353,9 @@ async def run_pipeline(task: str, on_plan=None, on_build=None, on_review_start=N
                 label = dep_task["title"] if dep_task else f"Subtask {dep_id}"
                 context_parts.append(f"[{label}]:\n{results[dep_id]}")
         context = "\n\n".join(context_parts)
-        output = await build(st, context)
+        # Bind the subtask to the token callback so callers know which subtask is streaming
+        st_on_token = (lambda tok: on_token(tok, st)) if on_token else None
+        output = await build(st, context, on_token=st_on_token)
         log_contribution(node_id, "compute", credits=5, task=st["title"])
         if on_build:
             on_build(st, output)

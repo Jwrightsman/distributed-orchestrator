@@ -150,6 +150,19 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  .node-breaker-badge {
+    display: inline-block;
+    font-family: 'Consolas', monospace;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    padding: 2px 7px;
+    border-radius: 3px;
+    margin-top: 4px;
+    color: #FF5555;
+    background: rgba(255,85,85,0.1);
+    border: 1px solid rgba(255,85,85,0.25);
+  }
   .credit-flash {
     position: absolute;
     right: 14px;
@@ -556,6 +569,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <span class="stat-value" id="stat-status">-</span>
     <span class="stat-label">Ollama</span>
   </div>
+  <div class="stat">
+    <span class="stat-value" id="stat-done">-</span>
+    <span class="stat-label">Tasks Done</span>
+  </div>
+  <div class="stat">
+    <span class="stat-value" id="stat-latency">-</span>
+    <span class="stat-label">Avg Latency</span>
+  </div>
 </div>
 
 <div class="main">
@@ -644,18 +665,25 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 </div>
 
 <script>
-// Poll health + nodes every 3 seconds
+// Poll health + nodes + metrics every 3 seconds
 async function refresh() {
   try {
-    const [health, nodes] = await Promise.all([
+    const [health, nodes, met] = await Promise.all([
       fetch('/health').then(r => r.json()),
       fetch('/nodes').then(r => r.json()),
+      fetch('/metrics').then(r => r.json()).catch(() => null),
     ]);
 
     document.getElementById('stat-nodes').textContent = nodes.count;
     document.getElementById('stat-tasks').textContent = health.tasks_pending;
     document.getElementById('stat-models').textContent = health.models.length;
     document.getElementById('stat-status').textContent = health.ollama;
+    if (met) {
+      const latEl = document.getElementById('stat-latency');
+      if (latEl) latEl.textContent = met.avg_task_latency_seconds != null ? met.avg_task_latency_seconds + 's' : '-';
+      const doneEl = document.getElementById('stat-done');
+      if (doneEl) doneEl.textContent = met.tasks_completed_total;
+    }
 
     const nodesList = document.getElementById('nodes-list');
     if (nodes.count === 0) {
@@ -737,6 +765,11 @@ async function pitchTask() {
         <div class="pipeline-status status-running" id="pstatus-${pipelineId}">PLANNING</div>
       </div>
       <div id="pstages-${pipelineId}">${stageBarHtml(false, false, false)}</div>
+      <pre id="token-stream-${pipelineId}"
+           style="margin-top:8px;padding:8px 10px;background:rgba(0,255,136,0.03);
+                  border:1px solid rgba(0,255,136,0.1);border-radius:4px;
+                  font-size:11px;color:#888;max-height:120px;overflow-y:auto;
+                  white-space:pre-wrap;word-break:break-word;display:none;"></pre>
     </div>`;
 
   // Remove empty state if present
@@ -795,6 +828,12 @@ async function pitchTask() {
       body: JSON.stringify(body),
     });
     const data = await resp.json();
+
+    // Re-key the token stream element so _appendToken can find it by server job_id
+    if (data.job_id) {
+      const tsEl = document.getElementById(`token-stream-${pipelineId}`);
+      if (tsEl) tsEl.id = `token-stream-${data.job_id}`;
+    }
 
     // Distributed pitch returns full result synchronously (nodes do the work)
     // Async pitch returns {job_id, status:"queued"} and we poll for completion
@@ -1016,7 +1055,20 @@ const EVENT_LABELS = {
   error:        {agent: 'ERROR',    color: '#FF5555'},
 };
 
+function _appendToken(ev) {
+  const el = document.getElementById(`token-stream-${ev.job_id}`);
+  if (!el) return;
+  if (el.style.display === 'none') el.style.display = 'block';
+  el.textContent += ev.token;
+  el.scrollTop = el.scrollHeight;
+}
+
 function appendEvent(ev) {
+  // Token events — route to the live stream display, never to the log
+  if (ev.type === 'token') {
+    _appendToken(ev);
+    return;
+  }
   // Handle node activity events — update node cards directly, skip log entry
   if (ev.type === 'node_busy') {
     _setNodeBusy(ev.node_id, ev.task_title);
@@ -1025,6 +1077,10 @@ function appendEvent(ev) {
   if (ev.type === 'node_idle') {
     _setNodeIdle(ev.node_id, ev.credits_earned);
     if (ev.credits_earned > 0) loadStandings();
+    return;
+  }
+  if (ev.type === 'node_blacklisted') {
+    _setNodeBlacklisted(ev.node_id, ev.blacklist_seconds);
     return;
   }
 
@@ -1078,6 +1134,26 @@ function _setNodeIdle(nodeId, creditsEarned) {
     card.appendChild(flash);
     setTimeout(() => flash.remove(), 2000);
   }
+}
+
+function _setNodeBlacklisted(nodeId, seconds) {
+  const card = document.getElementById(`nodecard-${nodeId}`);
+  if (!card) return;
+  const dot = card.querySelector('.node-dot');
+  if (dot) { dot.className = 'node-dot'; dot.style.background = '#FF5555'; dot.style.boxShadow = '0 0 8px rgba(255,85,85,0.4)'; }
+  // Show or update circuit breaker badge
+  let badge = card.querySelector('.node-breaker-badge');
+  if (!badge) {
+    badge = document.createElement('div');
+    badge.className = 'node-breaker-badge';
+    card.appendChild(badge);
+  }
+  badge.textContent = `CIRCUIT OPEN — ${seconds}s`;
+  // Auto-remove badge after the blacklist expires
+  setTimeout(() => {
+    badge.remove();
+    if (dot) { dot.style.background = ''; dot.style.boxShadow = ''; }
+  }, seconds * 1000);
 }
 
 function connectWebSocket() {

@@ -19,6 +19,8 @@ Usage:
 
 import asyncio
 import json
+import sqlite3
+import threading
 import time
 import uuid
 from datetime import datetime, timezone
@@ -58,6 +60,37 @@ _BLACKLIST_DURATION = 60  # seconds a blacklisted node sits out
 
 # ── Pipeline event log (for dashboard live updates) ──────────────────
 pipeline_events: list[dict] = []   # recent events for polling fallback
+
+# ── SQLite event persistence ──────────────────────────────────────────
+_DB_PATH = Path("events.db")
+_db_lock = threading.Lock()
+
+def _init_db() -> None:
+    with _db_lock:
+        con = sqlite3.connect(_DB_PATH)
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS events (
+                id   INTEGER PRIMARY KEY,
+                type TEXT NOT NULL,
+                time TEXT NOT NULL,
+                data TEXT NOT NULL
+            )
+        """)
+        con.commit()
+        con.close()
+
+def _db_write_event(event_type: str, event_time: str, data: dict) -> int:
+    blob = {k: v for k, v in data.items() if k not in ("type", "time")}
+    with _db_lock:
+        con = sqlite3.connect(_DB_PATH)
+        cur = con.execute(
+            "INSERT INTO events (type, time, data) VALUES (?, ?, ?)",
+            (event_type, event_time, json.dumps(blob)),
+        )
+        rowid = cur.lastrowid
+        con.commit()
+        con.close()
+    return rowid
 
 # ── WebSocket connection manager ──────────────────────────────────────
 class _WSManager:
@@ -162,6 +195,7 @@ class TaskResult(BaseModel):
 # ── Background: clean up stale nodes ────────────────────────────────────
 @app.on_event("startup")
 async def _start_background_tasks():
+    _init_db()
     asyncio.create_task(_cleanup_stale_nodes())
 
 
@@ -244,16 +278,18 @@ async def health():
 
 # ── Local pipeline ───────────────────────────────────────────────────
 def _emit(event_type: str, data: dict):
-    """Push an event to the pipeline log and broadcast to WebSocket clients."""
+    """Push an event to the pipeline log, SQLite, and broadcast to WebSocket clients."""
     event = {
         "type": event_type,
         "time": datetime.now(timezone.utc).isoformat(),
         **data,
     }
-    pipeline_events.append(event)
-    if len(pipeline_events) > 100:
-        pipeline_events.pop(0)
-    # Fire-and-forget broadcast — don't await in a sync context
+    # Token events are high-frequency — broadcast only, don't pollute the event log
+    if event_type != "token":
+        pipeline_events.append(event)
+        if len(pipeline_events) > 100:
+            pipeline_events.pop(0)
+        event["id"] = _db_write_event(event_type, event["time"], data)
     asyncio.get_event_loop().create_task(ws_manager.broadcast(event))
 
 
@@ -285,8 +321,30 @@ async def pitch(req: PitchRequest):
 
 @app.get("/events")
 async def get_events(since: int = 0):
-    """Get recent pipeline events (for dashboard polling)."""
-    return {"events": pipeline_events[since:]}
+    """Get pipeline events. since=0 returns last 100; since=N returns events with id > N."""
+    with _db_lock:
+        con = sqlite3.connect(_DB_PATH)
+        con.row_factory = sqlite3.Row
+        if since == 0:
+            rows = con.execute(
+                "SELECT id, type, time, data FROM events ORDER BY id DESC LIMIT 100"
+            ).fetchall()
+            rows = list(reversed(rows))
+        else:
+            rows = con.execute(
+                "SELECT id, type, time, data FROM events WHERE id > ? ORDER BY id",
+                (since,),
+            ).fetchall()
+        con.close()
+
+    events = []
+    for row in rows:
+        blob = json.loads(row["data"])
+        blob["id"]   = row["id"]
+        blob["type"] = row["type"]
+        blob["time"] = row["time"]
+        events.append(blob)
+    return {"events": events}
 
 
 # ── Async job system ─────────────────────────────────────────────────
@@ -330,8 +388,16 @@ async def _run_job(job_id: str, task: str, project_id: str | None = None, trace_
     def on_review_start():
         _emit("review_start", {"task": task, "job_id": job_id, "trace_id": trace_id})
 
+    def on_token(token: str, subtask: dict):
+        _emit("token", {
+            "token": token,
+            "subtask_id": subtask["id"],
+            "job_id": job_id,
+            "trace_id": trace_id,
+        })
+
     try:
-        result = await run_pipeline(task, on_plan=on_plan, on_build=on_build, on_review_start=on_review_start, project_id=project_id)
+        result = await run_pipeline(task, on_plan=on_plan, on_build=on_build, on_review_start=on_review_start, on_token=on_token, project_id=project_id)
         result["results"] = {str(k): v for k, v in result["results"].items()}
         jobs[job_id]["status"] = "complete"
         jobs[job_id]["result"] = result
@@ -510,6 +576,36 @@ async def gallery(limit: int = 30):
 async def standings():
     """Get contributor standings sorted by credits."""
     return {"standings": get_standings()}
+
+
+@app.get("/metrics")
+async def metrics():
+    """Operational snapshot — queue depth, latency, node count, job status."""
+    s = get_standings()
+    tasks_completed_total = sum(c["compute_tasks"] for c in s)
+
+    elapsed_values = [
+        r["elapsed_seconds"]
+        for r in task_results.values()
+        if r.get("elapsed_seconds") and r["elapsed_seconds"] > 0
+    ]
+    avg_latency = round(sum(elapsed_values) / len(elapsed_values), 1) if elapsed_values else None
+
+    blacklisted_nodes = [
+        nid for nid, until in node_blacklist.items()
+        if time.time() < until
+    ]
+
+    return {
+        "tasks_completed_total": tasks_completed_total,
+        "tasks_in_queue":        len(task_queue),
+        "tasks_inflight":        len(task_inflight),
+        "nodes_online":          len(nodes),
+        "nodes_blacklisted":     len(blacklisted_nodes),
+        "jobs_running":          sum(1 for j in jobs.values() if j["status"] == "running"),
+        "jobs_queued":           sum(1 for j in jobs.values() if j["status"] == "queued"),
+        "avg_task_latency_seconds": avg_latency,
+    }
 
 
 @app.get("/ledger")
