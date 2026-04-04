@@ -58,6 +58,11 @@ _LONG_POLL_TIMEOUT = 25   # seconds to hold GET /tasks/next open waiting for wor
 _FAILURE_THRESHOLD = 3    # consecutive failures before blacklisting
 _BLACKLIST_DURATION = 60  # seconds a blacklisted node sits out
 
+# ── Pitch rate limiting (per IP) ──────────────────────────────────────────
+_RATE_WINDOW = 60         # seconds
+_RATE_MAX = 5             # max pitches per IP per window
+_pitch_timestamps: dict[str, list[float]] = {}   # ip -> list of recent timestamps
+
 # ── Pipeline event log (for dashboard live updates) ──────────────────
 pipeline_events: list[dict] = []   # recent events for polling fallback
 
@@ -302,9 +307,25 @@ def _emit(event_type: str, data: dict):
     asyncio.get_event_loop().create_task(ws_manager.broadcast(event))
 
 
+def _check_rate_limit(request: Request) -> None:
+    """Raise 429 if this IP has exceeded _RATE_MAX pitches in the last _RATE_WINDOW seconds."""
+    ip = request.client.host if request.client else "unknown"
+    now = time.time()
+    window_start = now - _RATE_WINDOW
+    timestamps = [t for t in _pitch_timestamps.get(ip, []) if t > window_start]
+    if len(timestamps) >= _RATE_MAX:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit: max {_RATE_MAX} pitches per {_RATE_WINDOW}s. Try again shortly.",
+        )
+    timestamps.append(now)
+    _pitch_timestamps[ip] = timestamps
+
+
 @app.post("/pitch", response_model=PitchResponse)
-async def pitch(req: PitchRequest):
+async def pitch(req: PitchRequest, request: Request):
     """Run the full pipeline locally (no distributed execution)."""
+    _check_rate_limit(request)
     trace_id = str(uuid.uuid4())
     _emit("pitch", {"task": req.task, "trace_id": trace_id})
 
@@ -359,12 +380,13 @@ async def get_events(since: int = 0):
 # ── Async job system ─────────────────────────────────────────────────
 
 @app.post("/pitch/async")
-async def pitch_async(req: PitchRequest):
+async def pitch_async(req: PitchRequest, request: Request):
     """Submit a task and return immediately with a job_id.
 
     Poll GET /jobs/{job_id} for status and results.
     WebSocket clients on /ws/events receive live events as the job runs.
     """
+    _check_rate_limit(request)
     job_id = f"job_{int(time.time() * 1000)}"
     trace_id = str(uuid.uuid4())
     jobs[job_id] = {
