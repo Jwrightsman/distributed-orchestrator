@@ -94,16 +94,29 @@ None
 # ── Pipeline functions ──────────────────────────────────────────────────
 
 def _extract_json(text: str) -> list:
-    """Pull a JSON array out of a model response, tolerating markdown fences."""
+    """Pull a JSON array out of a model response, tolerating markdown fences.
+
+    Also handles the case where the model returns a single JSON object instead
+    of an array — wraps it in a list so downstream validation still works.
+    """
     text = re.sub(r"```(?:json)?\s*", "", text)
     text = re.sub(r"```", "", text)
     text = text.strip()
 
-    start = text.find("[")
-    end = text.rfind("]")
-    if start == -1 or end == -1:
-        raise ValueError(f"No JSON array found in planner output:\n{text[:300]}")
-    return json.loads(text[start : end + 1])
+    # Prefer array form
+    array_start = text.find("[")
+    array_end = text.rfind("]")
+    if array_start != -1 and array_end != -1:
+        return json.loads(text[array_start : array_end + 1])
+
+    # Fall back: single object — wrap it
+    obj_start = text.find("{")
+    obj_end = text.rfind("}")
+    if obj_start != -1 and obj_end != -1:
+        obj = json.loads(text[obj_start : obj_end + 1])
+        return [obj]
+
+    raise ValueError(f"No JSON found in planner output:\n{text[:300]}")
 
 
 def _validate_subtasks(subtasks: list) -> list:
@@ -283,12 +296,14 @@ async def build(subtask: dict, context: str = "", max_retries: int = 2, on_token
     on_token(token: str) — optional callback fired for each streamed token.
     When provided, uses Ollama's streaming API for live output.
     """
-    prompt = subtask["prompt"]
+    base_prompt = subtask["prompt"]
     if context:
         if len(context) > _MAX_CONTEXT_CHARS:
             context = "...[earlier context truncated]\n\n" + context[-_MAX_CONTEXT_CHARS:]
-        prompt = f"Context from previous subtasks:\n{context}\n\n---\n\nYour task:\n{prompt}"
+        base_prompt = f"Context from previous subtasks:\n{context}\n\n---\n\nYour task:\n{base_prompt}"
 
+    prompt = base_prompt
+    last_output = ""
     for attempt in range(max_retries):
         if on_token is not None:
             chunks = []
@@ -299,9 +314,20 @@ async def build(subtask: dict, context: str = "", max_retries: int = 2, on_token
         else:
             output = await generate(prompt, system=BUILDER_SYSTEM)
 
+        last_output = output
         if len(output.strip()) >= _MIN_BUILDER_OUTPUT:
             return output
-    return output  # return last attempt regardless
+
+        # Output too short — give the model explicit feedback on the retry
+        if attempt + 1 < max_retries:
+            prompt = (
+                f"{base_prompt}\n\n"
+                f"IMPORTANT: Your previous response was too short or empty. "
+                f"You MUST produce the complete deliverable. No summaries, no stubs. "
+                f"Write the full result now."
+            )
+
+    return last_output  # return last attempt regardless
 
 
 async def review(task: str, subtasks: list[dict], results: dict[int, str], memory_context: str = "") -> str:
@@ -463,8 +489,9 @@ async def run_pipeline(
         "review": review_output,
         "rating": rating,
         "code_files": [str(f) for f in code_files],
+        "mode": "local",
+        "project_id": project_id or "",
     }
-    log["project_id"] = project_id or ""
     (project_dir / "full_log.json").write_text(json.dumps(log, indent=2))
 
     result = {

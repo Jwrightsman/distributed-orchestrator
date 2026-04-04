@@ -75,13 +75,12 @@ A collectively-owned AI system powered by consumer hardware. Phase 0 demo: local
 - He can't assess security risk himself. Flag it clearly in plain language.
 
 ### What to build next (priority order)
-The demo works. The pipeline runs. The dashboard exists. WebSocket streaming, parallel wave execution, circuit breaker, persistent project memory, async job API, gallery, and ZIP download are all done. Here's what's left:
+The demo works. The pipeline runs. The dashboard exists. WebSocket streaming, parallel wave execution, circuit breaker, persistent project memory, async job API, gallery, ZIP download, node auth, demo mode, token streaming relay, and agent specialization are all done. Here's what's left:
 
-1. **Demo mode polish** — `py cli.py --demo` is in. Test it on video, tighten the pacing, make the Rich output look great at 1080p. Add a `--demo-fast` flag that skips the 2s pause for CI testing.
-2. **Output quality sweep** — run 10 varied prompt types (code, docs, analysis, multi-file projects) and log where the planner returns bad JSON or builders produce incomplete output. Fix each case. Target: 0 FAIL ratings on standard prompts.
-3. **Exo integration for model sharding** — connect to [Exo](https://github.com/exo-explore/exo) so multiple machines can collaboratively run a single large model inference. Replaces the per-node Ollama setup for GPU-scarce environments.
-4. **Network auth for node registration** — right now any machine can register as a node. Add a shared secret / API key check on `/nodes/register` and `/tasks/next` so only trusted machines can join. Required before any public demo.
-5. **Agent specialization** — let nodes declare which model they have and route tasks by role (planner → bigger model, builder → faster model). Config-driven, no hardcoding.
+1. **Output quality sweep** — run 10 varied prompt types (code, docs, analysis, multi-file projects) and find remaining failure modes. Builder retry-with-feedback and single-object JSON recovery are in. Target: 0 FAIL ratings on standard prompts.
+2. **Exo integration for model sharding** — connect to [Exo](https://github.com/exo-explore/exo) so multiple machines can collaboratively run a single large model inference. Replaces the per-node Ollama setup for GPU-scarce environments.
+3. **Dashboard UX polish** — node detail panel (click a node card to see its task history, model, uptime), estimated completion time on running jobs, better mobile layout.
+4. **`join.py` improvements** — auto-detect the orchestrator on the local network via mDNS/broadcast so nodes can join without knowing the IP. Requires no new dependencies (Python's built-in socket is enough).
 
 ### What NOT to do
 - Don't rewrite things that work. The pipeline is tested and passes.

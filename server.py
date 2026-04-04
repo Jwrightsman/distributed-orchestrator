@@ -539,6 +539,16 @@ async def _run_job(job_id: str, task: str, project_id: str | None = None, trace_
                     context = "...[truncated]\n\n" + context[-_MAX_CONTEXT_CHARS:]
                 prompt = f"Context from previous subtasks:\n{context}\n\n---\n\nYour task:\n{prompt}"
             task_id = f"build_{st['id']}_{int(time.time() * 1000)}"
+            # Soft model routing: if role_model_map specifies a preferred model for
+            # builders, only add a "requires" tag when at least one connected node
+            # has that model — otherwise fall through to any node (no deadlock).
+            preferred_model = get_config().get("role_model_map", {}).get("builder")
+            requires: list[str] = []
+            if preferred_model:
+                model_tag = f"model:{preferred_model}"
+                if any(model_tag in set(n.get("capabilities", [])) for n in nodes.values()):
+                    requires = [model_tag]
+
             task_queue.append({
                 "task_id": task_id,
                 "title": st["title"],
@@ -547,6 +557,7 @@ async def _run_job(job_id: str, task: str, project_id: str | None = None, trace_
                 "trace_id": trace_id,
                 "job_id": job_id,
                 "subtask_id": st["id"],
+                "requires": requires,
             })
             _emit("node_task_queued", {"task_id": task_id, "subtask": st["title"], "job_id": job_id, "trace_id": trace_id})
             deadline = time.time() + 600
@@ -905,6 +916,11 @@ def _check_node_auth(request: Request):
 @app.post("/nodes/register")
 async def register_node(reg: NodeRegistration, request: Request):
     _check_node_auth(request)
+    # Auto-add a "model:<name>" capability tag so tasks can soft-route by model.
+    caps = list(reg.capabilities)
+    model_tag = f"model:{reg.model}"
+    if model_tag not in caps:
+        caps.append(model_tag)
     nodes[reg.node_id] = {
         "node_id": reg.node_id,
         "model": reg.model,
@@ -914,7 +930,7 @@ async def register_node(reg: NodeRegistration, request: Request):
         "cpu_count": reg.cpu_count,
         "ram_gb": reg.ram_gb,
         "gpu": reg.gpu,
-        "capabilities": reg.capabilities,
+        "capabilities": caps,
         "registered_at": datetime.now(timezone.utc).isoformat(),
         "last_seen": time.time(),
         "tasks_completed": 0,
