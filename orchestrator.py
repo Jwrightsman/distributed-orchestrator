@@ -326,14 +326,27 @@ async def review(task: str, subtasks: list[dict], results: dict[int, str], memor
 
 # ── Full pipeline ───────────────────────────────────────────────────────
 
-async def run_pipeline(task: str, on_plan=None, on_build=None, on_review_start=None, on_token=None, project_id: str | None = None) -> dict:
+async def run_pipeline(
+    task: str,
+    on_plan=None,
+    on_build=None,
+    on_review_start=None,
+    on_token=None,
+    project_id: str | None = None,
+    build_fn=None,
+) -> dict:
     """Run the full planner -> builder -> reviewer pipeline.
 
     Optional callbacks for live progress:
       on_plan(subtasks)               — called after planning completes
       on_build(subtask, output)       — called after each builder finishes
       on_review_start()               — called when reviewer begins
-      on_token(token, subtask)        — called per streamed token from a builder
+      on_token(token, subtask)        — called per streamed token (local builds only)
+
+    build_fn(subtask, context) -> str
+      When provided, replaces the default local build() call for every subtask.
+      Use this to dispatch builds to remote worker nodes. When build_fn is set,
+      on_token is not called (remote nodes don't stream tokens back yet).
 
     Returns a dict with the plan, individual results, and final review.
     """
@@ -367,9 +380,15 @@ async def run_pipeline(task: str, on_plan=None, on_build=None, on_review_start=N
                 label = dep_task["title"] if dep_task else f"Subtask {dep_id}"
                 context_parts.append(f"[{label}]:\n{results[dep_id]}")
         context = "\n\n".join(context_parts)
-        # Bind the subtask to the token callback so callers know which subtask is streaming
-        st_on_token = (lambda tok: on_token(tok, st)) if on_token else None
-        output = await build(st, context, on_token=st_on_token)
+
+        if build_fn is not None:
+            # Caller-supplied dispatcher (e.g. distributed worker nodes)
+            output = await build_fn(st, context)
+        else:
+            # Default: local Ollama inference with optional token streaming
+            st_on_token = (lambda tok: on_token(tok, st)) if on_token else None
+            output = await build(st, context, on_token=st_on_token)
+
         log_contribution(node_id, "compute", credits=5, task=st["title"])
         if on_build:
             on_build(st, output)

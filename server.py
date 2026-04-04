@@ -502,8 +502,51 @@ async def _run_job(job_id: str, task: str, project_id: str | None = None, trace_
             "trace_id": trace_id,
         })
 
+    # When worker nodes are connected, distribute builder subtasks to them.
+    # Falls back to local Ollama automatically if a node times out or errors.
+    dist_build_fn = None
+    if nodes:
+        _dist_nodes_used: set[str] = set()
+
+        async def dist_build_fn(st: dict, context: str) -> str:
+            from orchestrator import _MAX_CONTEXT_CHARS
+            prompt = st["prompt"]
+            if context:
+                if len(context) > _MAX_CONTEXT_CHARS:
+                    context = "...[truncated]\n\n" + context[-_MAX_CONTEXT_CHARS:]
+                prompt = f"Context from previous subtasks:\n{context}\n\n---\n\nYour task:\n{prompt}"
+            task_id = f"build_{st['id']}_{int(time.time() * 1000)}"
+            task_queue.append({
+                "task_id": task_id,
+                "title": st["title"],
+                "prompt": prompt,
+                "system": BUILDER_SYSTEM,
+                "trace_id": trace_id,
+            })
+            _emit("node_task_queued", {"task_id": task_id, "subtask": st["title"], "job_id": job_id, "trace_id": trace_id})
+            deadline = time.time() + 600
+            while task_id not in task_results:
+                if time.time() > deadline:
+                    # Timeout — fall back to local inference
+                    task_queue[:] = [t for t in task_queue if t["task_id"] != task_id]
+                    return await generate(prompt, system=BUILDER_SYSTEM)
+                await asyncio.sleep(1)
+            tr = task_results.pop(task_id)
+            if tr.get("error") or not tr.get("output"):
+                return await generate(prompt, system=BUILDER_SYSTEM)
+            _dist_nodes_used.add(tr.get("node_id", "unknown"))
+            return tr["output"]
+
     try:
-        result = await run_pipeline(task, on_plan=on_plan, on_build=on_build, on_review_start=on_review_start, on_token=on_token, project_id=project_id)
+        result = await run_pipeline(
+            task,
+            on_plan=on_plan,
+            on_build=on_build,
+            on_review_start=on_review_start,
+            on_token=on_token if dist_build_fn is None else None,
+            project_id=project_id,
+            build_fn=dist_build_fn,
+        )
         result["results"] = {str(k): v for k, v in result["results"].items()}
         jobs[job_id]["status"] = "complete"
         jobs[job_id]["result"] = result
