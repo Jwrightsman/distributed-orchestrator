@@ -594,7 +594,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="empty-state"><p>No contributions yet.</p></div>
     </div>
 
-    <h2 style="margin-top:24px">Projects</h2>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:24px;margin-bottom:14px;">
+      <h2 style="margin:0;">Projects</h2>
+      <button onclick="promptNewProject()" style="background:rgba(0,255,170,0.08);border:1px solid rgba(0,255,170,0.2);border-radius:5px;padding:3px 10px;font-size:10px;font-weight:700;color:#00FFAA;cursor:pointer;">+ New</button>
+    </div>
     <div id="projects-list">
       <div class="empty-state"><p>No projects yet.</p></div>
     </div>
@@ -620,6 +623,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                placeholder="Describe what you want built...">
         <button class="pitch-btn" id="pitch-btn" onclick="pitchTask()">Pitch</button>
       </div>
+      <!-- Quick-start templates -->
+      <div id="task-templates" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:20px;"></div>
 
       <h2>Live Activity</h2>
       <div id="event-log" style="margin-bottom:24px;max-height:200px;overflow-y:auto;"></div>
@@ -654,7 +659,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div style="max-width:800px;margin:40px auto;padding:28px;background:#0D0F14;border:1px solid rgba(255,255,255,0.1);border-radius:12px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
           <h2 id="modal-title" style="font-size:18px;font-weight:700;color:#F0F0F0;margin:0;"></h2>
-          <button onclick="closeModal()" style="background:none;border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:6px 14px;color:#888;cursor:pointer;font-size:12px;">Close</button>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <button id="modal-download-btn" onclick="downloadOutput()" style="background:rgba(0,255,170,0.08);border:1px solid rgba(0,255,170,0.2);border-radius:6px;padding:6px 14px;color:#00FFAA;cursor:pointer;font-size:11px;font-weight:600;">Download</button>
+            <button onclick="closeModal()" style="background:none;border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:6px 14px;color:#888;cursor:pointer;font-size:12px;">Close</button>
+          </div>
         </div>
         <div id="modal-plan" style="margin-bottom:20px;"></div>
         <div id="modal-files" style="margin-bottom:16px;display:none;"></div>
@@ -985,6 +993,7 @@ function copyCode(btn) {
 
 async function viewRun(timestamp) {
   try {
+    _currentModalTimestamp = timestamp;
     const resp = await fetch(`/history/${timestamp}`);
     const data = await resp.json();
 
@@ -1291,6 +1300,23 @@ async function loadProjects() {
   } catch(e) {}
 }
 
+async function promptNewProject() {
+  const name = prompt('Project name:');
+  if (!name || !name.trim()) return;
+  try {
+    const resp = await fetch('/projects', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: name.trim(), initial_task: ''}),
+    });
+    const data = await resp.json();
+    if (data.project_id) {
+      await loadProjects();
+      continueProject(data.project_id, data.name);
+    }
+  } catch(e) { console.error('Failed to create project', e); }
+}
+
 function continueProject(projectId, projectName) {
   document.getElementById('active-project-id').value = projectId;
   document.getElementById('project-context-name').textContent = projectName;
@@ -1362,6 +1388,47 @@ function forkTask(task) {
   input.value = task;
   input.focus();
   input.select();
+}
+
+// ── Task templates ──
+const _TEMPLATES = [
+  'Build a REST API with FastAPI and SQLite',
+  'Write a Python web scraper with BeautifulSoup',
+  'Create a CLI tool in Python with argparse',
+  'Write a data analysis script for a CSV file',
+  'Build a React component library starter',
+];
+(function renderTemplates() {
+  const el = document.getElementById('task-templates');
+  if (!el) return;
+  const label = document.createElement('span');
+  label.textContent = 'Try:';
+  label.style.cssText = 'font-size:10px;color:#444;letter-spacing:1px;text-transform:uppercase;align-self:center;margin-right:4px;white-space:nowrap;';
+  el.appendChild(label);
+  _TEMPLATES.forEach(t => {
+    const btn = document.createElement('button');
+    btn.textContent = t;
+    btn.style.cssText = 'background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:5px;padding:4px 10px;font-size:11px;color:#666;cursor:pointer;transition:all 0.15s;';
+    btn.onmouseover = () => { btn.style.borderColor='rgba(0,255,170,0.25)'; btn.style.color='#00FFAA'; };
+    btn.onmouseout  = () => { btn.style.borderColor='rgba(255,255,255,0.08)'; btn.style.color='#666'; };
+    btn.onclick = () => { document.getElementById('pitch-input').value = t; document.getElementById('pitch-input').focus(); };
+    el.appendChild(btn);
+  });
+})();
+
+// ── Output download ──
+let _currentModalTimestamp = null;
+
+function downloadOutput() {
+  if (!_currentModalTimestamp) return;
+  const content = document.getElementById('modal-review').innerText;
+  const title = (document.getElementById('modal-title').textContent || 'output').replace(/[^a-z0-9]/gi, '_').toLowerCase();
+  const blob = new Blob([content], {type: 'text/plain'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `${title}_${_currentModalTimestamp}.txt`;
+  a.click();
+  URL.revokeObjectURL(a.href);
 }
 
 // Start
