@@ -341,6 +341,16 @@ async def _cleanup_stale_nodes():
         for jid in stale_jobs:
             jobs.pop(jid, None)
 
+        # 4. Prune SQLite event log — keep only the last 2000 rows
+        try:
+            with _db_conn() as conn:
+                conn.execute(
+                    "DELETE FROM events WHERE id NOT IN "
+                    "(SELECT id FROM events ORDER BY id DESC LIMIT 2000)"
+                )
+        except Exception:
+            pass
+
 
 # ── Health ───────────────────────────────────────────────────────────
 @app.get("/health")
@@ -381,8 +391,11 @@ def _emit(event_type: str, data: dict):
     asyncio.get_event_loop().create_task(ws_manager.broadcast(event))
 
 
-def _check_rate_limit(request: Request) -> None:
-    """Raise 429 if this IP has exceeded _RATE_MAX pitches in the last _RATE_WINDOW seconds."""
+def _check_rate_limit(request: Request) -> int:
+    """Raise 429 if this IP has exceeded _RATE_MAX pitches in the last _RATE_WINDOW seconds.
+
+    Returns the number of remaining pitches allowed in the current window.
+    """
     ip = request.client.host if request.client else "unknown"
     now = time.time()
     window_start = now - _RATE_WINDOW
@@ -391,15 +404,23 @@ def _check_rate_limit(request: Request) -> None:
         raise HTTPException(
             status_code=429,
             detail=f"Rate limit: max {_RATE_MAX} pitches per {_RATE_WINDOW}s. Try again shortly.",
+            headers={
+                "X-RateLimit-Limit": str(_RATE_MAX),
+                "X-RateLimit-Remaining": "0",
+                "X-RateLimit-Reset": str(int(min(timestamps)) + _RATE_WINDOW),
+            },
         )
     timestamps.append(now)
     _pitch_timestamps[ip] = timestamps
+    return _RATE_MAX - len(timestamps)
 
 
 @app.post("/pitch", response_model=PitchResponse)
-async def pitch(req: PitchRequest, request: Request):
+async def pitch(req: PitchRequest, request: Request, response: Response):
     """Run the full pipeline locally (no distributed execution)."""
-    _check_rate_limit(request)
+    remaining = _check_rate_limit(request)
+    response.headers["X-RateLimit-Limit"] = str(_RATE_MAX)
+    response.headers["X-RateLimit-Remaining"] = str(remaining)
     trace_id = str(uuid.uuid4())
     _emit("pitch", {"task": req.task, "trace_id": trace_id})
 
@@ -454,13 +475,15 @@ async def get_events(since: int = 0):
 # ── Async job system ─────────────────────────────────────────────────
 
 @app.post("/pitch/async")
-async def pitch_async(req: PitchRequest, request: Request):
+async def pitch_async(req: PitchRequest, request: Request, response: Response):
     """Submit a task and return immediately with a job_id.
 
     Poll GET /jobs/{job_id} for status and results.
     WebSocket clients on /ws/events receive live events as the job runs.
     """
-    _check_rate_limit(request)
+    remaining = _check_rate_limit(request)
+    response.headers["X-RateLimit-Limit"] = str(_RATE_MAX)
+    response.headers["X-RateLimit-Remaining"] = str(remaining)
     job_id = f"job_{int(time.time() * 1000)}"
     trace_id = str(uuid.uuid4())
     jobs[job_id] = {
@@ -522,6 +545,8 @@ async def _run_job(job_id: str, task: str, project_id: str | None = None, trace_
                 "prompt": prompt,
                 "system": BUILDER_SYSTEM,
                 "trace_id": trace_id,
+                "job_id": job_id,
+                "subtask_id": st["id"],
             })
             _emit("node_task_queued", {"task_id": task_id, "subtask": st["title"], "job_id": job_id, "trace_id": trace_id})
             deadline = time.time() + 600
@@ -659,6 +684,7 @@ async def history(search: str = "", limit: int = 50):
                     "subtask_count": len(log.get("plan", [])),
                     "rating": rating,
                     "project_id": log.get("project_id") or None,
+                    "mode": log.get("mode", "local"),
                     "dir": str(d),
                 })
             except json.JSONDecodeError:
@@ -769,6 +795,7 @@ async def gallery(limit: int = 30):
                     "preview": preview.strip(),
                     "code_files": code_files,
                     "project_id": log.get("project_id") or None,
+                    "mode": log.get("mode", "local"),
                 })
             except (json.JSONDecodeError, OSError):
                 pass
@@ -1010,6 +1037,33 @@ async def submit_result(task_id: str, result: TaskResult, request: Request):
         "trace_id": trace_id,
     })
     return {"status": "accepted", "credits_earned": credits_earned}
+
+
+class TokenBatch(BaseModel):
+    node_id: str
+    tokens: str  # accumulated token string for this batch
+
+
+@app.post("/tasks/{task_id}/stream")
+async def stream_task_tokens(task_id: str, batch: TokenBatch, request: Request):
+    """Worker node relays streamed tokens back to the orchestrator.
+
+    The server re-emits them as WebSocket 'token' events so the dashboard
+    live-streams output from remote nodes, not just local builds.
+    """
+    _check_node_auth(request)
+    task = task_inflight.get(task_id)
+    if not task or not batch.tokens:
+        return {"ok": False}
+    _emit("token", {
+        "token": batch.tokens,
+        "subtask_id": task.get("subtask_id", 0),
+        "job_id": task.get("job_id", ""),
+        "trace_id": task.get("trace_id", ""),
+        "source": "node",
+        "node_id": batch.node_id,
+    })
+    return {"ok": True}
 
 
 # ── Distributed pipeline ────────────────────────────────────────────

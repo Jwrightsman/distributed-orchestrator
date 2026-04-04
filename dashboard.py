@@ -1235,11 +1235,15 @@ async function loadHistory() {
     const ratingColor = {PASS: '#00FF88', NEEDS_WORK: '#E8FF47', FAIL: '#FF5555'};
     el.innerHTML = data.runs.map(r => {
       const color = ratingColor[r.rating] || '#555';
+      const modeBadge = r.mode === 'distributed'
+        ? `<span style="font-family:Consolas,monospace;font-size:9px;font-weight:700;color:#00FFAA;background:#00FFAA18;border:1px solid #00FFAA30;border-radius:3px;padding:1px 5px;letter-spacing:.5px;">DIST</span>`
+        : '';
       return `
         <div class="pipeline-card" style="padding:12px 16px;margin-bottom:6px;cursor:pointer;" onclick="viewRun('${escHtml(r.timestamp)}')">
           <div style="display:flex;justify-content:space-between;align-items:center;">
             <div style="font-size:13px;color:#BBBBBB;flex:1;padding-right:12px;">${escHtml(r.task)}</div>
             <div style="display:flex;gap:10px;align-items:center;flex-shrink:0;">
+              ${modeBadge}
               <span style="font-family:Consolas,monospace;font-size:10px;color:${color};">${escHtml(r.rating || '?')}</span>
               <span style="font-family:Consolas,monospace;font-size:11px;color:#555;">${r.subtask_count} tasks</span>
               <span style="font-family:Consolas,monospace;font-size:11px;color:#444;">${relativeTime(r.timestamp)}</span>
@@ -1369,6 +1373,9 @@ async function loadGallery() {
       const ratingHtml = c.rating && c.rating !== '?'
         ? `<span style="font-family:Consolas,monospace;font-size:10px;font-weight:700;color:${color};background:${color}18;border:1px solid ${color}30;border-radius:4px;padding:2px 8px;">${escHtml(c.rating)}</span>`
         : '';
+      const modeBadgeHtml = c.mode === 'distributed'
+        ? `<span style="font-family:Consolas,monospace;font-size:9px;font-weight:700;color:#00FFAA;background:#00FFAA18;border:1px solid #00FFAA30;border-radius:3px;padding:1px 5px;letter-spacing:.5px;">DIST</span>`
+        : '';
       const subtasksHtml = `<span style="font-family:Consolas,monospace;font-size:10px;color:#555;">${c.subtask_count} tasks</span>`;
       const timeHtml = `<span style="font-family:Consolas,monospace;font-size:10px;color:#444;">${relativeTime(c.timestamp)}</span>`;
       const previewHtml = c.preview
@@ -1380,7 +1387,7 @@ async function loadGallery() {
       return `
         <div class="gallery-card">
           <div class="gallery-task">${escHtml(c.task)}</div>
-          <div class="gallery-meta">${ratingHtml}${subtasksHtml}${timeHtml}</div>
+          <div class="gallery-meta">${modeBadgeHtml}${ratingHtml}${subtasksHtml}${timeHtml}</div>
           ${previewHtml}
           ${filesHtml}
           <div class="gallery-actions">
