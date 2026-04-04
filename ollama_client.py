@@ -71,9 +71,51 @@ async def auto_detect_model() -> str | None:
     return models[0] if models else None
 
 
-async def generate(prompt: str, system: str = "", model: str | None = None) -> str:
-    """Send a prompt to Ollama and return the full response text."""
+async def _generate_provider(prompt: str, system: str, cfg: dict) -> str:
+    """Call an OpenAI-compatible API (xai, openai, groq, together, etc.)."""
+    base_url = cfg.get("provider_base_url") or "https://api.openai.com/v1"
+    api_key = cfg["provider_api_key"]
+    model = cfg["provider_model"]
+    timeout = cfg.get("timeout", 600)
+
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {"model": model, "messages": messages}
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.post(f"{base_url}/chat/completions", json=payload, headers=headers)
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"]
+
+
+async def generate(prompt: str, system: str = "", model: str | None = None, role: str | None = None) -> str:
+    """Send a prompt to Ollama (or an external provider) and return the response.
+
+    Pass role="planner" or role="reviewer" to enable provider routing when
+    a provider is configured in config.json.
+    """
     _sync_globals()
+    cfg = get_config()
+
+    # Route to external provider if configured and this role uses it
+    provider = cfg.get("provider")
+    if (
+        provider
+        and cfg.get("provider_api_key")
+        and cfg.get("provider_model")
+        and role
+        and role in cfg.get("provider_roles", [])
+    ):
+        return await _generate_provider(prompt, system, cfg)
+
+    # Default: Ollama
     if model is None:
         model = DEFAULT_MODEL
 
