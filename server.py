@@ -20,6 +20,7 @@ Usage:
 import asyncio
 import json
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -49,6 +50,11 @@ async def _unhandled(request: Request, exc: Exception):
 # ── Node staleness threshold (seconds) ───────────────────────────────────
 _NODE_TIMEOUT = 90
 _MAX_TASK_QUEUE = 100
+_LONG_POLL_TIMEOUT = 25   # seconds to hold GET /tasks/next open waiting for work
+
+# ── Circuit breaker thresholds ────────────────────────────────────────────
+_FAILURE_THRESHOLD = 3    # consecutive failures before blacklisting
+_BLACKLIST_DURATION = 60  # seconds a blacklisted node sits out
 
 # ── Pipeline event log (for dashboard live updates) ──────────────────
 pipeline_events: list[dict] = []   # recent events for polling fallback
@@ -103,6 +109,10 @@ nodes: dict[str, dict] = {}          # node_id -> info
 task_queue: list[dict] = []          # pending tasks for workers
 task_results: dict[str, dict] = {}   # task_id -> result
 task_inflight: dict[str, dict] = {}  # task_id -> task (assigned but not yet returned)
+
+# ── Circuit breaker state ─────────────────────────────────────────────
+node_failure_count: dict[str, int] = {}   # node_id -> consecutive failure count
+node_blacklist: dict[str, float] = {}     # node_id -> blacklist_until timestamp
 
 # ── Async job store ──────────────────────────────────────────────────
 # Jobs allow /pitch/async to return immediately with a job_id.
@@ -250,25 +260,26 @@ def _emit(event_type: str, data: dict):
 @app.post("/pitch", response_model=PitchResponse)
 async def pitch(req: PitchRequest):
     """Run the full pipeline locally (no distributed execution)."""
-    _emit("pitch", {"task": req.task})
+    trace_id = str(uuid.uuid4())
+    _emit("pitch", {"task": req.task, "trace_id": trace_id})
 
     def on_plan(subtasks):
-        _emit("plan", {"task": req.task, "subtasks": [s["title"] for s in subtasks]})
+        _emit("plan", {"task": req.task, "subtasks": [s["title"] for s in subtasks], "trace_id": trace_id})
 
     def on_build(subtask, output):
-        _emit("build", {"task": req.task, "subtask": subtask["title"], "subtask_id": subtask["id"]})
+        _emit("build", {"task": req.task, "subtask": subtask["title"], "subtask_id": subtask["id"], "trace_id": trace_id})
 
     def on_review_start():
-        _emit("review_start", {"task": req.task})
+        _emit("review_start", {"task": req.task, "trace_id": trace_id})
 
     try:
         result = await run_pipeline(req.task, on_plan=on_plan, on_build=on_build, on_review_start=on_review_start, project_id=req.project_id)
     except ValueError as e:
-        _emit("error", {"task": req.task, "message": str(e)})
+        _emit("error", {"task": req.task, "message": str(e), "trace_id": trace_id})
         raise HTTPException(status_code=422, detail=str(e))
 
     result["results"] = {str(k): v for k, v in result["results"].items()}
-    _emit("complete", {"task": req.task, "project_dir": result["project_dir"]})
+    _emit("complete", {"task": req.task, "project_dir": result["project_dir"], "trace_id": trace_id})
     return result
 
 
@@ -288,6 +299,7 @@ async def pitch_async(req: PitchRequest):
     WebSocket clients on /ws/events receive live events as the job runs.
     """
     job_id = f"job_{int(time.time() * 1000)}"
+    trace_id = str(uuid.uuid4())
     jobs[job_id] = {
         "job_id": job_id,
         "task": req.task,
@@ -296,35 +308,38 @@ async def pitch_async(req: PitchRequest):
         "submitted_at": datetime.now(timezone.utc).isoformat(),
         "result": None,
         "error": None,
+        "trace_id": trace_id,
     }
-    asyncio.create_task(_run_job(job_id, req.task, req.project_id))
-    return {"job_id": job_id, "status": "queued", "project_id": req.project_id}
+    asyncio.create_task(_run_job(job_id, req.task, req.project_id, trace_id))
+    return {"job_id": job_id, "status": "queued", "project_id": req.project_id, "trace_id": trace_id}
 
 
-async def _run_job(job_id: str, task: str, project_id: str | None = None):
+async def _run_job(job_id: str, task: str, project_id: str | None = None, trace_id: str = ""):
     """Background task: run the full pipeline for a job."""
+    if not trace_id:
+        trace_id = str(uuid.uuid4())
     jobs[job_id]["status"] = "running"
-    _emit("pitch", {"task": task, "job_id": job_id})
+    _emit("pitch", {"task": task, "job_id": job_id, "trace_id": trace_id})
 
     def on_plan(subtasks):
-        _emit("plan", {"task": task, "job_id": job_id, "subtasks": [s["title"] for s in subtasks]})
+        _emit("plan", {"task": task, "job_id": job_id, "subtasks": [s["title"] for s in subtasks], "trace_id": trace_id})
 
     def on_build(subtask, output):
-        _emit("build", {"task": task, "job_id": job_id, "subtask": subtask["title"], "subtask_id": subtask["id"]})
+        _emit("build", {"task": task, "job_id": job_id, "subtask": subtask["title"], "subtask_id": subtask["id"], "trace_id": trace_id})
 
     def on_review_start():
-        _emit("review_start", {"task": task, "job_id": job_id})
+        _emit("review_start", {"task": task, "job_id": job_id, "trace_id": trace_id})
 
     try:
         result = await run_pipeline(task, on_plan=on_plan, on_build=on_build, on_review_start=on_review_start, project_id=project_id)
         result["results"] = {str(k): v for k, v in result["results"].items()}
         jobs[job_id]["status"] = "complete"
         jobs[job_id]["result"] = result
-        _emit("complete", {"task": task, "job_id": job_id, "project_dir": result["project_dir"]})
+        _emit("complete", {"task": task, "job_id": job_id, "project_dir": result["project_dir"], "trace_id": trace_id})
     except Exception as e:
         jobs[job_id]["status"] = "failed"
         jobs[job_id]["error"] = str(e)
-        _emit("error", {"task": task, "job_id": job_id, "message": str(e)})
+        _emit("error", {"task": task, "job_id": job_id, "message": str(e), "trace_id": trace_id})
 
     jobs[job_id]["finished_at"] = datetime.now(timezone.utc).isoformat()
 
@@ -571,29 +586,55 @@ async def list_nodes():
 # ── Task distribution ────────────────────────────────────────────────
 @app.get("/tasks/next")
 async def next_task(node_id: str):
-    """Worker asks for the next available task."""
+    """Worker asks for the next available task.
+
+    Long-polls up to _LONG_POLL_TIMEOUT seconds — holds the connection open
+    until work arrives or the timeout expires. Much more efficient than the
+    node polling every few seconds and getting empty 204s.
+
+    Returns 429 if the node is circuit-breaker blacklisted.
+    """
     if node_id in nodes:
         nodes[node_id]["last_seen"] = time.time()
 
-    if not task_queue:
-        return Response(status_code=204)  # No work
+    # Circuit breaker — check if this node is blacklisted for repeated failures
+    if node_id in node_blacklist:
+        if time.time() < node_blacklist[node_id]:
+            remaining = int(node_blacklist[node_id] - time.time())
+            return JSONResponse(
+                status_code=429,
+                content={"error": "circuit_open", "retry_after": remaining},
+            )
+        else:
+            # Blacklist expired — let it back in
+            node_blacklist.pop(node_id, None)
+            node_failure_count[node_id] = 0
 
-    task = task_queue.pop(0)
-    task["assigned_to"] = node_id
-    task["assigned_at"] = time.time()
+    # Long-poll: wait up to _LONG_POLL_TIMEOUT for a task to appear
+    deadline = time.time() + _LONG_POLL_TIMEOUT
+    while True:
+        if task_queue:
+            task = task_queue.pop(0)
+            task["assigned_to"] = node_id
+            task["assigned_at"] = time.time()
+            if node_id in nodes:
+                nodes[node_id]["current_task"] = task.get("title", task["task_id"])
+            task_inflight[task["task_id"]] = task
+            _emit("node_busy", {"node_id": node_id, "task_title": task.get("title", task["task_id"])})
+            return task
 
-    if node_id in nodes:
-        nodes[node_id]["current_task"] = task.get("title", task["task_id"])
-    task_inflight[task["task_id"]] = task
-    _emit("node_busy", {"node_id": node_id, "task_title": task.get("title", task["task_id"])})
+        if time.time() >= deadline:
+            return Response(status_code=204)
 
-    return task
+        await asyncio.sleep(0.5)
 
 
 @app.post("/tasks/{task_id}/result")
 async def submit_result(task_id: str, result: TaskResult):
     """Worker submits completed task."""
-    task_inflight.pop(task_id, None)
+    task = task_inflight.pop(task_id, None)
+    trace_id = task.get("trace_id", "") if task else ""
+
     task_results[task_id] = {
         "task_id": task_id,
         "node_id": result.node_id,
@@ -601,13 +642,30 @@ async def submit_result(task_id: str, result: TaskResult):
         "error": result.error,
         "elapsed_seconds": result.elapsed_seconds,
         "completed_at": time.time(),
+        "trace_id": trace_id,
     }
+
+    # Circuit breaker: track consecutive failures per node
+    success = bool(result.output and not result.error)
+    if not success:
+        count = node_failure_count.get(result.node_id, 0) + 1
+        node_failure_count[result.node_id] = count
+        if count >= _FAILURE_THRESHOLD:
+            node_blacklist[result.node_id] = time.time() + _BLACKLIST_DURATION
+            _emit("node_blacklisted", {
+                "node_id": result.node_id,
+                "failure_count": count,
+                "blacklist_seconds": _BLACKLIST_DURATION,
+            })
+    else:
+        node_failure_count[result.node_id] = 0  # reset on success
+
     credits_earned = 0
     if result.node_id in nodes:
         nodes[result.node_id]["tasks_completed"] += 1
         nodes[result.node_id]["last_seen"] = time.time()
         nodes[result.node_id]["current_task"] = None
-    if result.output and not result.error:
+    if success:
         credits_earned = 5
         log_contribution(result.node_id, "compute", credits=credits_earned, task=task_id)
         if result.node_id in nodes:
@@ -616,7 +674,8 @@ async def submit_result(task_id: str, result: TaskResult):
         "node_id": result.node_id,
         "credits_earned": credits_earned,
         "elapsed_seconds": result.elapsed_seconds,
-        "success": bool(result.output and not result.error),
+        "success": success,
+        "trace_id": trace_id,
     })
     return {"status": "accepted", "credits_earned": credits_earned}
 
