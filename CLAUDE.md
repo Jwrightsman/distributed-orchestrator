@@ -62,3 +62,43 @@ A collectively-owned AI system powered by consumer hardware. Phase 0 demo: local
 - GET /nodes — connected nodes
 - GET /tasks/next — worker polls for work
 - POST /tasks/{id}/result — worker submits result
+
+## Instructions for AI assistants working on this codebase
+
+### Who Jett is
+- No programming experience. Make all technical decisions yourself.
+- Explain things in plain language only when it helps him use the project.
+- Never ask him to choose between technical approaches — just pick the right one.
+
+### Security
+- ALWAYS warn Jett before any action that opens ports, exposes his IP, or could be accessed by others.
+- He can't assess security risk himself. Flag it clearly in plain language.
+
+### What to build next (priority order)
+The demo works. The pipeline runs. The dashboard exists. Here's what matters now:
+
+1. **Polish the dashboard** — make it look professional enough for a demo video. Add better loading states, smoother animations, and make the output viewer show formatted code.
+2. **Improve output quality** — the reviewer should produce cleaner merged outputs. Test with varied prompts and fix edge cases where the planner returns bad JSON or builders produce incomplete output.
+3. **Harden the server** — add proper error responses, request validation, and make sure nothing crashes ungracefully.
+4. **Add WebSocket support to the dashboard** — replace polling with real-time updates so the live activity feed is actually live, not polling every 2-3 seconds.
+5. **Improve the distributed pipeline** — right now tasks are sequential even across nodes. Tasks without dependencies should run in parallel on different nodes.
+
+### What NOT to do
+- Don't rewrite things that work. The pipeline is tested and passes.
+- Don't add new big features without testing them. Run `py cli.py "test task"` after changes.
+- Don't add dependencies unless absolutely necessary.
+- Don't build anything related to crypto, tokens, or blockchain. The ledger is a simple JSON file.
+- Don't touch the vision/strategy. That's Jett's domain. Just build what's in the priority list above.
+- Don't make network-facing changes without warning Jett.
+
+### Testing
+After making changes, verify:
+1. `py -c "from server import app; print('server imports ok')"` — server starts clean
+2. `py status.py` — Ollama connection works
+3. `py cli.py --history` — CLI works
+4. `py cli.py "Build a hello world Python script"` — full pipeline runs (takes ~5 min on CPU)
+
+### Git workflow
+- Commit after each logical change with a descriptive message
+- Push to origin/master
+- Co-Author line: `Co-Authored-By: Claude <noreply@anthropic.com>`
