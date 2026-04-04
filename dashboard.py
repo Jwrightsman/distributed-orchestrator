@@ -274,10 +274,117 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     color: #888;
     padding: 4px 0;
     border-bottom: 1px solid rgba(255,255,255,0.03);
+    animation: fadeIn 0.3s ease;
   }
   .log-time { color: #555; margin-right: 8px; }
   .log-agent { color: #00FFAA; font-weight: 600; }
   .log-event { color: #AAAAAA; }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes pulseBorder {
+    0%, 100% { border-color: rgba(232,255,71,0.2); box-shadow: none; }
+    50%       { border-color: rgba(232,255,71,0.5); box-shadow: 0 0 16px rgba(232,255,71,0.08); }
+  }
+  .pipeline-card { animation: fadeIn 0.25s ease; }
+  .pipeline-card.running { animation: fadeIn 0.25s ease, pulseBorder 2s ease-in-out infinite; }
+
+  /* Stage progress shown while pipeline runs */
+  .stage-bar {
+    display: flex;
+    gap: 6px;
+    margin: 10px 0 4px;
+  }
+  .stage {
+    flex: 1;
+    height: 3px;
+    border-radius: 2px;
+    background: rgba(255,255,255,0.06);
+    position: relative;
+    overflow: hidden;
+  }
+  .stage.done   { background: #00FF88; }
+  .stage.active { background: rgba(232,255,71,0.3); }
+  .stage.active::after {
+    content: '';
+    position: absolute;
+    left: -60%;
+    top: 0;
+    width: 60%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, #E8FF47, transparent);
+    animation: shimmer 1.4s ease-in-out infinite;
+  }
+  @keyframes shimmer {
+    from { left: -60%; }
+    to   { left: 160%; }
+  }
+  .stage-labels {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+  .stage-label {
+    flex: 1;
+    font-family: 'Consolas', monospace;
+    font-size: 9px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: #444;
+    text-align: center;
+    transition: color 0.3s;
+  }
+  .stage-label.done   { color: #00FF88; }
+  .stage-label.active { color: #E8FF47; }
+
+  /* Code blocks in the output modal */
+  .code-block {
+    margin: 10px 0;
+    border-radius: 6px;
+    overflow: hidden;
+    border: 1px solid rgba(255,255,255,0.08);
+  }
+  .code-block-header {
+    background: rgba(255,255,255,0.05);
+    padding: 5px 12px;
+    font-family: 'Consolas', monospace;
+    font-size: 10px;
+    color: #666;
+    letter-spacing: 1px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .code-block-copy {
+    background: none;
+    border: none;
+    color: #555;
+    cursor: pointer;
+    font-size: 10px;
+    padding: 0;
+    transition: color 0.2s;
+  }
+  .code-block-copy:hover { color: #00FFAA; }
+  .code-block pre {
+    margin: 0;
+    padding: 14px 16px;
+    background: rgba(0,0,0,0.3);
+    overflow-x: auto;
+    font-family: 'Consolas', monospace;
+    font-size: 12.5px;
+    color: #C8E6C9;
+    line-height: 1.55;
+    white-space: pre;
+  }
+  .prose-text {
+    font-size: 13px;
+    color: #BBBBBB;
+    line-height: 1.7;
+    white-space: pre-wrap;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+  }
 </style>
 </head>
 <body>
@@ -355,7 +462,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <button onclick="closeModal()" style="background:none;border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:6px 14px;color:#888;cursor:pointer;font-size:12px;">Close</button>
         </div>
         <div id="modal-plan" style="margin-bottom:20px;"></div>
-        <div id="modal-review" style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:8px;padding:16px 20px;white-space:pre-wrap;font-family:Consolas,monospace;font-size:12.5px;color:#BBBBBB;line-height:1.6;max-height:500px;overflow-y:auto;"></div>
+        <div id="modal-review" style="max-height:520px;overflow-y:auto;"></div>
       </div>
     </div>
   </div>
@@ -397,6 +504,27 @@ async function refresh() {
   }
 }
 
+// Stage bar helpers
+function stageBarHtml(planDone, buildDone, reviewDone, buildLabel) {
+  const planClass   = planDone   ? 'done' : (!planDone && !buildDone && !reviewDone ? 'active' : '');
+  const buildClass  = planDone && !buildDone ? 'active' : (buildDone ? 'done' : '');
+  const reviewClass = buildDone && !reviewDone ? 'active' : (reviewDone ? 'done' : '');
+  const planLbl   = planClass   === 'active' ? 'active' : (planDone   ? 'done' : '');
+  const buildLbl  = buildClass  === 'active' ? 'active' : (buildDone  ? 'done' : '');
+  const reviewLbl = reviewClass === 'active' ? 'active' : (reviewDone ? 'done' : '');
+  return `
+    <div class="stage-bar">
+      <div class="stage ${planClass}"></div>
+      <div class="stage ${buildClass}"></div>
+      <div class="stage ${reviewClass}"></div>
+    </div>
+    <div class="stage-labels">
+      <div class="stage-label ${planLbl}">Plan</div>
+      <div class="stage-label ${buildLbl}">${buildLabel || 'Build'}</div>
+      <div class="stage-label ${reviewLbl}">Review</div>
+    </div>`;
+}
+
 async function pitchTask() {
   const input = document.getElementById('pitch-input');
   const btn = document.getElementById('pitch-btn');
@@ -404,25 +532,63 @@ async function pitchTask() {
   if (!task) return;
 
   btn.disabled = true;
-  btn.textContent = 'Working...';
+  btn.textContent = 'Pitching...';
 
   const pipelineLog = document.getElementById('pipeline-log');
   const pipelineId = Date.now();
+  const startCursor = eventCursor;
 
-  // Show running state
-  pipelineLog.innerHTML = `
-    <div class="pipeline-card" id="pipeline-${pipelineId}">
+  // Show running card with stage bar in PLAN phase
+  const runningCard = `
+    <div class="pipeline-card running" id="pipeline-${pipelineId}">
       <div class="pipeline-header">
-        <div class="pipeline-task">${task}</div>
-        <div class="pipeline-status status-running">RUNNING</div>
+        <div class="pipeline-task">${escHtml(task)}</div>
+        <div class="pipeline-status status-running" id="pstatus-${pipelineId}">PLANNING</div>
       </div>
-      <div class="log-entry">
-        <span class="log-time">${new Date().toLocaleTimeString()}</span>
-        <span class="log-agent">PLANNER</span>
-        <span class="log-event"> Decomposing task...</span>
-      </div>
-    </div>
-  ` + pipelineLog.innerHTML;
+      <div id="pstages-${pipelineId}">${stageBarHtml(false, false, false)}</div>
+    </div>`;
+
+  // Remove empty state if present
+  const empty = pipelineLog.querySelector('.empty-state');
+  if (empty) pipelineLog.innerHTML = '';
+  pipelineLog.insertAdjacentHTML('afterbegin', runningCard);
+
+  // Watch events to update the stage bar while the request is in flight
+  let planDone = false, buildDone = false, buildCount = 0, totalSubtasks = 0;
+  const stageWatcher = setInterval(async () => {
+    try {
+      const r = await fetch(`/events?since=${eventCursor}`);
+      const d = await r.json();
+      d.events.forEach(ev => {
+        if (ev.type === 'plan') {
+          planDone = true;
+          totalSubtasks = ev.subtasks ? ev.subtasks.length : 0;
+        }
+        if (ev.type === 'build') buildCount++;
+        if (ev.type === 'review_start') buildDone = true;
+      });
+      eventCursor += d.events.length;
+
+      const statusEl = document.getElementById(`pstatus-${pipelineId}`);
+      const stagesEl = document.getElementById(`pstages-${pipelineId}`);
+      if (!statusEl) return;
+
+      const buildLabel = totalSubtasks > 0
+        ? `Build ${Math.min(buildCount, totalSubtasks)}/${totalSubtasks}`
+        : 'Build';
+
+      if (!planDone) {
+        statusEl.textContent = 'PLANNING';
+        stagesEl.innerHTML = stageBarHtml(false, false, false, buildLabel);
+      } else if (!buildDone) {
+        statusEl.textContent = buildLabel.toUpperCase();
+        stagesEl.innerHTML = stageBarHtml(true, false, false, buildLabel);
+      } else {
+        statusEl.textContent = 'REVIEWING';
+        stagesEl.innerHTML = stageBarHtml(true, true, false, buildLabel);
+      }
+    } catch(e) {}
+  }, 1000);
 
   try {
     const endpoint = document.getElementById('stat-nodes').textContent !== '0'
@@ -434,37 +600,44 @@ async function pitchTask() {
     });
     const result = await resp.json();
 
+    clearInterval(stageWatcher);
+
     // Show completed state
     const card = document.getElementById(`pipeline-${pipelineId}`);
     if (card) {
+      card.classList.remove('running');
       let subtasksHtml = '<div class="subtask-list">';
       result.plan.forEach(st => {
         subtasksHtml += `
           <div class="subtask">
-            <span class="subtask-id">${st.id}</span>
-            <span class="subtask-title">${st.title}</span>
-            <span class="subtask-check">done</span>
+            <span class="subtask-id">${escHtml(String(st.id))}</span>
+            <span class="subtask-title">${escHtml(st.title)}</span>
+            <span class="subtask-check" style="color:#00FF88;">&#10003;</span>
           </div>`;
       });
       subtasksHtml += '</div>';
 
       card.innerHTML = `
         <div class="pipeline-header">
-          <div class="pipeline-task">${task}</div>
+          <div class="pipeline-task">${escHtml(task)}</div>
           <div class="pipeline-status status-complete">${result.mode === 'distributed' ? 'DISTRIBUTED' : 'COMPLETE'}</div>
         </div>
+        ${stageBarHtml(true, true, true)}
         ${subtasksHtml}
-        <div class="log-entry">
+        <div class="log-entry" style="margin-top:8px;">
           <span class="log-time">${new Date().toLocaleTimeString()}</span>
-          <span class="log-event">Output saved to ${result.project_dir}</span>
+          <span class="log-event">&#8594; ${escHtml(result.project_dir)}</span>
         </div>
       `;
     }
+    loadHistory();
   } catch(e) {
+    clearInterval(stageWatcher);
     const card = document.getElementById(`pipeline-${pipelineId}`);
     if (card) {
-      card.querySelector('.pipeline-status').className = 'pipeline-status status-pending';
-      card.querySelector('.pipeline-status').textContent = 'FAILED';
+      card.classList.remove('running');
+      const s = document.getElementById(`pstatus-${pipelineId}`);
+      if (s) { s.className = 'pipeline-status status-pending'; s.textContent = 'FAILED'; }
     }
   }
 
@@ -473,12 +646,55 @@ async function pitchTask() {
   input.value = '';
 }
 
+function escHtml(str) {
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
 // Enter key to pitch
 document.getElementById('pitch-input').addEventListener('keydown', e => {
   if (e.key === 'Enter') pitchTask();
 });
 
 // ── Output viewer modal ──
+function renderOutput(text) {
+  if (!text) return '<div class="prose-text">No review output.</div>';
+
+  const parts = [];
+  const codeRe = /```(\\w*)\\n([\\s\\S]*?)```/g;
+  let last = 0, m;
+
+  while ((m = codeRe.exec(text)) !== null) {
+    if (m.index > last) {
+      parts.push(`<div class="prose-text">${escHtml(text.slice(last, m.index))}</div>`);
+    }
+    const lang = m[1] || 'text';
+    const code = escHtml(m[2]);
+    parts.push(`
+      <div class="code-block">
+        <div class="code-block-header">
+          <span>${lang}</span>
+          <button class="code-block-copy" onclick="copyCode(this)">copy</button>
+        </div>
+        <pre>${code}</pre>
+      </div>`);
+    last = m.index + m[0].length;
+  }
+
+  if (last < text.length) {
+    parts.push(`<div class="prose-text">${escHtml(text.slice(last))}</div>`);
+  }
+
+  return parts.join('') || `<div class="prose-text">${escHtml(text)}</div>`;
+}
+
+function copyCode(btn) {
+  const code = btn.closest('.code-block').querySelector('pre').textContent;
+  navigator.clipboard.writeText(code).then(() => {
+    btn.textContent = 'copied!';
+    setTimeout(() => btn.textContent = 'copy', 1500);
+  });
+}
+
 async function viewRun(timestamp) {
   try {
     const resp = await fetch(`/history/${timestamp}`);
@@ -486,17 +702,17 @@ async function viewRun(timestamp) {
 
     document.getElementById('modal-title').textContent = data.task;
 
-    let planHtml = '<div style="margin-bottom:12px;">';
+    let planHtml = '<div style="margin-bottom:16px;">';
     data.plan.forEach(st => {
-      planHtml += `<div style="display:flex;gap:8px;padding:4px 0;">
-        <span style="font-family:Consolas,monospace;font-size:11px;color:#555;min-width:20px;">${st.id}</span>
-        <span style="font-size:13px;color:#00FFAA;font-weight:600;">${st.title}</span>
+      planHtml += `<div style="display:flex;gap:8px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.04);">
+        <span style="font-family:Consolas,monospace;font-size:11px;color:#555;min-width:20px;">${escHtml(String(st.id))}</span>
+        <span style="font-size:13px;color:#00FFAA;font-weight:600;">${escHtml(st.title)}</span>
       </div>`;
     });
     planHtml += '</div>';
     document.getElementById('modal-plan').innerHTML = planHtml;
 
-    document.getElementById('modal-review').textContent = data.review || 'No review output.';
+    document.getElementById('modal-review').innerHTML = renderOutput(data.review);
     document.getElementById('output-modal').style.display = 'block';
   } catch(e) {
     console.error('Failed to load run:', e);
