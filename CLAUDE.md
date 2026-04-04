@@ -75,13 +75,13 @@ A collectively-owned AI system powered by consumer hardware. Phase 0 demo: local
 - He can't assess security risk himself. Flag it clearly in plain language.
 
 ### What to build next (priority order)
-The demo works. The pipeline runs. The dashboard exists. Here's what matters now:
+The demo works. The pipeline runs. The dashboard exists. WebSocket streaming, parallel wave execution, circuit breaker, persistent project memory, async job API, gallery, and ZIP download are all done. Here's what's left:
 
-1. **Polish the dashboard** — make it look professional enough for a demo video. Add better loading states, smoother animations, and make the output viewer show formatted code.
-2. **Improve output quality** — the reviewer should produce cleaner merged outputs. Test with varied prompts and fix edge cases where the planner returns bad JSON or builders produce incomplete output.
-3. **Harden the server** — add proper error responses, request validation, and make sure nothing crashes ungracefully.
-4. **Add WebSocket support to the dashboard** — replace polling with real-time updates so the live activity feed is actually live, not polling every 2-3 seconds.
-5. **Improve the distributed pipeline** — right now tasks are sequential even across nodes. Tasks without dependencies should run in parallel on different nodes.
+1. **Demo mode polish** — `py cli.py --demo` is in. Test it on video, tighten the pacing, make the Rich output look great at 1080p. Add a `--demo-fast` flag that skips the 2s pause for CI testing.
+2. **Output quality sweep** — run 10 varied prompt types (code, docs, analysis, multi-file projects) and log where the planner returns bad JSON or builders produce incomplete output. Fix each case. Target: 0 FAIL ratings on standard prompts.
+3. **Exo integration for model sharding** — connect to [Exo](https://github.com/exo-explore/exo) so multiple machines can collaboratively run a single large model inference. Replaces the per-node Ollama setup for GPU-scarce environments.
+4. **Network auth for node registration** — right now any machine can register as a node. Add a shared secret / API key check on `/nodes/register` and `/tasks/next` so only trusted machines can join. Required before any public demo.
+5. **Agent specialization** — let nodes declare which model they have and route tasks by role (planner → bigger model, builder → faster model). Config-driven, no hardcoding.
 
 ### What NOT to do
 - Don't rewrite things that work. The pipeline is tested and passes.

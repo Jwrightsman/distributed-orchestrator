@@ -181,17 +181,22 @@ def _validate_subtasks(subtasks: list) -> list:
 
 
 def _extract_final_output(review_text: str) -> str | None:
-    """Pull the Final Assembled Output section out of a reviewer response."""
-    marker = "## Final Assembled Output"
-    idx = review_text.find(marker)
-    if idx == -1:
+    """Pull the Final Assembled Output section out of a reviewer response.
+
+    Tolerates minor header variations (extra spaces, different case).
+    """
+    match = re.search(r"##\s*final assembled output\s*\n", review_text, re.IGNORECASE)
+    if not match:
         return None
-    return review_text[idx + len(marker):].strip()
+    return review_text[match.end():].strip()
 
 
 def _extract_rating(review_text: str) -> str:
     """Return 'PASS', 'NEEDS_WORK', or 'FAIL' from a reviewer response."""
-    for line in review_text.splitlines():
+    # First look inside a Quality Rating section for precision
+    section_match = re.search(r"##\s*quality rating\s*\n(.*?)(?=\n##|\Z)", review_text, re.IGNORECASE | re.DOTALL)
+    search_text = section_match.group(1) if section_match else review_text
+    for line in search_text.splitlines():
         stripped = line.strip()
         if stripped in ("PASS", "NEEDS_WORK", "FAIL"):
             return stripped
@@ -200,13 +205,14 @@ def _extract_rating(review_text: str) -> str:
 
 def _extract_issues(review_text: str) -> str:
     """Pull the Issues Found section, returning empty string if 'None'."""
-    start_marker = "## Issues Found"
-    end_marker = "## Final Assembled Output"
-    start = review_text.find(start_marker)
-    if start == -1:
+    start_match = re.search(r"##\s*issues found\s*\n", review_text, re.IGNORECASE)
+    if not start_match:
         return ""
-    end = review_text.find(end_marker, start)
-    section = review_text[start + len(start_marker): end if end != -1 else None].strip()
+    end_match = re.search(r"##\s*final assembled output", review_text[start_match.end():], re.IGNORECASE)
+    if end_match:
+        section = review_text[start_match.end(): start_match.end() + end_match.start()].strip()
+    else:
+        section = review_text[start_match.end():].strip()
     if section.lower() in ("none", "none.", "n/a", ""):
         return ""
     return section
@@ -253,13 +259,21 @@ async def plan(task: str, max_retries: int | None = None, memory_context: str = 
         system = PLANNER_MEMORY_PREFIX.format(memory=memory_context) + PLANNER_SYSTEM
 
     last_err: Exception = ValueError("no attempts made")
+    prompt = task
     for attempt in range(max_retries):
-        raw = await generate(task, system=system, role="planner")
+        raw = await generate(prompt, system=system, role="planner")
         try:
             subtasks = _extract_json(raw)
             return _validate_subtasks(subtasks)
         except (ValueError, json.JSONDecodeError) as e:
             last_err = e
+            # On retry, inject the error so the model knows what it got wrong
+            if attempt + 1 < max_retries:
+                prompt = (
+                    f"{task}\n\n"
+                    f"IMPORTANT: Your previous response could not be parsed. Error: {e}\n"
+                    f"You MUST return ONLY a valid JSON array — no markdown, no explanation, no text outside the array."
+                )
     raise ValueError(f"Planner failed after {max_retries} attempts: {last_err}")
 
 

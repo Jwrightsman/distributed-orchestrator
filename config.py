@@ -55,6 +55,12 @@ DEFAULTS = {
 
     # ── Server ───────────────────────────────────────────────────────
     "port": 8000,
+
+    # Shared secret for node authentication.
+    # Set this to a non-empty string to require worker nodes to present
+    # X-Node-Secret: <value> on /nodes/register, /tasks/next, and /tasks/*/result.
+    # Leave empty ("") to allow any node to join (default — trusted networks only).
+    "node_secret": "",
 }
 
 

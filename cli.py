@@ -271,6 +271,56 @@ def _flag_value(flag: str) -> str | None:
     return None
 
 
+async def run_demo(fast: bool = False):
+    """Demo mode — shows the full project memory flow in two pitches.
+
+    Perfect for screen recording: creates a project, runs the first task,
+    pauses so the viewer can read, then continues with a follow-up task
+    that proves the AI remembers what it already built.
+
+    Pass fast=True (--demo-fast) to skip the inter-pitch pause.
+    """
+    console.print(Panel(
+        "[bold cyan]DEMO MODE[/bold cyan] — showing project memory in action\n\n"
+        "[dim]Pitch 1:[/dim] Build a Python expense tracker with categories and a spending summary\n"
+        "[dim]Pitch 2:[/dim] Add a monthly budget feature that warns when you're over budget\n\n"
+        "[dim]The second pitch will load context from the first — the AI picks up exactly where it left off.[/dim]",
+        title="[bold]Distributed AI Orchestrator[/bold]",
+        border_style="cyan",
+    ))
+    console.print()
+
+    # Pitch 1 — seed the project
+    project_id = create_project("demo-app", "Build a Python expense tracker with categories and a spending summary")
+    console.print(f"[dim]Project created: {project_id}[/dim]\n")
+    await run_task(
+        "Build a Python expense tracker with categories and a spending summary",
+        project_id=project_id,
+    )
+
+    console.print()
+    console.print("[bold cyan]─" * 60 + "[/bold cyan]")
+    if not fast:
+        console.print("[dim]Pausing 2 seconds before continuation pitch...[/dim]")
+        await asyncio.sleep(2)
+    console.print("[bold cyan]─" * 60 + "[/bold cyan]")
+    console.print()
+
+    # Pitch 2 — continuation that exercises project memory
+    await run_task(
+        "Add a monthly budget feature that warns when you're over budget",
+        project_id=project_id,
+    )
+
+    console.print()
+    console.print(Panel(
+        f"[bold green]Demo complete.[/bold green]\n\n"
+        f"Both runs saved under project [cyan]{project_id}[/cyan]\n"
+        f"[dim]Continue anytime: py cli.py --project {project_id} \"your next task\"[/dim]",
+        border_style="green",
+    ))
+
+
 async def main():
     # Pre-flight: check Ollama is running
     status = await check_ollama()
@@ -322,6 +372,14 @@ async def main():
                 console.print(f"[red]Project '{project_id}' not found.[/red]")
             return
         await run_task(" ".join(args), project_id=project_id)
+        return
+
+    # ── Demo mode — two-pitch project memory showcase ──
+    if "--demo-fast" in sys.argv:
+        await run_demo(fast=True)
+        return
+    if "--demo" in sys.argv:
+        await run_demo()
         return
 
     # ── Direct task or interactive mode ──

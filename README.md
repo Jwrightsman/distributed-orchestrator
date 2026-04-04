@@ -8,19 +8,27 @@ An open orchestration layer for multi-agent task execution across contributor ha
 
 ```
 POST /pitch  (or: python cli.py "your task")
-    ↓
-PLANNER    decomposes task into 3–5 subtasks with dependency graph
-    ↓
-BUILDERS   execute subtasks in parallel (locally or across worker nodes)
-    ↓
-REVIEWER   validates output, assembles final deliverable, flags issues
-    ↓
-REVISER    (if needed) runs a targeted fix pass on reviewer-flagged issues
-    ↓
-output/{timestamp}/output.md   + extracted code files
+    │
+    ├─ PLANNER (local)   decomposes into 3–5 subtasks with dependency graph
+    │                    ↓
+    │         ┌──────────┴──────────┐
+    │         │          │          │     ← independent subtasks run concurrently
+    │    BUILDER 1   BUILDER 2  BUILDER 3  (on connected nodes, or local fallback)
+    │         │          │          │
+    │         └──────────┬──────────┘
+    │                    ↓
+    ├─ REVIEWER (local)  assembles final output, rates quality
+    │                    ↓ (if NEEDS_WORK)
+    └─ REVISER (local)   targeted fix pass (up to 2 rounds)
+                         ↓
+             output/{timestamp}/output.md + extracted code files
 ```
 
-All agents run on local models via [Ollama](https://ollama.com). No data leaves your machine unless you connect worker nodes across a network.
+**`/pitch` vs `/pitch/distributed`**
+- `/pitch` or `cli.py` — all agents run locally on your machine
+- `/pitch/distributed` — planner and reviewer run locally; builder subtasks are distributed to connected worker nodes and execute in parallel across machines
+
+All agents use local models via [Ollama](https://ollama.com). No data leaves your machine unless you connect worker nodes across a network.
 
 ## Quick start
 
@@ -30,6 +38,31 @@ All agents run on local models via [Ollama](https://ollama.com). No data leaves 
 pip install fastapi uvicorn httpx rich
 ollama pull gemma3:4b
 ```
+
+### Verify your setup
+
+After installing, run this to confirm everything is wired up correctly:
+
+```
+python status.py
+```
+
+Expected output:
+
+```
+Ollama
+  Status:  running
+  URL:     http://localhost:11434
+  Models:  gemma3:4b
+  Active:  gemma3:4b
+
+Config
+  Model:    gemma3:4b
+  Timeout:  600s
+  Retries:  3
+```
+
+If Ollama isn't running, start it with `ollama serve` and re-run. If the model is missing, run `ollama pull gemma3:4b`.
 
 ### CLI
 
@@ -138,6 +171,23 @@ events.db           # SQLite event log (survives server restarts)
 | `/nodes/register` | POST | Worker node registration |
 | `/tasks/next` | GET | Worker polls for next task (long-polls 25s) |
 | `/tasks/{id}/result` | POST | Worker submits completed task |
+
+## Reliability and trust model
+
+This is a **Phase 0 trusted-network prototype**. Here's exactly what's durable and what isn't:
+
+| Thing | Durable? | Notes |
+|---|---|---|
+| Pipeline output | Yes | Saved to `output/{timestamp}/` on disk after every run |
+| Event history | Yes | SQLite (`events.db`) — survives restarts |
+| Job status | Yes | SQLite (`events.db`) — `/jobs/{id}` works after restart |
+| Project memory | Yes | `projects/<id>/memory.md` on disk |
+| Connected nodes | No | Nodes must re-register after server restart |
+| Task queue | No | In-flight tasks are reclaimed automatically if a node goes silent; a server restart drops queued-but-not-started tasks |
+
+**Execution guarantees:** Tasks are at-least-once in the distributed path — if a node goes offline mid-task, the task is re-queued and can run on another node. There's no deduplication guard, so in rare race conditions a task may run twice. The final reviewer sees all outputs and merges them, so this typically doesn't affect the result.
+
+**Trust model:** Worker nodes authenticate with a shared secret (`node_secret` in `config.json`). Leave it empty for fully open trusted-network mode (Phase 0 default). The orchestrator itself has no login — don't expose port 8000 to the internet.
 
 ## What's built
 
