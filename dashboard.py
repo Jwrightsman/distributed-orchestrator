@@ -658,6 +658,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       </div>
     </div>
 
+    <!-- Node detail modal -->
+    <div id="node-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.85);z-index:100;overflow-y:auto;" onclick="if(event.target===this)closeNodeModal()">
+      <div style="max-width:560px;margin:60px auto;padding:28px;background:#0D0F14;border:1px solid rgba(255,255,255,0.1);border-radius:12px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+          <h2 id="node-modal-title" style="font-size:16px;font-weight:700;color:#F0F0F0;margin:0;font-family:Consolas,monospace;"></h2>
+          <button onclick="closeNodeModal()" style="background:none;border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:6px 14px;color:#888;cursor:pointer;font-size:12px;">Close</button>
+        </div>
+        <div id="node-modal-body" style="font-size:13px;color:#CCC;"></div>
+      </div>
+    </div>
+
     <!-- Output viewer modal -->
     <div id="output-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.85);z-index:100;overflow-y:auto;">
       <div style="max-width:800px;margin:40px auto;padding:28px;background:#0D0F14;border:1px solid rgba(255,255,255,0.1);border-radius:12px;">
@@ -719,12 +730,15 @@ async function refresh() {
         const hwHtml = hwParts.length
           ? `<div class="node-meta" style="color:#444;">${hwParts.join(' &middot; ')}</div>`
           : '';
-        const capsHtml = (n.capabilities && n.capabilities.length)
-          ? n.capabilities.map(c => `<span style="background:rgba(0,255,170,0.08);border:1px solid rgba(0,255,170,0.2);border-radius:3px;padding:1px 5px;font-size:9px;color:#00FFAA;margin-right:3px;">${escHtml(c)}</span>`).join('')
+        // Filter auto-added model: tags from the visible chips — model is shown explicitly
+        const visibleCaps = (n.capabilities || []).filter(c => !c.startsWith('model:'));
+        const capsHtml = visibleCaps.length
+          ? visibleCaps.map(c => `<span style="background:rgba(0,255,170,0.08);border:1px solid rgba(0,255,170,0.2);border-radius:3px;padding:1px 5px;font-size:9px;color:#00FFAA;margin-right:3px;">${escHtml(c)}</span>`).join('')
           : '';
         const capsRow = capsHtml ? `<div class="node-meta" style="margin-top:3px;">${capsHtml}</div>` : '';
+        const nodeData = encodeURIComponent(JSON.stringify(n));
         return `
-          <div class="node-card active" id="nodecard-${escHtml(n.node_id)}" style="position:relative;">
+          <div class="node-card active" id="nodecard-${escHtml(n.node_id)}" style="position:relative;cursor:pointer;" onclick="openNodeModal(decodeURIComponent('${nodeData}'))">
             <div class="node-name"><span class="${dotClass}"></span>${escHtml(n.node_id)}</div>
             <div class="node-meta">${escHtml(n.platform)} / ${escHtml(n.machine)}</div>
             <div class="node-meta">${escHtml(n.model)}</div>
@@ -774,12 +788,17 @@ async function pitchTask() {
   const pipelineId = Date.now();
   const startCursor = eventCursor;
 
+  const _cardStart = Date.now();
+
   // Show running card with stage bar in PLAN phase
   const runningCard = `
     <div class="pipeline-card running" id="pipeline-${pipelineId}">
       <div class="pipeline-header">
         <div class="pipeline-task">${escHtml(task)}</div>
-        <div class="pipeline-status status-running" id="pstatus-${pipelineId}">PLANNING</div>
+        <div style="display:flex;align-items:center;gap:10px;flex-shrink:0;">
+          <span id="pelapsed-${pipelineId}" style="font-family:Consolas,monospace;font-size:10px;color:#444;">0s</span>
+          <div class="pipeline-status status-running" id="pstatus-${pipelineId}">PLANNING</div>
+        </div>
       </div>
       <div id="pstages-${pipelineId}">${stageBarHtml(false, false, false)}</div>
       <pre id="token-stream-${pipelineId}"
@@ -788,6 +807,14 @@ async function pitchTask() {
                   font-size:11px;color:#888;max-height:120px;overflow-y:auto;
                   white-space:pre-wrap;word-break:break-word;display:none;"></pre>
     </div>`;
+
+  // Tick the elapsed time every second
+  const elapsedTicker = setInterval(() => {
+    const el = document.getElementById(`pelapsed-${pipelineId}`);
+    if (!el) { clearInterval(elapsedTicker); return; }
+    const secs = Math.round((Date.now() - _cardStart) / 1000);
+    el.textContent = secs >= 60 ? `${Math.floor(secs/60)}m ${secs%60}s` : `${secs}s`;
+  }, 1000);
 
   // Remove empty state if present
   const empty = pipelineLog.querySelector('.empty-state');
@@ -855,9 +882,10 @@ async function pitchTask() {
     // /pitch/async always returns {job_id, status:"queued"} — poll until done
     if (!data.job_id) throw new Error('Unexpected response: ' + JSON.stringify(data));
     btn.textContent = 'Running...';
-    await _pollJobCompletion(data.job_id, pipelineId, task, stageWatcher);
+    await _pollJobCompletion(data.job_id, pipelineId, task, stageWatcher, elapsedTicker);
   } catch(e) {
     clearInterval(stageWatcher);
+    clearInterval(elapsedTicker);
     const card = document.getElementById(`pipeline-${pipelineId}`);
     if (card) {
       card.classList.remove('running');
@@ -871,7 +899,7 @@ async function pitchTask() {
   input.value = '';
 }
 
-async function _pollJobCompletion(jobId, pipelineId, task, stageWatcher) {
+async function _pollJobCompletion(jobId, pipelineId, task, stageWatcher, elapsedTicker) {
   // Poll /jobs/{id} until done; WebSocket keeps the stage bar + event log live
   while (true) {
     await new Promise(r => setTimeout(r, 3000));
@@ -880,6 +908,7 @@ async function _pollJobCompletion(jobId, pipelineId, task, stageWatcher) {
       const job = await r.json();
       if (job.status === 'complete' || job.status === 'failed') {
         clearInterval(stageWatcher);
+        clearInterval(elapsedTicker);
         _showCompletedCard(pipelineId, task, {
           plan: job.plan || [],
           project_dir: job.project_dir || '',
@@ -903,6 +932,11 @@ function _showCompletedCard(pipelineId, task, result) {
   const statusClass = failed ? 'status-pending' : 'status-complete';
   const statusText = failed ? 'FAILED' : (result.mode === 'distributed' ? 'DISTRIBUTED' : 'COMPLETE');
 
+  const ratingColors = {PASS: '#00FF88', NEEDS_WORK: '#E8FF47', FAIL: '#FF5555'};
+  const ratingBadge = result.rating && !failed
+    ? ` <span style="font-family:Consolas,monospace;font-size:10px;font-weight:700;color:${ratingColors[result.rating]||'#888'};background:${ratingColors[result.rating]||'#888'}18;border:1px solid ${ratingColors[result.rating]||'#888'}30;border-radius:4px;padding:2px 7px;">${escHtml(result.rating)}</span>`
+    : '';
+
   let subtasksHtml = '<div class="subtask-list">';
   (result.plan || []).forEach(st => {
     subtasksHtml += `
@@ -917,13 +951,13 @@ function _showCompletedCard(pipelineId, task, result) {
   card.innerHTML = `
     <div class="pipeline-header">
       <div class="pipeline-task">${escHtml(task)}</div>
-      <div class="pipeline-status ${statusClass}">${statusText}</div>
+      <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">${ratingBadge}<div class="pipeline-status ${statusClass}">${statusText}</div></div>
     </div>
     ${stageBarHtml(true, true, true)}
     ${subtasksHtml}
-    ${result.project_dir ? `<div class="log-entry" style="margin-top:8px;">
+    ${result.project_dir ? `<div class="log-entry" style="margin-top:8px;cursor:pointer;" onclick="viewRun('${escHtml(result.project_dir.split(/[\\/]/).pop())}')">
       <span class="log-time">${new Date().toLocaleTimeString()}</span>
-      <span class="log-event">&#8594; ${escHtml(result.project_dir)}</span>
+      <span class="log-event" style="color:#00FFAA;">View output &#8594;</span>
     </div>` : ''}
   `;
 }
@@ -1047,6 +1081,49 @@ async function viewRun(timestamp) {
 
 function closeModal() {
   document.getElementById('output-modal').style.display = 'none';
+}
+
+// ── Node detail modal ──
+function openNodeModal(nodeJson) {
+  const n = typeof nodeJson === 'string' ? JSON.parse(nodeJson) : nodeJson;
+  document.getElementById('node-modal-title').textContent = n.node_id;
+
+  const rows = [];
+  rows.push(`<div style="display:grid;grid-template-columns:120px 1fr;gap:8px 16px;line-height:1.7;">`);
+  const row = (label, val) => val
+    ? `<span style="color:#555;font-size:12px;">${label}</span><span style="color:#CCC;">${escHtml(String(val))}</span>`
+    : '';
+
+  rows.push(row('Model', n.model));
+  rows.push(row('Platform', `${n.platform} / ${n.machine}`));
+  rows.push(row('Hostname', n.hostname));
+  rows.push(row('CPU', n.cpu_count ? `${n.cpu_count} cores` : null));
+  rows.push(row('RAM', n.ram_gb ? `${n.ram_gb} GB` : null));
+  rows.push(row('GPU', n.gpu));
+  rows.push(row('Joined', n.registered_at ? n.registered_at.slice(0,19).replace('T',' ') + ' UTC' : null));
+  rows.push(row('Tasks done', n.tasks_completed));
+  rows.push(row('Credits', n.credits_earned || 0));
+
+  const visibleCaps = (n.capabilities || []).filter(c => !c.startsWith('model:'));
+  if (visibleCaps.length) {
+    const chips = visibleCaps.map(c =>
+      `<span style="background:rgba(0,255,170,0.08);border:1px solid rgba(0,255,170,0.2);border-radius:3px;padding:1px 6px;font-size:10px;color:#00FFAA;margin-right:4px;">${escHtml(c)}</span>`
+    ).join('');
+    rows.push(`<span style="color:#555;font-size:12px;">Capabilities</span><span>${chips}</span>`);
+  }
+
+  rows.push('</div>');
+
+  if (n.current_task) {
+    rows.push(`<div style="margin-top:16px;padding:10px 14px;background:rgba(0,255,136,0.05);border:1px solid rgba(0,255,136,0.15);border-radius:6px;font-size:12px;color:#00FF88;">&#9654; ${escHtml(n.current_task)}</div>`);
+  }
+
+  document.getElementById('node-modal-body').innerHTML = rows.filter(Boolean).join('');
+  document.getElementById('node-modal').style.display = 'block';
+}
+
+function closeNodeModal() {
+  document.getElementById('node-modal').style.display = 'none';
 }
 
 document.addEventListener('keydown', e => {

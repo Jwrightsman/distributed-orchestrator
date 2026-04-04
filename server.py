@@ -506,6 +506,7 @@ async def _run_job(job_id: str, task: str, project_id: str | None = None, trace_
     if not trace_id:
         trace_id = str(uuid.uuid4())
     jobs[job_id]["status"] = "running"
+    jobs[job_id]["started_at"] = datetime.now(timezone.utc).isoformat()
     _emit("pitch", {"task": task, "job_id": job_id, "trace_id": trace_id})
 
     def on_plan(subtasks):
@@ -633,6 +634,7 @@ async def get_job(job_id: str):
         "task": job["task"],
         "status": job["status"],
         "submitted_at": job["submitted_at"],
+        "started_at": job.get("started_at"),
         "finished_at": job.get("finished_at"),
         "error": job.get("error"),
         "project_dir": job["result"]["project_dir"] if job["result"] else None,
