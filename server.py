@@ -124,12 +124,21 @@ ws_manager = _WSManager()
 async def ws_events(websocket: WebSocket):
     """WebSocket endpoint — clients receive pipeline events in real time."""
     await ws_manager.connect(websocket)
-    # Send recent history so the client doesn't start blind
-    for event in pipeline_events[-20:]:
-        try:
-            await websocket.send_json(event)
-        except Exception:
-            break
+    # Replay last 20 persisted events from SQLite so new clients aren't blind
+    try:
+        with _db_lock:
+            con = sqlite3.connect(_DB_PATH)
+            con.row_factory = sqlite3.Row
+            rows = con.execute(
+                "SELECT id, type, time, data FROM events ORDER BY id DESC LIMIT 20"
+            ).fetchall()
+            con.close()
+        for row in reversed(rows):
+            blob = json.loads(row["data"])
+            blob.update({"id": row["id"], "type": row["type"], "time": row["time"]})
+            await websocket.send_json(blob)
+    except Exception:
+        pass
     try:
         while True:
             # Keep alive — ignore any incoming messages

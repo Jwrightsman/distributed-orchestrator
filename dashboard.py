@@ -792,8 +792,8 @@ async function pitchTask() {
         }
         if (ev.type === 'build') buildCount++;
         if (ev.type === 'review_start') buildDone = true;
+        if (ev.id && ev.id > stageCursor) stageCursor = ev.id;
       });
-      stageCursor += d.events.length;
 
       const statusEl = document.getElementById(`pstatus-${pipelineId}`);
       const stagesEl = document.getElementById(`pstages-${pipelineId}`);
@@ -1043,6 +1043,8 @@ document.addEventListener('keydown', e => {
 });
 
 // ── Event log — WebSocket with polling fallback ──
+// eventCursor tracks the last SQLite rowid seen, not a count.
+// Events from /events now carry an "id" field (rowid). We set cursor = max(id seen).
 let eventCursor = 0;
 let wsConnected = false;
 
@@ -1168,7 +1170,8 @@ function connectWebSocket() {
     try {
       const ev = JSON.parse(e.data);
       appendEvent(ev);
-      eventCursor++;
+      // Track highest rowid seen so polling fallback has a correct cursor
+      if (ev.id && ev.id > eventCursor) eventCursor = ev.id;
     } catch(_) {}
   };
 
@@ -1189,7 +1192,10 @@ async function pollEvents() {
   try {
     const resp = await fetch(`/events?since=${eventCursor}`);
     const data = await resp.json();
-    data.events.forEach(ev => { appendEvent(ev); eventCursor++; });
+    data.events.forEach(ev => {
+      appendEvent(ev);
+      if (ev.id && ev.id > eventCursor) eventCursor = ev.id;
+    });
   } catch(e) {}
 }
 
