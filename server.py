@@ -18,16 +18,18 @@ Usage:
 """
 
 import asyncio
+import io
 import json
 import sqlite3
 import threading
 import time
 import uuid
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, field_validator
 
 import httpx
@@ -557,6 +559,27 @@ async def history_detail(timestamp: str):
         "rating": rating,
         "code_files": code_files,
     }
+
+
+@app.get("/history/{timestamp}/download")
+async def download_history(timestamp: str):
+    """Download all files from a run as a ZIP archive."""
+    run_dir = OUTPUT_DIR / timestamp
+    if not run_dir.exists():
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for file_path in sorted(run_dir.rglob("*")):
+            if file_path.is_file():
+                zf.write(file_path, file_path.relative_to(run_dir))
+    zip_buffer.seek(0)
+
+    return StreamingResponse(
+        iter([zip_buffer.getvalue()]),
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename=output_{timestamp}.zip"},
+    )
 
 
 # ── Gallery ──────────────────────────────────────────────────────────

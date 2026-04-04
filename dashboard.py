@@ -1421,14 +1421,10 @@ let _currentModalTimestamp = null;
 
 function downloadOutput() {
   if (!_currentModalTimestamp) return;
-  const content = document.getElementById('modal-review').innerText;
-  const title = (document.getElementById('modal-title').textContent || 'output').replace(/[^a-z0-9]/gi, '_').toLowerCase();
-  const blob = new Blob([content], {type: 'text/plain'});
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = `${title}_${_currentModalTimestamp}.txt`;
+  a.href = `/history/${_currentModalTimestamp}/download`;
+  a.download = `output_${_currentModalTimestamp}.zip`;
   a.click();
-  URL.revokeObjectURL(a.href);
 }
 
 // Start

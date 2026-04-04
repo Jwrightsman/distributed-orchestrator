@@ -445,11 +445,18 @@ async def run_pipeline(task: str, on_plan=None, on_build=None, on_review_start=N
         "project_id": project_id or "",
     }
 
-    # Save iteration to project memory
+    # Save iteration to project memory, auto-summarize if it's grown too large
     if project_id:
         try:
-            from memory import add_iteration
+            from memory import add_iteration, _summarize_memory, SUMMARIZE_THRESHOLD, PROJECTS_DIR as _PROJ_DIR
             add_iteration(project_id, result, task)
+            memory_file = _PROJ_DIR / project_id / "memory.md"
+            if memory_file.exists():
+                raw = memory_file.read_text(errors="ignore")
+                if len(raw) > SUMMARIZE_THRESHOLD:
+                    compressed = await _summarize_memory(raw)
+                    if compressed and compressed != raw:
+                        memory_file.write_text(compressed)
         except Exception:
             pass  # memory write failure never blocks the pipeline
 
