@@ -637,7 +637,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
       </div>
 
-      <h2 style="margin-top:24px">History</h2>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:24px;margin-bottom:8px;">
+        <h2 style="margin:0;">History</h2>
+        <input id="history-search" type="text" placeholder="search..." oninput="onHistorySearch()"
+          style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:5px;padding:3px 8px;font-size:11px;color:#CCC;outline:none;width:100px;">
+      </div>
       <div id="history-list">
         <div class="empty-state"><p>No past runs yet.</p></div>
       </div>
@@ -661,6 +665,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <h2 id="modal-title" style="font-size:18px;font-weight:700;color:#F0F0F0;margin:0;"></h2>
           <div style="display:flex;gap:8px;align-items:center;">
             <button id="modal-download-btn" onclick="downloadOutput()" style="background:rgba(0,255,170,0.08);border:1px solid rgba(0,255,170,0.2);border-radius:6px;padding:6px 14px;color:#00FFAA;cursor:pointer;font-size:11px;font-weight:600;">Download</button>
+            <button id="modal-share-btn" onclick="copyShareLink()" style="background:none;border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:6px 14px;color:#888;cursor:pointer;font-size:11px;font-weight:600;">Copy link</button>
             <button onclick="closeModal()" style="background:none;border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:6px 14px;color:#888;cursor:pointer;font-size:12px;">Close</button>
           </div>
         </div>
@@ -1208,9 +1213,17 @@ async function pollEvents() {
 connectWebSocket();
 
 // ── History ──
+let _historySearchTimer = null;
+function onHistorySearch() {
+  clearTimeout(_historySearchTimer);
+  _historySearchTimer = setTimeout(loadHistory, 250);
+}
+
 async function loadHistory() {
+  const q = (document.getElementById('history-search')?.value || '').trim();
+  const url = q ? `/history?search=${encodeURIComponent(q)}` : '/history';
   try {
-    const resp = await fetch('/history');
+    const resp = await fetch(url);
     const data = await resp.json();
     const el = document.getElementById('history-list');
 
@@ -1430,6 +1443,18 @@ function downloadOutput() {
   a.click();
 }
 
+function copyShareLink() {
+  if (!_currentModalTimestamp) return;
+  const url = `${location.origin}/dashboard#run=${_currentModalTimestamp}`;
+  navigator.clipboard.writeText(url).then(() => {
+    const btn = document.getElementById('modal-share-btn');
+    if (btn) { btn.textContent = 'Copied!'; setTimeout(() => btn.textContent = 'Copy link', 1500); }
+  }).catch(() => {
+    // Fallback for non-HTTPS contexts
+    prompt('Copy this link:', `${location.origin}/dashboard#run=${_currentModalTimestamp}`);
+  });
+}
+
 // Start
 refresh();
 loadHistory();
@@ -1440,6 +1465,13 @@ setInterval(pollEvents, 3000);   // fallback only — no-ops when WS is connecte
 setInterval(loadHistory, 15000);
 setInterval(loadStandings, 10000);
 setInterval(loadProjects, 20000);
+
+// Handle #run=<timestamp> links — auto-open the run modal on page load
+(function() {
+  const hash = location.hash;
+  const m = hash.match(/#run=([^&]+)/);
+  if (m) viewRun(decodeURIComponent(m[1]));
+})();
 </script>
 </body>
 </html>"""

@@ -625,35 +625,45 @@ async def list_jobs(limit: int = 20):
 
 
 @app.get("/history")
-async def history():
-    """List past pipeline runs from the output folder."""
+async def history(search: str = "", limit: int = 50):
+    """List past pipeline runs from the output folder.
+
+    Pass ?search=<text> to filter runs whose task text contains the query
+    (case-insensitive). Returns up to `limit` most recent matching runs.
+    """
+    query = search.strip().lower()
     runs = []
     if OUTPUT_DIR.exists():
         for d in sorted(OUTPUT_DIR.iterdir(), reverse=True):
-            if d.is_dir():
-                log_file = d / "full_log.json"
-                if log_file.exists():
-                    try:
-                        log = json.loads(log_file.read_text())
-                        # Quick rating check from review.md if available
-                        rating = log.get("rating", "?")
-                        if rating == "?":
-                            review_f = d / "review.md"
-                            if review_f.exists():
-                                for line in review_f.read_text(errors="ignore").splitlines():
-                                    if line.strip() in ("PASS", "NEEDS_WORK", "FAIL"):
-                                        rating = line.strip()
-                                        break
-                        runs.append({
-                            "timestamp": log.get("timestamp", d.name),
-                            "task": log.get("task", "Unknown"),
-                            "subtask_count": len(log.get("plan", [])),
-                            "rating": rating,
-                            "dir": str(d),
-                        })
-                    except json.JSONDecodeError:
-                        pass
-            if len(runs) >= 20:
+            if not d.is_dir():
+                continue
+            log_file = d / "full_log.json"
+            if not log_file.exists():
+                continue
+            try:
+                log = json.loads(log_file.read_text())
+                task = log.get("task", "Unknown")
+                if query and query not in task.lower():
+                    continue
+                rating = log.get("rating", "?")
+                if rating == "?":
+                    review_f = d / "review.md"
+                    if review_f.exists():
+                        for line in review_f.read_text(errors="ignore").splitlines():
+                            if line.strip() in ("PASS", "NEEDS_WORK", "FAIL"):
+                                rating = line.strip()
+                                break
+                runs.append({
+                    "timestamp": log.get("timestamp", d.name),
+                    "task": task,
+                    "subtask_count": len(log.get("plan", [])),
+                    "rating": rating,
+                    "project_id": log.get("project_id") or None,
+                    "dir": str(d),
+                })
+            except json.JSONDecodeError:
+                pass
+            if len(runs) >= limit:
                 break
     return {"runs": runs, "count": len(runs)}
 
