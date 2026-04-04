@@ -346,6 +346,61 @@ async def submit_result(task_id: str, result: TaskResult):
 
 
 # ── Distributed pipeline ────────────────────────────────────────────
+
+async def _dispatch_subtask(
+    st: dict,
+    subtasks: list[dict],
+    results: dict[int, str],
+    nodes_used: set[str],
+) -> tuple[int, str]:
+    """Push one subtask to the worker queue and wait for its result.
+
+    Falls back to local Ollama inference on timeout or worker error.
+    Returns (subtask_id, output_text).
+    """
+    from orchestrator import _MAX_CONTEXT_CHARS
+
+    # Build context from resolved dependencies
+    context_parts = []
+    for dep_id in st.get("depends_on", []):
+        if dep_id in results:
+            dep_task = next((s for s in subtasks if s["id"] == dep_id), None)
+            label = dep_task["title"] if dep_task else f"Subtask {dep_id}"
+            context_parts.append(f"[{label}]:\n{results[dep_id]}")
+    context = "\n\n".join(context_parts)
+    if len(context) > _MAX_CONTEXT_CHARS:
+        context = "...[truncated]\n\n" + context[-_MAX_CONTEXT_CHARS:]
+
+    prompt = st["prompt"]
+    if context:
+        prompt = f"Context from previous subtasks:\n{context}\n\n---\n\nYour task:\n{prompt}"
+
+    task_id = f"build_{st['id']}_{int(time.time() * 1000)}"
+    task_queue.append({
+        "task_id": task_id,
+        "title": st["title"],
+        "prompt": prompt,
+        "system": BUILDER_SYSTEM,
+    })
+
+    deadline = time.time() + 600
+    while task_id not in task_results:
+        if time.time() > deadline:
+            output = await generate(prompt, system=BUILDER_SYSTEM)
+            nodes_used.add("local")
+            return st["id"], output
+        await asyncio.sleep(1)
+
+    tr = task_results.pop(task_id)
+    if tr.get("error") or not tr.get("output"):
+        output = await generate(prompt, system=BUILDER_SYSTEM)
+        nodes_used.add("local")
+    else:
+        output = tr["output"]
+        nodes_used.add(tr.get("node_id", "unknown"))
+    return st["id"], output
+
+
 @app.post("/pitch/distributed")
 async def pitch_distributed(req: PitchRequest):
     """Pitch a task that gets distributed across connected nodes.
@@ -370,56 +425,34 @@ async def pitch_distributed(req: PitchRequest):
         result["mode"] = "local"
         return result
 
-    # 3. Distribute builder tasks to worker nodes
+    # 3. Distribute builder tasks to worker nodes (parallel waves by dependency level)
+    from orchestrator import _MAX_CONTEXT_CHARS
+
     results: dict[int, str] = {}
     nodes_used: set[str] = set()
 
     if len(task_queue) >= _MAX_TASK_QUEUE:
         raise HTTPException(status_code=503, detail="Task queue is full — too many pending tasks")
 
-    for st in sorted(subtasks, key=lambda s: s["id"]):
-        # Build context from dependencies (reuse the same truncation logic as local)
-        from orchestrator import _MAX_CONTEXT_CHARS
-        context_parts = []
-        for dep_id in st.get("depends_on", []):
-            if dep_id in results:
-                dep_task = next((s for s in subtasks if s["id"] == dep_id), None)
-                label = dep_task["title"] if dep_task else f"Subtask {dep_id}"
-                context_parts.append(f"[{label}]:\n{results[dep_id]}")
-        context = "\n\n".join(context_parts)
-        if len(context) > _MAX_CONTEXT_CHARS:
-            context = "...[truncated]\n\n" + context[-_MAX_CONTEXT_CHARS:]
+    remaining = {st["id"]: st for st in subtasks}
 
-        prompt = st["prompt"]
-        if context:
-            prompt = f"Context from previous subtasks:\n{context}\n\n---\n\nYour task:\n{prompt}"
+    while remaining:
+        # Find subtasks whose dependencies are all resolved
+        ready = [
+            st for st in remaining.values()
+            if all(dep_id in results for dep_id in st.get("depends_on", []))
+        ]
+        if not ready:
+            break  # shouldn't happen with valid dep graph
 
-        task_id = f"build_{st['id']}_{int(time.time() * 1000)}"
-
-        task_queue.append({
-            "task_id": task_id,
-            "title": st["title"],
-            "prompt": prompt,
-            "system": BUILDER_SYSTEM,
-        })
-
-        # Wait for result (poll)
-        deadline = time.time() + 600
-        while task_id not in task_results:
-            if time.time() > deadline:
-                # Timeout — fall back to local execution for this subtask
-                results[st["id"]] = await generate(prompt, system=BUILDER_SYSTEM)
-                nodes_used.add("local")
-                break
-            await asyncio.sleep(1)
-        else:
-            tr = task_results.pop(task_id)
-            if tr.get("error") or not tr.get("output"):
-                results[st["id"]] = await generate(prompt, system=BUILDER_SYSTEM)
-                nodes_used.add("local")
-            else:
-                results[st["id"]] = tr["output"]
-                nodes_used.add(tr.get("node_id", "unknown"))
+        # Launch all ready tasks in parallel
+        wave_results = await asyncio.gather(*[
+            _dispatch_subtask(st, subtasks, results, nodes_used)
+            for st in ready
+        ])
+        for subtask_id, output in wave_results:
+            results[subtask_id] = output
+            remaining.pop(subtask_id, None)
 
     # 4. Review (runs locally on orchestrator)
     review_output = await review(req.task, subtasks, results)
