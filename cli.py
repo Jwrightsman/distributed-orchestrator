@@ -292,51 +292,65 @@ def _flag_value(flag: str) -> str | None:
 
 
 async def run_demo(fast: bool = False):
-    """Demo mode — shows the full project memory flow in two pitches.
+    """Demo mode — automated screen-recording script for the expense tracker showcase.
 
-    Perfect for screen recording: creates a project, runs the first task,
-    pauses so the viewer can read, then continues with a follow-up task
-    that proves the AI remembers what it already built.
+    Runs two pitches on the same project to demonstrate:
+      1. The full planner→builder→reviewer pipeline
+      2. Persistent project memory — the second pitch knows everything from the first
 
-    Pass fast=True (--demo-fast) to skip the inter-pitch pause.
+    Pass fast=True (--demo-fast) to skip the 3-second inter-pitch pause.
     """
+    PITCH_1 = "Build a Python expense tracker with categories, date tracking, and a spending summary report"
+    PITCH_2 = "Add a monthly budget feature that warns when spending exceeds the budget"
+    PROJECT_NAME = "demo-expense-tracker"
+
     console.print(Panel(
-        "[bold cyan]DEMO MODE[/bold cyan] — showing project memory in action\n\n"
-        "[dim]Pitch 1:[/dim] Build a Python expense tracker with categories and a spending summary\n"
-        "[dim]Pitch 2:[/dim] Add a monthly budget feature that warns when you're over budget\n\n"
-        "[dim]The second pitch will load context from the first — the AI picks up exactly where it left off.[/dim]",
-        title="[bold]Distributed AI Orchestrator[/bold]",
+        "[bold cyan]DEMO MODE[/bold cyan]\n\n"
+        f"[bold]Pitch 1:[/bold] {PITCH_1}\n\n"
+        f"[bold]Pitch 2:[/bold] {PITCH_2}\n\n"
+        "[dim]The second pitch loads full context from the first run — the AI knows\n"
+        "exactly what was already built and picks up without repeating work.[/dim]",
+        title="[bold]Distributed AI Orchestrator — Demo[/bold]",
         border_style="cyan",
     ))
     console.print()
 
-    # Pitch 1 — seed the project
-    project_id = create_project("demo-app", "Build a Python expense tracker with categories and a spending summary")
-    console.print(f"[dim]Project created: {project_id}[/dim]\n")
-    await run_task(
-        "Build a Python expense tracker with categories and a spending summary",
-        project_id=project_id,
-    )
+    # ── Pitch 1: Build the expense tracker ──────────────────────────────
+    project_id = create_project(PROJECT_NAME, PITCH_1)
+    console.print(f"[dim]Project: {project_id}[/dim]\n")
+    await run_task(PITCH_1, project_id=project_id)
 
+    # Pause — gives the viewer time to read the output before the next pitch
     console.print()
-    console.print("[bold cyan]─" * 60 + "[/bold cyan]")
     if not fast:
-        console.print("[dim]Pausing 2 seconds before continuation pitch...[/dim]")
-        await asyncio.sleep(2)
-    console.print("[bold cyan]─" * 60 + "[/bold cyan]")
+        console.print("[dim]── continuing in 3 seconds... ──[/dim]")
+        await asyncio.sleep(3)
     console.print()
 
-    # Pitch 2 — continuation that exercises project memory
-    await run_task(
-        "Add a monthly budget feature that warns when you're over budget",
-        project_id=project_id,
-    )
+    # ── Pitch 2: Add budget feature ──────────────────────────────────────
+    await run_task(PITCH_2, project_id=project_id)
+
+    # ── Summary ─────────────────────────────────────────────────────────
+    # Show memory growth — concrete proof the context was accumulated
+    memory_lines = 0
+    memory_bytes = 0
+    memory_file = PROJECTS_DIR / project_id / "memory.md"
+    if memory_file.exists():
+        raw = memory_file.read_text(errors="ignore")
+        memory_lines = len([l for l in raw.splitlines() if l.strip()])
+        memory_bytes = len(raw.encode())
 
     console.print()
     console.print(Panel(
-        f"[bold green]Demo complete.[/bold green]\n\n"
-        f"Both runs saved under project [cyan]{project_id}[/cyan]\n"
-        f"[dim]Continue anytime: py cli.py --project {project_id} \"your next task\"[/dim]",
+        f"[bold green]✓ Demo complete[/bold green]\n\n"
+        f"  [bold]Project:[/bold]    {project_id}\n"
+        f"  [bold]Iterations:[/bold] 2 (expense tracker → added monthly budgets)\n"
+        f"  [bold]Memory:[/bold]     {memory_lines} lines / {memory_bytes / 1024:.1f} KB of context accumulated\n\n"
+        f"[dim]The memory file now contains both iterations — every future pitch on\n"
+        f"this project starts with that full context loaded automatically.[/dim]\n\n"
+        f"  Continue: [cyan]py cli.py --project {project_id} \"your next task\"[/cyan]\n"
+        f"  Share:    open [cyan]http://localhost:8000/dashboard[/cyan] → Gallery",
+        title="[bold cyan]Project Memory in Action[/bold cyan]",
         border_style="green",
     ))
 
