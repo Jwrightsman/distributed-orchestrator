@@ -542,6 +542,56 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .gallery-btn:hover { border-color: rgba(0,255,170,0.3); color: #00FFAA; }
   .gallery-btn.fork { border-color: rgba(0,255,170,0.2); color: #00FFAA; }
   .gallery-btn.fork:hover { background: rgba(0,255,170,0.08); }
+
+  /* ── Responsive / Mobile ─────────────────────────────────────── */
+  @media (max-width: 768px) {
+    .header { padding: 18px 16px 14px; }
+    .header h1 { font-size: 20px; }
+    .header-sub { font-size: 12px; }
+
+    .stats-bar {
+      flex-wrap: wrap;
+      gap: 12px 20px;
+      padding: 12px 16px;
+    }
+    .stat-value { font-size: 18px; }
+    .stat-label { font-size: 10px; }
+
+    /* Stack sidebar below content on narrow screens */
+    .main {
+      grid-template-columns: 1fr;
+      grid-template-rows: auto auto;
+    }
+    .sidebar {
+      border-right: none;
+      border-top: 1px solid rgba(255,255,255,0.06);
+      padding: 16px;
+      order: 2;          /* appears below content */
+    }
+    .content {
+      padding: 16px;
+      order: 1;
+    }
+
+    /* Prevent iOS from zooming into pitch input */
+    .pitch-input { font-size: 16px; }
+
+    /* Narrower modal */
+    #output-modal > div,
+    #node-modal > div { margin: 16px; padding: 20px; }
+
+    /* Gallery: single column */
+    .gallery-grid { grid-template-columns: 1fr; }
+
+    /* Pipeline cards: wrap status badge below title on very small screens */
+    .pipeline-header { flex-wrap: wrap; gap: 6px; }
+    .pipeline-task { font-size: 13px; }
+  }
+
+  @media (max-width: 480px) {
+    .tab-btn { padding: 8px 10px; font-size: 10px; letter-spacing: 1px; }
+    .stats-bar { gap: 10px 16px; }
+  }
 </style>
 </head>
 <body>
