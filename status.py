@@ -39,9 +39,32 @@ async def main():
 
     # Config
     console.print("[bold]Config[/bold]")
-    console.print(f"  Model:    {config['model']}")
-    console.print(f"  Timeout:  {config['timeout']}s")
-    console.print(f"  Retries:  {config['planner_retries']}")
+    console.print(f"  Model:       {config['model']}")
+    console.print(f"  Timeout:     {config['timeout']}s")
+    console.print(f"  Retries:     {config['planner_retries']}")
+
+    # Node auth
+    secret = config.get("node_secret", "")
+    if secret:
+        console.print(f"  Node auth:   [green]enabled[/green] ({secret[:4]}{'*' * max(0, len(secret) - 4)})")
+    else:
+        console.print(f"  Node auth:   [dim]off (any node can join)[/dim]")
+
+    # Agent specialization
+    role_map = config.get("role_model_map", {})
+    if role_map:
+        parts = ", ".join(f"{k}→{v}" for k, v in role_map.items())
+        console.print(f"  Role routing: [cyan]{parts}[/cyan]")
+    else:
+        console.print(f"  Role routing: [dim]any node[/dim]")
+
+    # External provider
+    provider = config.get("provider")
+    if provider and config.get("provider_api_key") and config.get("provider_model"):
+        roles = ", ".join(config.get("provider_roles", []))
+        console.print(f"  Provider:    [cyan]{provider}[/cyan] / {config['provider_model']} (roles: {roles})")
+    else:
+        console.print(f"  Provider:    [dim]Ollama only[/dim]")
 
     console.print()
 
@@ -57,6 +80,16 @@ async def main():
                 console.print(f"  URL:     {server}")
                 console.print(f"  Tasks:   {health['tasks_pending']} pending")
 
+                # Job stats
+                try:
+                    jresp = await client.get(f"{server}/jobs?limit=100")
+                    jdata = jresp.json()
+                    running = sum(1 for j in jdata["jobs"] if j["status"] == "running")
+                    complete = sum(1 for j in jdata["jobs"] if j["status"] == "complete")
+                    console.print(f"  Jobs:    {running} running · {complete} completed")
+                except Exception:
+                    pass
+
                 resp = await client.get(f"{server}/nodes")
                 nodes = resp.json()
                 console.print(f"  Nodes:   {nodes['count']} connected")
@@ -67,13 +100,19 @@ async def main():
                     table.add_column("Node", style="cyan")
                     table.add_column("Platform")
                     table.add_column("Model")
-                    table.add_column("Tasks Done", justify="center")
+                    table.add_column("Capabilities", style="dim")
+                    table.add_column("Tasks", justify="center")
+                    table.add_column("Credits", justify="right", style="yellow")
                     for n in nodes["nodes"]:
+                        # Filter model: cap tags — they're redundant with the model column
+                        caps = [c for c in n.get("capabilities", []) if not c.startswith("model:")]
                         table.add_row(
                             n["node_id"],
                             f"{n['platform']} / {n['machine']}",
                             n["model"],
+                            ", ".join(caps) or "—",
                             str(n["tasks_completed"]),
+                            str(n.get("credits_earned", 0)),
                         )
                     console.print(table)
         except httpx.ConnectError:

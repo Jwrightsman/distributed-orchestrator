@@ -227,7 +227,13 @@ async def main():
     # Register with orchestrator
     try:
         reg = await register(server, node_id, secret=secret, capabilities=capabilities)
-        console.print(f"[green]Connected.[/green] {reg.get('message', '')}\n")
+        # After registration the server may have added auto-detected caps (model:<name>, etc.)
+        # Show what was actually registered so the user knows what the node is offering.
+        registered_caps = reg.get("capabilities", capabilities or [])
+        visible_caps = [c for c in (registered_caps or []) if not c.startswith("model:")]
+        caps_str = ", ".join(visible_caps) if visible_caps else "none"
+        console.print(f"[green]Connected.[/green] {reg.get('message', '')}")
+        console.print(f"[dim]Capabilities: {caps_str}[/dim]\n")
     except Exception as e:
         console.print(f"[red bold]Could not connect to orchestrator at {server}[/red bold]")
         console.print(f"[dim]{e}[/dim]")
@@ -256,7 +262,6 @@ async def main():
             if registered:
                 console.print("[yellow]Lost connection to orchestrator. Retrying...[/yellow]")
             registered = False
-            idle_streak = 0
             await asyncio.sleep(10)
 
         except KeyboardInterrupt:

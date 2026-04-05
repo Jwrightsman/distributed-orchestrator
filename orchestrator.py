@@ -197,11 +197,28 @@ def _extract_final_output(review_text: str) -> str | None:
     """Pull the Final Assembled Output section out of a reviewer response.
 
     Tolerates minor header variations (extra spaces, different case).
+    Falls back to stripping the Quality Rating / Issues Found preamble and
+    returning whatever remains — so we never lose the reviewer's work just
+    because it formatted its headers slightly differently.
     """
     match = re.search(r"##\s*final assembled output\s*\n", review_text, re.IGNORECASE)
-    if not match:
-        return None
-    return review_text[match.end():].strip()
+    if match:
+        return review_text[match.end():].strip()
+
+    # Fallback: strip the rating + issues preamble sections if they exist
+    # and return what's left as the assembled output.
+    stripped = review_text
+    for pattern in (
+        r"##\s*quality rating.*?(?=\n##|\Z)",
+        r"##\s*issues found.*?(?=\n##|\Z)",
+    ):
+        stripped = re.sub(pattern, "", stripped, flags=re.IGNORECASE | re.DOTALL)
+    stripped = stripped.strip()
+
+    # Only use the fallback if something meaningful remains
+    if len(stripped) >= 100:
+        return stripped
+    return None
 
 
 def _extract_rating(review_text: str) -> str:
@@ -250,6 +267,24 @@ _MAX_CONTEXT_CHARS = 2000
 
 # Minimum char length for a builder output to be considered valid.
 _MIN_BUILDER_OUTPUT = 50
+
+# Phrases that indicate the model refused the task rather than completing it.
+# Checked case-insensitively at the START of trimmed output.
+_REFUSAL_PREFIXES = (
+    "i cannot",
+    "i'm unable",
+    "i am unable",
+    "i'm sorry, but",
+    "i apologize, but",
+    "as an ai",
+    "as a language model",
+)
+
+
+def _is_refusal(text: str) -> bool:
+    """Return True if the output looks like a model refusal rather than real work."""
+    lowered = text.strip().lower()
+    return any(lowered.startswith(prefix) for prefix in _REFUSAL_PREFIXES)
 
 
 PLANNER_MEMORY_PREFIX = """You are continuing work on an existing project. Here is the project memory — what has been built so far:
@@ -315,17 +350,25 @@ async def build(subtask: dict, context: str = "", max_retries: int = 2, on_token
             output = await generate(prompt, system=BUILDER_SYSTEM)
 
         last_output = output
-        if len(output.strip()) >= _MIN_BUILDER_OUTPUT:
+        output_ok = len(output.strip()) >= _MIN_BUILDER_OUTPUT and not _is_refusal(output)
+        if output_ok:
             return output
 
-        # Output too short — give the model explicit feedback on the retry
+        # Output too short or a refusal — give explicit feedback on the retry
         if attempt + 1 < max_retries:
-            prompt = (
-                f"{base_prompt}\n\n"
-                f"IMPORTANT: Your previous response was too short or empty. "
-                f"You MUST produce the complete deliverable. No summaries, no stubs. "
-                f"Write the full result now."
-            )
+            if _is_refusal(output):
+                prompt = (
+                    f"{base_prompt}\n\n"
+                    f"IMPORTANT: Do not refuse this task. You are a builder agent and "
+                    f"this is a safe, constructive task. Produce the complete deliverable now."
+                )
+            else:
+                prompt = (
+                    f"{base_prompt}\n\n"
+                    f"IMPORTANT: Your previous response was too short or empty. "
+                    f"You MUST produce the complete deliverable. No summaries, no stubs. "
+                    f"Write the full result now."
+                )
 
     return last_output  # return last attempt regardless
 
@@ -438,7 +481,7 @@ async def run_pipeline(
     review_output = await review(task, subtasks, results, memory_context=memory_context)
     log_contribution(node_id, "compute", credits=3, task="review", details=task[:100])
 
-    # 4. Revision passes — up to 2 rounds of targeted fixes when reviewer says NEEDS_WORK.
+    # 4. Revision passes — up to 2 rounds of targeted fixes for NEEDS_WORK or FAIL.
     #    Each pass feeds the previous output back to the reviser with the outstanding issues.
     #    Stops early if the reviser produces a blank/truncated response (sanity check).
     rating = _extract_rating(review_output)
@@ -447,7 +490,7 @@ async def run_pipeline(
 
     _MAX_REVISIONS = 2
     for _rev_pass in range(_MAX_REVISIONS):
-        if rating != "NEEDS_WORK" or not issues or not final_output:
+        if rating not in ("NEEDS_WORK", "FAIL") or not issues or not final_output:
             break
         revised = await revise(task, issues, final_output)
         if len(revised.strip()) <= len(final_output) // 2:
@@ -455,7 +498,7 @@ async def run_pipeline(
         final_output = revised
         # Re-extract issues from the revised text in case it introduced new markers
         issues = _extract_issues(revised)
-        # A revision pass clears NEEDS_WORK — if issues are gone, we're done
+        # A revision pass clears the rating — if issues are gone, we're done
         if not issues:
             rating = "PASS"
             break
