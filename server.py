@@ -749,6 +749,8 @@ async def history_detail(timestamp: str):
         "final_output": final_output,
         "rating": rating,
         "code_files": code_files,
+        "mode": log.get("mode", "local"),
+        "project_id": log.get("project_id") or None,
     }
 
 
@@ -939,7 +941,10 @@ async def register_node(reg: NodeRegistration, request: Request):
         "credits_earned": 0,
         "current_task": None,
     }
-    return {"message": f"Welcome, {reg.node_id}. You are node #{len(nodes)} in the network."}
+    return {
+        "message": f"Welcome, {reg.node_id}. You are node #{len(nodes)} in the network.",
+        "capabilities": caps,
+    }
 
 
 @app.get("/nodes")

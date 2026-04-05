@@ -964,6 +964,7 @@ async function _pollJobCompletion(jobId, pipelineId, task, stageWatcher, elapsed
           project_dir: job.project_dir || '',
           rating: job.rating,
           status: job.status,
+          error: job.error || null,
         });
         loadHistory();
         loadProjects();
@@ -1009,6 +1010,7 @@ function _showCompletedCard(pipelineId, task, result) {
       <span class="log-time">${new Date().toLocaleTimeString()}</span>
       <span class="log-event" style="color:#00FFAA;">View output &#8594;</span>
     </div>` : ''}
+    ${result.error ? `<div style="margin-top:8px;padding:8px 10px;background:rgba(255,85,85,0.06);border:1px solid rgba(255,85,85,0.2);border-radius:4px;font-family:Consolas,monospace;font-size:11px;color:#FF8888;">${escHtml(result.error)}</div>` : ''}
   `;
 }
 
@@ -1032,9 +1034,9 @@ function relativeTime(ts) {
   } catch(_) { return ts; }
 }
 
-// Enter key to pitch
+// Enter or Cmd/Ctrl+Enter to pitch
 document.getElementById('pitch-input').addEventListener('keydown', e => {
-  if (e.key === 'Enter') pitchTask();
+  if (e.key === 'Enter' && !e.shiftKey) pitchTask();
 });
 
 // ── Output viewer modal ──
@@ -1095,13 +1097,16 @@ async function viewRun(timestamp) {
     planHtml += '</div>';
     document.getElementById('modal-plan').innerHTML = planHtml;
 
-    // Rating badge in title area
+    // Rating badge + mode badge in title area
     const ratingColors = {PASS: '#00FF88', NEEDS_WORK: '#E8FF47', FAIL: '#FF5555'};
     const ratingEl = document.getElementById('modal-title');
     const ratingBadge = data.rating && data.rating !== '?'
       ? ` <span style="font-size:11px;font-family:Consolas,monospace;color:${ratingColors[data.rating]||'#888'};font-weight:600;">${escHtml(data.rating)}</span>`
       : '';
-    ratingEl.innerHTML = escHtml(data.task) + ratingBadge;
+    const modalModeBadge = data.mode === 'distributed'
+      ? ` <span style="font-size:9px;font-family:Consolas,monospace;color:#00FFAA;background:#00FFAA18;border:1px solid #00FFAA30;border-radius:3px;padding:1px 5px;letter-spacing:.5px;">DIST</span>`
+      : '';
+    ratingEl.innerHTML = escHtml(data.task) + ratingBadge + modalModeBadge;
 
     // Code files section
     const filesEl = document.getElementById('modal-files');
@@ -1177,7 +1182,7 @@ function closeNodeModal() {
 }
 
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') closeModal();
+  if (e.key === 'Escape') { closeModal(); closeNodeModal(); }
 });
 
 // ── Event log — WebSocket with polling fallback ──
