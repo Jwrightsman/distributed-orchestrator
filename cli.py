@@ -16,6 +16,7 @@ import io
 from datetime import datetime, timezone
 from pathlib import Path
 
+import httpx
 from rich.console import Console
 from rich.panel import Panel
 from rich.markdown import Markdown
@@ -25,6 +26,8 @@ from orchestrator import run_pipeline, OUTPUT_DIR
 from ollama_client import check_ollama, auto_detect_model, DEFAULT_MODEL
 from ledger import get_standings
 from memory import create_project, load_project, list_projects, PROJECTS_DIR
+
+SERVER_URL = "http://localhost:8000"
 
 console = Console()
 
@@ -355,6 +358,232 @@ async def run_demo(fast: bool = False):
     ))
 
 
+async def run_demo_live():
+    """Live distributed demo — submits pitches to the local server so builder tasks
+    route to connected nodes. Designed for the two-laptop screen recording.
+
+    Both machines must be ready before running:
+      Machine 1 (you):   py -m uvicorn server:app --host 0.0.0.0 --port 8000
+                         py node.py --server http://localhost:8000 --node-id Laptop-1
+      Machine 2 (friend): py join.py  (auto-discovers you on the LAN)
+
+    Then on Machine 1:   py cli.py --demo-live
+    """
+    PITCH_1 = "Build a Python expense tracker with CSV import and monthly budgets"
+    PITCH_2 = "Add monthly budget warnings and dark mode to the CLI"
+    PROJECT_NAME = "demo-expense-tracker-live"
+
+    # ── Pre-flight: check server ─────────────────────────────────────────
+    async with httpx.AsyncClient(timeout=5) as client:
+        try:
+            health = (await client.get(f"{SERVER_URL}/health")).json()
+        except Exception:
+            console.print(Panel(
+                "[red bold]Server not running.[/red bold]\n\n"
+                "Start it first:\n"
+                "  [cyan]py -m uvicorn server:app --host 0.0.0.0 --port 8000[/cyan]",
+                border_style="red",
+            ))
+            return
+
+        nodes = health.get("nodes", [])
+        node_count = len(nodes)
+
+    # ── Node list panel ──────────────────────────────────────────────────
+    if node_count == 0:
+        node_status = (
+            "[yellow]⚠  No worker nodes connected — tasks will run locally as fallback.[/yellow]\n"
+            "[dim]To add a node: py node.py --server http://localhost:8000 --node-id Laptop-1[/dim]"
+        )
+    else:
+        node_lines = []
+        for n in nodes:
+            caps = [c for c in n.get("capabilities", []) if not c.startswith("model:")]
+            cpu = n.get("cpu_model") or "CPU"
+            ram = n.get("ram_gb")
+            hw = f"{cpu}" + (f" · {ram}GB RAM" if ram else "")
+            caps_str = ", ".join(caps) if caps else "builder"
+            node_lines.append(f"  [green]●[/green] [bold]{n['node_id']}[/bold]  {hw}  [{caps_str}]")
+        node_status = f"[green]{node_count} node(s) connected:[/green]\n" + "\n".join(node_lines)
+
+    console.print(Panel(
+        "[bold cyan]LIVE DISTRIBUTED DEMO[/bold cyan]\n\n"
+        f"[bold]Pitch 1:[/bold] {PITCH_1}\n\n"
+        f"[bold]Pitch 2:[/bold] {PITCH_2}\n\n"
+        f"{node_status}\n\n"
+        "[dim]Builder tasks will distribute across all connected nodes.\n"
+        "Each node earns credits. Watch the Guild Standings at the end.[/dim]",
+        title="[bold]Distributed AI Orchestrator — Live Demo[/bold]",
+        border_style="cyan",
+    ))
+    console.print()
+
+    # ── Create project locally (for memory.md path tracking) ────────────
+    project_id = create_project(PROJECT_NAME, PITCH_1)
+    console.print(f"[dim]Project: {project_id}[/dim]\n")
+
+    # ── Helper: submit + watch a pitch ──────────────────────────────────
+    async def run_live_pitch(task: str, pitch_num: int):
+        console.print(Panel(
+            task,
+            title=f"[bold cyan]Pitch {pitch_num}[/bold cyan]",
+            border_style="cyan",
+        ))
+        console.print()
+
+        # Submit to server
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(
+                f"{SERVER_URL}/pitch/async",
+                json={"task": task, "project_id": project_id},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            job_id = data["job_id"]
+
+        console.print(f"[dim]Job {job_id} queued — watching events...[/dim]\n")
+
+        # Poll events + job status until complete
+        last_event_id = 0
+        seen_subtasks: set = set()
+        console.print("[bold yellow]PLANNER[/bold yellow] Decomposing task into subtasks...\n")
+
+        async with httpx.AsyncClient(timeout=10) as client:
+            while True:
+                # Fetch new events
+                try:
+                    ev_resp = await client.get(
+                        f"{SERVER_URL}/events",
+                        params={"since": last_event_id},
+                    )
+                    if ev_resp.status_code == 200:
+                        ev_data = ev_resp.json()
+                        for ev in ev_data.get("events", []):
+                            eid = ev.get("id", 0)
+                            if eid > last_event_id:
+                                last_event_id = eid
+                            ev_job = ev.get("job_id") or ev.get("data", {}).get("job_id", "")
+                            if ev_job and ev_job != job_id:
+                                continue  # skip events from other jobs
+                            _render_event(ev, seen_subtasks)
+                except Exception:
+                    pass  # network blip — keep polling
+
+                # Check job status
+                try:
+                    job_resp = await client.get(f"{SERVER_URL}/jobs/{job_id}")
+                    job = job_resp.json()
+                    status = job.get("status", "queued")
+                    if status in ("complete", "failed"):
+                        if status == "failed":
+                            console.print(f"\n[red bold]Job failed:[/red bold] {job.get('error', '?')}")
+                        break
+                except Exception:
+                    pass
+
+                await asyncio.sleep(2)
+
+            # Final fetch — catch any trailing events
+            try:
+                ev_resp = await client.get(
+                    f"{SERVER_URL}/events",
+                    params={"since": last_event_id},
+                )
+                if ev_resp.status_code == 200:
+                    for ev in ev_resp.json().get("events", []):
+                        ev_job = ev.get("job_id") or ev.get("data", {}).get("job_id", "")
+                        if ev_job and ev_job != job_id:
+                            continue
+                        _render_event(ev, seen_subtasks)
+            except Exception:
+                pass
+
+        # Show rating from completed job
+        if status == "complete":
+            rating = job.get("rating", "?")
+            color = {"PASS": "green", "NEEDS_WORK": "yellow", "FAIL": "red"}.get(rating, "white")
+            console.print(f"\n[{color} bold]REVIEWER  ──  {rating}[/{color} bold]")
+            if job.get("project_dir"):
+                console.print(f"[dim]Output: {job['project_dir']}[/dim]")
+
+        console.print()
+
+    # ── Pitch 1 ──────────────────────────────────────────────────────────
+    await run_live_pitch(PITCH_1, 1)
+
+    # Pause for viewer
+    console.print("[dim]── continuing in 3 seconds — watch: the next pitch loads memory from Pitch 1 ──[/dim]")
+    await asyncio.sleep(3)
+    console.print()
+
+    # ── Pitch 2 ──────────────────────────────────────────────────────────
+    memory_file = PROJECTS_DIR / project_id / "memory.md"
+    if memory_file.exists():
+        raw = memory_file.read_text(errors="ignore")
+        lines = len([l for l in raw.splitlines() if l.strip()])
+        console.print(f"[dim]Loading project memory: {lines} lines of context from Pitch 1[/dim]\n")
+
+    await run_live_pitch(PITCH_2, 2)
+
+    # ── Summary panel ────────────────────────────────────────────────────
+    memory_lines = 0
+    memory_bytes = 0
+    if memory_file.exists():
+        raw = memory_file.read_text(errors="ignore")
+        memory_lines = len([l for l in raw.splitlines() if l.strip()])
+        memory_bytes = len(raw.encode())
+
+    console.print()
+    console.print(Panel(
+        f"[bold green]✓ Live demo complete[/bold green]\n\n"
+        f"  [bold]Project:[/bold]    {project_id}\n"
+        f"  [bold]Iterations:[/bold] 2  (expense tracker → budget warnings + dark mode)\n"
+        f"  [bold]Memory:[/bold]     {memory_lines} lines / {memory_bytes / 1024:.1f} KB accumulated\n"
+        f"  [bold]Nodes:[/bold]      {node_count} worker(s) participated\n\n"
+        f"[dim]Open the dashboard to see the Guild Standings and share your project:[/dim]\n"
+        f"  [cyan]http://localhost:8000/dashboard[/cyan]",
+        title="[bold cyan]Project Memory in Action[/bold cyan]",
+        border_style="green",
+    ))
+
+    # ── Guild standings ──────────────────────────────────────────────────
+    console.print()
+    show_standings()
+
+
+def _render_event(ev: dict, seen_subtasks: set):
+    """Print a single server event in a readable format for the live demo terminal."""
+    etype = ev.get("type", "")
+    data = ev.get("data", {})
+
+    if etype == "plan":
+        subtasks = data.get("subtasks", [])
+        console.print("[bold yellow]PLAN[/bold yellow]")
+        for i, s in enumerate(subtasks, 1):
+            console.print(f"  [{i}] {s}")
+        console.print()
+
+    elif etype == "build":
+        sid = data.get("subtask_id", data.get("subtask", "?"))
+        title = data.get("subtask", sid)
+        node = data.get("node_id", "local")
+        if sid not in seen_subtasks:
+            seen_subtasks.add(sid)
+            console.print(f"[bold green]BUILDER {sid}[/bold green]  {title}  [dim]→ {node}[/dim]")
+
+    elif etype == "node_task_queued":
+        console.print(f"[dim]  ↳ queued: {data.get('subtask', '?')}[/dim]")
+
+    elif etype == "review_start":
+        console.print("\n[bold magenta]REVIEWER[/bold magenta] Assembling and rating output...\n")
+
+    elif etype == "revise":
+        console.print(f"[bold yellow]REVISER[/bold yellow] Auto-fixing: {data.get('issues', ['issues'])}")
+
+    elif etype == "error":
+        console.print(f"[red]ERROR:[/red] {data.get('message', '?')}")
+
+
 def import_fork(zip_path: str):
     """Import a fork template ZIP and set up a new project ready to continue."""
     p = Path(zip_path)
@@ -475,9 +704,12 @@ async def main():
         await run_task(" ".join(args), project_id=project_id)
         return
 
-    # ── Demo mode — two-pitch project memory showcase ──
+    # ── Demo mode ──────────────────────────────────────────────────────
     if "--demo-fast" in sys.argv:
         await run_demo(fast=True)
+        return
+    if "--demo-live" in sys.argv:
+        await run_demo_live()
         return
     if "--demo" in sys.argv:
         await run_demo()
