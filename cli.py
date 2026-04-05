@@ -11,6 +11,8 @@ import asyncio
 import sys
 import time
 import json
+import zipfile
+import io
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -339,6 +341,68 @@ async def run_demo(fast: bool = False):
     ))
 
 
+def import_fork(zip_path: str):
+    """Import a fork template ZIP and set up a new project ready to continue."""
+    p = Path(zip_path)
+    if not p.exists():
+        console.print(f"[red bold]File not found:[/red bold] {zip_path}")
+        return
+
+    try:
+        with zipfile.ZipFile(p, "r") as zf:
+            names = zf.namelist()
+
+            # Read task.txt
+            if "task.txt" not in names:
+                console.print("[red bold]Invalid fork ZIP:[/red bold] missing task.txt")
+                return
+            task = zf.read("task.txt").decode("utf-8", errors="ignore").strip()
+
+            # Read memory.md if present
+            memory_content = ""
+            if "memory.md" in names:
+                memory_content = zf.read("memory.md").decode("utf-8", errors="ignore")
+
+            # Read fork_config.json for extra context (best-effort)
+            fork_config = {}
+            if "fork_config.json" in names:
+                try:
+                    fork_config = json.loads(zf.read("fork_config.json").decode("utf-8"))
+                except Exception:
+                    pass
+
+    except zipfile.BadZipFile:
+        console.print(f"[red bold]Not a valid ZIP file:[/red bold] {zip_path}")
+        return
+
+    # Derive a project name from the task (first ~40 chars)
+    project_name = task[:40].strip()
+    if not project_name:
+        project_name = "forked-project"
+
+    # Create the project
+    project_id = create_project(project_name, task)
+
+    # Write the imported memory.md to the project directory
+    if memory_content:
+        from memory import PROJECTS_DIR
+        memory_file = PROJECTS_DIR / project_id / "memory.md"
+        memory_file.write_text(memory_content, encoding="utf-8")
+
+    original_ts = fork_config.get("original_timestamp", "")
+    rating = fork_config.get("rating", "")
+    origin_note = f"\n[dim]Original run: {original_ts}  Rating: {rating}[/dim]" if original_ts else ""
+
+    console.print(Panel(
+        f"[bold green]Fork imported as project:[/bold green] [cyan]{project_id}[/cyan]{origin_note}\n\n"
+        f"[bold]Task:[/bold]\n{task}\n\n"
+        f"[dim]Memory context loaded from fork.[/dim]\n\n"
+        f"[bold]Run it:[/bold]\n  py cli.py --project {project_id} \"{task}\"",
+        title="[bold cyan]Fork Imported[/bold cyan]",
+        border_style="cyan",
+    ))
+
+
 async def main():
     # Pre-flight: check Ollama is running
     status = await check_ollama()
@@ -347,6 +411,11 @@ async def main():
         sys.exit(1)
 
     # ── Flags that don't need Ollama ──
+    import_zip = _flag_value("--import")
+    if import_zip:
+        import_fork(import_zip)
+        return
+
     if "--history" in sys.argv:
         show_history()
         return

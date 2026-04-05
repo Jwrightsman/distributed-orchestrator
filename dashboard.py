@@ -497,7 +497,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     font-size: 11px;
     color: #666;
     line-height: 1.5;
-    max-height: 80px;
+    max-height: 120px;
     overflow: hidden;
     position: relative;
   }
@@ -542,6 +542,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .gallery-btn:hover { border-color: rgba(0,255,170,0.3); color: #00FFAA; }
   .gallery-btn.fork { border-color: rgba(0,255,170,0.2); color: #00FFAA; }
   .gallery-btn.fork:hover { background: rgba(0,255,170,0.08); }
+  .gallery-btn.share { border-color: rgba(100,180,255,0.2); color: #64B4FF; }
+  .gallery-btn.share:hover { background: rgba(100,180,255,0.08); border-color: rgba(100,180,255,0.5); }
 
   /* ── Responsive / Mobile ─────────────────────────────────────── */
   @media (max-width: 768px) {
@@ -1510,21 +1512,28 @@ async function loadGallery() {
         : '';
       const subtasksHtml = `<span style="font-family:Consolas,monospace;font-size:10px;color:#555;">${c.subtask_count} tasks</span>`;
       const timeHtml = `<span style="font-family:Consolas,monospace;font-size:10px;color:#444;">${relativeTime(c.timestamp)}</span>`;
+      const nodesHtml = c.nodes_used > 0
+        ? `<span style="font-family:Consolas,monospace;font-size:10px;color:#4488BB;">${c.nodes_used} node${c.nodes_used > 1 ? 's' : ''}</span>`
+        : '';
       const previewHtml = c.preview
         ? `<div class="gallery-preview">${escHtml(c.preview)}</div>`
         : '';
       const filesHtml = c.code_files && c.code_files.length > 0
         ? `<div class="gallery-files">${c.code_files.map(f => `<span class="gallery-file-chip">${escHtml(f)}</span>`).join('')}</div>`
         : '';
+      const ts = escHtml(c.timestamp);
+      const taskEsc = escHtml(c.task.replace(/'/g, "\\'"));
+      const projEsc = escHtml((c.project_id||'').replace(/'/g,"\\'"));
       return `
         <div class="gallery-card">
           <div class="gallery-task">${escHtml(c.task)}</div>
-          <div class="gallery-meta">${modeBadgeHtml}${ratingHtml}${subtasksHtml}${timeHtml}</div>
+          <div class="gallery-meta">${modeBadgeHtml}${ratingHtml}${subtasksHtml}${nodesHtml}${timeHtml}</div>
           ${previewHtml}
           ${filesHtml}
           <div class="gallery-actions">
-            <button class="gallery-btn" onclick="viewRun('${escHtml(c.timestamp)}')">View Output</button>
-            <button class="gallery-btn fork" onclick="forkTask('${escHtml(c.task.replace(/'/g, "\\'"))}','${escHtml((c.project_id||'').replace(/'/g,"\\'"))}')">Fork this</button>
+            <button class="gallery-btn" onclick="viewRun('${ts}')">View Output</button>
+            <button class="gallery-btn fork" onclick="forkTask('${taskEsc}','${projEsc}')">Fork &amp; continue</button>
+            <button class="gallery-btn share" onclick="shareRun('${ts}')" title="Copy share link">Share &#x2197;</button>
           </div>
         </div>`;
     }).join('');
@@ -1543,6 +1552,27 @@ function forkTask(task, projectId) {
     input.focus();
     input.select();
   }
+}
+
+function shareRun(timestamp) {
+  const url = `${location.origin}/share/${timestamp}`;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(url).then(() => {
+      showToast('Share link copied!');
+    }).catch(() => {
+      prompt('Copy this share link:', url);
+    });
+  } else {
+    prompt('Copy this share link:', url);
+  }
+}
+
+function showToast(msg) {
+  const t = document.createElement('div');
+  t.textContent = msg;
+  t.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#00FFAA;color:#08090C;padding:8px 20px;border-radius:8px;font-size:13px;font-weight:700;z-index:9999;pointer-events:none;transition:opacity 0.4s;';
+  document.body.appendChild(t);
+  setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 400); }, 2000);
 }
 
 // ── Task templates ──
