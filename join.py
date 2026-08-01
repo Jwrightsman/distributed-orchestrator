@@ -85,7 +85,7 @@ async def ensure_ollama():
     """Make sure Ollama is running and has the right model."""
     status = await check_ollama()
     if not status["ok"]:
-        console.print(f"[red bold]Ollama is not running.[/red bold]")
+        console.print("[red bold]Ollama is not running.[/red bold]")
         console.print("Start it with: [dim]ollama serve[/dim]")
         console.print("Download from: [dim]https://ollama.com[/dim]")
         return False

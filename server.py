@@ -332,7 +332,7 @@ async def _cleanup_stale_nodes():
             finished = job.get("finished_at")
             if finished and job["status"] in ("complete", "failed"):
                 try:
-                    from datetime import datetime, timezone
+                    from datetime import datetime
                     finished_ts = datetime.fromisoformat(finished).timestamp()
                     if finished_ts < job_cutoff:
                         stale_jobs.append(jid)
@@ -809,7 +809,7 @@ async def fork_template(timestamp: str):
     memory_content = ""
     if project_id:
         try:
-            from memory import get_memory_context, PROJECTS_DIR
+            from memory import PROJECTS_DIR
             proj_memory_file = PROJECTS_DIR / project_id / "memory.md"
             if proj_memory_file.exists():
                 memory_content = proj_memory_file.read_text(errors="ignore")

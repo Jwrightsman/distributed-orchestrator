@@ -27,12 +27,12 @@ async def main():
     console.print("[bold]Ollama[/bold]")
     status = await check_ollama()
     if status["ok"]:
-        console.print(f"  Status:  [green]running[/green]")
+        console.print("  Status:  [green]running[/green]")
         console.print(f"  URL:     {config['ollama_url']}")
         console.print(f"  Models:  {', '.join(status['models']) or 'none pulled'}")
         console.print(f"  Active:  {DEFAULT_MODEL}")
     else:
-        console.print(f"  Status:  [red]offline[/red]")
+        console.print("  Status:  [red]offline[/red]")
         console.print(f"  Error:   {status['error']}")
 
     console.print()
@@ -48,7 +48,7 @@ async def main():
     if secret:
         console.print(f"  Node auth:   [green]enabled[/green] ({secret[:4]}{'*' * max(0, len(secret) - 4)})")
     else:
-        console.print(f"  Node auth:   [dim]off (any node can join)[/dim]")
+        console.print("  Node auth:   [dim]off (any node can join)[/dim]")
 
     # Agent specialization
     role_map = config.get("role_model_map", {})
@@ -56,7 +56,7 @@ async def main():
         parts = ", ".join(f"{k}→{v}" for k, v in role_map.items())
         console.print(f"  Role routing: [cyan]{parts}[/cyan]")
     else:
-        console.print(f"  Role routing: [dim]any node[/dim]")
+        console.print("  Role routing: [dim]any node[/dim]")
 
     # External provider
     provider = config.get("provider")
@@ -64,7 +64,7 @@ async def main():
         roles = ", ".join(config.get("provider_roles", []))
         console.print(f"  Provider:    [cyan]{provider}[/cyan] / {config['provider_model']} (roles: {roles})")
     else:
-        console.print(f"  Provider:    [dim]Ollama only[/dim]")
+        console.print("  Provider:    [dim]Ollama only[/dim]")
 
     console.print()
 
@@ -76,7 +76,7 @@ async def main():
             async with httpx.AsyncClient(timeout=5) as client:
                 resp = await client.get(f"{server}/health")
                 health = resp.json()
-                console.print(f"  Status:  [green]running[/green]")
+                console.print("  Status:  [green]running[/green]")
                 console.print(f"  URL:     {server}")
                 console.print(f"  Tasks:   {health['tasks_pending']} pending")
 
@@ -116,7 +116,7 @@ async def main():
                         )
                     console.print(table)
         except httpx.ConnectError:
-            console.print(f"  Status:  [dim]offline[/dim]")
+            console.print("  Status:  [dim]offline[/dim]")
             console.print(f"  Start:   py -m uvicorn server:app --host 0.0.0.0 --port {config['port']}")
     else:
         console.print("[dim]Run with --server to check orchestrator + nodes[/dim]")

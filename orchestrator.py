@@ -96,26 +96,48 @@ None
 def _extract_json(text: str) -> list:
     """Pull a JSON array out of a model response, tolerating markdown fences.
 
-    Also handles the case where the model returns a single JSON object instead
-    of an array — wraps it in a list so downstream validation still works.
+    Handles the shapes small models actually emit: a plain array (possibly in
+    prose or fences), a single subtask object (wrapped in a list), and an
+    envelope object like {"subtasks": [...]} (unwrapped).
     """
     text = re.sub(r"```(?:json)?\s*", "", text)
     text = re.sub(r"```", "", text)
     text = text.strip()
 
-    # Prefer array form
     array_start = text.find("[")
-    array_end = text.rfind("]")
-    if array_start != -1 and array_end != -1:
-        return json.loads(text[array_start : array_end + 1])
-
-    # Fall back: single object — wrap it
     obj_start = text.find("{")
-    obj_end = text.rfind("}")
-    if obj_start != -1 and obj_end != -1:
-        obj = json.loads(text[obj_start : obj_end + 1])
-        return [obj]
 
+    # Try whichever JSON value starts first — an object whose fields contain
+    # arrays must not be mistaken for the plan array itself.
+    candidates = []
+    if array_start != -1:
+        candidates.append(text[array_start : text.rfind("]") + 1])
+    if obj_start != -1:
+        candidates.append(text[obj_start : text.rfind("}") + 1])
+    if array_start != -1 and obj_start != -1 and obj_start < array_start:
+        candidates.reverse()
+
+    last_err: Exception | None = None
+    for chunk in candidates:
+        try:
+            parsed = json.loads(chunk)
+        except json.JSONDecodeError as e:
+            last_err = e
+            continue
+        if isinstance(parsed, list):
+            return parsed
+        if isinstance(parsed, dict):
+            # Envelope form ({"subtasks": [...]}) — unwrap the single list of dicts
+            inner_lists = [
+                v for v in parsed.values()
+                if isinstance(v, list) and v and all(isinstance(item, dict) for item in v)
+            ]
+            if len(inner_lists) == 1:
+                return inner_lists[0]
+            return [parsed]
+
+    if last_err is not None:
+        raise last_err
     raise ValueError(f"No JSON found in planner output:\n{text[:300]}")
 
 
@@ -209,8 +231,8 @@ def _extract_final_output(review_text: str) -> str | None:
     # and return what's left as the assembled output.
     stripped = review_text
     for pattern in (
-        r"##\s*quality rating.*?(?=\n##|\Z)",
-        r"##\s*issues found.*?(?=\n##|\Z)",
+        r"##\s*quality rating.*?(?=\n#|\Z)",
+        r"##\s*issues found.*?(?=\n#|\Z)",
     ):
         stripped = re.sub(pattern, "", stripped, flags=re.IGNORECASE | re.DOTALL)
     stripped = stripped.strip()

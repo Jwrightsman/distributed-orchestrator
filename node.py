@@ -22,7 +22,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich import box
 
-from ollama_client import generate, generate_stream, check_ollama, DEFAULT_MODEL
+from ollama_client import generate_stream, check_ollama, DEFAULT_MODEL
 
 console = Console()
 
