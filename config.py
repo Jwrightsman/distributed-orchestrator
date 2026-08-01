@@ -21,6 +21,11 @@ DEFAULTS = {
     # Ollama server URL
     "ollama_url": "http://localhost:11434",
 
+    # Thinking models (qwen3.5 etc.) generate hidden reasoning before answering.
+    # Off by default: on CPU-only nodes it multiplies latency several-fold.
+    # Set true to allow thinking (only affects models that support it).
+    "think": False,
+
     # Timeout for a single inference call (seconds)
     # CPU-only: 600s is safe. GPU: 120s is plenty.
     "timeout": 600,

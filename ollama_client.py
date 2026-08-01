@@ -40,6 +40,31 @@ async def check_ollama() -> dict:
         return {"ok": False, "models": [], "error": str(e)}
 
 
+# Capabilities per model (from /api/show), fetched once per model per process.
+# Used to decide whether to send "think": false — thinking models (qwen3.5 etc.)
+# otherwise burn unbounded hidden reasoning tokens, which is unusable on CPU.
+_capabilities_cache: dict[str, list[str]] = {}
+
+
+async def _model_capabilities(client: httpx.AsyncClient, model: str) -> list[str]:
+    if model not in _capabilities_cache:
+        try:
+            resp = await client.post(f"{OLLAMA_URL}/api/show", json={"model": model})
+            resp.raise_for_status()
+            _capabilities_cache[model] = resp.json().get("capabilities") or []
+        except Exception:
+            _capabilities_cache[model] = []
+    return _capabilities_cache[model]
+
+
+async def _apply_think(client: httpx.AsyncClient, payload: dict) -> None:
+    """Disable hidden reasoning on thinking-capable models (config: "think")."""
+    if get_config().get("think", False):
+        return  # user opted in to thinking — leave the model's default alone
+    if "thinking" in await _model_capabilities(client, payload["model"]):
+        payload["think"] = False
+
+
 async def auto_detect_model() -> str | None:
     """Pick the best available model from what Ollama has pulled.
 
@@ -133,6 +158,7 @@ async def generate(
 
     _, _, timeout = _cfg()
     async with httpx.AsyncClient(timeout=timeout) as client:
+        await _apply_think(client, payload)
         resp = await client.post(f"{OLLAMA_URL}/api/generate", json=payload)
         if resp.status_code == 400 and format is not None:
             # Ollama rejected the schema (older version or unsupported model) —
@@ -175,6 +201,7 @@ async def generate_stream(prompt: str, system: str = "", model: str | None = Non
 
     _, _, timeout = _cfg()
     async with httpx.AsyncClient(timeout=timeout) as client:
+        await _apply_think(client, payload)
         async with client.stream("POST", f"{OLLAMA_URL}/api/generate", json=payload) as resp:
             resp.raise_for_status()
             async for line in resp.aiter_lines():
