@@ -5,6 +5,26 @@
 
 ---
 
+## The MCP Moment ("I ask my AI; it delegates to the swarm")
+
+Candidate opening hook — an AI app handing work to the swarm hits harder than a
+typed command. Requires docs/MCP.md setup done beforehand and the orchestrator
+running with the dashboard visible on a second screen/window.
+
+1. **On screen:** Claude Desktop (or Claude Code) chat + the dashboard side by side.
+2. **Type to Claude:** *"Pitch this to the swarm: build a retro Snake game as a
+   single HTML file with neon styling."*
+3. **What the camera catches:** Claude calls `pitch_task` → the pitch appears on
+   the dashboard instantly → node cards light up as builders take subtasks →
+   Claude polls `get_job_status` and narrates progress → `get_result` brings the
+   finished code back into the chat.
+4. **Caption:** *"Any AI app can delegate to the swarm — it's just an MCP server."*
+
+Record this segment separately; if the timing drags, cut to the dashboard while
+the swarm works and come back for the result landing in chat.
+
+---
+
 ## The Hook (first 3 seconds of final video)
 
 **Start with the finished output already on screen** — the completed expense tracker code, scrolled to show the main logic. Let it sit for 3 seconds.
