@@ -4,7 +4,21 @@
 
 An open orchestration layer for multi-agent task execution across contributor hardware. A planner agent decomposes work into subtasks, builder agents execute them in parallel across connected machines, and a reviewer agent assembles and validates the final output — all running on local models via Ollama, no cloud APIs required. If this is useful, drop a star
 
-> **Experimental — Phase 0.** Designed for trusted local networks. Not security-hardened. Do not expose to the public internet.
+> **Status (August 2026):** Phase 0 works end-to-end — distributed execution, persistent project memory, auto-revision, live dashboard, credit ledger. Now hardened for WAN use (`node_secret` + `pitch_key` auth, rate limits, disk caps) with a [beginner-friendly deploy guide](docs/DEPLOY.md). Looking for the first external nodes — see below.
+
+## Positioning
+
+Decentralized, incentive-aligned agent networks *without* blockchain are an open lane: [SwarmHarness](https://arxiv.org/abs/2605.28764) (May 2026) maps this exact design space academically and notes that no existing system ships the combination — volunteer consumer hardware, credit-based incentives, no tokens. SwarmHarness is a protocol paper; this repo is a working implementation you can run tonight on two laptops. DePIN GPU marketplaces (token-based) and centralized cloud "agent swarms" are different animals — this is the collectively-owned, local-model one.
+
+## Looking for nodes 🖥️
+
+The network gets real when strangers connect hardware. Joining takes one command — any machine with 8GB RAM:
+
+```bash
+python join.py http://ORCHESTRATOR_ADDRESS:8000
+```
+
+A public orchestrator address will be posted here when the first community round opens. Until then: run your own on a LAN in minutes, or invite friends over [Tailscale](docs/DEPLOY.md) — and open an issue saying hi if you want in on the first tester wave.
 
 ## How it works
 
@@ -34,12 +48,14 @@ All agents use local models via [Ollama](https://ollama.com). No data leaves you
 
 ## Quick start
 
-**Requirements:** Python 3.12+, [Ollama](https://ollama.com)
+**Requirements:** Python 3.12+ (tested on 3.14), [Ollama](https://ollama.com)
 
 ```bash
 pip install fastapi uvicorn httpx rich
-ollama pull gemma3:4b
+ollama pull qwen3.5:4b
 ```
+
+`qwen3.5:4b` (~2.5GB) is the best 8GB-CPU-only pick as of August 2026. No qwen3.5? The orchestrator auto-detects down a ladder: qwen3.5 → gemma4 → phi4-mini → qwen3 → gemma3:4b → gemma3:1b.
 
 ### Verify your setup
 
@@ -55,16 +71,16 @@ Expected output:
 Ollama
   Status:  running
   URL:     http://localhost:11434
-  Models:  gemma3:4b
-  Active:  gemma3:4b
+  Models:  qwen3.5:4b
+  Active:  qwen3.5:4b
 
 Config
-  Model:    gemma3:4b
+  Model:    qwen3.5:4b
   Timeout:  600s
   Retries:  3
 ```
 
-If Ollama isn't running, start it with `ollama serve` and re-run. If the model is missing, run `ollama pull gemma3:4b`.
+If Ollama isn't running, start it with `ollama serve` and re-run. If the model is missing, run `ollama pull qwen3.5:4b`.
 
 ### CLI
 
@@ -135,20 +151,33 @@ The orchestrator handles planning and review locally. Builder subtasks are distr
 
 ```
 cli.py              # Terminal interface
-server.py           # Orchestrator: HTTP API, WebSocket events, task distribution
+server.py           # App assembly — routers, lifespan, exception handling
+server_state.py     # Shared state, SQLite persistence, events, auth, rate limits
+routes_pitch.py     # /pitch, /pitch/async, /pitch/distributed, /jobs*
+routes_nodes.py     # Worker protocol: register, poll, results, circuit breaker
+routes_history.py   # /history*, /share, /gallery
+routes_projects.py  # /projects*
+routes_events.py    # /health, /events, /ws/events, /standings, /metrics
 node.py             # Worker node: polls for tasks, runs inference, reports results
 join.py             # One-command node setup
-dashboard.py        # Live web dashboard (served from server.py)
+dashboard.py        # Serves the dashboard (HTML in templates/dashboard.html)
 orchestrator.py     # Core pipeline: plan → build → review → revise
-ollama_client.py    # Ollama HTTP client + token streaming
+ollama_client.py    # Ollama HTTP client + token streaming + structured outputs
 memory.py           # Persistent project memory across sessions
 ledger.py           # Contribution ledger (append-only JSON)
 extract.py          # Extracts runnable code files from pipeline output
-config.py           # Centralized settings (model, provider routing, timeout)
+config.py           # Centralized settings (model, auth keys, provider routing)
+tests/              # 114 pytest tests — run with: pytest
+docs/DEPLOY.md      # LAN / Tailscale / cloud deployment for beginners
+Dockerfile          # + docker-compose.yml: one-command orchestrator + Ollama
 output/             # Saved results, one directory per run
 projects/           # Persistent project memory (one dir per project)
 events.db           # SQLite event log (survives server restarts)
 ```
+
+## Deploying beyond your machine
+
+See **[docs/DEPLOY.md](docs/DEPLOY.md)** — three copy-paste paths: LAN (no setup), Tailscale (private testers, free), or a 24/7 public orchestrator on Oracle's free tier / Hetzner via `docker compose up`. Each path has a plain-language security note.
 
 ## API reference
 
@@ -189,7 +218,7 @@ This is a **Phase 0 trusted-network prototype**. Here's exactly what's durable a
 
 **Execution guarantees:** Tasks are at-least-once in the distributed path — if a node goes offline mid-task, the task is re-queued and can run on another node. There's no deduplication guard, so in rare race conditions a task may run twice. The final reviewer sees all outputs and merges them, so this typically doesn't affect the result.
 
-**Trust model:** Worker nodes authenticate with a shared secret (`node_secret` in `config.json`). Leave it empty for fully open trusted-network mode (Phase 0 default). The orchestrator itself has no login — don't expose port 8000 to the internet.
+**Trust model:** Worker nodes authenticate with a shared secret (`node_secret`), task submission can be gated with `pitch_key`, pitch endpoints are rate-limited (5/min/IP), and `output/` disk usage is capped (`output_max_mb`). All auth is off by default for trusted-network mode; **set both keys before any internet exposure** — [docs/DEPLOY.md](docs/DEPLOY.md) walks through it. No HTTPS out of the box: treat pitched tasks and outputs as public on a public deployment.
 
 ## What's built
 
@@ -211,15 +240,18 @@ This is a **Phase 0 trusted-network prototype**. Here's exactly what's durable a
 - [x] Contribution ledger with guild standings and credit tracking
 - [x] Worker node hardware reporting (CPU, RAM, GPU) and auto-reconnect
 - [x] `/metrics` endpoint — queue depth, latency, blacklisted nodes, job status
+- [x] Schema-enforced planner output (Ollama structured outputs, with text-parsing fallback)
+- [x] WAN hardening — `node_secret` + `pitch_key` auth, rate limits, output disk cap
+- [x] Docker + docker-compose deployment; test suite (114) + CI
 
 **Planned**
+- [ ] MCP server interface — let any agent app (Claude Desktop etc.) delegate tasks to the swarm
+- [ ] Verification & reputation — redundant execution spot-checks, per-node quality scores
 - [ ] Exo integration for model sharding across devices
-- [ ] Agent specialization (fine-tuned models per role)
-- [ ] Network-layer authentication for node registration
 
 ## Hardware
 
-- **Minimum:** 8GB RAM, any CPU — gemma3:4b runs on CPU (~30–60s per agent call)
+- **Minimum:** 8GB RAM, any CPU — qwen3.5:4b runs on CPU (~1–3 min per agent call)
 - **Recommended:** 16GB RAM + GPU — much faster inference
 - **Best:** Multiple machines connected as nodes for true parallel execution
 
@@ -233,6 +265,6 @@ This is Phase 0 of a three-layer system:
 
 ## Built with
 
-- Python 3.12+ · FastAPI · httpx · rich
+- Python 3.12+ (tested on 3.14) · FastAPI · httpx · rich
 - [Ollama](https://ollama.com) for local inference
-- gemma3:4b (CPU) · gemma4 (GPU)
+- qwen3.5:4b (default) · auto-detect ladder for whatever you have pulled

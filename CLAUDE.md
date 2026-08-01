@@ -75,13 +75,11 @@ A collectively-owned AI system powered by consumer hardware. Phase 0 demo: local
 - ALWAYS warn Jett before any action that opens ports, exposes his IP, or could be accessed by others.
 - He can't assess security risk himself. Flag it clearly in plain language.
 
-### What to build next (priority order)
-The demo works. The pipeline runs. The dashboard exists. WebSocket streaming, parallel wave execution, circuit breaker, persistent project memory, async job API, gallery, ZIP download, node auth, demo mode, token streaming relay, and agent specialization are all done. Here's what's left:
-
-1. **Output quality sweep** — run 10 varied prompt types (code, docs, analysis, multi-file projects) and find remaining failure modes. Builder retry-with-feedback and single-object JSON recovery are in. Target: 0 FAIL ratings on standard prompts.
-2. **Exo integration for model sharding** — connect to [Exo](https://github.com/exo-explore/exo) so multiple machines can collaboratively run a single large model inference. Replaces the per-node Ollama setup for GPU-scarce environments.
-3. **Dashboard UX polish** — node detail panel (click a node card to see its task history, model, uptime), estimated completion time on running jobs, better mobile layout.
-4. **`join.py` improvements** — auto-detect the orchestrator on the local network via mDNS/broadcast so nodes can join without knowing the IP. Requires no new dependencies (Python's built-in socket is enough).
+### What to build next
+Read **MASTER_PLAN.md** (project north star — direction, launch plan, division of labor)
+and **SPRINT_AUG2026.md** (the current execution plan and cross-session memory: work its
+items top to bottom, check them off, and append to its Session Log). Those two files
+override any older priority list, including anything cached from previous sessions.
 
 ### What NOT to do
 - Don't rewrite things that work. The pipeline is tested and passes.
