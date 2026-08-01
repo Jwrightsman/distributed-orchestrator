@@ -201,6 +201,70 @@ async def _run_job(job_id: str, task: str, project_id: str | None = None, trace_
     _db_write_job(jobs[job_id])
 
 
+@router.post("/public/pitch")
+async def public_pitch(req: PitchRequest, request: Request):
+    """Keyless pitching for the /try page — hard-limited, off by default.
+
+    Guards, in order: feature flag, per-IP hourly limit, task length cap,
+    content filter, global concurrent-job cap. Runs through the same async
+    job machinery as /pitch/async.
+    """
+    if not get_config().get("public_pitch", False):
+        raise HTTPException(status_code=404, detail="Public pitching is not enabled on this server")
+
+    ip = request.client.host if request.client else "unknown"
+    now = time.time()
+    window_start = now - state._PUBLIC_RATE_WINDOW
+    stamps = [t for t in state._public_pitch_timestamps.get(ip, []) if t > window_start]
+    if len(stamps) >= state._PUBLIC_RATE_MAX:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Public pitching is limited to {state._PUBLIC_RATE_MAX} tasks per hour. Try again later.",
+        )
+
+    if len(req.task) > state._PUBLIC_TASK_MAX:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Keep public tasks under {state._PUBLIC_TASK_MAX} characters.",
+        )
+
+    lowered = req.task.lower()
+    if any(term in lowered for term in state._PUBLIC_BLOCKLIST):
+        raise HTTPException(
+            status_code=422,
+            detail="That task isn't something this public demo will build. Pitch something constructive!",
+        )
+
+    active_public = sum(
+        1 for j in jobs.values() if j.get("source") == "public" and j["status"] in ("queued", "running")
+    )
+    if active_public >= state._PUBLIC_MAX_ACTIVE:
+        raise HTTPException(
+            status_code=503,
+            detail="The public queue is full right now — try again in a few minutes.",
+        )
+
+    stamps.append(now)
+    state._public_pitch_timestamps[ip] = stamps
+
+    job_id = f"job_{int(time.time() * 1000)}"
+    trace_id = str(uuid.uuid4())
+    jobs[job_id] = {
+        "job_id": job_id,
+        "task": req.task,
+        "project_id": None,
+        "status": "queued",
+        "submitted_at": datetime.now(timezone.utc).isoformat(),
+        "result": None,
+        "error": None,
+        "trace_id": trace_id,
+        "source": "public",
+    }
+    _db_write_job(jobs[job_id])
+    asyncio.create_task(_run_job(job_id, req.task, None, trace_id))
+    return {"job_id": job_id, "status": "queued", "trace_id": trace_id}
+
+
 @router.get("/jobs/{job_id}")
 async def get_job(job_id: str):
     """Get the status and result of an async job.

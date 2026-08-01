@@ -34,6 +34,21 @@ _RATE_WINDOW = 60         # seconds
 _RATE_MAX = 5             # max pitches per IP per window
 _pitch_timestamps: dict[str, list[float]] = {}   # ip -> list of recent timestamps
 
+# ── Public pitch page limits (/try — keyless, so much harsher) ────────────
+_PUBLIC_RATE_WINDOW = 3600   # seconds
+_PUBLIC_RATE_MAX = 2         # pitches per IP per window
+_PUBLIC_TASK_MAX = 300       # task length cap (chars)
+_PUBLIC_MAX_ACTIVE = 3       # concurrent public jobs across all visitors
+_public_pitch_timestamps: dict[str, list[float]] = {}
+
+# Basic content filter for keyless public pitching. Substring match, so it
+# over-blocks (e.g. "hackathon") — acceptable at this trust tier.
+_PUBLIC_BLOCKLIST = (
+    "hack", "malware", "ransomware", "exploit", "phishing", "ddos", "botnet",
+    "keylogger", "spyware", "crack password", "bypass", "nude", "porn",
+    "sexual", "nsfw", "bomb", "weapon", "ghost gun", "suicide", "kill ",
+)
+
 # ── Pipeline event log (for dashboard live updates) ──────────────────
 pipeline_events: list[dict] = []   # recent events for polling fallback
 

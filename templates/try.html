@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Try the swarm — Distributed AI Orchestrator</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #08090C;
+    color: #D8D8D8;
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 48px 20px;
+  }
+  .logo-tag {
+    font-family: 'Consolas', monospace;
+    font-size: 12px;
+    color: #00FFAA;
+    letter-spacing: 3px;
+    font-weight: 700;
+    margin-bottom: 18px;
+  }
+  h1 { font-size: clamp(24px, 4vw, 38px); font-weight: 800; color: #F0F0F0; text-align: center; }
+  .sub { margin-top: 10px; color: #888; font-size: 15px; text-align: center; max-width: 560px; line-height: 1.6; }
+  .box {
+    margin-top: 34px;
+    width: 100%;
+    max-width: 640px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  textarea {
+    width: 100%;
+    min-height: 90px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 10px;
+    color: #E8E8E8;
+    font-family: inherit;
+    font-size: 16px;
+    padding: 14px 16px;
+    resize: vertical;
+  }
+  textarea:focus { outline: none; border-color: rgba(0,255,170,0.5); }
+  .row { display: flex; justify-content: space-between; align-items: center; }
+  .counter { font-family: 'Consolas', monospace; font-size: 12px; color: #666; }
+  button {
+    background: #00FFAA;
+    color: #08090C;
+    border: none;
+    border-radius: 9px;
+    padding: 13px 30px;
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  button:hover { background: #00e899; }
+  button:disabled { background: #2a2a2a; color: #666; cursor: default; }
+  .status-msg { font-size: 14px; color: #E8FF47; min-height: 20px; }
+  .stages { display: none; flex-direction: column; gap: 10px; margin-top: 8px; }
+  .stage {
+    display: flex; align-items: center; gap: 12px;
+    font-size: 15px; color: #666;
+    padding: 12px 16px;
+    background: rgba(255,255,255,0.025);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 9px;
+    transition: all 0.3s;
+  }
+  .stage.active { color: #E8E8E8; border-color: rgba(0,255,170,0.5); box-shadow: 0 0 16px rgba(0,255,170,0.15); }
+  .stage.done { color: #9a9a9a; }
+  .stage .dot { width: 9px; height: 9px; border-radius: 50%; background: #333; flex-shrink: 0; }
+  .stage.active .dot { background: #00FFAA; box-shadow: 0 0 10px rgba(0,255,170,0.8); animation: blink 1.2s infinite; }
+  .stage.done .dot { background: #00FFAA; }
+  @keyframes blink { 50% { opacity: 0.35; } }
+  .stage .detail { color: #777; font-size: 13px; margin-left: auto; }
+  .result {
+    display: none;
+    margin-top: 8px;
+    background: rgba(0,0,0,0.35);
+    border: 1px solid rgba(0,255,170,0.25);
+    border-radius: 10px;
+    padding: 20px 22px;
+    font-family: 'Consolas', monospace;
+    font-size: 13px;
+    line-height: 1.65;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 480px;
+    overflow-y: auto;
+  }
+  .error-msg { color: #FF7777; font-size: 14px; }
+  .footer { margin-top: 40px; font-size: 12px; color: #444; text-align: center; }
+  .footer a { color: #666; text-decoration: none; }
+  .footer a:hover { color: #00FFAA; }
+</style>
+</head>
+<body>
+  <div class="logo-tag">DISTRIBUTED AI ORCHESTRATOR</div>
+  <h1>Pitch the swarm a task</h1>
+  <p class="sub">
+    Type a task. A planner decomposes it, builder agents execute the pieces across
+    volunteer machines, a reviewer assembles the result. Local models only —
+    expect minutes, not seconds. Limit: 2 tasks/hour.
+  </p>
+
+  <div class="box">
+    <textarea id="task" maxlength="300" placeholder="e.g. Write a bash script that renames photos by their EXIF date"></textarea>
+    <div class="row">
+      <span class="counter"><span id="count">0</span>/300</span>
+      <button id="go">Pitch it</button>
+    </div>
+    <div class="status-msg" id="msg"></div>
+
+    <div class="stages" id="stages">
+      <div class="stage" id="st-plan"><span class="dot"></span> Planning <span class="detail" id="d-plan"></span></div>
+      <div class="stage" id="st-build"><span class="dot"></span> Building <span class="detail" id="d-build"></span></div>
+      <div class="stage" id="st-review"><span class="dot"></span> Reviewing &amp; assembling <span class="detail" id="d-review"></span></div>
+    </div>
+
+    <div class="result" id="result"></div>
+  </div>
+
+  <div class="footer">
+    <a href="/">about</a> · <a href="/dashboard">dashboard</a> ·
+    <a href="https://github.com/Jwrightsman/distributed-orchestrator" target="_blank">run your own swarm</a>
+  </div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const task = $('task'), go = $('go'), msg = $('msg');
+  let jobId = null, subtasksTotal = 0, subtasksDone = 0;
+
+  task.addEventListener('input', () => { $('count').textContent = task.value.length; });
+
+  function setStage(stage) {
+    const order = ['plan', 'build', 'review'];
+    order.forEach(s => {
+      const el = $('st-' + s);
+      el.classList.remove('active', 'done');
+      if (order.indexOf(s) < order.indexOf(stage)) el.classList.add('done');
+      if (s === stage) el.classList.add('active');
+    });
+  }
+
+  function markAllDone() {
+    ['plan','build','review'].forEach(s => { $('st-'+s).classList.remove('active'); $('st-'+s).classList.add('done'); });
+  }
+
+  go.addEventListener('click', async () => {
+    const t = task.value.trim();
+    if (!t) return;
+    go.disabled = true;
+    msg.textContent = 'Submitting…';
+    msg.className = 'status-msg';
+    $('result').style.display = 'none';
+    try {
+      const resp = await fetch('/public/pitch', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({task: t}),
+      });
+      const body = await resp.json();
+      if (!resp.ok) {
+        msg.textContent = body.detail || 'Something went wrong.';
+        msg.className = 'status-msg error-msg';
+        go.disabled = false;
+        return;
+      }
+      jobId = body.job_id;
+      msg.textContent = 'The swarm is on it — this takes a few minutes on volunteer hardware.';
+      $('stages').style.display = 'flex';
+      setStage('plan');
+      listen();
+      poll();
+    } catch (e) {
+      msg.textContent = 'Could not reach the server.';
+      msg.className = 'status-msg error-msg';
+      go.disabled = false;
+    }
+  });
+
+  function listen() {
+    try {
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      const ws = new WebSocket(`${proto}://${location.host}/ws/events`);
+      ws.onmessage = (e) => {
+        try {
+          const ev = JSON.parse(e.data);
+          if (ev.job_id !== jobId) return;
+          if (ev.type === 'plan') {
+            subtasksTotal = (ev.subtasks || []).length;
+            $('d-plan').textContent = `${subtasksTotal} subtasks`;
+            setStage('build');
+          }
+          if (ev.type === 'build') {
+            subtasksDone++;
+            $('d-build').textContent = `${subtasksDone}/${subtasksTotal || '?'}`;
+          }
+          if (ev.type === 'review_start') setStage('review');
+        } catch (err) {}
+      };
+    } catch (e) { /* polling still covers us */ }
+  }
+
+  async function poll() {
+    while (true) {
+      await new Promise(r => setTimeout(r, 4000));
+      try {
+        const job = await (await fetch(`/jobs/${jobId}`)).json();
+        if (job.status === 'complete') { await showResult(job); return; }
+        if (job.status === 'failed') {
+          msg.textContent = 'The swarm could not finish this one: ' + (job.error || 'unknown error');
+          msg.className = 'status-msg error-msg';
+          markAllDone();
+          go.disabled = false;
+          return;
+        }
+      } catch (e) { /* transient — keep polling */ }
+    }
+  }
+
+  async function showResult(job) {
+    markAllDone();
+    msg.textContent = `Done — rated ${job.rating || '?'} by the reviewer.`;
+    let text = '';
+    try {
+      const ts = (job.project_dir || '').split(/[\\/]/).pop();
+      const run = await (await fetch(`/history/${ts}`)).json();
+      text = run.final_output || run.review || '(no output)';
+    } catch (e) {
+      text = '(output saved on the server, but could not be loaded here)';
+    }
+    const box = $('result');
+    box.textContent = text;
+    box.style.display = 'block';
+    go.disabled = false;
+  }
+</script>
+</body>
+</html>

@@ -26,3 +26,8 @@ async def landing():
 @router.get("/dashboard", response_class=HTMLResponse)
 async def dashboard():
     return (_TEMPLATES_DIR / "dashboard.html").read_text(encoding="utf-8")
+
+
+@router.get("/try", response_class=HTMLResponse)
+async def try_page():
+    return (_TEMPLATES_DIR / "try.html").read_text(encoding="utf-8")

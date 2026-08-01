@@ -79,6 +79,12 @@ DEFAULTS = {
     # Set 0 to disable pruning.
     "output_max_mb": 500,
 
+    # Public pitch page (/try): lets anyone submit a task from a browser with
+    # NO key — hard-limited to 2 pitches/hour per IP, 3 concurrent public jobs,
+    # 300-char tasks, and a basic content filter. Off by default; understand
+    # the abuse risk (docs/DEPLOY.md) before enabling on a public server.
+    "public_pitch": False,
+
     # ── Agent specialization (optional) ──────────────────────────────
     # Route builder tasks to nodes running a specific model.
     # The dispatcher will prefer nodes whose model matches the value set here.

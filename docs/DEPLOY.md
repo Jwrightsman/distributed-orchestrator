@@ -171,6 +171,20 @@ py node.py --server http://YOUR_VM_IP:8000 --secret REPLACE-WITH-LONG-RANDOM-STR
 
 ---
 
+## The public pitch page (`/try`) — read before enabling
+
+`"public_pitch": true` in config.json turns on a page where **anyone on the
+internet can submit tasks with no key**. Protections that are always on with
+it: 2 tasks per hour per visitor, at most 3 public tasks running at once,
+300-character task limit, and a basic word filter.
+
+**What can still go wrong:** strangers decide what your hardware works on for
+minutes at a time; the word filter is basic, so someone determined can phrase
+something distasteful and the swarm will write text about it; and outputs are
+publicly readable. Enable it for demo events and launch windows, watch the
+dashboard while it's on, and turn it off (`"public_pitch": false` + restart)
+when you're not looking at it.
+
 ## Troubleshooting
 
 | Symptom | Fix |
