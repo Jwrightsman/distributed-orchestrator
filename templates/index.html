@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Distributed AI Orchestrator</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #08090C;
+    color: #D8D8D8;
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 48px 20px;
+    text-align: center;
+  }
+  .logo-tag {
+    font-family: 'Consolas', monospace;
+    font-size: 13px;
+    color: #00FFAA;
+    letter-spacing: 4px;
+    font-weight: 700;
+    margin-bottom: 24px;
+  }
+  h1 {
+    font-size: clamp(28px, 5vw, 52px);
+    font-weight: 800;
+    color: #F0F0F0;
+    letter-spacing: -1px;
+    line-height: 1.15;
+    max-width: 800px;
+  }
+  h1 .accent { color: #00FFAA; }
+  .sub {
+    margin-top: 20px;
+    max-width: 640px;
+    font-size: clamp(15px, 2vw, 18px);
+    line-height: 1.65;
+    color: #999;
+  }
+  .stats-row {
+    margin-top: 40px;
+    display: flex;
+    gap: 40px;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+  .stat {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .stat .num {
+    font-family: 'Consolas', monospace;
+    font-size: 40px;
+    font-weight: 700;
+    color: #00FFAA;
+    text-shadow: 0 0 24px rgba(0,255,170,0.35);
+  }
+  .stat .label {
+    font-size: 12px;
+    color: #666;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+  }
+  .pulse { animation: pulse 2.4s ease-in-out infinite; }
+  @keyframes pulse {
+    0%, 100% { text-shadow: 0 0 24px rgba(0,255,170,0.35); }
+    50% { text-shadow: 0 0 42px rgba(0,255,170,0.7); }
+  }
+  .actions {
+    margin-top: 44px;
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .btn {
+    padding: 15px 34px;
+    border-radius: 10px;
+    font-size: 16px;
+    font-weight: 700;
+    text-decoration: none;
+    transition: all 0.15s;
+  }
+  .btn-primary { background: #00FFAA; color: #08090C; }
+  .btn-primary:hover { background: #00e899; box-shadow: 0 0 30px rgba(0,255,170,0.35); }
+  .btn-secondary {
+    background: none;
+    color: #00FFAA;
+    border: 1.5px solid rgba(0,255,170,0.4);
+  }
+  .btn-secondary:hover { background: rgba(0,255,170,0.08); border-color: #00FFAA; }
+  .join-line {
+    margin-top: 40px;
+    font-family: 'Consolas', monospace;
+    font-size: 14px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.09);
+    border-radius: 10px;
+    padding: 14px 22px;
+    color: #B8B8B8;
+    cursor: pointer;
+    transition: border-color 0.15s;
+    user-select: all;
+  }
+  .join-line:hover { border-color: rgba(0,255,170,0.5); }
+  .join-line .prompt { color: #00FFAA; }
+  .join-hint { margin-top: 10px; font-size: 12px; color: #555; }
+  .footer {
+    margin-top: 56px;
+    font-size: 12px;
+    color: #444;
+  }
+  .footer a { color: #666; text-decoration: none; }
+  .footer a:hover { color: #00FFAA; }
+</style>
+</head>
+<body>
+  <div class="logo-tag">DISTRIBUTED AI ORCHESTRATOR</div>
+  <h1>A swarm of AI agents,<br>running on <span class="accent">everyone's</span> hardware.</h1>
+  <p class="sub">
+    Pitch a task. A planner splits it into subtasks, builder agents execute them in
+    parallel across volunteer machines, a reviewer assembles and grades the result —
+    all on local models. No cloud, no API keys, and every contribution earns credits
+    in an open ledger.
+  </p>
+
+  <div class="stats-row">
+    <div class="stat"><span class="num pulse" id="node-count">–</span><span class="label">nodes online</span></div>
+    <div class="stat"><span class="num" id="task-count">–</span><span class="label">tasks completed</span></div>
+  </div>
+
+  <div class="actions">
+    <a class="btn btn-primary" href="/dashboard">Open the dashboard</a>
+    <a class="btn btn-secondary" href="https://github.com/Jwrightsman/distributed-orchestrator" target="_blank">GitHub ↗</a>
+  </div>
+
+  <div class="join-line" id="join-line" title="Click to copy">
+    <span class="prompt">$</span> python join.py <span id="join-host">http://this-server:8000</span>
+  </div>
+  <div class="join-hint" id="join-hint">Join this network as a worker node — any machine with 8GB RAM · click to copy</div>
+
+  <div class="footer">
+    Phase 0 · <a href="https://github.com/Jwrightsman/distributed-orchestrator" target="_blank">source</a> ·
+    open protocol → contributor guild → marketplace
+  </div>
+
+<script>
+  // Live stats — same endpoints the dashboard uses
+  async function refresh() {
+    try {
+      const m = await (await fetch('/metrics')).json();
+      document.getElementById('node-count').textContent = m.nodes_online;
+      document.getElementById('task-count').textContent = m.tasks_completed_total;
+    } catch (e) { /* leave placeholders */ }
+  }
+  refresh();
+  setInterval(refresh, 5000);
+
+  // Fill in this server's real address for the join one-liner
+  document.getElementById('join-host').textContent = location.origin;
+  document.getElementById('join-line').addEventListener('click', () => {
+    navigator.clipboard.writeText(`python join.py ${location.origin}`);
+    document.getElementById('join-hint').textContent = 'Copied — run it on any machine with Python + Ollama';
+  });
+</script>
+</body>
+</html>

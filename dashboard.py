@@ -15,9 +15,14 @@ from fastapi.responses import HTMLResponse
 router = APIRouter()
 
 # Resolve relative to this file, not CWD — the server can be started from anywhere
-_TEMPLATE_FILE = Path(__file__).parent / "templates" / "dashboard.html"
+_TEMPLATES_DIR = Path(__file__).parent / "templates"
+
+
+@router.get("/", response_class=HTMLResponse)
+async def landing():
+    return (_TEMPLATES_DIR / "index.html").read_text(encoding="utf-8")
 
 
 @router.get("/dashboard", response_class=HTMLResponse)
 async def dashboard():
-    return _TEMPLATE_FILE.read_text(encoding="utf-8")
+    return (_TEMPLATES_DIR / "dashboard.html").read_text(encoding="utf-8")
