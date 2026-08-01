@@ -332,7 +332,7 @@ async def _cleanup_stale_nodes():
             finished = job.get("finished_at")
             if finished and job["status"] in ("complete", "failed"):
                 try:
-                    from datetime import datetime, timezone
+                    from datetime import datetime
                     finished_ts = datetime.fromisoformat(finished).timestamp()
                     if finished_ts < job_cutoff:
                         stale_jobs.append(jid)
@@ -343,11 +343,14 @@ async def _cleanup_stale_nodes():
 
         # 4. Prune SQLite event log — keep only the last 2000 rows
         try:
-            with _db_conn() as conn:
-                conn.execute(
+            with _db_lock:
+                con = sqlite3.connect(_DB_PATH)
+                con.execute(
                     "DELETE FROM events WHERE id NOT IN "
                     "(SELECT id FROM events ORDER BY id DESC LIMIT 2000)"
                 )
+                con.commit()
+                con.close()
         except Exception:
             pass
 
@@ -806,7 +809,7 @@ async def fork_template(timestamp: str):
     memory_content = ""
     if project_id:
         try:
-            from memory import get_memory_context, PROJECTS_DIR
+            from memory import PROJECTS_DIR
             proj_memory_file = PROJECTS_DIR / project_id / "memory.md"
             if proj_memory_file.exists():
                 memory_content = proj_memory_file.read_text(errors="ignore")
@@ -881,7 +884,7 @@ async def share_page(timestamp: str, request: Request):
     rating = log.get("rating", "?")
     mode = log.get("mode", "local")
     subtask_count = len(log.get("plan", []))
-    model = log.get("model", get_config().get("model", "gemma3:4b"))
+    model = log.get("model", get_config().get("model", "qwen3.5:4b"))
 
     output_file = run_dir / "output.md"
     final_output = output_file.read_text(errors="ignore") if output_file.exists() else ""

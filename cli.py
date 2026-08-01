@@ -12,7 +12,6 @@ import sys
 import time
 import json
 import zipfile
-import io
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -54,7 +53,7 @@ def show_projects():
             ts,
         )
     console.print(table)
-    console.print(f"[dim]Continue a project: py cli.py --project <id> \"next task\"[/dim]")
+    console.print("[dim]Continue a project: py cli.py --project <id> \"next task\"[/dim]")
 
 
 async def run_task(task: str, project_id: str | None = None):
@@ -340,7 +339,7 @@ async def run_demo(fast: bool = False):
     memory_file = PROJECTS_DIR / project_id / "memory.md"
     if memory_file.exists():
         raw = memory_file.read_text(errors="ignore")
-        memory_lines = len([l for l in raw.splitlines() if l.strip()])
+        memory_lines = len([ln for ln in raw.splitlines() if ln.strip()])
         memory_bytes = len(raw.encode())
 
     console.print()
@@ -520,7 +519,7 @@ async def run_demo_live():
     memory_file = PROJECTS_DIR / project_id / "memory.md"
     if memory_file.exists():
         raw = memory_file.read_text(errors="ignore")
-        lines = len([l for l in raw.splitlines() if l.strip()])
+        lines = len([ln for ln in raw.splitlines() if ln.strip()])
         console.print(f"[dim]Loading project memory: {lines} lines of context from Pitch 1[/dim]\n")
 
     await run_live_pitch(PITCH_2, 2)
@@ -530,7 +529,7 @@ async def run_demo_live():
     memory_bytes = 0
     if memory_file.exists():
         raw = memory_file.read_text(errors="ignore")
-        memory_lines = len([l for l in raw.splitlines() if l.strip()])
+        memory_lines = len([ln for ln in raw.splitlines() if ln.strip()])
         memory_bytes = len(raw.encode())
 
     console.print()
