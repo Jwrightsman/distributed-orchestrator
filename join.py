@@ -120,9 +120,9 @@ async def main():
             console.print(
                 "[red bold]No orchestrator found on the local network.[/red bold]\n"
                 "[dim]Make sure the server is running:[/dim]\n"
-                "  [dim]py -m uvicorn server:app --host 0.0.0.0 --port 8000[/dim]\n"
+                "  [dim]python -m uvicorn server:app --host 0.0.0.0 --port 8000[/dim]\n"
                 "[dim]Or pass the URL directly:[/dim]\n"
-                "  [dim]py join.py http://ORCHESTRATOR_IP:8000[/dim]"
+                "  [dim]python join.py http://ORCHESTRATOR_IP:8000[/dim]"
             )
             sys.exit(1)
 

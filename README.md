@@ -135,7 +135,19 @@ curl -X POST http://localhost:8000/pitch/async \
 
 ## Worker nodes
 
-Any machine with Ollama can join as a builder node.
+Any machine with 8GB RAM can join as a builder node — one copy-paste line:
+
+**Mac / Linux**
+```bash
+curl -fsSL https://raw.githubusercontent.com/Jwrightsman/distributed-orchestrator/master/install.sh | bash -s -- http://ORCHESTRATOR_IP:8000
+```
+
+**Windows (PowerShell)**
+```powershell
+$env:SWARM_SERVER="http://ORCHESTRATOR_IP:8000"; irm https://raw.githubusercontent.com/Jwrightsman/distributed-orchestrator/master/install.ps1 | iex
+```
+
+The installer checks Python and Ollama, downloads the repo, pulls the model, and starts working. Omit the address to auto-discover an orchestrator on your LAN. Already have the repo?
 
 ```bash
 # One-command join (checks deps, pulls model, registers, starts polling):
