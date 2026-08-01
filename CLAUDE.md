@@ -4,8 +4,9 @@
 A collectively-owned AI system powered by consumer hardware. Phase 0 demo: local planner/builder/reviewer pipeline hitting Ollama.
 
 ## Tech stack
-- Python 3.14 + FastAPI + httpx + rich
-- Ollama for local inference (gemma3:4b for CPU, swap to gemma4 when GPU available)
+- Python 3.14 (3.14.3 verified Aug 2026) + FastAPI + httpx + rich
+- Ollama for local inference (default: qwen3.5:4b — best 8GB CPU-only pick as of Aug 2026;
+  auto-detect ladder: qwen3.5 → gemma4 → phi4-mini → qwen3 → gemma3:4b → gemma3:1b)
 - No venv currently — deps installed globally via `py -m pip`
 
 ## Running it

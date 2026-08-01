@@ -12,7 +12,7 @@ def _cfg():
 
 
 OLLAMA_URL = "http://localhost:11434"
-DEFAULT_MODEL = "gemma3:4b"
+DEFAULT_MODEL = "qwen3.5:4b"
 
 
 def _sync_globals():
@@ -43,15 +43,15 @@ async def check_ollama() -> dict:
 async def auto_detect_model() -> str | None:
     """Pick the best available model from what Ollama has pulled.
 
-    Preference order (best to worst for orchestration tasks):
-      gemma4 > qwen3:8b > gemma3:4b > anything else
+    Preference order (best to worst for orchestration tasks, Aug 2026):
+      qwen3.5 > gemma4 > phi4-mini > qwen3 > gemma3:4b > gemma3:1b
     """
     status = await check_ollama()
     if not status["ok"]:
         return None
 
     models = status["models"]
-    preference = ["gemma4", "qwen3:8b", "gemma3:4b", "gemma3:1b"]
+    preference = ["qwen3.5", "gemma4", "phi4-mini", "qwen3", "gemma3:4b", "gemma3:1b"]
 
     for pref in preference:
         for m in models:
@@ -86,16 +86,27 @@ async def _generate_provider(prompt: str, system: str, cfg: dict) -> str:
         return resp.json()["choices"][0]["message"]["content"]
 
 
-async def generate(prompt: str, system: str = "", model: str | None = None, role: str | None = None) -> str:
+async def generate(
+    prompt: str,
+    system: str = "",
+    model: str | None = None,
+    role: str | None = None,
+    format: dict | str | None = None,
+) -> str:
     """Send a prompt to Ollama (or an external provider) and return the response.
 
     Pass role="planner" or role="reviewer" to enable provider routing when
     a provider is configured in config.json.
+
+    Pass format= a JSON schema dict (or "json") to have Ollama constrain the
+    output to that schema (structured outputs). External providers ignore it —
+    callers must keep a text-parsing fallback for that path.
     """
     _sync_globals()
     cfg = get_config()
 
-    # Route to external provider if configured and this role uses it
+    # Route to external provider if configured and this role uses it.
+    # Providers don't get the format schema — caller's parsing fallback applies.
     provider = cfg.get("provider")
     if (
         provider
@@ -117,10 +128,17 @@ async def generate(prompt: str, system: str = "", model: str | None = None, role
     }
     if system:
         payload["system"] = system
+    if format is not None:
+        payload["format"] = format
 
     _, _, timeout = _cfg()
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(f"{OLLAMA_URL}/api/generate", json=payload)
+        if resp.status_code == 400 and format is not None:
+            # Ollama rejected the schema (older version or unsupported model) —
+            # retry unconstrained; the caller's text-parsing fallback handles it.
+            payload.pop("format")
+            resp = await client.post(f"{OLLAMA_URL}/api/generate", json=payload)
         resp.raise_for_status()
         return resp.json()["response"]
 

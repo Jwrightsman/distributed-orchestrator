@@ -287,6 +287,24 @@ def _is_refusal(text: str) -> bool:
     return any(lowered.startswith(prefix) for prefix in _REFUSAL_PREFIXES)
 
 
+# JSON schema for Ollama structured outputs — the runtime constrains the planner's
+# sampling to this shape, so parse failures become rare instead of retried-away.
+# External providers ignore it; _extract_json below remains the fallback parser.
+PLANNER_FORMAT = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "id": {"type": "integer"},
+            "title": {"type": "string"},
+            "prompt": {"type": "string"},
+            "depends_on": {"type": "array", "items": {"type": "integer"}},
+        },
+        "required": ["id", "title", "prompt", "depends_on"],
+    },
+}
+
+
 PLANNER_MEMORY_PREFIX = """You are continuing work on an existing project. Here is the project memory — what has been built so far:
 
 {memory}
@@ -309,7 +327,7 @@ async def plan(task: str, max_retries: int | None = None, memory_context: str = 
     last_err: Exception = ValueError("no attempts made")
     prompt = task
     for attempt in range(max_retries):
-        raw = await generate(prompt, system=system, role="planner")
+        raw = await generate(prompt, system=system, role="planner", format=PLANNER_FORMAT)
         try:
             subtasks = _extract_json(raw)
             return _validate_subtasks(subtasks)

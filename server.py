@@ -343,11 +343,14 @@ async def _cleanup_stale_nodes():
 
         # 4. Prune SQLite event log — keep only the last 2000 rows
         try:
-            with _db_conn() as conn:
-                conn.execute(
+            with _db_lock:
+                con = sqlite3.connect(_DB_PATH)
+                con.execute(
                     "DELETE FROM events WHERE id NOT IN "
                     "(SELECT id FROM events ORDER BY id DESC LIMIT 2000)"
                 )
+                con.commit()
+                con.close()
         except Exception:
             pass
 
@@ -881,7 +884,7 @@ async def share_page(timestamp: str, request: Request):
     rating = log.get("rating", "?")
     mode = log.get("mode", "local")
     subtask_count = len(log.get("plan", []))
-    model = log.get("model", get_config().get("model", "gemma3:4b"))
+    model = log.get("model", get_config().get("model", "qwen3.5:4b"))
 
     output_file = run_dir / "output.md"
     final_output = output_file.read_text(errors="ignore") if output_file.exists() else ""
