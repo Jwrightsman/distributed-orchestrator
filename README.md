@@ -1,5 +1,7 @@
 # Distributed AI Orchestrator
 
+[![CI](https://github.com/Jwrightsman/distributed-orchestrator/actions/workflows/ci.yml/badge.svg)](https://github.com/Jwrightsman/distributed-orchestrator/actions/workflows/ci.yml)
+
 An open orchestration layer for multi-agent task execution across contributor hardware. A planner agent decomposes work into subtasks, builder agents execute them in parallel across connected machines, and a reviewer agent assembles and validates the final output — all running on local models via Ollama, no cloud APIs required. If this is useful, drop a star
 
 > **Experimental — Phase 0.** Designed for trusted local networks. Not security-hardened. Do not expose to the public internet.
