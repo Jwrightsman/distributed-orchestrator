@@ -25,3 +25,14 @@ jobs:
 
       - name: Tests (pytest — no Ollama needed)
         run: pytest -q
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build orchestrator image
+        run: docker build -t distributed-orchestrator .
+
+      - name: Server imports inside container
+        run: docker run --rm distributed-orchestrator python -c "from server import app; print('ok:', len(app.routes), 'routes')"
