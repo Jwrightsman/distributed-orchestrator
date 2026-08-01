@@ -11,7 +11,9 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+import routes_pitch
 import server
+import server_state
 
 
 @pytest.fixture(autouse=True)
@@ -98,7 +100,7 @@ def node_secret(monkeypatch):
 
     cfg = config.DEFAULTS.copy()
     cfg["node_secret"] = "s3cret"
-    monkeypatch.setattr(server, "get_config", lambda: cfg)
+    monkeypatch.setattr(server_state, "get_config", lambda: cfg)
     return "s3cret"
 
 
@@ -146,7 +148,7 @@ def test_worker_gets_queued_task(client):
 
 
 def test_worker_respects_capability_requirements(client, monkeypatch):
-    monkeypatch.setattr(server, "_LONG_POLL_TIMEOUT", 0.1)
+    monkeypatch.setattr(server_state, "_LONG_POLL_TIMEOUT", 0.1)
     _register(client)  # capabilities: [model:qwen3.5:4b]
     server.task_queue.append(
         {"task_id": "t1", "title": "B", "prompt": "p", "system": "s", "requires": ["model:other-model"]}
@@ -196,7 +198,7 @@ def test_pitch_overlong_task_rejected(client):
 
 
 def test_pitch_runs_pipeline(client, monkeypatch):
-    monkeypatch.setattr(server, "run_pipeline", _fake_pipeline)
+    monkeypatch.setattr(routes_pitch, "run_pipeline", _fake_pipeline)
     resp = client.post("/pitch", json={"task": "build a thing"})
     assert resp.status_code == 200
     body = resp.json()
@@ -205,7 +207,7 @@ def test_pitch_runs_pipeline(client, monkeypatch):
 
 
 def test_pitch_rate_limited(client, monkeypatch):
-    monkeypatch.setattr(server, "run_pipeline", _fake_pipeline)
+    monkeypatch.setattr(routes_pitch, "run_pipeline", _fake_pipeline)
     for _ in range(server._RATE_MAX):
         assert client.post("/pitch", json={"task": "t"}).status_code == 200
     resp = client.post("/pitch", json={"task": "t"})
@@ -214,14 +216,14 @@ def test_pitch_rate_limited(client, monkeypatch):
 
 
 def test_pitch_async_rate_limited(client, monkeypatch):
-    monkeypatch.setattr(server, "run_pipeline", _fake_pipeline)
+    monkeypatch.setattr(routes_pitch, "run_pipeline", _fake_pipeline)
     for _ in range(server._RATE_MAX):
         assert client.post("/pitch/async", json={"task": "t"}).status_code == 200
     assert client.post("/pitch/async", json={"task": "t"}).status_code == 429
 
 
 def test_pitch_async_returns_job(client, monkeypatch):
-    monkeypatch.setattr(server, "run_pipeline", _fake_pipeline)
+    monkeypatch.setattr(routes_pitch, "run_pipeline", _fake_pipeline)
     resp = client.post("/pitch/async", json={"task": "async thing"})
     assert resp.status_code == 200
     job_id = resp.json()["job_id"]
@@ -332,3 +334,10 @@ def test_projects_crud(client):
 def test_events_endpoint(client):
     body = client.get("/events").json()
     assert isinstance(body["events"], list)
+
+
+def test_dashboard_serves_template(client):
+    resp = client.get("/dashboard")
+    assert resp.status_code == 200
+    assert "<!DOCTYPE html>" in resp.text
+    assert "text/html" in resp.headers["content-type"]
