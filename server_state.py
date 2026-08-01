@@ -222,6 +222,21 @@ def _check_rate_limit(request: Request) -> int:
     return _RATE_MAX - len(timestamps)
 
 
+# ── Pitch auth ───────────────────────────────────────────────────────
+def _check_pitch_key(request: Request):
+    """Raise 401 if pitch_key is configured and the request doesn't present it.
+
+    Pitchers must include 'X-Pitch-Key: <value>' in their request headers.
+    When pitch_key is empty in config, pitching is open (trusted-network mode).
+    """
+    key = get_config().get("pitch_key", "")
+    if not key:
+        return  # auth disabled
+    provided = request.headers.get("X-Pitch-Key", "")
+    if provided != key:
+        raise HTTPException(status_code=401, detail="Invalid or missing X-Pitch-Key header")
+
+
 # ── Node auth ────────────────────────────────────────────────────────
 def _check_node_auth(request: Request):
     """Raise 401 if node_secret is configured and the request doesn't present it.
@@ -291,6 +306,47 @@ class NewProjectRequest(BaseModel):
     initial_task: str
 
 
+# ── Output directory size cap ────────────────────────────────────────
+def _prune_output_dir() -> list[str]:
+    """Delete oldest runs until output/ is under the configured size cap.
+
+    Returns the list of pruned run-directory names. No-op when the cap is 0
+    or the directory doesn't exist. Run dirs are timestamp-named, so sorting
+    by name is sorting by age.
+    """
+    import shutil
+
+    max_mb = get_config().get("output_max_mb", 0)
+    if not max_mb or not OUTPUT_DIR.exists():
+        return []
+    cap_bytes = max_mb * 1024 * 1024
+
+    run_dirs = sorted(d for d in OUTPUT_DIR.iterdir() if d.is_dir())
+    sizes = {}
+    total = 0
+    for d in run_dirs:
+        size = sum(f.stat().st_size for f in d.rglob("*") if f.is_file())
+        sizes[d] = size
+        total += size
+
+    pruned = []
+    for d in run_dirs:  # oldest first
+        if total <= cap_bytes:
+            break
+        try:
+            shutil.rmtree(d)
+            total -= sizes[d]
+            pruned.append(d.name)
+        except OSError:
+            pass
+    if pruned:
+        try:
+            _emit("output_pruned", {"runs_deleted": pruned, "cap_mb": max_mb})
+        except Exception:
+            pass  # pruning must never fail on event emission (e.g. no event loop)
+    return pruned
+
+
 # ── Background cleanup loop ──────────────────────────────────────────
 async def _cleanup_stale_nodes():
     """Remove stale nodes, reclaim their in-flight tasks, and prune old records.
@@ -352,5 +408,11 @@ async def _cleanup_stale_nodes():
                 )
                 con.commit()
                 con.close()
+        except Exception:
+            pass
+
+        # 5. Enforce the output/ directory size cap (config: output_max_mb)
+        try:
+            _prune_output_dir()
         except Exception:
             pass

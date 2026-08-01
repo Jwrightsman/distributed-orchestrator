@@ -67,6 +67,18 @@ DEFAULTS = {
     # Leave empty ("") to allow any node to join (default — trusted networks only).
     "node_secret": "",
 
+    # Shared key for pitch authentication.
+    # Set this to a non-empty string to require X-Pitch-Key: <value> on
+    # /pitch, /pitch/async, and /pitch/distributed. Required before exposing
+    # the server to the internet — otherwise anyone can burn your compute.
+    # Leave empty ("") to allow open pitching (default — trusted networks only).
+    "pitch_key": "",
+
+    # Cap on total size of the output/ directory, in megabytes.
+    # When exceeded, the oldest runs are deleted until back under the cap.
+    # Set 0 to disable pruning.
+    "output_max_mb": 500,
+
     # ── Agent specialization (optional) ──────────────────────────────
     # Route builder tasks to nodes running a specific model.
     # The dispatcher will prefer nodes whose model matches the value set here.

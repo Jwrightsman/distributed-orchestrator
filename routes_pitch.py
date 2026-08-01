@@ -32,6 +32,7 @@ from server_state import (
     OUTPUT_DIR,
     PitchRequest,
     PitchResponse,
+    _check_pitch_key,
     _check_rate_limit,
     _db_write_job,
     _emit,
@@ -47,6 +48,7 @@ router = APIRouter()
 @router.post("/pitch", response_model=PitchResponse)
 async def pitch(req: PitchRequest, request: Request, response: Response):
     """Run the full pipeline locally (no distributed execution)."""
+    _check_pitch_key(request)
     remaining = _check_rate_limit(request)
     response.headers["X-RateLimit-Limit"] = str(state._RATE_MAX)
     response.headers["X-RateLimit-Remaining"] = str(remaining)
@@ -82,6 +84,7 @@ async def pitch_async(req: PitchRequest, request: Request, response: Response):
     Poll GET /jobs/{job_id} for status and results.
     WebSocket clients on /ws/events receive live events as the job runs.
     """
+    _check_pitch_key(request)
     remaining = _check_rate_limit(request)
     response.headers["X-RateLimit-Limit"] = str(state._RATE_MAX)
     response.headers["X-RateLimit-Remaining"] = str(remaining)
@@ -322,7 +325,7 @@ async def _dispatch_subtask(
 
 
 @router.post("/pitch/distributed")
-async def pitch_distributed(req: PitchRequest):
+async def pitch_distributed(req: PitchRequest, request: Request):
     """Pitch a task that gets distributed across connected nodes.
 
     Planner and reviewer run locally. Builder subtasks go to the worker
@@ -332,6 +335,8 @@ async def pitch_distributed(req: PitchRequest):
     Full feature parity with /pitch: project memory, reviser pass, code
     extraction, rating, events, and ZIP-downloadable output.
     """
+    _check_pitch_key(request)
+    _check_rate_limit(request)
     trace_id = str(uuid.uuid4())
 
     # Load project memory context

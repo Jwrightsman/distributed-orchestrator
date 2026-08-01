@@ -50,6 +50,13 @@ async def main():
     else:
         console.print("  Node auth:   [dim]off (any node can join)[/dim]")
 
+    # Pitch auth
+    pitch_key = config.get("pitch_key", "")
+    if pitch_key:
+        console.print(f"  Pitch auth:  [green]enabled[/green] ({pitch_key[:4]}{'*' * max(0, len(pitch_key) - 4)})")
+    else:
+        console.print("  Pitch auth:  [dim]off (anyone can pitch)[/dim]")
+
     # Agent specialization
     role_map = config.get("role_model_map", {})
     if role_map:
