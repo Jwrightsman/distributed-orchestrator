@@ -1,0 +1,145 @@
+"""
+Observability routes — health, event stream (polling + WebSocket),
+standings, metrics, and the raw contribution ledger.
+"""
+
+import json
+import sqlite3
+import time
+
+import httpx
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+
+from ledger import get_history, get_standings
+from ollama_client import OLLAMA_URL
+import server_state as state
+from server_state import (
+    _db_lock,
+    jobs,
+    node_blacklist,
+    nodes,
+    task_inflight,
+    task_queue,
+    task_results,
+    ws_manager,
+)
+
+router = APIRouter()
+
+
+@router.get("/health")
+async def health():
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(f"{OLLAMA_URL}/api/tags")
+            resp.raise_for_status()
+            models = [m["name"] for m in resp.json().get("models", [])]
+        ollama_status = "connected"
+    except Exception:
+        models = []
+        ollama_status = "unavailable"
+
+    return {
+        "status": "ok" if ollama_status == "connected" else "degraded",
+        "ollama": ollama_status,
+        "models": models,
+        "nodes_online": len(nodes),
+        "tasks_pending": len(task_queue),
+    }
+
+
+@router.get("/events")
+async def get_events(since: int = 0):
+    """Get pipeline events. since=0 returns last 100; since=N returns events with id > N."""
+    with _db_lock:
+        con = sqlite3.connect(state._DB_PATH)
+        con.row_factory = sqlite3.Row
+        if since == 0:
+            rows = con.execute(
+                "SELECT id, type, time, data FROM events ORDER BY id DESC LIMIT 100"
+            ).fetchall()
+            rows = list(reversed(rows))
+        else:
+            rows = con.execute(
+                "SELECT id, type, time, data FROM events WHERE id > ? ORDER BY id",
+                (since,),
+            ).fetchall()
+        con.close()
+
+    events = []
+    for row in rows:
+        blob = json.loads(row["data"])
+        blob["id"]   = row["id"]
+        blob["type"] = row["type"]
+        blob["time"] = row["time"]
+        events.append(blob)
+    return {"events": events}
+
+
+@router.websocket("/ws/events")
+async def ws_events(websocket: WebSocket):
+    """WebSocket endpoint — clients receive pipeline events in real time."""
+    await ws_manager.connect(websocket)
+    # Replay last 20 persisted events from SQLite so new clients aren't blind
+    try:
+        with _db_lock:
+            con = sqlite3.connect(state._DB_PATH)
+            con.row_factory = sqlite3.Row
+            rows = con.execute(
+                "SELECT id, type, time, data FROM events ORDER BY id DESC LIMIT 20"
+            ).fetchall()
+            con.close()
+        for row in reversed(rows):
+            blob = json.loads(row["data"])
+            blob.update({"id": row["id"], "type": row["type"], "time": row["time"]})
+            await websocket.send_json(blob)
+    except Exception:
+        pass
+    try:
+        while True:
+            # Keep alive — ignore any incoming messages
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        ws_manager.disconnect(websocket)
+
+
+@router.get("/standings")
+async def standings():
+    """Get contributor standings sorted by credits."""
+    return {"standings": get_standings()}
+
+
+@router.get("/metrics")
+async def metrics():
+    """Operational snapshot — queue depth, latency, node count, job status."""
+    s = get_standings()
+    tasks_completed_total = sum(c["compute_tasks"] for c in s)
+
+    elapsed_values = [
+        r["elapsed_seconds"]
+        for r in task_results.values()
+        if r.get("elapsed_seconds") and r["elapsed_seconds"] > 0
+    ]
+    avg_latency = round(sum(elapsed_values) / len(elapsed_values), 1) if elapsed_values else None
+
+    blacklisted_nodes = [
+        nid for nid, until in node_blacklist.items()
+        if time.time() < until
+    ]
+
+    return {
+        "tasks_completed_total": tasks_completed_total,
+        "tasks_in_queue":        len(task_queue),
+        "tasks_inflight":        len(task_inflight),
+        "nodes_online":          len(nodes),
+        "nodes_blacklisted":     len(blacklisted_nodes),
+        "jobs_running":          sum(1 for j in jobs.values() if j["status"] == "running"),
+        "jobs_queued":           sum(1 for j in jobs.values() if j["status"] == "queued"),
+        "avg_task_latency_seconds": avg_latency,
+    }
+
+
+@router.get("/ledger")
+async def ledger(contributor: str | None = None, limit: int = 50):
+    """Get recent ledger entries."""
+    return {"entries": get_history(contributor, limit)}

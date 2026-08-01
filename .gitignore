@@ -4,3 +4,5 @@ __pycache__/
 output/
 ledger.json
 config.json
+projects/
+events.db

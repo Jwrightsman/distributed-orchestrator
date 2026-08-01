@@ -15,6 +15,15 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Legacy Windows consoles default to cp1252, which can't encode the demo's
+# unicode output and crashes rich mid-print. Force UTF-8 (lossy if impossible).
+if sys.platform == "win32":
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, OSError):
+            pass
+
 import httpx
 from rich.console import Console
 from rich.panel import Panel

@@ -1,0 +1,31 @@
+# Distributed AI Orchestrator — one-command deployment
+#
+#   docker compose up -d
+#   docker compose exec ollama ollama pull qwen3.5:4b
+#
+# The orchestrator reads its settings from ./data/config.json (created on
+# first edit — see docs/DEPLOY.md). At minimum, point it at the Ollama
+# container:  {"ollama_url": "http://ollama:11434"}
+#
+# To run a worker node against a remote orchestrator instead:
+#   docker compose run --rm orchestrator python /app/node.py --server http://ORCHESTRATOR:8000
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama-models:/root/.ollama
+    restart: unless-stopped
+
+  orchestrator:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/data
+    depends_on:
+      - ollama
+    restart: unless-stopped
+
+volumes:
+  ollama-models:
