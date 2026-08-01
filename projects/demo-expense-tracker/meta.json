@@ -1,0 +1,8 @@
+{
+  "project_id": "demo-expense-tracker",
+  "name": "demo-expense-tracker",
+  "initial_task": "Build a Python expense tracker with categories, date tracking, and a spending summary report",
+  "created_at": "2026-08-01T20:15:54.699614+00:00",
+  "last_updated": "2026-08-01T20:15:54.699630+00:00",
+  "iteration_count": 0
+}
