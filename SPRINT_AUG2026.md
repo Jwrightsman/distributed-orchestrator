@@ -19,39 +19,40 @@ repo must be demo-able at all times._
 ## Week 1 (Aug 1–7): Foundation
 
 ### 1.1 Revive + model refresh
-- [ ] Verify deps (fastapi, uvicorn, httpx, rich) and Ollama; document Python version in CLAUDE.md
-- [ ] `ollama pull qwen3.5:4b` (fallbacks: qwen3:4b → gemma3:4b); update config.json default
-- [ ] Update `auto_detect_model()` ladder: qwen3.5 → gemma4 → phi4-mini → qwen3 → gemma3:4b → gemma3:1b
-- [ ] Planner via Ollama structured outputs (`format` + JSON schema); keep `_extract_json` as provider fallback
-- [ ] Test gauntlet passes: `py status.py` · `py cli.py "Build a hello world Python script"` · `py cli.py --demo`
+- [x] Verify deps (fastapi, uvicorn, httpx, rich) and Ollama; document Python version in CLAUDE.md
+- [x] `ollama pull qwen3.5:4b` (fallbacks: qwen3:4b → gemma3:4b); update config.json default
+- [x] Update `auto_detect_model()` ladder: qwen3.5 → gemma4 → phi4-mini → qwen3 → gemma3:4b → gemma3:1b
+- [x] Planner via Ollama structured outputs (`format` + JSON schema); keep `_extract_json` as provider fallback
+- [ ] Test gauntlet passes: `py status.py` ✓ · `py cli.py "Build a hello world Python script"` ✓ (PASS, 18 min) · `py cli.py --demo` (run in progress)
 
 ### 1.2 Test suite + CI  _(protects the whole sprint)_
-- [ ] `tests/` with pytest: unit coverage for orchestrator parsing/validation (`_extract_json`,
+- [x] `tests/` with pytest: unit coverage for orchestrator parsing/validation (`_extract_json`,
       `_validate_subtasks`, cycle detection, rating/issue extraction), ledger, memory, extract, config.
       Mock `generate()` — no Ollama in CI.
-- [ ] GitHub Actions: ruff + pytest on push; README badge
-- [ ] All tests green
+- [x] GitHub Actions: ruff + pytest on push; README badge (+ Docker build job)
+- [x] All tests green (131 as of this session's end)
 
 ### 1.3 Contained refactor  _(only after tests exist)_
-- [ ] Split server.py (~1,600 lines) into app assembly + route modules (nodes, pitch/jobs, history/gallery,
+- [x] Split server.py (~1,600 lines) into app assembly + route modules (nodes, pitch/jobs, history/gallery,
       projects, ws/events). No behavior changes — tests prove it.
-- [ ] Move dashboard HTML into `templates/` served by the same route (enables Week 2 polish). No redesign yet.
+- [x] Move dashboard HTML into `templates/` served by the same route (enables Week 2 polish). No redesign yet.
 
 ### 1.4 Security audit (WAN-readiness)
-- [ ] `node_secret` enforced on /nodes/register, /tasks/next, /tasks/{id}/result — verified, not assumed
-- [ ] Optional `pitch_key` config; when set, required on /pitch, /pitch/async, /pitch/distributed
-- [ ] Rate limits verified on all pitch endpoints
-- [ ] Configurable cap on `output/` total size with oldest-run pruning
-- [ ] Plain-language security summary for Jett in the session log
+- [x] `node_secret` enforced on /nodes/register, /tasks/next, /tasks/{id}/result — verified, not assumed
+      (+ /tasks/{id}/stream, which also carries node data)
+- [x] Optional `pitch_key` config; when set, required on /pitch, /pitch/async, /pitch/distributed
+- [x] Rate limits verified on all pitch endpoints (/pitch/distributed had none — added)
+- [x] Configurable cap on `output/` total size with oldest-run pruning (`output_max_mb`, default 500)
+- [x] Plain-language security summary for Jett in the session log
 
 ### 1.5 Deploy plumbing + docs
-- [ ] Dockerfile + docker-compose.yml (orchestrator; node variant if simple)
-- [ ] `docs/DEPLOY.md` for a beginner — three paths: LAN (video), Tailscale (private testers),
+- [x] Dockerfile + docker-compose.yml (orchestrator; node runs via compose `run` command override)
+- [x] `docs/DEPLOY.md` for a beginner — three paths: LAN (video), Tailscale (private testers),
       Oracle free tier / Hetzner (24/7 public, with node_secret + pitch_key). Exact commands, signup
       pointers, plain-language security notes.
-- [ ] README refresh: Aug 2026 status, new model ladder, Positioning paragraph citing SwarmHarness
+- [x] README refresh: Aug 2026 status, new model ladder, Positioning paragraph citing SwarmHarness
       (arXiv 2605.28764) as academic validation of the niche, "Looking for nodes" CTA with join one-liner
-- [ ] CLAUDE.md "What to build next" → points to MASTER_PLAN.md + this sprint file
+- [x] CLAUDE.md "What to build next" → points to MASTER_PLAN.md + this sprint file
 
 **Week 1 exit criteria: tests green in CI, --demo clean on qwen3.5:4b, server refactored, WAN-safe, deploy docs done.**
 
@@ -60,39 +61,42 @@ repo must be demo-able at all times._
 ## Week 2 (Aug 8–14): Showpieces — strict priority order
 
 ### 2.1 MCP server interface  _(flagship — the video's best moment)_
-- [ ] `mcp_server.py` using the official Python MCP SDK, exposing tools:
+- [x] `mcp_server.py` using the official Python MCP SDK, exposing tools:
       `pitch_task(task, project_id?)`, `get_job_status(job_id)`, `get_result(job_id)`,
       `list_projects()`, `continue_project(project_id, task)`
-- [ ] Wraps the existing async job API (localhost:8000) — thin adapter, no pipeline changes
-- [ ] stdio transport first (Claude Desktop local); streamable HTTP if straightforward (remote orchestrator)
-- [ ] `docs/MCP.md`: Claude Desktop config snippet + 60-second setup
+- [x] Wraps the existing async job API (localhost:8000) — thin adapter, no pipeline changes
+- [x] stdio transport first (Claude Desktop local); streamable HTTP via `--http` flag
+- [x] `docs/MCP.md`: Claude Desktop config snippet + 60-second setup
 - [ ] Verified end-to-end: an MCP client pitches a task → swarm executes → result returns to the client
-- [ ] On-camera flow documented in docs/demo-script.md ("I ask my AI; it delegates to the swarm")
+      _(stdio client handshake + all 5 tools verified against a live server; the full real-inference
+      pitch runs once the demo gauntlet frees the CPU)_
+- [x] On-camera flow documented in docs/demo-script.md ("I ask my AI; it delegates to the swarm")
 
 ### 2.2 Showcase demo  _(the visual money shot)_
-- [ ] `--demo-showcase`: pitches "Build a retro Snake game as a single self-contained HTML file with
+- [x] `--demo-showcase`: pitches "Build a retro Snake game as a single self-contained HTML file with
       neon styling, scoreboard, and keyboard controls"
-- [ ] Extractor writes the .html; CLI auto-opens it in the default browser on completion
+- [x] Extractor writes the .html; CLI auto-opens it in the default browser on completion
 - [ ] Tune prompts until the game is reliably playable with qwen3.5:4b (iterate; this is output-quality work)
-- [ ] Keep --demo (expense tracker) as the memory/iteration story; showcase is the visual pop
+- [x] Keep --demo (expense tracker) as the memory/iteration story; showcase is the visual pop
 
 ### 2.3 Dashboard camera polish
-- [ ] Readable at 1080p recording: type scale, contrast, spacing
-- [ ] Landing page at `/` — one-paragraph what-this-is, live node count, Join + Dashboard buttons
-- [ ] Node cards animate on task assignment/completion (visible from across a room)
-- [ ] Empty states that look intentional on camera (0 nodes, no history)
+- [x] Readable at 1080p recording: type scale (9–11px floor → 12–13px), contrast (#444/#555 lifted), spacing
+- [x] Landing page at `/` — one-paragraph what-this-is, live node count, Join + Dashboard buttons
+- [x] Node cards animate on task assignment/completion (glow-pulse while working, bright flash on finish)
+- [x] Empty states that look intentional on camera (0 nodes, no history)
 
 ### 2.4 Public pitch page  _("try it in your browser")_
-- [ ] `public_pitch: false` by default. When enabled: per-IP limit (2/hour), global queue cap,
-      task length cap, basic content filter
-- [ ] Simple page: type a task → watch live progress → see result. No login.
-- [ ] Plain-language abuse-risk note for Jett before this ever goes live
+- [x] `public_pitch: false` by default. When enabled: per-IP limit (2/hour), global queue cap (3 active),
+      task length cap (300 chars), basic content filter
+- [x] Simple page at `/try`: type a task → watch live progress → see result. No login.
+- [x] Plain-language abuse-risk note for Jett (docs/DEPLOY.md section + session log)
 
 ### 2.5 One-line joins
-- [ ] `install.ps1` (Windows) + `install.sh` (Mac/Linux): check Python/Ollama → install deps →
+- [x] `install.ps1` (Windows) + `install.sh` (Mac/Linux): check Python/Ollama → install deps →
       pull model → run join.py
-- [ ] README join section: one copy-paste line per OS
-- [ ] Cross-platform paths/subprocess audit (Jett is on Windows; most testers will be Mac/Linux)
+- [x] README join section: one copy-paste line per OS
+- [x] Cross-platform paths/subprocess audit (all subprocess calls list-arg + guarded; `py` launcher
+      hints in printed messages neutralized to `python`; .gitattributes forces LF on shell scripts)
 
 **Week 2 exit criteria: MCP flow works end-to-end; showcase demo reliably produces a playable game; dashboard looks good at 1080p; join is one line per OS.**
 
@@ -146,3 +150,34 @@ _Claude Code: append one entry per session — date, what was completed (referen
 next, any warnings for Jett._
 
 <!-- sessions append below -->
+
+### Session 1 — August 1, 2026
+
+**Completed:** 1.1 (all but the final `--demo` gauntlet run, in progress at time of writing) · 1.2 ·
+1.3 · 1.4 · 1.5 · 2.1 (all but the real-inference e2e pitch) · 2.2 scaffold (`--demo-showcase` built;
+playability tuning pending) · 2.3 · 2.4 · 2.5. 131 tests, CI green with a Docker-build job.
+
+**Fixed along the way:** qwen3.5 is a *thinking* model — hidden reasoning made CPU inference unusable
+(7+ min planner calls); now disabled via capability detection (config `think` to re-enable). `--demo`
+crashed on legacy Windows console encoding (cp1252) — stdout forced to UTF-8. Two dormant bugs caught
+by the new tests: event-log pruning never ran (called a function that didn't exist), and the planner's
+fallback JSON parser mis-read single objects containing arrays.
+
+**Learned the hard way:** running anything heavy (test suites, extra servers, Docker) alongside a demo
+run on this 8GB machine can starve/wedge the Ollama runner — one demo run died that way. Rule for
+future sessions: while a pipeline run is going, file edits only.
+
+**Next session:** confirm `--demo` completed clean (if yes, tick the 1.1 box — Week 1 exits), run the
+full MCP e2e pitch (`scratchpad mcp_e2e.py pitch` pattern — spawn client, pitch, poll, assert result),
+then iterate `--demo-showcase` until the Snake game is reliably playable (2.2 exit criterion). After
+that Week 2 is done and Week 3 (deploy + freeze) begins — 3.1 needs Jett for the Oracle/Hetzner account.
+
+**For Jett, in plain language:**
+- *Security:* your server now has two locks (a node key and a pitch key) plus rate limits and a disk
+  cap — all verified by automated tests. Both locks are OFF by default, which is fine at home. Before
+  anything goes on the real internet, docs/DEPLOY.md walks through turning them on (it's two random
+  strings in a config file).
+- *The `/try` page:* there's now a page where strangers could type tasks with no password. It is OFF
+  by default. Don't turn it on until launch, and only while you're watching — the risk note is in
+  docs/DEPLOY.md.
+- *Nothing needs your action yet.* The Oracle Cloud account (Week 3) is the next thing only you can do.
