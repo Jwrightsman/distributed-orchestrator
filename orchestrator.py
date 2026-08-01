@@ -380,14 +380,21 @@ async def build(subtask: dict, context: str = "", max_retries: int = 2, on_token
     prompt = base_prompt
     last_output = ""
     for attempt in range(max_retries):
-        if on_token is not None:
-            chunks = []
-            async for token in generate_stream(prompt, system=BUILDER_SYSTEM):
-                on_token(token)
-                chunks.append(token)
-            output = "".join(chunks)
-        else:
-            output = await generate(prompt, system=BUILDER_SYSTEM)
+        # A transient failure (timeout, dead Ollama runner, network blip) must
+        # not kill a multi-hour pipeline — burn a retry attempt on it instead.
+        try:
+            if on_token is not None:
+                chunks = []
+                async for token in generate_stream(prompt, system=BUILDER_SYSTEM):
+                    on_token(token)
+                    chunks.append(token)
+                output = "".join(chunks)
+            else:
+                output = await generate(prompt, system=BUILDER_SYSTEM)
+        except Exception:
+            if attempt + 1 < max_retries:
+                continue
+            raise
 
         last_output = output
         output_ok = len(output.strip()) >= _MIN_BUILDER_OUTPUT and not _is_refusal(output)

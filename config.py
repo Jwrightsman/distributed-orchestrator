@@ -27,8 +27,9 @@ DEFAULTS = {
     "think": False,
 
     # Timeout for a single inference call (seconds)
-    # CPU-only: 600s is safe. GPU: 120s is plenty.
-    "timeout": 600,
+    # CPU-only: 1200s — qwen3.5's reviewer calls (big prompt + long assembled
+    # output) can exceed 600s on 8GB CPU machines. GPU: 120s is plenty.
+    "timeout": 1200,
 
     # Max planner retries when model returns bad JSON
     "planner_retries": 3,

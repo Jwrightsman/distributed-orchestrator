@@ -71,3 +71,32 @@ def test_planner_format_schema_shape():
     item = schema["items"]
     assert set(item["required"]) == {"id", "title", "prompt", "depends_on"}
     assert item["properties"]["depends_on"]["type"] == "array"
+
+
+@pytest.mark.asyncio
+async def test_build_retries_after_transient_exception(monkeypatch):
+    """A timeout/dead-runner blip on one attempt must not kill the build."""
+    calls = {"n": 0}
+
+    async def flaky_generate(prompt, system="", model=None, role=None, format=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("Model call timed out after 1200s (model=test)")
+        return "a complete deliverable with plenty of substance to pass the length check"
+
+    monkeypatch.setattr(orchestrator, "generate", flaky_generate)
+    subtask = {"id": 1, "title": "Build", "prompt": "Build the thing.", "depends_on": []}
+    output = await orchestrator.build(subtask, max_retries=2)
+    assert "complete deliverable" in output
+    assert calls["n"] == 2
+
+
+@pytest.mark.asyncio
+async def test_build_raises_when_all_attempts_fail(monkeypatch):
+    async def always_fails(prompt, system="", model=None, role=None, format=None):
+        raise RuntimeError("Model call timed out after 1200s (model=test)")
+
+    monkeypatch.setattr(orchestrator, "generate", always_fails)
+    subtask = {"id": 1, "title": "Build", "prompt": "Build the thing.", "depends_on": []}
+    with pytest.raises(RuntimeError, match="timed out"):
+        await orchestrator.build(subtask, max_retries=2)

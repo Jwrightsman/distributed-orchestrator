@@ -137,7 +137,8 @@ async def run_task(task: str, project_id: str | None = None):
         console.print(f"[red bold]Pipeline failed:[/red bold] {e}")
         return None
     except Exception as e:
-        console.print(f"[red bold]Unexpected error:[/red bold] {e}")
+        # Some exceptions (httpx timeouts) stringify to "" — never print a blank error
+        console.print(f"[red bold]Unexpected error:[/red bold] {str(e) or type(e).__name__}")
         return None
 
     # Show the clean final output if available, otherwise fall back to full review
@@ -331,7 +332,8 @@ async def run_demo_showcase():
 
     result = await run_task(SHOWCASE_TASK)
     if not result:
-        return
+        console.print("[bold red]✗ Showcase aborted[/bold red] — pipeline failed (error above).")
+        sys.exit(1)
 
     html_files = [f for f in result.get("code_files", []) if str(f).endswith(".html")]
     if not html_files:
@@ -373,7 +375,13 @@ async def run_demo(fast: bool = False):
     # ── Pitch 1: Build the expense tracker ──────────────────────────────
     project_id = create_project(PROJECT_NAME, PITCH_1)
     console.print(f"[dim]Project: {project_id}[/dim]\n")
-    await run_task(PITCH_1, project_id=project_id)
+    result_1 = await run_task(PITCH_1, project_id=project_id)
+    if result_1 is None:
+        console.print(Panel(
+            "[bold red]✗ Demo aborted[/bold red] — pitch 1 failed (error above).",
+            border_style="red",
+        ))
+        sys.exit(1)
 
     # Pause — gives the viewer time to read the output before the next pitch
     console.print()
@@ -383,7 +391,13 @@ async def run_demo(fast: bool = False):
     console.print()
 
     # ── Pitch 2: Add budget feature ──────────────────────────────────────
-    await run_task(PITCH_2, project_id=project_id)
+    result_2 = await run_task(PITCH_2, project_id=project_id)
+    if result_2 is None:
+        console.print(Panel(
+            "[bold red]✗ Demo aborted[/bold red] — pitch 2 failed (error above).",
+            border_style="red",
+        ))
+        sys.exit(1)
 
     # ── Summary ─────────────────────────────────────────────────────────
     # Show memory growth — concrete proof the context was accumulated
