@@ -5,3 +5,4 @@ output/
 ledger.json
 config.json
 projects/
+events.db
