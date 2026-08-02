@@ -9,7 +9,7 @@ import config
 def test_defaults_when_no_config_file():
     cfg = config.load()
     assert cfg["model"] == config.DEFAULTS["model"]
-    assert cfg["timeout"] == 600
+    assert cfg["timeout"] == config.DEFAULTS["timeout"]
     assert cfg["node_secret"] == ""
 
 

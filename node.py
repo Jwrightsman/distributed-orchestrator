@@ -238,7 +238,7 @@ async def main():
         console.print(f"[red bold]Could not connect to orchestrator at {server}[/red bold]")
         console.print(f"[dim]{e}[/dim]")
         console.print("\nMake sure the orchestrator is running:")
-        console.print("  [dim]py -m uvicorn server:app --host 0.0.0.0 --port 8000[/dim]")
+        console.print("  [dim]python -m uvicorn server:app --host 0.0.0.0 --port 8000[/dim]")
         return
 
     console.print("[dim]Waiting for tasks... (Ctrl+C to stop)[/dim]\n")

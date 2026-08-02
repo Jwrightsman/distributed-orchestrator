@@ -157,16 +157,23 @@ async def generate(
         payload["format"] = format
 
     _, _, timeout = _cfg()
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        await _apply_think(client, payload)
-        resp = await client.post(f"{OLLAMA_URL}/api/generate", json=payload)
-        if resp.status_code == 400 and format is not None:
-            # Ollama rejected the schema (older version or unsupported model) —
-            # retry unconstrained; the caller's text-parsing fallback handles it.
-            payload.pop("format")
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            await _apply_think(client, payload)
             resp = await client.post(f"{OLLAMA_URL}/api/generate", json=payload)
-        resp.raise_for_status()
-        return resp.json()["response"]
+            if resp.status_code == 400 and format is not None:
+                # Ollama rejected the schema (older version or unsupported model) —
+                # retry unconstrained; the caller's text-parsing fallback handles it.
+                payload.pop("format")
+                resp = await client.post(f"{OLLAMA_URL}/api/generate", json=payload)
+            resp.raise_for_status()
+            return resp.json()["response"]
+    except httpx.TimeoutException as e:
+        # str(e) is often empty — make the failure explain itself
+        raise RuntimeError(
+            f"Model call timed out after {timeout}s (model={model}). On slow CPU "
+            f"hardware, raise \"timeout\" in config.json."
+        ) from e
 
 
 async def generate_stream(prompt: str, system: str = "", model: str | None = None, role: str | None = None):
@@ -200,19 +207,25 @@ async def generate_stream(prompt: str, system: str = "", model: str | None = Non
         payload["system"] = system
 
     _, _, timeout = _cfg()
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        await _apply_think(client, payload)
-        async with client.stream("POST", f"{OLLAMA_URL}/api/generate", json=payload) as resp:
-            resp.raise_for_status()
-            async for line in resp.aiter_lines():
-                if not line:
-                    continue
-                try:
-                    chunk = _json.loads(line)
-                except _json.JSONDecodeError:
-                    continue
-                token = chunk.get("response", "")
-                if token:
-                    yield token
-                if chunk.get("done"):
-                    break
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            await _apply_think(client, payload)
+            async with client.stream("POST", f"{OLLAMA_URL}/api/generate", json=payload) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if not line:
+                        continue
+                    try:
+                        chunk = _json.loads(line)
+                    except _json.JSONDecodeError:
+                        continue
+                    token = chunk.get("response", "")
+                    if token:
+                        yield token
+                    if chunk.get("done"):
+                        break
+    except httpx.TimeoutException as e:
+        raise RuntimeError(
+            f"Model stream stalled past {timeout}s (model={model}). The Ollama "
+            f"runner may have died mid-generation, or the machine slept."
+        ) from e

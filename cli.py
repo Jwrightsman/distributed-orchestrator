@@ -135,10 +135,11 @@ async def run_task(task: str, project_id: str | None = None):
         )
     except ValueError as e:
         console.print(f"[red bold]Pipeline failed:[/red bold] {e}")
-        return
+        return None
     except Exception as e:
-        console.print(f"[red bold]Unexpected error:[/red bold] {e}")
-        return
+        # Some exceptions (httpx timeouts) stringify to "" — never print a blank error
+        console.print(f"[red bold]Unexpected error:[/red bold] {str(e) or type(e).__name__}")
+        return None
 
     # Show the clean final output if available, otherwise fall back to full review
     output_content = result.get("final_output") or result["review"]
@@ -154,6 +155,13 @@ async def run_task(task: str, project_id: str | None = None):
         for f in result["code_files"]:
             console.print(f"  [dim]{f}[/dim]")
 
+    # Surface code that still doesn't parse after the repair pass — never let a
+    # PASS rating imply the code runs
+    if result.get("code_problems"):
+        console.print("\n[bold yellow]Warning — extracted code has problems:[/bold yellow]")
+        for p in result["code_problems"]:
+            console.print(f"  [yellow]{p}[/yellow]")
+
     elapsed = time.time() - start
     pid = result.get("project_id") or project_id
     if pid:
@@ -161,6 +169,7 @@ async def run_task(task: str, project_id: str | None = None):
         console.print(f"[dim]Continue this project: py cli.py --project {pid} \"your next task\"[/dim]")
     else:
         console.print(f"\n[dim]Completed in {elapsed:.0f}s — output saved to: {result['project_dir']}[/dim]")
+    return result
 
 
 def _relative_time(timestamp_str: str) -> str:
@@ -302,6 +311,50 @@ def _flag_value(flag: str) -> str | None:
     return None
 
 
+# The showcase task, tuned for reliability on a 4B model:
+# - "ONE single self-contained HTML file" repeated so the planner doesn't split
+#   the game across incompatible files
+# - concrete feature list keeps builders from inventing scope
+# - "runs by double-clicking" forces a complete document, not a fragment
+SHOWCASE_TASK = (
+    "Build a retro Snake game as ONE single self-contained HTML file with all CSS and "
+    "JavaScript inline in that file. Dark background with neon-glow styling, a live score "
+    "display, arrow-key controls, collision detection, and a game-over screen with a "
+    "restart button. The final deliverable must be one complete HTML document starting "
+    "with <!DOCTYPE html> that runs by double-clicking the file — no external files, "
+    "no frameworks, no image assets (draw everything on a <canvas>)."
+)
+
+
+async def run_demo_showcase():
+    """Showcase demo — the swarm builds a playable Snake game, then it opens in your browser."""
+    import webbrowser
+
+    console.print(Panel(
+        "[bold]SHOWCASE[/bold] — the swarm builds a neon Snake game, live.\n"
+        "[dim]When the pipeline finishes, the game opens in your default browser.[/dim]",
+        border_style="magenta",
+    ))
+    console.print()
+
+    result = await run_task(SHOWCASE_TASK)
+    if not result:
+        console.print("[bold red]✗ Showcase aborted[/bold red] — pipeline failed (error above).")
+        sys.exit(1)
+
+    html_files = [f for f in result.get("code_files", []) if str(f).endswith(".html")]
+    if not html_files:
+        console.print(
+            "\n[yellow]No HTML file was extracted from the output — check "
+            f"{result['project_dir']} for what the swarm produced.[/yellow]"
+        )
+        return
+
+    game = Path(html_files[0]).resolve()
+    console.print(f"\n[bold green]Opening the game:[/bold green] [cyan]{game}[/cyan]")
+    webbrowser.open(game.as_uri())
+
+
 async def run_demo(fast: bool = False):
     """Demo mode — automated screen-recording script for the expense tracker showcase.
 
@@ -329,7 +382,13 @@ async def run_demo(fast: bool = False):
     # ── Pitch 1: Build the expense tracker ──────────────────────────────
     project_id = create_project(PROJECT_NAME, PITCH_1)
     console.print(f"[dim]Project: {project_id}[/dim]\n")
-    await run_task(PITCH_1, project_id=project_id)
+    result_1 = await run_task(PITCH_1, project_id=project_id)
+    if result_1 is None:
+        console.print(Panel(
+            "[bold red]✗ Demo aborted[/bold red] — pitch 1 failed (error above).",
+            border_style="red",
+        ))
+        sys.exit(1)
 
     # Pause — gives the viewer time to read the output before the next pitch
     console.print()
@@ -339,7 +398,13 @@ async def run_demo(fast: bool = False):
     console.print()
 
     # ── Pitch 2: Add budget feature ──────────────────────────────────────
-    await run_task(PITCH_2, project_id=project_id)
+    result_2 = await run_task(PITCH_2, project_id=project_id)
+    if result_2 is None:
+        console.print(Panel(
+            "[bold red]✗ Demo aborted[/bold red] — pitch 2 failed (error above).",
+            border_style="red",
+        ))
+        sys.exit(1)
 
     # ── Summary ─────────────────────────────────────────────────────────
     # Show memory growth — concrete proof the context was accumulated
@@ -713,6 +778,9 @@ async def main():
         return
 
     # ── Demo mode ──────────────────────────────────────────────────────
+    if "--demo-showcase" in sys.argv:
+        await run_demo_showcase()
+        return
     if "--demo-fast" in sys.argv:
         await run_demo(fast=True)
         return

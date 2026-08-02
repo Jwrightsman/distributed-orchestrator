@@ -27,8 +27,9 @@ DEFAULTS = {
     "think": False,
 
     # Timeout for a single inference call (seconds)
-    # CPU-only: 600s is safe. GPU: 120s is plenty.
-    "timeout": 600,
+    # CPU-only: 1200s — qwen3.5's reviewer calls (big prompt + long assembled
+    # output) can exceed 600s on 8GB CPU machines. GPU: 120s is plenty.
+    "timeout": 1200,
 
     # Max planner retries when model returns bad JSON
     "planner_retries": 3,
@@ -78,6 +79,12 @@ DEFAULTS = {
     # When exceeded, the oldest runs are deleted until back under the cap.
     # Set 0 to disable pruning.
     "output_max_mb": 500,
+
+    # Public pitch page (/try): lets anyone submit a task from a browser with
+    # NO key — hard-limited to 2 pitches/hour per IP, 3 concurrent public jobs,
+    # 300-char tasks, and a basic content filter. Off by default; understand
+    # the abuse risk (docs/DEPLOY.md) before enabling on a public server.
+    "public_pitch": False,
 
     # ── Agent specialization (optional) ──────────────────────────────
     # Route builder tasks to nodes running a specific model.

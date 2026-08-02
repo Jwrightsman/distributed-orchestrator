@@ -8,6 +8,7 @@ executes each subtask (builder), and reviews the assembled output (reviewer).
 import asyncio
 import json
 import re
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -16,7 +17,7 @@ import platform
 from ollama_client import generate, generate_stream
 from config import get as get_config
 from ledger import log_contribution
-from extract import extract_code_files
+from extract import check_code_files, extract_code_files
 
 OUTPUT_DIR = Path("output")
 
@@ -380,14 +381,21 @@ async def build(subtask: dict, context: str = "", max_retries: int = 2, on_token
     prompt = base_prompt
     last_output = ""
     for attempt in range(max_retries):
-        if on_token is not None:
-            chunks = []
-            async for token in generate_stream(prompt, system=BUILDER_SYSTEM):
-                on_token(token)
-                chunks.append(token)
-            output = "".join(chunks)
-        else:
-            output = await generate(prompt, system=BUILDER_SYSTEM)
+        # A transient failure (timeout, dead Ollama runner, network blip) must
+        # not kill a multi-hour pipeline — burn a retry attempt on it instead.
+        try:
+            if on_token is not None:
+                chunks = []
+                async for token in generate_stream(prompt, system=BUILDER_SYSTEM):
+                    on_token(token)
+                    chunks.append(token)
+                output = "".join(chunks)
+            else:
+                output = await generate(prompt, system=BUILDER_SYSTEM)
+        except Exception:
+            if attempt + 1 < max_retries:
+                continue
+            raise
 
         last_output = output
         output_ok = len(output.strip()) >= _MIN_BUILDER_OUTPUT and not _is_refusal(output)
@@ -564,6 +572,29 @@ async def run_pipeline(
     extract_source = final_output if final_output else review_output
     code_files = extract_code_files(extract_source, project_dir)
 
+    # 4b. Broken-code repair pass. The reviewer rates prose quality and happily
+    #     passes code that won't parse, so check the extracted files mechanically
+    #     and spend one revision on concrete, quoted defects if we find any.
+    code_problems = check_code_files(code_files)
+    if code_problems and final_output:
+        issue_text = "The extracted code does not run. Fix exactly these defects:\n" + "\n".join(
+            f"- {p}" for p in code_problems
+        )
+        repaired = await revise(task, issue_text, final_output)
+        if len(repaired.strip()) > len(final_output) // 2:
+            candidate_dir = project_dir / "_repair_check"
+            candidate_dir.mkdir(exist_ok=True)
+            candidate_files = extract_code_files(repaired, candidate_dir)
+            # Only accept the repair if it actually reduced the defect count
+            if len(check_code_files(candidate_files)) < len(code_problems):
+                final_output = repaired
+                (project_dir / "output.md").write_text(final_output)
+                for stale in (project_dir / "code").glob("*"):
+                    stale.unlink()
+                code_files = extract_code_files(final_output, project_dir)
+                code_problems = check_code_files(code_files)
+            shutil.rmtree(candidate_dir, ignore_errors=True)
+
     log = {
         "task": task,
         "timestamp": timestamp,
@@ -572,6 +603,7 @@ async def run_pipeline(
         "review": review_output,
         "rating": rating,
         "code_files": [str(f) for f in code_files],
+        "code_problems": code_problems,
         "mode": "local",
         "project_id": project_id or "",
     }
@@ -585,6 +617,7 @@ async def run_pipeline(
         "final_output": final_output or "",
         "rating": rating,
         "code_files": code_files,
+        "code_problems": code_problems,
         "project_id": project_id or "",
     }
 

@@ -20,7 +20,7 @@
   }
   .header-tag {
     font-family: 'Consolas', 'Courier New', monospace;
-    font-size: 10px;
+    font-size:12px;
     color: #00FF88;
     letter-spacing: 3px;
     font-weight: 600;
@@ -35,7 +35,7 @@
   .header h1 span { color: #00FFAA; }
   .header-sub {
     color: #666;
-    font-size: 13px;
+    font-size:14px;
     margin-top: 6px;
   }
 
@@ -58,7 +58,7 @@
     font-family: 'Consolas', monospace;
   }
   .stat-label {
-    font-size: 11px;
+    font-size:13px;
     color: #666;
     text-transform: uppercase;
     letter-spacing: 1px;
@@ -75,7 +75,7 @@
     padding: 20px;
   }
   .sidebar h2 {
-    font-size: 11px;
+    font-size:13px;
     color: #888;
     letter-spacing: 2px;
     text-transform: uppercase;
@@ -92,14 +92,30 @@
     transition: border-color 0.2s;
   }
   .node-card.active { border-color: rgba(0,255,136,0.3); }
+  /* Camera-visible states: glow-pulse while working, one bright flash on finish */
+  .node-card.working {
+    border-color: rgba(0,255,170,0.75);
+    animation: cardWorking 1.6s ease-in-out infinite;
+  }
+  @keyframes cardWorking {
+    0%, 100% { box-shadow: 0 0 4px rgba(0,255,170,0.25); background: rgba(0,255,170,0.03); }
+    50% { box-shadow: 0 0 22px rgba(0,255,170,0.55); background: rgba(0,255,170,0.08); }
+  }
+  .node-card.finished {
+    animation: cardFinished 1.2s ease-out;
+  }
+  @keyframes cardFinished {
+    0% { box-shadow: 0 0 34px rgba(0,255,170,0.9); background: rgba(0,255,170,0.22); border-color: #00FFAA; }
+    100% { box-shadow: none; background: rgba(255,255,255,0.025); }
+  }
   .node-name {
     font-weight: 700;
     color: #E0E0E0;
-    font-size: 13px;
+    font-size:14px;
     margin-bottom: 4px;
   }
   .node-meta {
-    font-size: 11px;
+    font-size:13px;
     color: #666;
     font-family: 'Consolas', monospace;
   }
@@ -122,12 +138,12 @@
     50%       { opacity: 0.4; }
   }
   .node-tasks {
-    font-size: 11px;
+    font-size:13px;
     color: #00FFAA;
     margin-top: 4px;
   }
   .node-active-task {
-    font-size: 11px;
+    font-size:13px;
     color: #E8FF47;
     margin-top: 3px;
     font-family: 'Consolas', monospace;
@@ -138,7 +154,7 @@
   .node-breaker-badge {
     display: inline-block;
     font-family: 'Consolas', monospace;
-    font-size: 9px;
+    font-size:11px;
     font-weight: 700;
     letter-spacing: 1px;
     padding: 2px 7px;
@@ -154,7 +170,7 @@
     top: 50%;
     transform: translateY(-50%);
     font-family: 'Consolas', monospace;
-    font-size: 12px;
+    font-size:14px;
     font-weight: 700;
     color: #E8FF47;
     pointer-events: none;
@@ -172,7 +188,7 @@
     overflow-y: auto;
   }
   .content h2 {
-    font-size: 11px;
+    font-size:13px;
     color: #888;
     letter-spacing: 2px;
     text-transform: uppercase;
@@ -196,11 +212,11 @@
   .pipeline-task {
     font-weight: 700;
     color: #E0E0E0;
-    font-size: 14px;
+    font-size:15px;
   }
   .pipeline-status {
     font-family: 'Consolas', monospace;
-    font-size: 10px;
+    font-size:12px;
     letter-spacing: 1px;
     padding: 3px 10px;
     border-radius: 4px;
@@ -233,27 +249,27 @@
   .subtask:first-child { border-top: none; }
   .subtask-id {
     font-family: 'Consolas', monospace;
-    font-size: 11px;
-    color: #555;
+    font-size:13px;
+    color:#777;
     min-width: 24px;
   }
   .subtask-title {
-    font-size: 13px;
+    font-size:14px;
     color: #BBBBBB;
     flex: 1;
   }
   .subtask-node {
     font-family: 'Consolas', monospace;
-    font-size: 10px;
+    font-size:12px;
     color: #AA77FF;
   }
   .subtask-check {
     color: #00FF88;
-    font-size: 14px;
+    font-size:15px;
   }
   .subtask-spinner {
     color: #E8FF47;
-    font-size: 12px;
+    font-size:14px;
     animation: spin 1s linear infinite;
   }
   @keyframes spin {
@@ -264,10 +280,10 @@
   .empty-state {
     text-align: center;
     padding: 60px 20px;
-    color: #444;
+    color:#6a6a6a;
   }
   .empty-state .icon { font-size: 40px; margin-bottom: 16px; opacity: 0.3; }
-  .empty-state p { font-size: 14px; line-height: 1.6; }
+  .empty-state p { font-size:15px; line-height: 1.6; }
 
   .pitch-form {
     display: flex;
@@ -281,12 +297,12 @@
     border-radius: 8px;
     padding: 10px 14px;
     color: #E0E0E0;
-    font-size: 14px;
+    font-size:15px;
     outline: none;
     transition: border-color 0.2s;
   }
   .pitch-input:focus { border-color: rgba(0,255,170,0.4); }
-  .pitch-input::placeholder { color: #444; }
+  .pitch-input::placeholder { color:#6a6a6a; }
   .pitch-btn {
     background: rgba(0,255,170,0.12);
     border: 1px solid rgba(0,255,170,0.3);
@@ -294,7 +310,7 @@
     padding: 10px 20px;
     color: #00FFAA;
     font-weight: 700;
-    font-size: 13px;
+    font-size:14px;
     cursor: pointer;
     transition: all 0.15s;
     white-space: nowrap;
@@ -304,13 +320,13 @@
 
   .log-entry {
     font-family: 'Consolas', monospace;
-    font-size: 12px;
+    font-size:14px;
     color: #888;
     padding: 4px 0;
     border-bottom: 1px solid rgba(255,255,255,0.03);
     animation: fadeIn 0.3s ease;
   }
-  .log-time { color: #555; margin-right: 8px; }
+  .log-time { color:#777; margin-right: 8px; }
   .log-agent { color: #00FFAA; font-weight: 600; }
   .log-event { color: #AAAAAA; }
 
@@ -363,10 +379,10 @@
   .stage-label {
     flex: 1;
     font-family: 'Consolas', monospace;
-    font-size: 9px;
+    font-size:11px;
     letter-spacing: 1px;
     text-transform: uppercase;
-    color: #444;
+    color:#6a6a6a;
     text-align: center;
     transition: color 0.3s;
   }
@@ -384,7 +400,7 @@
     background: rgba(255,255,255,0.05);
     padding: 5px 12px;
     font-family: 'Consolas', monospace;
-    font-size: 10px;
+    font-size:12px;
     color: #666;
     letter-spacing: 1px;
     display: flex;
@@ -394,9 +410,9 @@
   .code-block-copy {
     background: none;
     border: none;
-    color: #555;
+    color:#777;
     cursor: pointer;
-    font-size: 10px;
+    font-size:12px;
     padding: 0;
     transition: color 0.2s;
   }
@@ -413,7 +429,7 @@
     white-space: pre;
   }
   .prose-text {
-    font-size: 13px;
+    font-size:14px;
     color: #BBBBBB;
     line-height: 1.7;
     white-space: pre-wrap;
@@ -433,10 +449,10 @@
     border: none;
     border-bottom: 2px solid transparent;
     padding: 8px 16px;
-    font-size: 11px;
+    font-size:13px;
     letter-spacing: 2px;
     text-transform: uppercase;
-    color: #555;
+    color:#777;
     cursor: pointer;
     font-weight: 600;
     margin-bottom: -1px;
@@ -466,7 +482,7 @@
     background: rgba(255,255,255,0.035);
   }
   .gallery-task {
-    font-size: 13px;
+    font-size:14px;
     font-weight: 700;
     color: #E0E0E0;
     line-height: 1.4;
@@ -479,7 +495,7 @@
   }
   .gallery-preview {
     font-family: 'Consolas', monospace;
-    font-size: 11px;
+    font-size:13px;
     color: #666;
     line-height: 1.5;
     max-height: 120px;
@@ -504,7 +520,7 @@
     border-radius: 4px;
     padding: 2px 8px;
     font-family: 'Consolas', monospace;
-    font-size: 10px;
+    font-size:12px;
     color: #00FFAA;
   }
   .gallery-actions {
@@ -518,7 +534,7 @@
     border: 1px solid rgba(255,255,255,0.1);
     border-radius: 6px;
     padding: 6px 10px;
-    font-size: 11px;
+    font-size:13px;
     color: #666;
     cursor: pointer;
     transition: all 0.15s;
@@ -534,7 +550,7 @@
   @media (max-width: 768px) {
     .header { padding: 18px 16px 14px; }
     .header h1 { font-size: 20px; }
-    .header-sub { font-size: 12px; }
+    .header-sub { font-size:14px; }
 
     .stats-bar {
       flex-wrap: wrap;
@@ -542,7 +558,7 @@
       padding: 12px 16px;
     }
     .stat-value { font-size: 18px; }
-    .stat-label { font-size: 10px; }
+    .stat-label { font-size:12px; }
 
     /* Stack sidebar below content on narrow screens */
     .main {
@@ -572,11 +588,11 @@
 
     /* Pipeline cards: wrap status badge below title on very small screens */
     .pipeline-header { flex-wrap: wrap; gap: 6px; }
-    .pipeline-task { font-size: 13px; }
+    .pipeline-task { font-size:14px; }
   }
 
   @media (max-width: 480px) {
-    .tab-btn { padding: 8px 10px; font-size: 10px; letter-spacing: 1px; }
+    .tab-btn { padding: 8px 10px; font-size:12px; letter-spacing: 1px; }
     .stats-bar { gap: 10px 16px; }
   }
 </style>
@@ -633,7 +649,7 @@
 
     <div style="display:flex;justify-content:space-between;align-items:center;margin-top:24px;margin-bottom:14px;">
       <h2 style="margin:0;">Projects</h2>
-      <button onclick="promptNewProject()" style="background:rgba(0,255,170,0.08);border:1px solid rgba(0,255,170,0.2);border-radius:5px;padding:3px 10px;font-size:10px;font-weight:700;color:#00FFAA;cursor:pointer;">+ New</button>
+      <button onclick="promptNewProject()" style="background:rgba(0,255,170,0.08);border:1px solid rgba(0,255,170,0.2);border-radius:5px;padding:3px 10px;font-size:12px;font-weight:700;color:#00FFAA;cursor:pointer;">+ New</button>
     </div>
     <div id="projects-list">
       <div class="empty-state"><p>No projects yet.</p></div>
@@ -651,8 +667,8 @@
       <h2>Pitch a Task</h2>
       <!-- Hidden project context — set when "Continue" is clicked -->
       <div id="project-context" style="display:none;margin-bottom:10px;padding:8px 12px;background:rgba(0,255,170,0.06);border:1px solid rgba(0,255,170,0.2);border-radius:6px;justify-content:space-between;align-items:center;">
-        <span style="font-size:12px;color:#00FFAA;">Continuing project: <strong id="project-context-name"></strong></span>
-        <button onclick="clearProjectContext()" style="background:none;border:none;color:#555;cursor:pointer;font-size:11px;">✕ clear</button>
+        <span style="font-size:14px;color:#00FFAA;">Continuing project: <strong id="project-context-name"></strong></span>
+        <button onclick="clearProjectContext()" style="background:none;border:none;color:#777;cursor:pointer;font-size:13px;">✕ clear</button>
       </div>
       <input type="hidden" id="active-project-id" value="">
       <div class="pitch-form">
@@ -677,7 +693,7 @@
       <div style="display:flex;justify-content:space-between;align-items:center;margin-top:24px;margin-bottom:8px;">
         <h2 style="margin:0;">History</h2>
         <input id="history-search" type="text" placeholder="search..." oninput="onHistorySearch()"
-          style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:5px;padding:3px 8px;font-size:11px;color:#CCC;outline:none;width:100px;">
+          style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:5px;padding:3px 8px;font-size:13px;color:#CCC;outline:none;width:100px;">
       </div>
       <div id="history-list">
         <div class="empty-state"><p>No past runs yet.</p></div>
@@ -688,7 +704,7 @@
     <div id="view-gallery" style="display:none;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
         <h2 style="margin-bottom:0;">Swarm Gallery</h2>
-        <span style="font-size:11px;color:#444;">Tasks completed by the network</span>
+        <span style="font-size:13px;color:#6a6a6a;">Tasks completed by the network</span>
       </div>
       <div id="gallery-grid" class="gallery-grid">
         <div class="empty-state" style="grid-column:1/-1;"><p>No completed tasks yet.</p></div>
@@ -700,9 +716,9 @@
       <div style="max-width:560px;margin:60px auto;padding:28px;background:#0D0F14;border:1px solid rgba(255,255,255,0.1);border-radius:12px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
           <h2 id="node-modal-title" style="font-size:16px;font-weight:700;color:#F0F0F0;margin:0;font-family:Consolas,monospace;"></h2>
-          <button onclick="closeNodeModal()" style="background:none;border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:6px 14px;color:#888;cursor:pointer;font-size:12px;">Close</button>
+          <button onclick="closeNodeModal()" style="background:none;border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:6px 14px;color:#888;cursor:pointer;font-size:14px;">Close</button>
         </div>
-        <div id="node-modal-body" style="font-size:13px;color:#CCC;"></div>
+        <div id="node-modal-body" style="font-size:14px;color:#CCC;"></div>
       </div>
     </div>
 
@@ -712,9 +728,9 @@
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
           <h2 id="modal-title" style="font-size:18px;font-weight:700;color:#F0F0F0;margin:0;"></h2>
           <div style="display:flex;gap:8px;align-items:center;">
-            <button id="modal-download-btn" onclick="downloadOutput()" style="background:rgba(0,255,170,0.08);border:1px solid rgba(0,255,170,0.2);border-radius:6px;padding:6px 14px;color:#00FFAA;cursor:pointer;font-size:11px;font-weight:600;">Download</button>
-            <button id="modal-share-btn" onclick="copyShareLink()" style="background:none;border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:6px 14px;color:#888;cursor:pointer;font-size:11px;font-weight:600;">Copy link</button>
-            <button onclick="closeModal()" style="background:none;border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:6px 14px;color:#888;cursor:pointer;font-size:12px;">Close</button>
+            <button id="modal-download-btn" onclick="downloadOutput()" style="background:rgba(0,255,170,0.08);border:1px solid rgba(0,255,170,0.2);border-radius:6px;padding:6px 14px;color:#00FFAA;cursor:pointer;font-size:13px;font-weight:600;">Download</button>
+            <button id="modal-share-btn" onclick="copyShareLink()" style="background:none;border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:6px 14px;color:#888;cursor:pointer;font-size:13px;font-weight:600;">Copy link</button>
+            <button onclick="closeModal()" style="background:none;border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:6px 14px;color:#888;cursor:pointer;font-size:14px;">Close</button>
           </div>
         </div>
         <div id="modal-plan" style="margin-bottom:20px;"></div>
@@ -765,12 +781,12 @@ async function refresh() {
         if (n.ram_gb)    hwParts.push(`${n.ram_gb}GB RAM`);
         if (n.gpu)       hwParts.push(escHtml(n.gpu));
         const hwHtml = hwParts.length
-          ? `<div class="node-meta" style="color:#444;">${hwParts.join(' &middot; ')}</div>`
+          ? `<div class="node-meta" style="color:#6a6a6a;">${hwParts.join(' &middot; ')}</div>`
           : '';
         // Filter auto-added model: tags from the visible chips — model is shown explicitly
         const visibleCaps = (n.capabilities || []).filter(c => !c.startsWith('model:'));
         const capsHtml = visibleCaps.length
-          ? visibleCaps.map(c => `<span style="background:rgba(0,255,170,0.08);border:1px solid rgba(0,255,170,0.2);border-radius:3px;padding:1px 5px;font-size:9px;color:#00FFAA;margin-right:3px;">${escHtml(c)}</span>`).join('')
+          ? visibleCaps.map(c => `<span style="background:rgba(0,255,170,0.08);border:1px solid rgba(0,255,170,0.2);border-radius:3px;padding:1px 5px;font-size:11px;color:#00FFAA;margin-right:3px;">${escHtml(c)}</span>`).join('')
           : '';
         const capsRow = capsHtml ? `<div class="node-meta" style="margin-top:3px;">${capsHtml}</div>` : '';
         const nodeData = encodeURIComponent(JSON.stringify(n));
@@ -833,7 +849,7 @@ async function pitchTask() {
       <div class="pipeline-header">
         <div class="pipeline-task">${escHtml(task)}</div>
         <div style="display:flex;align-items:center;gap:10px;flex-shrink:0;">
-          <span id="pelapsed-${pipelineId}" style="font-family:Consolas,monospace;font-size:10px;color:#444;">0s</span>
+          <span id="pelapsed-${pipelineId}" style="font-family:Consolas,monospace;font-size:12px;color:#6a6a6a;">0s</span>
           <div class="pipeline-status status-running" id="pstatus-${pipelineId}">PLANNING</div>
         </div>
       </div>
@@ -841,7 +857,7 @@ async function pitchTask() {
       <pre id="token-stream-${pipelineId}"
            style="margin-top:8px;padding:8px 10px;background:rgba(0,255,136,0.03);
                   border:1px solid rgba(0,255,136,0.1);border-radius:4px;
-                  font-size:11px;color:#888;max-height:120px;overflow-y:auto;
+                  font-size:13px;color:#888;max-height:120px;overflow-y:auto;
                   white-space:pre-wrap;word-break:break-word;display:none;"></pre>
     </div>`;
 
@@ -972,7 +988,7 @@ function _showCompletedCard(pipelineId, task, result) {
 
   const ratingColors = {PASS: '#00FF88', NEEDS_WORK: '#E8FF47', FAIL: '#FF5555'};
   const ratingBadge = result.rating && !failed
-    ? ` <span style="font-family:Consolas,monospace;font-size:10px;font-weight:700;color:${ratingColors[result.rating]||'#888'};background:${ratingColors[result.rating]||'#888'}18;border:1px solid ${ratingColors[result.rating]||'#888'}30;border-radius:4px;padding:2px 7px;">${escHtml(result.rating)}</span>`
+    ? ` <span style="font-family:Consolas,monospace;font-size:12px;font-weight:700;color:${ratingColors[result.rating]||'#888'};background:${ratingColors[result.rating]||'#888'}18;border:1px solid ${ratingColors[result.rating]||'#888'}30;border-radius:4px;padding:2px 7px;">${escHtml(result.rating)}</span>`
     : '';
 
   let subtasksHtml = '<div class="subtask-list">';
@@ -997,7 +1013,7 @@ function _showCompletedCard(pipelineId, task, result) {
       <span class="log-time">${new Date().toLocaleTimeString()}</span>
       <span class="log-event" style="color:#00FFAA;">View output &#8594;</span>
     </div>` : ''}
-    ${result.error ? `<div style="margin-top:8px;padding:8px 10px;background:rgba(255,85,85,0.06);border:1px solid rgba(255,85,85,0.2);border-radius:4px;font-family:Consolas,monospace;font-size:11px;color:#FF8888;">${escHtml(result.error)}</div>` : ''}
+    ${result.error ? `<div style="margin-top:8px;padding:8px 10px;background:rgba(255,85,85,0.06);border:1px solid rgba(255,85,85,0.2);border-radius:4px;font-family:Consolas,monospace;font-size:13px;color:#FF8888;">${escHtml(result.error)}</div>` : ''}
   `;
 }
 
@@ -1077,8 +1093,8 @@ async function viewRun(timestamp) {
     let planHtml = '<div style="margin-bottom:16px;">';
     data.plan.forEach(st => {
       planHtml += `<div style="display:flex;gap:8px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.04);">
-        <span style="font-family:Consolas,monospace;font-size:11px;color:#555;min-width:20px;">${escHtml(String(st.id))}</span>
-        <span style="font-size:13px;color:#00FFAA;font-weight:600;">${escHtml(st.title)}</span>
+        <span style="font-family:Consolas,monospace;font-size:13px;color:#777;min-width:20px;">${escHtml(String(st.id))}</span>
+        <span style="font-size:14px;color:#00FFAA;font-weight:600;">${escHtml(st.title)}</span>
       </div>`;
     });
     planHtml += '</div>';
@@ -1088,10 +1104,10 @@ async function viewRun(timestamp) {
     const ratingColors = {PASS: '#00FF88', NEEDS_WORK: '#E8FF47', FAIL: '#FF5555'};
     const ratingEl = document.getElementById('modal-title');
     const ratingBadge = data.rating && data.rating !== '?'
-      ? ` <span style="font-size:11px;font-family:Consolas,monospace;color:${ratingColors[data.rating]||'#888'};font-weight:600;">${escHtml(data.rating)}</span>`
+      ? ` <span style="font-size:13px;font-family:Consolas,monospace;color:${ratingColors[data.rating]||'#888'};font-weight:600;">${escHtml(data.rating)}</span>`
       : '';
     const modalModeBadge = data.mode === 'distributed'
-      ? ` <span style="font-size:9px;font-family:Consolas,monospace;color:#00FFAA;background:#00FFAA18;border:1px solid #00FFAA30;border-radius:3px;padding:1px 5px;letter-spacing:.5px;">DIST</span>`
+      ? ` <span style="font-size:11px;font-family:Consolas,monospace;color:#00FFAA;background:#00FFAA18;border:1px solid #00FFAA30;border-radius:3px;padding:1px 5px;letter-spacing:.5px;">DIST</span>`
       : '';
     ratingEl.innerHTML = escHtml(data.task) + ratingBadge + modalModeBadge;
 
@@ -1100,10 +1116,10 @@ async function viewRun(timestamp) {
     if (data.code_files && data.code_files.length > 0) {
       filesEl.style.display = 'block';
       filesEl.innerHTML = `
-        <div style="font-size:10px;color:#666;letter-spacing:2px;text-transform:uppercase;margin-bottom:8px;font-family:Consolas,monospace;">Extracted Files</div>
+        <div style="font-size:12px;color:#666;letter-spacing:2px;text-transform:uppercase;margin-bottom:8px;font-family:Consolas,monospace;">Extracted Files</div>
         <div style="display:flex;flex-wrap:wrap;gap:6px;">
           ${data.code_files.map(f => `
-            <span style="background:rgba(0,255,170,0.08);border:1px solid rgba(0,255,170,0.2);border-radius:4px;padding:3px 10px;font-family:Consolas,monospace;font-size:11px;color:#00FFAA;">${escHtml(f)}</span>
+            <span style="background:rgba(0,255,170,0.08);border:1px solid rgba(0,255,170,0.2);border-radius:4px;padding:3px 10px;font-family:Consolas,monospace;font-size:13px;color:#00FFAA;">${escHtml(f)}</span>
           `).join('')}
         </div>`;
     } else {
@@ -1133,7 +1149,7 @@ function openNodeModal(nodeJson) {
   const rows = [];
   rows.push(`<div style="display:grid;grid-template-columns:120px 1fr;gap:8px 16px;line-height:1.7;">`);
   const row = (label, val) => val
-    ? `<span style="color:#555;font-size:12px;">${label}</span><span style="color:#CCC;">${escHtml(String(val))}</span>`
+    ? `<span style="color:#777;font-size:14px;">${label}</span><span style="color:#CCC;">${escHtml(String(val))}</span>`
     : '';
 
   rows.push(row('Model', n.model));
@@ -1149,15 +1165,15 @@ function openNodeModal(nodeJson) {
   const visibleCaps = (n.capabilities || []).filter(c => !c.startsWith('model:'));
   if (visibleCaps.length) {
     const chips = visibleCaps.map(c =>
-      `<span style="background:rgba(0,255,170,0.08);border:1px solid rgba(0,255,170,0.2);border-radius:3px;padding:1px 6px;font-size:10px;color:#00FFAA;margin-right:4px;">${escHtml(c)}</span>`
+      `<span style="background:rgba(0,255,170,0.08);border:1px solid rgba(0,255,170,0.2);border-radius:3px;padding:1px 6px;font-size:12px;color:#00FFAA;margin-right:4px;">${escHtml(c)}</span>`
     ).join('');
-    rows.push(`<span style="color:#555;font-size:12px;">Capabilities</span><span>${chips}</span>`);
+    rows.push(`<span style="color:#777;font-size:14px;">Capabilities</span><span>${chips}</span>`);
   }
 
   rows.push('</div>');
 
   if (n.current_task) {
-    rows.push(`<div style="margin-top:16px;padding:10px 14px;background:rgba(0,255,136,0.05);border:1px solid rgba(0,255,136,0.15);border-radius:6px;font-size:12px;color:#00FF88;">&#9654; ${escHtml(n.current_task)}</div>`);
+    rows.push(`<div style="margin-top:16px;padding:10px 14px;background:rgba(0,255,136,0.05);border:1px solid rgba(0,255,136,0.15);border-radius:6px;font-size:14px;color:#00FF88;">&#9654; ${escHtml(n.current_task)}</div>`);
   }
 
   document.getElementById('node-modal-body').innerHTML = rows.filter(Boolean).join('');
@@ -1239,6 +1255,8 @@ function appendEvent(ev) {
 function _setNodeBusy(nodeId, taskTitle) {
   const card = document.getElementById(`nodecard-${nodeId}`);
   if (!card) return;
+  card.classList.remove('finished');
+  card.classList.add('working');
   const dot = card.querySelector('.node-dot');
   if (dot) { dot.className = 'node-dot busy'; }
   let active = card.querySelector('.node-active-task');
@@ -1253,6 +1271,9 @@ function _setNodeBusy(nodeId, taskTitle) {
 function _setNodeIdle(nodeId, creditsEarned) {
   const card = document.getElementById(`nodecard-${nodeId}`);
   if (!card) return;
+  card.classList.remove('working');
+  card.classList.add('finished');
+  card.addEventListener('animationend', () => card.classList.remove('finished'), {once: true});
   const dot = card.querySelector('.node-dot');
   if (dot) { dot.className = 'node-dot'; }
   const active = card.querySelector('.node-active-task');
@@ -1355,18 +1376,18 @@ async function loadHistory() {
     el.innerHTML = data.runs.map(r => {
       const color = ratingColor[r.rating] || '#555';
       const modeBadge = r.mode === 'distributed'
-        ? `<span style="font-family:Consolas,monospace;font-size:9px;font-weight:700;color:#00FFAA;background:#00FFAA18;border:1px solid #00FFAA30;border-radius:3px;padding:1px 5px;letter-spacing:.5px;">DIST</span>`
+        ? `<span style="font-family:Consolas,monospace;font-size:11px;font-weight:700;color:#00FFAA;background:#00FFAA18;border:1px solid #00FFAA30;border-radius:3px;padding:1px 5px;letter-spacing:.5px;">DIST</span>`
         : '';
       return `
         <div class="pipeline-card" style="padding:12px 16px;margin-bottom:6px;cursor:pointer;" onclick="viewRun('${escHtml(r.timestamp)}')">
           <div style="display:flex;justify-content:space-between;align-items:center;">
-            <div style="font-size:13px;color:#BBBBBB;flex:1;padding-right:12px;">${escHtml(r.task)}</div>
+            <div style="font-size:14px;color:#BBBBBB;flex:1;padding-right:12px;">${escHtml(r.task)}</div>
             <div style="display:flex;gap:10px;align-items:center;flex-shrink:0;">
               ${modeBadge}
-              <span style="font-family:Consolas,monospace;font-size:10px;color:${color};">${escHtml(r.rating || '?')}</span>
-              <span style="font-family:Consolas,monospace;font-size:11px;color:#555;">${r.subtask_count} tasks</span>
-              <span style="font-family:Consolas,monospace;font-size:11px;color:#444;">${relativeTime(r.timestamp)}</span>
-              <span style="font-size:11px;color:#00FFAA;">view</span>
+              <span style="font-family:Consolas,monospace;font-size:12px;color:${color};">${escHtml(r.rating || '?')}</span>
+              <span style="font-family:Consolas,monospace;font-size:13px;color:#777;">${r.subtask_count} tasks</span>
+              <span style="font-family:Consolas,monospace;font-size:13px;color:#6a6a6a;">${relativeTime(r.timestamp)}</span>
+              <span style="font-size:13px;color:#00FFAA;">view</span>
             </div>
           </div>
         </div>`;
@@ -1389,7 +1410,7 @@ async function loadStandings() {
     el.innerHTML = data.standings.map((s, i) => `
       <div class="node-card" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
         <div>
-          <div class="node-name" style="font-size:12px;">
+          <div class="node-name" style="font-size:14px;">
             <span style="color:${i===0?'#E8FF47':i===1?'#00FFAA':'#888'};margin-right:6px;">#${i+1}</span>
             ${s.contributor}
           </div>
@@ -1419,12 +1440,12 @@ async function loadProjects() {
       <div class="node-card" style="margin-bottom:6px;cursor:pointer;padding:10px 12px;">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;">
           <div style="flex:1;min-width:0;">
-            <div class="node-name" style="font-size:12px;margin-bottom:2px;">${escHtml(p.name)}</div>
-            <div class="node-meta" style="font-size:10px;">${escHtml(p.project_id)}</div>
+            <div class="node-name" style="font-size:14px;margin-bottom:2px;">${escHtml(p.name)}</div>
+            <div class="node-meta" style="font-size:12px;">${escHtml(p.project_id)}</div>
             <div class="node-meta" style="margin-top:3px;">${p.iteration_count} iteration${p.iteration_count !== 1 ? 's' : ''}</div>
           </div>
           <button onclick="continueProject('${escHtml(p.project_id)}','${escHtml(p.name)}')"
-            style="background:rgba(0,255,170,0.1);border:1px solid rgba(0,255,170,0.25);border-radius:5px;padding:4px 10px;color:#00FFAA;font-size:10px;font-weight:700;cursor:pointer;white-space:nowrap;margin-left:8px;flex-shrink:0;">
+            style="background:rgba(0,255,170,0.1);border:1px solid rgba(0,255,170,0.25);border-radius:5px;padding:4px 10px;color:#00FFAA;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;margin-left:8px;flex-shrink:0;">
             Continue
           </button>
         </div>
@@ -1490,15 +1511,15 @@ async function loadGallery() {
     el.innerHTML = data.cards.map(c => {
       const color = ratingColor[c.rating] || '#555';
       const ratingHtml = c.rating && c.rating !== '?'
-        ? `<span style="font-family:Consolas,monospace;font-size:10px;font-weight:700;color:${color};background:${color}18;border:1px solid ${color}30;border-radius:4px;padding:2px 8px;">${escHtml(c.rating)}</span>`
+        ? `<span style="font-family:Consolas,monospace;font-size:12px;font-weight:700;color:${color};background:${color}18;border:1px solid ${color}30;border-radius:4px;padding:2px 8px;">${escHtml(c.rating)}</span>`
         : '';
       const modeBadgeHtml = c.mode === 'distributed'
-        ? `<span style="font-family:Consolas,monospace;font-size:9px;font-weight:700;color:#00FFAA;background:#00FFAA18;border:1px solid #00FFAA30;border-radius:3px;padding:1px 5px;letter-spacing:.5px;">DIST</span>`
+        ? `<span style="font-family:Consolas,monospace;font-size:11px;font-weight:700;color:#00FFAA;background:#00FFAA18;border:1px solid #00FFAA30;border-radius:3px;padding:1px 5px;letter-spacing:.5px;">DIST</span>`
         : '';
-      const subtasksHtml = `<span style="font-family:Consolas,monospace;font-size:10px;color:#555;">${c.subtask_count} tasks</span>`;
-      const timeHtml = `<span style="font-family:Consolas,monospace;font-size:10px;color:#444;">${relativeTime(c.timestamp)}</span>`;
+      const subtasksHtml = `<span style="font-family:Consolas,monospace;font-size:12px;color:#777;">${c.subtask_count} tasks</span>`;
+      const timeHtml = `<span style="font-family:Consolas,monospace;font-size:12px;color:#6a6a6a;">${relativeTime(c.timestamp)}</span>`;
       const nodesHtml = c.nodes_used > 0
-        ? `<span style="font-family:Consolas,monospace;font-size:10px;color:#4488BB;">${c.nodes_used} node${c.nodes_used > 1 ? 's' : ''}</span>`
+        ? `<span style="font-family:Consolas,monospace;font-size:12px;color:#4488BB;">${c.nodes_used} node${c.nodes_used > 1 ? 's' : ''}</span>`
         : '';
       const previewHtml = c.preview
         ? `<div class="gallery-preview">${escHtml(c.preview)}</div>`
@@ -1555,7 +1576,7 @@ function shareRun(timestamp) {
 function showToast(msg) {
   const t = document.createElement('div');
   t.textContent = msg;
-  t.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#00FFAA;color:#08090C;padding:8px 20px;border-radius:8px;font-size:13px;font-weight:700;z-index:9999;pointer-events:none;transition:opacity 0.4s;';
+  t.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#00FFAA;color:#08090C;padding:8px 20px;border-radius:8px;font-size:14px;font-weight:700;z-index:9999;pointer-events:none;transition:opacity 0.4s;';
   document.body.appendChild(t);
   setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 400); }, 2000);
 }
@@ -1573,12 +1594,12 @@ const _TEMPLATES = [
   if (!el) return;
   const label = document.createElement('span');
   label.textContent = 'Try:';
-  label.style.cssText = 'font-size:10px;color:#444;letter-spacing:1px;text-transform:uppercase;align-self:center;margin-right:4px;white-space:nowrap;';
+  label.style.cssText = 'font-size:12px;color:#6a6a6a;letter-spacing:1px;text-transform:uppercase;align-self:center;margin-right:4px;white-space:nowrap;';
   el.appendChild(label);
   _TEMPLATES.forEach(t => {
     const btn = document.createElement('button');
     btn.textContent = t;
-    btn.style.cssText = 'background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:5px;padding:4px 10px;font-size:11px;color:#666;cursor:pointer;transition:all 0.15s;';
+    btn.style.cssText = 'background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:5px;padding:4px 10px;font-size:13px;color:#666;cursor:pointer;transition:all 0.15s;';
     btn.onmouseover = () => { btn.style.borderColor='rgba(0,255,170,0.25)'; btn.style.color='#00FFAA'; };
     btn.onmouseout  = () => { btn.style.borderColor='rgba(255,255,255,0.08)'; btn.style.color='#666'; };
     btn.onclick = () => { document.getElementById('pitch-input').value = t; document.getElementById('pitch-input').focus(); };
