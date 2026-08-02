@@ -4,120 +4,123 @@ Post this (adapted for each community) with your demo video.
 
 ---
 
-## Long version — for ExoLabs Discord / LocalLLaMA / r/LocalLLaMA / AI builders
+## Long version — for r/LocalLLaMA / Ollama Discord / r/selfhosted / AI builders
 
-**Title:** I pitched "build an expense tracker" and my laptop decomposed it, built it with parallel agents, auto-reviewed it, and fixed its own issues — then I said "add budgets" and it remembered everything from round 1
+**Title:** I asked Claude to build me a game — it delegated the work to a swarm of small models on my own hardware, and the game opened in my browser
 
 **Body:**
 
-I've been building a distributed AI orchestrator that runs entirely on local hardware. Here's what just happened when I ran the demo:
+I've been building a distributed AI orchestrator that runs entirely on local hardware — several machines, several small models, working one task together. Two things happened this week that make it worth sharing.
 
-1. I typed: `py cli.py --demo`
-2. A **Planner agent** decomposed "build a Python expense tracker" into 4 parallel subtasks (data model, CLI interface, category logic, summary report)
-3. **Builder agents** ran those subtasks concurrently — each one got the outputs of its dependencies as context
-4. A **Reviewer agent** assembled the outputs, rated the quality, and flagged an issue with the date filtering
-5. A **Reviser agent** automatically fixed the issue — no human in the loop
-6. I got a complete, runnable expense tracker
+**One: it's now an MCP server.** I asked Claude Desktop to pitch a task to the swarm. It called `pitch_task`, my laptop's planner decomposed the job, builder agents ran the subtasks in parallel, a reviewer assembled the result — and the finished code came back into the chat. Any MCP client can do this now; the swarm is just a tool your existing AI app can reach for.
 
-Then I typed: "Add a monthly budget feature that warns when spending exceeds the budget"
+**Two: the loop is real.** Here's the pipeline it runs:
 
-The system loaded the **project memory** from round 1 — the planner knew what was already built, built only the new parts, and the reviewer merged everything without duplicating the existing code.
+1. A **Planner** decomposes your task into 3–5 subtasks with a dependency graph (schema-enforced JSON, so it doesn't get mangled)
+2. **Builder agents** run independent subtasks concurrently — across connected machines when nodes are online, locally when they're not
+3. A **Reviewer** assembles all the outputs into one deliverable and rates it
+4. A **Reviser** auto-fixes whatever the reviewer flagged
+5. Extracted code is then **checked mechanically** — Python is parsed, HTML is structurally validated — and anything broken gets one more targeted repair pass. A "PASS" that doesn't actually run gets caught.
 
-**What makes this interesting:**
+Then I pitched a follow-up task to the same project, and it loaded the **project memory** from round 1: the planner knew what already existed and built only the new parts.
 
-- **Persistent project memory** — every run writes to `memory.md`. The next pitch injects that context into the planner and reviewer automatically. You can iterate on the same codebase across sessions indefinitely.
-- **Parallel wave execution** — subtasks with no dependencies run at the same time via `asyncio.gather`. A 4-subtask job can finish faster than a sequential one.
-- **Auto-revision loop** — if the reviewer rates output as NEEDS_WORK or FAIL, a reviser agent gets the issues list and fixes them. Up to 2 passes.
-- **Distributed execution** — other machines can join as worker nodes with one command (`py join.py http://YOUR_IP:8000`). It auto-discovers the orchestrator on the LAN — no IP needed if you're on the same network.
-- **Gallery + fork** — every completed project gets a shareable card at `/share/{timestamp}`. Anyone can fork your project: they download a ZIP with your task, your memory context, and instructions to continue it on their own machine.
-- **100% local** — gemma3:4b via Ollama on my 8GB laptop. No cloud, no API keys, no data leaving the machine.
+**What makes this different from the usual agent swarm:**
 
-This is Phase 0 of something bigger — a collectively-owned AI system where anyone can contribute compute, pitch ideas, and earn credits. The goal is a protocol layer that sits under a marketplace.
+- **It's not a cloud product.** qwen3.5:4b via Ollama on an 8GB laptop with no GPU. No API keys, no data leaving the machines you own.
+- **It's multi-machine.** Volunteer hardware joins with one command and picks up builder tasks. Task reclaim, circuit breaker, and auto-reconnect are built in for when someone's laptop closes.
+- **Contributions are tracked.** An append-only credit ledger records compute, pitches, and reviews — the seed of a contributor guild. No tokens, no blockchain, deliberately.
+- **Persistent project memory.** Every run appends to `memory.md`, auto-summarized when it grows. You can iterate on the same codebase across sessions indefinitely.
+
+Worth noting: [SwarmHarness](https://arxiv.org/abs/2605.28764) (May 2026) describes this exact design space academically — decentralized, incentive-aligned agent networks without a blockchain — and points out nobody ships the combination. That's a protocol paper. This is a working implementation you can run tonight.
+
+This is Phase 0 of something bigger: an open protocol, then a contributor guild, then a marketplace on top.
 
 **Demo:** [link to video]
 
 **Repo:** https://github.com/Jwrightsman/distributed-orchestrator
 
-**Want to run it yourself?**
+**Run it yourself:**
 ```bash
 git clone https://github.com/Jwrightsman/distributed-orchestrator
-pip install fastapi uvicorn httpx rich
-ollama pull gemma3:4b
-py cli.py --demo
+pip install -r requirements.txt
+ollama pull qwen3.5:4b
+python cli.py --demo-showcase
 ```
 
-**Want to connect a node?**
+**Connect a node (this is the part I actually need):**
 ```bash
-# From another machine on the same network:
-py join.py   # auto-discovers the orchestrator, no IP needed
-# or: py join.py http://ORCHESTRATOR_IP:8000
+# Mac/Linux
+curl -fsSL https://raw.githubusercontent.com/Jwrightsman/distributed-orchestrator/master/install.sh | bash -s -- http://ORCHESTRATOR:8000
+
+# Windows PowerShell
+$env:SWARM_SERVER="http://ORCHESTRATOR:8000"; irm https://raw.githubusercontent.com/Jwrightsman/distributed-orchestrator/master/install.ps1 | iex
 ```
 
-Looking for people who want to stress-test distributed execution, contribute nodes, or fork projects and continue them. The gallery is live — everything you build is shareable.
+Looking for people who want to contribute a node, stress-test distributed execution across the WAN, or just tell me where it falls over. Every rough edge you hit becomes an issue.
 
 ---
 
 ## Short version — Discord channels / Twitter / Hacker News comment
 
-I typed "build an expense tracker" into my local AI orchestrator.
+I asked Claude to build me a game. It delegated the job to a swarm of 4B models running on my own hardware — planner split it up, builders ran in parallel, a reviewer assembled it — and the finished game opened in my browser.
 
-It decomposed the task into 4 parallel subtasks, ran builder agents on each, assembled the output with a reviewer, and auto-fixed a bug — all on my 8GB laptop, no cloud, no API keys.
-
-Then I said "add monthly budgets" and it **remembered everything from round 1** and built only the new parts.
+No cloud, no API keys. qwen3.5:4b via Ollama on an 8GB laptop. It's an MCP server, so any AI app can hand work to the swarm, and any machine can join as a worker with one command.
 
 Full demo: [video link]
 Repo: https://github.com/Jwrightsman/distributed-orchestrator
 
-Run it: `pip install fastapi uvicorn httpx rich && ollama pull gemma3:4b && py cli.py --demo`
+Run it: `pip install -r requirements.txt && ollama pull qwen3.5:4b && python cli.py --demo-showcase`
 
 ---
 
 ## Twitter/X thread version
 
 **Tweet 1 (hook):**
-I pitched "build an expense tracker" to my local AI orchestrator.
+I asked Claude to build me a game.
 
-It decomposed it, ran 4 parallel builder agents, reviewed its own output, and auto-fixed a bug.
+It delegated the work to a swarm of small models running on my own hardware.
 
-Then I said "add budgets" — and it remembered everything from round 1.
+A few minutes later the finished game opened in my browser.
 
-All on my laptop. No cloud. Thread 🧵
+No cloud. No API keys. Thread 🧵
 
 **Tweet 2:**
-Here's what's actually happening under the hood:
+The swarm is an MCP server, so any AI app can reach it.
 
-→ Planner agent decomposes your task into 3-5 subtasks with a dependency graph
-→ Builder agents run independent subtasks in parallel (asyncio.gather)
-→ Reviewer assembles and rates the output (PASS / NEEDS_WORK / FAIL)
-→ Reviser auto-fixes flagged issues, up to 2 passes
+Claude called `pitch_task` → my laptop's planner split the job into subtasks → builder agents ran them in parallel → a reviewer assembled the result → it came back into the chat.
 
 **Tweet 3:**
-The part I'm most excited about: persistent project memory.
+Under the hood:
 
-Every run writes to memory.md. The next pitch loads that context automatically.
-
-You can iterate on the same codebase across sessions. The AI never forgets what it already built.
+→ Planner decomposes into 3–5 subtasks with a dependency graph (schema-enforced JSON)
+→ Builders run independent subtasks concurrently, across machines
+→ Reviewer assembles + rates
+→ Reviser auto-fixes what's flagged
 
 **Tweet 4:**
-It's also distributed.
+Then it checks its own work *mechanically*.
 
-Other machines join with one command:
-`py join.py` (auto-discovers orchestrator on LAN)
+Extracted Python gets parsed. HTML gets structurally validated. If it doesn't run, that goes back for a targeted repair pass.
 
-Builder tasks route to connected nodes and run in parallel across machines. Falls back to local if nobody's online.
+A "PASS" that doesn't actually execute doesn't survive.
 
 **Tweet 5:**
-Every completed project gets a shareable card.
+It's multi-machine by design.
 
-Anyone can fork your project — download the task + memory context + instructions, and continue it on their own machine.
+Any laptop joins with one command and starts taking builder tasks. Task reclaim, circuit breaker, auto-reconnect — because volunteer hardware closes its lid.
 
-That's the loop I'm trying to build: pitch → build → share → fork → build more.
+Contributions land in an append-only credit ledger. No tokens. No blockchain.
 
 **Tweet 6:**
-Running gemma3:4b via Ollama on 8GB, no GPU.
+Persistent memory ties it together.
 
-Open source. No API keys. No data leaves your machine.
+Every run appends to memory.md, auto-summarized as it grows. The next pitch loads it — the swarm knows what it already built.
+
+**Tweet 7:**
+qwen3.5:4b via Ollama. 8GB laptop, no GPU.
+
+Open source, no API keys, nothing leaves the machines you own.
 
 Repo: https://github.com/Jwrightsman/distributed-orchestrator
 
-Try the demo: `py cli.py --demo`
+I need nodes — if you've got a spare machine, one command joins it.

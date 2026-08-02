@@ -153,6 +153,35 @@ next, any warnings for Jett._
 
 <!-- sessions append below -->
 
+### Session 2 — August 1, 2026 (continued, after credit top-up)
+
+**Week 1 CLOSED.** `--demo` passed end-to-end: both pitches PASS (3028s + 3149s), memory carried across
+2 iterations. All five Week 1 exit criteria met. Merged to master via [PR #14].
+
+**Two output-quality bugs found by inspecting real runs (not by tests):**
+1. The demo's extracted Python had a syntax error while the reviewer rated it PASS — the reviewer grades
+   prose, not runnability. Added `extract.check_code_files()` (ast.parse for Python, structural checks for
+   HTML) plus an automatic repair pass that quotes the exact defect; leftover problems now print as a CLI
+   warning so a PASS can never imply "it runs".
+2. The showcase run produced a **pygame Python game** for a task that said "ONE self-contained HTML file".
+   Cause: builders only ever saw their own subtask prompt, never the parent task, so "implement the game
+   logic" was built in whatever language the model felt like. Added `compose_builder_prompt()` shared by
+   the local and both distributed paths, and taught the planner to repeat format constraints into every
+   subtask. This was an architectural gap affecting every multi-file task, not just the showcase.
+
+**Also:** `docs/community-pitch.md` rewritten for the current feature set (3.3 item, done early).
+
+**Where things stand:** Week 2 items 2.3/2.4/2.5 complete; 2.1 complete but for a real-inference MCP
+round-trip; 2.2 has the showcase running with the builder-context fix — that run is the playability check.
+150 tests green.
+
+**Next session:** check the showcase output (`output/<latest>/code/*.html`) — does it have a canvas, a game
+loop, and keyboard handlers, and does `check_code_files` pass it? Iterate the prompt if not. Then the MCP
+e2e pitch. Then Week 3: **Jett needs to create the Oracle Cloud (or Hetzner) account** — that's the only
+blocking human task left.
+
+---
+
 ### Session 1 — August 1, 2026
 
 **Completed:** 1.1 (all but the final `--demo` gauntlet run, in progress at time of writing) · 1.2 ·

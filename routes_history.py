@@ -104,6 +104,7 @@ async def history_detail(timestamp: str):
         "final_output": final_output,
         "rating": rating,
         "code_files": code_files,
+        "code_problems": log.get("code_problems", []),
         "mode": log.get("mode", "local"),
         "project_id": log.get("project_id") or None,
     }
