@@ -181,9 +181,23 @@ invisible to the PASS rating:**
 
 **Also:** `docs/community-pitch.md` rewritten for the current feature set (3.3 item, done early).
 
+**The showcase DOES produce a playable game.** Run `20260802_023417` was verified in a real browser:
+no JS errors, canvas renders, game loop runs, arrow keys steer, plus score/collision/food/game-over/
+restart. One cosmetic defect — the game-over overlay shipped visible on load — now addressed by stating
+the required load-time state in the showcase prompt.
+
+**A correction worth recording, because it cost an hour.** I first reported the game had "no game logic".
+That was a bad grep: `\|` inside `grep -E` matches a literal pipe, not alternation, so every mechanic
+read as absent. Acting on that, I added a "prefer a builder's artifact over the reviewer's merge"
+fallback — then removed it once the corrected check showed the merge was fine. **Verify a negative
+result before building on it.** Related: raising context to 16384 to "let the reviewer see more" made
+the reviewer exceed its timeout and abort the run; 8192 is the configuration that actually works on this
+machine. Both changes were reverted. Kept: `num_ctx` being sent at all (Ollama's 4096 default truncated
+deliverables), the budget helper that scales with context, and the timeout raise to 1800s.
+
 **Where things stand:** Week 2 items 2.3/2.4/2.5 complete; 2.1 complete but for a real-inference MCP
-round-trip; 2.2 has the showcase running with the builder-context fix — that run is the playability check.
-150 tests green.
+round-trip; 2.2 has a verified playable game and a re-run in flight to confirm the overlay fix.
+165 tests green.
 
 **Next session:** check the showcase output (`output/<latest>/code/*.html`) — does it have a canvas, a game
 loop, and keyboard handlers, and does `check_code_files` pass it? Iterate the prompt if not. Then the MCP
