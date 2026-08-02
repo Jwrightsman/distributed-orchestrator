@@ -158,7 +158,8 @@ next, any warnings for Jett._
 **Week 1 CLOSED.** `--demo` passed end-to-end: both pitches PASS (3028s + 3149s), memory carried across
 2 iterations. All five Week 1 exit criteria met. Merged to master via [PR #14].
 
-**Two output-quality bugs found by inspecting real runs (not by tests):**
+**Four output-quality bugs found by inspecting real runs (not by tests) — every one of them was
+invisible to the PASS rating:**
 1. The demo's extracted Python had a syntax error while the reviewer rated it PASS — the reviewer grades
    prose, not runnability. Added `extract.check_code_files()` (ast.parse for Python, structural checks for
    HTML) plus an automatic repair pass that quotes the exact defect; leftover problems now print as a CLI
@@ -168,6 +169,15 @@ next, any warnings for Jett._
    logic" was built in whatever language the model felt like. Added `compose_builder_prompt()` shared by
    the local and both distributed paths, and taught the planner to repeat format constraints into every
    subtask. This was an architectural gap affecting every multi-file task, not just the showcase.
+
+3. **The 4096-token ceiling.** Ollama defaults to a 4096-token context; the reviewer's assembled output
+   hit it and got cut off mid-statement. The showcase game was truncated this way, and so was the demo's
+   pitch-2 output (`output/20260801_235313` ends mid-JavaScript) — a run that was rated PASS. Now sends
+   `num_ctx` from config `context_tokens` (default 8192; measured cost on this machine: 5.8GB → 5.9GB).
+4. **Unfenced deliverables extracted nothing.** The showcase reviewer returned a complete HTML document
+   with no markdown fences, so the extractor — which only looked for fenced blocks — produced zero files
+   and the CLI had nothing to open. Now detects a response that opens with a document signature
+   (`<!DOCTYPE html`, `<html`, shebangs) and saves it as one file; fenced blocks still take precedence.
 
 **Also:** `docs/community-pitch.md` rewritten for the current feature set (3.3 item, done early).
 
