@@ -144,6 +144,12 @@ async def get_result(job_id: str) -> str:
     parts = [f"Rating: {run.get('rating', '?')}"]
     if run.get("code_files"):
         parts.append("Extracted code files: " + ", ".join(run["code_files"]))
+    if run.get("code_problems"):
+        # The reviewer's rating covers prose; this is whether the code actually runs
+        parts.append(
+            "Known problems in the extracted code (verified mechanically):\n"
+            + "\n".join(f"  - {p}" for p in run["code_problems"])
+        )
     parts.append("")
     parts.append(run.get("final_output") or run.get("review") or "(no output recorded)")
     return "\n".join(parts)

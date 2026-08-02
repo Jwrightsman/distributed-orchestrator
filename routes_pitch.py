@@ -14,7 +14,6 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request, Response
 
-from extract import extract_code_files
 from ollama_client import generate
 from orchestrator import (
     BUILDER_SYSTEM,
@@ -22,6 +21,7 @@ from orchestrator import (
     _extract_issues,
     _extract_rating,
     compose_builder_prompt,
+    extract_and_repair,
     plan,
     review,
     revise,
@@ -479,8 +479,10 @@ async def pitch_distributed(req: PitchRequest, request: Request):
     if final_output:
         (project_dir / "output.md").write_text(final_output)
 
-    extract_source = final_output or review_output
-    code_files = extract_code_files(extract_source, project_dir)
+    # Same extract → verify → repair guarantees as the local pipeline
+    final_output, code_files, code_problems = await extract_and_repair(
+        req.task, final_output, review_output, project_dir
+    )
 
     log = {
         "task": req.task,
@@ -490,6 +492,7 @@ async def pitch_distributed(req: PitchRequest, request: Request):
         "review": review_output,
         "rating": rating,
         "code_files": [str(f) for f in code_files],
+        "code_problems": code_problems,
         "mode": "distributed",
         "nodes_used": list(nodes_used),
         "project_id": req.project_id or "",
@@ -529,6 +532,7 @@ async def pitch_distributed(req: PitchRequest, request: Request):
         "final_output": final_output or "",
         "rating": rating,
         "code_files": [str(f) for f in code_files],
+        "code_problems": code_problems,
         "mode": "distributed",
         "nodes_used": len(nodes_used),
         "project_id": req.project_id or "",

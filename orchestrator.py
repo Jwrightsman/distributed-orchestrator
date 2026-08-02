@@ -453,6 +453,54 @@ async def build(
     return last_output  # return last attempt regardless
 
 
+async def extract_and_repair(
+    task: str,
+    final_output: str | None,
+    review_output: str,
+    project_dir: Path,
+) -> tuple[str | None, list[str], list[str]]:
+    """Extract code files, verify them mechanically, and repair once if broken.
+
+    The reviewer rates prose quality and will pass code that doesn't parse, so
+    the extracted files get checked for real. When defects are found we spend
+    one revision quoting them, and keep the result only if it actually fixed
+    more than it broke.
+
+    Returns (final_output, code_files, remaining_problems). Writes output.md
+    and the code/ directory as a side effect. Shared by the local pipeline and
+    the distributed path so both produce the same guarantees.
+    """
+    extract_source = final_output if final_output else review_output
+    code_files = extract_code_files(extract_source, project_dir)
+    code_problems = check_code_files(code_files)
+
+    if not code_problems or not final_output:
+        return final_output, code_files, code_problems
+
+    issue_text = "The extracted code does not run. Fix exactly these defects:\n" + "\n".join(
+        f"- {p}" for p in code_problems
+    )
+    repaired = await revise(task, issue_text, final_output)
+    if len(repaired.strip()) <= len(final_output) // 2:
+        return final_output, code_files, code_problems  # came back truncated
+
+    candidate_dir = project_dir / "_repair_check"
+    candidate_dir.mkdir(exist_ok=True)
+    try:
+        candidate_files = extract_code_files(repaired, candidate_dir)
+        if len(check_code_files(candidate_files)) >= len(code_problems):
+            return final_output, code_files, code_problems  # no improvement
+    finally:
+        shutil.rmtree(candidate_dir, ignore_errors=True)
+
+    final_output = repaired
+    (project_dir / "output.md").write_text(final_output)
+    for stale in (project_dir / "code").glob("*"):
+        stale.unlink()
+    code_files = extract_code_files(final_output, project_dir)
+    return final_output, code_files, check_code_files(code_files)
+
+
 async def review(task: str, subtasks: list[dict], results: dict[int, str], memory_context: str = "") -> str:
     """Review all builder outputs against the original task."""
     parts = []
@@ -600,32 +648,10 @@ async def run_pipeline(
     if final_output:
         (project_dir / "output.md").write_text(final_output)
 
-    # Extract runnable code files from the final (possibly revised) output
-    extract_source = final_output if final_output else review_output
-    code_files = extract_code_files(extract_source, project_dir)
-
-    # 4b. Broken-code repair pass. The reviewer rates prose quality and happily
-    #     passes code that won't parse, so check the extracted files mechanically
-    #     and spend one revision on concrete, quoted defects if we find any.
-    code_problems = check_code_files(code_files)
-    if code_problems and final_output:
-        issue_text = "The extracted code does not run. Fix exactly these defects:\n" + "\n".join(
-            f"- {p}" for p in code_problems
-        )
-        repaired = await revise(task, issue_text, final_output)
-        if len(repaired.strip()) > len(final_output) // 2:
-            candidate_dir = project_dir / "_repair_check"
-            candidate_dir.mkdir(exist_ok=True)
-            candidate_files = extract_code_files(repaired, candidate_dir)
-            # Only accept the repair if it actually reduced the defect count
-            if len(check_code_files(candidate_files)) < len(code_problems):
-                final_output = repaired
-                (project_dir / "output.md").write_text(final_output)
-                for stale in (project_dir / "code").glob("*"):
-                    stale.unlink()
-                code_files = extract_code_files(final_output, project_dir)
-                code_problems = check_code_files(code_files)
-            shutil.rmtree(candidate_dir, ignore_errors=True)
+    # Extract runnable code files, then mechanically verify and repair them
+    final_output, code_files, code_problems = await extract_and_repair(
+        task, final_output, review_output, project_dir
+    )
 
     log = {
         "task": task,
