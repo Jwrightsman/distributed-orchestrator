@@ -105,7 +105,7 @@ else's machine joins as a worker from anywhere. **Do not skip step 4.**
 3. Add your SSH key during creation (Hetzner shows how to make one).
 4. In the server's Firewall tab, allow inbound TCP on ports 22 and 8000.
 
-### 3b. Install and run
+### 3b. Install and run — one command
 
 SSH in (replace the IP):
 
@@ -113,21 +113,38 @@ SSH in (replace the IP):
 ssh ubuntu@YOUR_VM_IP
 ```
 
-Then on the VM:
+Then run this on the VM:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Jwrightsman/distributed-orchestrator/master/deploy.sh | bash
+```
+
+That script does everything: installs Docker, clones the repo, **generates both
+security keys for you**, starts the orchestrator and Ollama, pulls the model,
+waits until it reports healthy, and then prints your dashboard address, your two
+keys, and the exact commands to join a node and submit a task. It takes about
+ten minutes, mostly model download. Re-running it is safe — your keys are kept.
+
+Write the two keys down somewhere private when it prints them:
+
+- `node_secret` — give only to people you allow to join as workers.
+- `pitch_key` — give only to people you allow to submit tasks.
+
+**Join your laptop as the first worker node** (from your laptop, not the VM):
+
+```bash
+python join.py http://YOUR_VM_IP:8000 --secret THE_NODE_SECRET_IT_PRINTED
+```
+
+<details>
+<summary>Manual steps, if you'd rather not run a script</summary>
 
 ```bash
 sudo apt-get update && sudo apt-get install -y docker.io docker-compose-v2 git
 sudo usermod -aG docker $USER && newgrp docker
 git clone https://github.com/Jwrightsman/distributed-orchestrator.git
-cd distributed-orchestrator
-mkdir -p data
-```
+cd distributed-orchestrator && mkdir -p data
 
-### 3c. Configure (the security step — required)
-
-Create `data/config.json` on the VM:
-
-```bash
 cat > data/config.json <<'EOF'
 {
   "ollama_url": "http://ollama:11434",
@@ -137,28 +154,13 @@ cat > data/config.json <<'EOF'
   "output_max_mb": 500
 }
 EOF
-```
 
-Generate two random strings with: `openssl rand -hex 24` (run it twice).
-
-- `node_secret` — give this only to people you allow to join as workers.
-- `pitch_key` — give this only to people you allow to submit tasks.
-
-### 3d. Launch
-
-```bash
 docker compose up -d --build
 docker compose exec ollama ollama pull qwen3.5:4b
 ```
 
-Check it: `http://YOUR_VM_IP:8000/health` in a browser should show
-`"status": "ok"`.
-
-**Join your laptop as the first worker node** (from your laptop, not the VM):
-
-```bash
-py node.py --server http://YOUR_VM_IP:8000 --secret REPLACE-WITH-LONG-RANDOM-STRING-1
-```
+Generate the two random strings with `openssl rand -hex 24` (run it twice).
+</details>
 
 > **Is this safe?** With both keys set: joining and pitching require secrets,
 > pitch rate limiting is on, and disk usage is capped. What this does *not*

@@ -114,12 +114,14 @@ browser; dashboard type/contrast/animations done; one-line installers for both O
 ## Week 3 (Aug 15–20): Deploy + freeze
 
 ### 3.1 Live public orchestrator  _(needs Jett for account creation)_
-- [ ] Jett creates Oracle Cloud free tier (or Hetzner) account + SSH key — DEPLOY.md walks through it
-- [ ] Claude Code configures the VM over SSH: Docker or systemd, Ollama + qwen3.5:4b (Oracle ARM 24GB
-      handles CPU inference for planner/reviewer; or route planner/reviewer to a free-tier API via the
-      existing model router), node_secret + pitch_key set, orchestrator live 24/7
+- [ ] **JETT: create an Oracle Cloud free tier (or Hetzner) account + SSH key** — DEPLOY.md §3a walks
+      through it. This is the only remaining blocker in the whole sprint.
+- [x] VM setup automated: `deploy.sh` takes a fresh Ubuntu box to a live, secured orchestrator in one
+      command (installs Docker, clones, generates node_secret + pitch_key, starts the stack, pulls the
+      model, waits for health, prints the join/pitch commands with the real public IP)
 - [ ] Jett's laptop + the VM = a real 2-node network before IU
-- [ ] Fallback if no account before IU: everything deploy-ready; 30-minute task from the dorm
+- [x] Fallback if no account before IU: everything deploy-ready — the remaining work is one SSH command,
+      well under the 30-minute budget
 
 ### 3.2 Verification seed  _(stretch — only if 3.1 lands early)_
 - [ ] Occasional redundant execution: same subtask on 2 nodes, outputs compared
@@ -130,12 +132,12 @@ browser; dashboard type/contrast/animations done; one-line installers for both O
 - [ ] Full regression: test gauntlet, --demo, --demo-showcase, MCP flow, fresh-clone install on a
       second environment if available
 - [ ] Aug 18–20: bug fixes and docs ONLY
-- [ ] docs/demo-script.md rewritten for the new feature set — shot-by-shot, so recording at IU is
-      follow-the-script: hook (MCP delegate or typed pitch) → parallel nodes + credits → showcase
-      game opens in browser → memory iteration → reviser fires → leaderboard → "join right now" CTA
-      with the live address
-- [ ] docs/community-pitch.md final pass: title leads with the result; mentions MCP, live network,
-      one-line join
+- [x] docs/demo-script.md rewritten for the new feature set — six numbered shots with screen content,
+      script, and timing: hook on the playing game → MCP delegate moment → parallel nodes + credits →
+      memory iteration → self-checking → join CTA. Includes a prep checklist that front-loads every
+      failure that has actually bitten a take, and a mid-take recovery section.
+- [x] docs/community-pitch.md final pass: title leads with the result; mentions MCP, live network,
+      one-line join _(done early, Aug 1)_
 
 **Sprint exit criteria: stable repo, green CI, live (or 30-min-ready) public orchestrator, shot-by-shot
 video script, launch post drafted. Jett arrives at IU and records.**
@@ -216,8 +218,19 @@ into a complete, usable deliverable...]`) and the pipeline ships that as the res
 plus a bracketed-refusal body should probably trigger a rebuild rather than a delivery. Deliberately
 NOT fixed on speculation — needs a couple of real occurrences first to design against.
 
-**Where things stand:** Weeks 1 and 2 both closed. Next is Week 3 (deploy + freeze), whose first item
-needs Jett.
+**Week 3 progress without Jett:** `deploy.sh` automates the entire VM setup (3.1's engineering half),
+`docs/demo-script.md` is rewritten shot-by-shot, and community-pitch.md was done Aug 1. CI now also
+validates the compose file, both shell scripts, and that templates/ ships inside the image.
+
+**Where things stand:** Weeks 1 and 2 closed. Week 3's writing and automation are done. The sprint is
+blocked on exactly one thing: **Jett creating a cloud account** (DEPLOY.md §3a). After that, going live
+is one SSH command. 3.2 (verification seed) remains deliberately unbuilt — the sprint gates it on 3.1
+landing early, and it hasn't landed.
+
+**Next session:** if Jett has an account, run `deploy.sh` on the VM, then join his laptop as a node and
+confirm a real 2-node pitch. If not, there is no remaining unblocked sprint work — resist inventing
+some; use spare time on the known-remaining quality issue above (reviewer refusal shipped as
+deliverable) only if a second occurrence shows up in a real run.
 
 **Next session:** check the showcase output (`output/<latest>/code/*.html`) — does it have a canvas, a game
 loop, and keyboard handlers, and does `check_code_files` pass it? Iterate the prompt if not. Then the MCP
