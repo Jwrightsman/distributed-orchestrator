@@ -323,12 +323,15 @@ SHOWCASE_TASK = (
     "restart button. The final deliverable must be one complete HTML document starting "
     "with <!DOCTYPE html> that runs by double-clicking the file — no external files, "
     "no frameworks, no image assets (draw everything on a <canvas>). "
-    # Observed failure: the game-over overlay shipped visible on page load, so the
-    # game looked broken before it began. State the start state explicitly.
-    "REQUIRED BEHAVIOUR ON LOAD: the game must start playing immediately with the snake "
-    "moving; the game-over overlay must be hidden (display:none) until the snake actually "
-    "dies, and must be hidden again when the restart button is pressed. Do not show the "
-    "game-over screen at startup."
+    # Observed failures across runs: the game-over overlay shipped visible on load
+    # (run 023417), then reappeared as a start screen still labelled GAME OVER
+    # (run 043911). Both look broken on camera, so pin the start state hard.
+    "REQUIRED BEHAVIOUR ON LOAD: the snake must already be moving the moment the page "
+    "opens — no start screen, no title screen, no 'press any key' prompt, and no click "
+    "required to begin. There must be exactly ONE overlay element, used only for game "
+    "over; it starts with style=\"display:none\" in the HTML, is shown only when the "
+    "snake dies, and is hidden again by the restart button. The text 'GAME OVER' must "
+    "never be visible before the snake has died."
 )
 
 

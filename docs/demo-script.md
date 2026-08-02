@@ -5,6 +5,22 @@
 
 ---
 
+## Recording note: the showcase game
+
+`--demo-showcase` reliably produces a **playable** Snake game (canvas, arrow-key
+steering, score, collision, food, game over, restart — verified in a browser).
+What varies run to run is the start state: a 4B model sometimes ships the
+game-over overlay as a start screen, so the file opens showing "GAME OVER" with
+a restart button.
+
+**Before recording:** open the generated HTML, click restart once so the snake is
+moving, and start the shot there. If the take needs the file opening cold, run
+`--demo-showcase` again — the prompt now forbids a start screen, and a clean run
+opens straight into gameplay. Never record the cold-open without checking it
+first.
+
+---
+
 ## The MCP Moment ("I ask my AI; it delegates to the swarm")
 
 Candidate opening hook — an AI app handing work to the swarm hits harder than a

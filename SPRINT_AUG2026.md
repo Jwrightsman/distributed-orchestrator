@@ -78,7 +78,11 @@ repo must be demo-able at all times._
 - [x] `--demo-showcase`: pitches "Build a retro Snake game as a single self-contained HTML file with
       neon styling, scoreboard, and keyboard controls"
 - [x] Extractor writes the .html; CLI auto-opens it in the default browser on completion
-- [ ] Tune prompts until the game is reliably playable with qwen3.5:4b (iterate; this is output-quality work)
+- [x] Tune prompts until the game is reliably playable with qwen3.5:4b — **verified playable in a real
+      browser** (run `20260802_043911`): no JS errors, canvas renders, arrow keys steer, score/collision/
+      food/game-over/restart all work. Residual quirk: the model sometimes reuses the game-over overlay
+      as a start screen, so the file can open showing "GAME OVER" until you click restart. Prompt now
+      forbids a start screen outright; docs/demo-script.md carries the recording workaround.
 - [x] Keep --demo (expense tracker) as the memory/iteration story; showcase is the visual pop
 
 ### 2.3 Dashboard camera polish
