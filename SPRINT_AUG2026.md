@@ -23,7 +23,8 @@ repo must be demo-able at all times._
 - [x] `ollama pull qwen3.5:4b` (fallbacks: qwen3:4b → gemma3:4b); update config.json default
 - [x] Update `auto_detect_model()` ladder: qwen3.5 → gemma4 → phi4-mini → qwen3 → gemma3:4b → gemma3:1b
 - [x] Planner via Ollama structured outputs (`format` + JSON schema); keep `_extract_json` as provider fallback
-- [ ] Test gauntlet passes: `py status.py` ✓ · `py cli.py "Build a hello world Python script"` ✓ (PASS, 18 min) · `py cli.py --demo` (run in progress)
+- [x] Test gauntlet passes: `py status.py` ✓ · `py cli.py "Build a hello world Python script"` ✓ (PASS, 18 min) ·
+      `py cli.py --demo` ✓ (both pitches PASS, 3028s + 3149s, memory carried 2 iterations)
 
 ### 1.2 Test suite + CI  _(protects the whole sprint)_
 - [x] `tests/` with pytest: unit coverage for orchestrator parsing/validation (`_extract_json`,
@@ -55,6 +56,7 @@ repo must be demo-able at all times._
 - [x] CLAUDE.md "What to build next" → points to MASTER_PLAN.md + this sprint file
 
 **Week 1 exit criteria: tests green in CI, --demo clean on qwen3.5:4b, server refactored, WAN-safe, deploy docs done.**
+**→ MET, Aug 1 2026.** All five criteria verified; see Session Log.
 
 ---
 
