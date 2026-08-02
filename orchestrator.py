@@ -29,6 +29,10 @@ IMPORTANT RULES:
 - Maximize parallelism: prefer independent subtasks (depends_on: []) wherever possible. Only add a dependency when a task genuinely needs the output of a previous one.
 - Each subtask must be specific enough that a separate AI agent can complete it without asking follow-up questions.
 - Each subtask prompt must be detailed: explain exactly what to produce, what format, what constraints.
+- Each builder sees ONLY its own subtask prompt. If the project names a language, file format, or
+  technology (e.g. "a single HTML file", "in Rust", "no frameworks"), repeat that constraint inside
+  EVERY subtask prompt. A subtask that says only "implement the game logic" will be built in the
+  wrong language.
 - Keep subtask count between 3 and 5. Do not exceed 5.
 - Bad plan: 1→2→3→4→5 (fully sequential, no parallelism)
 - Good plan: [1,2,3] run in parallel, then 4 depends on 1+2, then 5 depends on 3+4
@@ -366,17 +370,45 @@ async def plan(task: str, max_retries: int | None = None, memory_context: str = 
     raise ValueError(f"Planner failed after {max_retries} attempts: {last_err}")
 
 
-async def build(subtask: dict, context: str = "", max_retries: int = 2, on_token=None) -> str:
+def compose_builder_prompt(subtask: dict, context: str = "", task: str = "") -> str:
+    """Build the full prompt a builder agent sees for one subtask.
+
+    Includes the overall project when known. Without it, a builder only sees
+    its own subtask text and will happily satisfy it in the wrong language or
+    format — e.g. writing a Python class for a subtask of "build a single
+    self-contained HTML game". Shared by local and distributed dispatch so
+    both paths give builders identical information.
+    """
+    parts = []
+    if task:
+        parts.append(
+            f"## The overall project\n{task}\n\n"
+            "Your piece below must fit that project — same language, same file "
+            "format, same constraints. Do not switch technologies.\n"
+        )
+    if context:
+        if len(context) > _MAX_CONTEXT_CHARS:
+            context = "...[earlier context truncated]\n\n" + context[-_MAX_CONTEXT_CHARS:]
+        parts.append(f"## Context from previous subtasks\n{context}\n")
+    parts.append(f"## Your subtask\n{subtask['prompt']}")
+    return "\n".join(parts)
+
+
+async def build(
+    subtask: dict,
+    context: str = "",
+    max_retries: int = 2,
+    on_token=None,
+    task: str = "",
+) -> str:
     """Execute a single subtask using the builder agent.
 
     on_token(token: str) — optional callback fired for each streamed token.
     When provided, uses Ollama's streaming API for live output.
+
+    task — the overall project text, so the builder keeps to its constraints.
     """
-    base_prompt = subtask["prompt"]
-    if context:
-        if len(context) > _MAX_CONTEXT_CHARS:
-            context = "...[earlier context truncated]\n\n" + context[-_MAX_CONTEXT_CHARS:]
-        base_prompt = f"Context from previous subtasks:\n{context}\n\n---\n\nYour task:\n{base_prompt}"
+    base_prompt = compose_builder_prompt(subtask, context, task)
 
     prompt = base_prompt
     last_output = ""
@@ -504,7 +536,7 @@ async def run_pipeline(
         else:
             # Default: local Ollama inference with optional token streaming
             st_on_token = (lambda tok: on_token(tok, st)) if on_token else None
-            output = await build(st, context, on_token=st_on_token)
+            output = await build(st, context, on_token=st_on_token, task=task)
 
         log_contribution(node_id, "compute", credits=5, task=st["title"])
         if on_build:

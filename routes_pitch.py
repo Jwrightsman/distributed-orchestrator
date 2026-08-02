@@ -21,6 +21,7 @@ from orchestrator import (
     _extract_final_output,
     _extract_issues,
     _extract_rating,
+    compose_builder_prompt,
     plan,
     review,
     revise,
@@ -137,12 +138,9 @@ async def _run_job(job_id: str, task: str, project_id: str | None = None, trace_
         _dist_nodes_used: set[str] = set()
 
         async def dist_build_fn(st: dict, context: str) -> str:
-            from orchestrator import _MAX_CONTEXT_CHARS
-            prompt = st["prompt"]
-            if context:
-                if len(context) > _MAX_CONTEXT_CHARS:
-                    context = "...[truncated]\n\n" + context[-_MAX_CONTEXT_CHARS:]
-                prompt = f"Context from previous subtasks:\n{context}\n\n---\n\nYour task:\n{prompt}"
+            # Same prompt the local builder would see — including the overall
+            # project, so remote nodes don't drift off-format
+            prompt = compose_builder_prompt(st, context, task)
             task_id = f"build_{st['id']}_{int(time.time() * 1000)}"
             # Soft model routing: if role_model_map specifies a preferred model for
             # builders, only add a "requires" tag when at least one connected node
@@ -339,14 +337,13 @@ async def _dispatch_subtask(
     subtasks: list[dict],
     results: dict[int, str],
     nodes_used: set[str],
+    overall_task: str = "",
 ) -> tuple[int, str]:
     """Push one subtask to the worker queue and wait for its result.
 
     Falls back to local Ollama inference on timeout or worker error.
     Returns (subtask_id, output_text).
     """
-    from orchestrator import _MAX_CONTEXT_CHARS
-
     # Build context from resolved dependencies
     context_parts = []
     for dep_id in st.get("depends_on", []):
@@ -355,12 +352,8 @@ async def _dispatch_subtask(
             label = dep_task["title"] if dep_task else f"Subtask {dep_id}"
             context_parts.append(f"[{label}]:\n{results[dep_id]}")
     context = "\n\n".join(context_parts)
-    if len(context) > _MAX_CONTEXT_CHARS:
-        context = "...[truncated]\n\n" + context[-_MAX_CONTEXT_CHARS:]
 
-    prompt = st["prompt"]
-    if context:
-        prompt = f"Context from previous subtasks:\n{context}\n\n---\n\nYour task:\n{prompt}"
+    prompt = compose_builder_prompt(st, context, overall_task)
 
     task_id = f"build_{st['id']}_{int(time.time() * 1000)}"
     task_queue.append({
@@ -445,7 +438,7 @@ async def pitch_distributed(req: PitchRequest, request: Request):
         if not ready:
             break
         wave_results = await asyncio.gather(*[
-            _dispatch_subtask(st, subtasks, results, nodes_used) for st in ready
+            _dispatch_subtask(st, subtasks, results, nodes_used, req.task) for st in ready
         ])
         for subtask_id, output in wave_results:
             results[subtask_id] = output
