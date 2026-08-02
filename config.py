@@ -27,11 +27,12 @@ DEFAULTS = {
     "think": False,
 
     # Context window in tokens. Ollama defaults to 4096, which silently
-    # truncates large deliverables mid-sentence — the reviewer's assembled
-    # output is the usual casualty. 8192 fits a self-contained HTML app and
-    # still runs on 8GB. Raise for bigger outputs if you have the RAM;
-    # each doubling costs roughly 0.5-1GB on a 4B model.
-    "context_tokens": 8192,
+    # truncates large deliverables mid-sentence AND starves the reviewer of the
+    # builder output it is supposed to merge. Measured on an 8GB CPU machine
+    # with qwen3.5:4b: 4096 -> 5.8GB, 8192 -> 5.9GB, 16384 -> 6.2GB.
+    # The reviewer's per-builder budget scales from this automatically.
+    # Drop to 8192 if you are tight on RAM; raise it if you have plenty.
+    "context_tokens": 16384,
 
     # Timeout for a single inference call (seconds)
     # CPU-only: 1200s — qwen3.5's reviewer calls (big prompt + long assembled

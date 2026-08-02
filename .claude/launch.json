@@ -6,6 +6,12 @@
       "runtimeExecutable": "py",
       "runtimeArgs": ["-m", "uvicorn", "server:app", "--port", "8000"],
       "port": 8000
+    },
+    {
+      "name": "showcase-output",
+      "runtimeExecutable": "py",
+      "runtimeArgs": ["-m", "http.server", "8899", "--directory", "output"],
+      "port": 8899
     }
   ]
 }

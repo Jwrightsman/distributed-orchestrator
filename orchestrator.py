@@ -285,9 +285,35 @@ async def revise(task: str, issues: str, current_output: str) -> str:
     return await generate(prompt, system=REVISER_SYSTEM)
 
 
-# Max chars of a single builder output included in the review prompt.
-# Keeps the combined review prompt from growing huge on CPU-memory-limited machines.
+# Fallback cap on a single builder output in the review prompt, used when the
+# budget can't be computed. Prefer _review_char_budget().
 _MAX_BUILDER_CHARS_IN_REVIEW = 3000
+
+# Fraction of the context window the review PROMPT may occupy. The rest is
+# generation room — the reviewer has to re-emit the whole deliverable, so it
+# needs at least as much space as the answer.
+_REVIEW_PROMPT_FRACTION = 0.55
+
+# Conservative chars-per-token for code and markup (real ratio is ~3-4).
+_CHARS_PER_TOKEN = 3
+
+
+def _review_char_budget(builder_count: int) -> int:
+    """Chars of each builder's output to include in the review prompt.
+
+    Derived from the configured context window rather than fixed, because a
+    hardcoded cap silently starves the reviewer: with a 3000-char slice of a
+    14000-char builder output, it never sees the code it is supposed to merge
+    and assembles something worse than its own inputs (observed Aug 1 — the
+    showcase reviewer emitted a game shell with no game loop).
+    """
+    if builder_count <= 0:
+        return _MAX_BUILDER_CHARS_IN_REVIEW
+    context_tokens = get_config().get("context_tokens", 8192)
+    prompt_chars = context_tokens * _CHARS_PER_TOKEN * _REVIEW_PROMPT_FRACTION
+    # Leave room for the task, plan, and section headers
+    usable = max(prompt_chars - 2000, 1000)
+    return max(int(usable // builder_count), _MAX_BUILDER_CHARS_IN_REVIEW)
 
 # Max chars of dependency context passed into a builder prompt.
 _MAX_CONTEXT_CHARS = 2000
@@ -458,6 +484,7 @@ async def extract_and_repair(
     final_output: str | None,
     review_output: str,
     project_dir: Path,
+    builder_outputs: dict[str, str] | None = None,
 ) -> tuple[str | None, list[str], list[str]]:
     """Extract code files, verify them mechanically, and repair once if broken.
 
@@ -511,10 +538,11 @@ async def review(task: str, subtasks: list[dict], results: dict[int, str], memor
     for st in subtasks:
         parts.append(f"### Subtask {st['id']}: {st['title']}\n{st['prompt']}\n")
     parts.append("## Builder Outputs")
+    budget = _review_char_budget(len(subtasks))
     for st in subtasks:
         output = results[st["id"]]
-        if len(output) > _MAX_BUILDER_CHARS_IN_REVIEW:
-            output = output[:_MAX_BUILDER_CHARS_IN_REVIEW] + "\n\n...[output truncated]"
+        if len(output) > budget:
+            output = output[:budget] + "\n\n...[output truncated]"
         parts.append(f"### Output for Subtask {st['id']}: {st['title']}\n{output}\n")
 
     combined = "\n".join(parts)
@@ -650,7 +678,13 @@ async def run_pipeline(
 
     # Extract runnable code files, then mechanically verify and repair them
     final_output, code_files, code_problems = await extract_and_repair(
-        task, final_output, review_output, project_dir
+        task,
+        final_output,
+        review_output,
+        project_dir,
+        builder_outputs={
+            f"builder {st['id']} ({st['title']})": results[st["id"]] for st in subtasks
+        },
     )
 
     log = {

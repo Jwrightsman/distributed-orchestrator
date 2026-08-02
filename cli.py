@@ -322,7 +322,13 @@ SHOWCASE_TASK = (
     "display, arrow-key controls, collision detection, and a game-over screen with a "
     "restart button. The final deliverable must be one complete HTML document starting "
     "with <!DOCTYPE html> that runs by double-clicking the file — no external files, "
-    "no frameworks, no image assets (draw everything on a <canvas>)."
+    "no frameworks, no image assets (draw everything on a <canvas>). "
+    # Observed failure: the game-over overlay shipped visible on page load, so the
+    # game looked broken before it began. State the start state explicitly.
+    "REQUIRED BEHAVIOUR ON LOAD: the game must start playing immediately with the snake "
+    "moving; the game-over overlay must be hidden (display:none) until the snake actually "
+    "dies, and must be hidden again when the restart button is pressed. Do not show the "
+    "game-over screen at startup."
 )
 
 
