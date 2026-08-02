@@ -1,6 +1,8 @@
 """Thin wrapper around the Ollama HTTP API."""
 
 import json as _json
+import re
+
 import httpx
 
 from config import get as get_config
@@ -55,6 +57,29 @@ async def _model_capabilities(client: httpx.AsyncClient, model: str) -> list[str
         except Exception:
             _capabilities_cache[model] = []
     return _capabilities_cache[model]
+
+
+_THINK_BLOCK = re.compile(r"<think\b[^>]*>.*?</think\s*>", re.DOTALL | re.IGNORECASE)
+_THINK_ORPHAN = re.compile(r"</?think\b[^>]*>", re.IGNORECASE)
+
+
+def strip_thinking(text: str) -> str:
+    """Remove reasoning markup that leaked into a response.
+
+    Even with think=false, reasoning models emit stray <think> tags — and an
+    orphan closing tag drags the reasoning that preceded it into the
+    deliverable (observed: a reviewer response whose assembled output opened
+    with draft haiku lines followed by '</think>'). Anything before an orphan
+    close is reasoning, so it goes too.
+    """
+    text = _THINK_BLOCK.sub("", text)
+
+    # Orphan close with no open: everything before it was reasoning
+    orphan_close = re.search(r"</think\s*>", text, re.IGNORECASE)
+    if orphan_close and not re.search(r"<think\b", text[: orphan_close.start()], re.IGNORECASE):
+        text = text[orphan_close.end():]
+
+    return _THINK_ORPHAN.sub("", text).strip()
 
 
 async def _apply_think(client: httpx.AsyncClient, payload: dict) -> None:
@@ -168,7 +193,7 @@ async def generate(
                 payload.pop("format")
                 resp = await client.post(f"{OLLAMA_URL}/api/generate", json=payload)
             resp.raise_for_status()
-            return resp.json()["response"]
+            return strip_thinking(resp.json()["response"])
     except httpx.TimeoutException as e:
         # str(e) is often empty — make the failure explain itself
         raise RuntimeError(

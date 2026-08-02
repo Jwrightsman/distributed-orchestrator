@@ -14,7 +14,7 @@ from pathlib import Path
 
 import platform
 
-from ollama_client import generate, generate_stream
+from ollama_client import generate, generate_stream, strip_thinking
 from config import get as get_config
 from ledger import log_contribution
 from extract import check_code_files, extract_code_files
@@ -447,7 +447,8 @@ async def build(
                 async for token in generate_stream(prompt, system=BUILDER_SYSTEM):
                     on_token(token)
                     chunks.append(token)
-                output = "".join(chunks)
+                # Tokens stream raw for live display; sanitize the saved result
+                output = strip_thinking("".join(chunks))
             else:
                 output = await generate(prompt, system=BUILDER_SYSTEM)
         except Exception:
