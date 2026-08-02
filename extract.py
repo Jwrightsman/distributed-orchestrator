@@ -41,8 +41,35 @@ LANG_MAP = {
 }
 
 
+# Signatures of a response that IS a code document rather than prose containing
+# one. Single-file deliverables ("build one self-contained HTML file") routinely
+# come back unfenced, and without this the extractor finds nothing at all.
+_RAW_DOCUMENT_SIGNATURES = (
+    ("<!doctype html", "html"),
+    ("<html", "html"),
+    ("<?xml", "xml"),
+    ("#!/usr/bin/env python", "python"),
+    ("#!/bin/bash", "bash"),
+    ("#!/usr/bin/env bash", "bash"),
+)
+
+
+def _detect_raw_document(text: str) -> dict | None:
+    """Return a block for text that is itself a code document, else None."""
+    stripped = text.strip()
+    lowered = stripped[:200].lower()
+    for signature, lang in _RAW_DOCUMENT_SIGNATURES:
+        if lowered.startswith(signature):
+            return {"lang": lang, "code": stripped}
+    return None
+
+
 def extract_code_blocks(text: str) -> list[dict]:
     """Extract fenced code blocks from markdown text.
+
+    Falls back to treating the whole response as one file when it opens with a
+    recognizable document signature and carries no fences — that is what a
+    single-file deliverable actually looks like.
 
     Returns list of {"lang": str, "code": str}
     """
@@ -55,6 +82,11 @@ def extract_code_blocks(text: str) -> list[dict]:
         code = code.strip()
         if code and len(code) > 20:  # skip tiny snippets
             blocks.append({"lang": lang, "code": code})
+
+    if not blocks:
+        raw = _detect_raw_document(text)
+        if raw and len(raw["code"]) > 20:
+            return [raw]
 
     return blocks
 

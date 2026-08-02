@@ -77,6 +77,48 @@ async def test_capabilities_cached_once():
 
 
 @pytest.mark.asyncio
+async def test_generate_sends_context_window(monkeypatch):
+    """Ollama defaults to 4096 tokens, which truncates large deliverables."""
+    captured = {}
+
+    class _Resp:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"response": "ok"}
+
+    class _Client:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json=None):
+            if url.endswith("/api/show"):
+                return _FakeResponse({"capabilities": ["completion"]})
+            captured.update(json)
+            return _Resp()
+
+    monkeypatch.setattr(ollama_client.httpx, "AsyncClient", _Client)
+    await ollama_client.generate("hi")
+    assert captured["options"]["num_ctx"] == ollama_client.get_config()["context_tokens"]
+    assert captured["options"]["num_ctx"] > 4096  # bigger than Ollama's default
+
+
+def test_context_tokens_default_is_generous():
+    import config
+
+    assert config.DEFAULTS["context_tokens"] >= 8192
+
+
+@pytest.mark.asyncio
 async def test_auto_detect_prefers_ladder_order(monkeypatch):
     async def fake_check():
         return {"ok": True, "models": ["gemma3:1b", "gemma3:4b", "qwen3.5:4b", "gemma4:e4b"]}

@@ -93,6 +93,46 @@ def test_multiple_files_all_reported(tmp_path):
     assert any("c.html" in p for p in problems)
 
 
+def test_unfenced_html_document_is_extracted(tmp_path):
+    """Single-file deliverables come back as raw documents, not fenced blocks.
+
+    Observed Aug 1: the showcase reviewer emitted a complete HTML game with no
+    markdown fences, so the extractor produced zero files and the CLI had
+    nothing to open.
+    """
+    from extract import extract_code_files
+
+    saved = extract_code_files(GOOD_HTML, tmp_path)
+    assert len(saved) == 1
+    assert Path(saved[0]).name == "index.html"
+    assert check_code_files(saved) == []
+
+
+def test_unfenced_python_script_is_extracted(tmp_path):
+    from extract import extract_code_files
+
+    script = "#!/usr/bin/env python\nimport sys\n\n\ndef main():\n    print('hello world')\n"
+    saved = extract_code_files(script, tmp_path)
+    assert len(saved) == 1
+    assert Path(saved[0]).name == "main.py"
+
+
+def test_prose_is_not_mistaken_for_a_document(tmp_path):
+    from extract import extract_code_files
+
+    prose = "Here is a summary of the work. The system uses HTML and Python together."
+    assert extract_code_files(prose, tmp_path) == []
+
+
+def test_fenced_blocks_still_win_over_raw_detection(tmp_path):
+    from extract import extract_code_files
+
+    text = f"<!DOCTYPE html>\nSome preamble\n\n```python\n{GOOD_PY}\n```"
+    saved = extract_code_files(text, tmp_path)
+    assert len(saved) == 1
+    assert Path(saved[0]).name == "main.py"  # the fence, not the raw sniff
+
+
 def test_real_world_regression_from_demo_run():
     """The actual file the Aug 1 demo produced, if it's still on disk."""
     real = Path("output/20260801_230041/code/main.py")

@@ -26,6 +26,13 @@ DEFAULTS = {
     # Set true to allow thinking (only affects models that support it).
     "think": False,
 
+    # Context window in tokens. Ollama defaults to 4096, which silently
+    # truncates large deliverables mid-sentence — the reviewer's assembled
+    # output is the usual casualty. 8192 fits a self-contained HTML app and
+    # still runs on 8GB. Raise for bigger outputs if you have the RAM;
+    # each doubling costs roughly 0.5-1GB on a 4B model.
+    "context_tokens": 8192,
+
     # Timeout for a single inference call (seconds)
     # CPU-only: 1200s — qwen3.5's reviewer calls (big prompt + long assembled
     # output) can exceed 600s on 8GB CPU machines. GPU: 120s is plenty.

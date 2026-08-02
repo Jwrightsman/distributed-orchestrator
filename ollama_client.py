@@ -150,6 +150,7 @@ async def generate(
         "model": model,
         "prompt": prompt,
         "stream": False,
+        "options": {"num_ctx": cfg.get("context_tokens", 8192)},
     }
     if system:
         payload["system"] = system
@@ -202,7 +203,12 @@ async def generate_stream(prompt: str, system: str = "", model: str | None = Non
     if model is None:
         model = DEFAULT_MODEL
 
-    payload = {"model": model, "prompt": prompt, "stream": True}
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "stream": True,
+        "options": {"num_ctx": cfg.get("context_tokens", 8192)},
+    }
     if system:
         payload["system"] = system
 
