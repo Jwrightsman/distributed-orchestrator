@@ -27,17 +27,20 @@ DEFAULTS = {
     "think": False,
 
     # Context window in tokens. Ollama defaults to 4096, which silently
-    # truncates large deliverables mid-sentence AND starves the reviewer of the
-    # builder output it is supposed to merge. Measured on an 8GB CPU machine
-    # with qwen3.5:4b: 4096 -> 5.8GB, 8192 -> 5.9GB, 16384 -> 6.2GB.
-    # The reviewer's per-builder budget scales from this automatically.
-    # Drop to 8192 if you are tight on RAM; raise it if you have plenty.
-    "context_tokens": 16384,
+    # truncates large deliverables mid-sentence. 8192 is the measured sweet
+    # spot on an 8GB CPU machine with qwen3.5:4b — it fits a self-contained
+    # HTML app and the reviewer call still finishes inside the timeout.
+    # (RAM: 4096 -> 5.8GB, 8192 -> 5.9GB, 16384 -> 6.2GB. 16384 fits in memory
+    # but the reviewer's prompt got large enough to blow past 1200s on CPU.)
+    # Raise it only with faster hardware; the reviewer's per-builder budget
+    # scales from this automatically.
+    "context_tokens": 8192,
 
     # Timeout for a single inference call (seconds)
-    # CPU-only: 1200s — qwen3.5's reviewer calls (big prompt + long assembled
-    # output) can exceed 600s on 8GB CPU machines. GPU: 120s is plenty.
-    "timeout": 1200,
+    # CPU-only: the reviewer is the long pole — it ingests every builder output
+    # and re-emits the whole deliverable. Measured ~15-20 min on an 8GB CPU
+    # machine, so 1800s leaves headroom for variance. GPU: 120s is plenty.
+    "timeout": 1800,
 
     # Max planner retries when model returns bad JSON
     "planner_retries": 3,
