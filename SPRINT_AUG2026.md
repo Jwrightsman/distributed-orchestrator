@@ -69,9 +69,10 @@ repo must be demo-able at all times._
 - [x] Wraps the existing async job API (localhost:8000) — thin adapter, no pipeline changes
 - [x] stdio transport first (Claude Desktop local); streamable HTTP via `--http` flag
 - [x] `docs/MCP.md`: Claude Desktop config snippet + 60-second setup
-- [ ] Verified end-to-end: an MCP client pitches a task → swarm executes → result returns to the client
-      _(stdio client handshake + all 5 tools verified against a live server; the full real-inference
-      pitch runs once the demo gauntlet frees the CPU)_
+- [x] Verified end-to-end: an MCP client pitches a task → swarm executes → result returns to the client
+      — **passed Aug 2** (run `20260802_044626`): real stdio client → `pitch_task` → job ran → polled
+      `get_job_status` → `get_result` returned the deliverable. Exposed a reasoning-leak bug, now fixed
+      (see session log).
 - [x] On-camera flow documented in docs/demo-script.md ("I ask my AI; it delegates to the swarm")
 
 ### 2.2 Showcase demo  _(the visual money shot)_
@@ -105,6 +106,8 @@ repo must be demo-able at all times._
       hints in printed messages neutralized to `python`; .gitattributes forces LF on shell scripts)
 
 **Week 2 exit criteria: MCP flow works end-to-end; showcase demo reliably produces a playable game; dashboard looks good at 1080p; join is one line per OS.**
+**→ MET, Aug 2 2026.** MCP round-trip verified with a real client; showcase game verified playable in a
+browser; dashboard type/contrast/animations done; one-line installers for both OSes. 174 tests green.
 
 ---
 
@@ -199,9 +202,22 @@ the reviewer exceed its timeout and abort the run; 8192 is the configuration tha
 machine. Both changes were reverted. Kept: `num_ctx` being sent at all (Ollama's 4096 default truncated
 deliverables), the budget helper that scales with context, and the timeout raise to 1800s.
 
-**Where things stand:** Week 2 items 2.3/2.4/2.5 complete; 2.1 complete but for a real-inference MCP
-round-trip; 2.2 has a verified playable game and a re-run in flight to confirm the overlay fix.
-165 tests green.
+**WEEK 2 CLOSED (Aug 2).** MCP round-trip passed with a real stdio client — pitch → job → poll → result.
+Showcase game verified playable in a browser. 174 tests green.
+
+**Fifth bug, found by the MCP e2e run:** the reviewer's response contained draft haiku lines followed by
+an orphan `</think>`, and all of it shipped as the deliverable. Reasoning models emit these tags even
+with `think=false`. Worse, it corrupted grading — `_extract_rating` read NEEDS_WORK off the leaked
+reasoning when the reviewer had said FAIL. `strip_thinking()` now sanitizes every model response.
+
+**Known-remaining quality issue (not yet addressed):** when the reviewer decides the builders' work is
+unusable, it writes a bracketed refusal into the Final Assembled Output section (`[Cannot be assembled
+into a complete, usable deliverable...]`) and the pipeline ships that as the result. A rating of FAIL
+plus a bracketed-refusal body should probably trigger a rebuild rather than a delivery. Deliberately
+NOT fixed on speculation — needs a couple of real occurrences first to design against.
+
+**Where things stand:** Weeks 1 and 2 both closed. Next is Week 3 (deploy + freeze), whose first item
+needs Jett.
 
 **Next session:** check the showcase output (`output/<latest>/code/*.html`) — does it have a canvas, a game
 loop, and keyboard handlers, and does `check_code_files` pass it? Iterate the prompt if not. Then the MCP
