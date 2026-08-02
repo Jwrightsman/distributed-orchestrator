@@ -36,3 +36,12 @@ jobs:
 
       - name: Server imports inside container
         run: docker run --rm distributed-orchestrator python -c "from server import app; print('ok:', len(app.routes), 'routes')"
+
+      - name: Dashboard templates present in image
+        run: docker run --rm distributed-orchestrator python -c "import dashboard; print(sorted(p.name for p in dashboard._TEMPLATES_DIR.iterdir()))"
+
+      - name: Compose file is valid
+        run: docker compose config --quiet
+
+      - name: Deploy script parses
+        run: bash -n deploy.sh install.sh
