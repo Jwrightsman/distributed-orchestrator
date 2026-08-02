@@ -77,6 +77,84 @@ async def test_capabilities_cached_once():
 
 
 @pytest.mark.asyncio
+async def test_generate_sends_context_window(monkeypatch):
+    """Ollama defaults to 4096 tokens, which truncates large deliverables."""
+    captured = {}
+
+    class _Resp:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"response": "ok"}
+
+    class _Client:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json=None):
+            if url.endswith("/api/show"):
+                return _FakeResponse({"capabilities": ["completion"]})
+            captured.update(json)
+            return _Resp()
+
+    monkeypatch.setattr(ollama_client.httpx, "AsyncClient", _Client)
+    await ollama_client.generate("hi")
+    assert captured["options"]["num_ctx"] == ollama_client.get_config()["context_tokens"]
+    assert captured["options"]["num_ctx"] > 4096  # bigger than Ollama's default
+
+
+def test_context_tokens_default_is_generous():
+    import config
+
+    assert config.DEFAULTS["context_tokens"] >= 8192
+
+
+def test_review_budget_scales_with_context(monkeypatch):
+    """A fixed budget starves the reviewer of the code it must merge."""
+    import config
+    import orchestrator
+
+    cfg = config.DEFAULTS.copy()
+    cfg["context_tokens"] = 16384
+    monkeypatch.setattr(orchestrator, "get_config", lambda: cfg)
+    big = orchestrator._review_char_budget(4)
+
+    cfg2 = config.DEFAULTS.copy()
+    cfg2["context_tokens"] = 8192
+    monkeypatch.setattr(orchestrator, "get_config", lambda: cfg2)
+    small = orchestrator._review_char_budget(4)
+
+    assert big > small
+    # At 16k, four builders each get well past the old hardcoded 3000 cap
+    assert big > 3000
+
+
+def test_review_budget_never_below_legacy_floor(monkeypatch):
+    import config
+    import orchestrator
+
+    cfg = config.DEFAULTS.copy()
+    cfg["context_tokens"] = 2048  # absurdly small
+    monkeypatch.setattr(orchestrator, "get_config", lambda: cfg)
+    assert orchestrator._review_char_budget(10) >= orchestrator._MAX_BUILDER_CHARS_IN_REVIEW
+
+
+def test_review_budget_handles_zero_builders():
+    import orchestrator
+
+    assert orchestrator._review_char_budget(0) > 0
+
+
+@pytest.mark.asyncio
 async def test_auto_detect_prefers_ladder_order(monkeypatch):
     async def fake_check():
         return {"ok": True, "models": ["gemma3:1b", "gemma3:4b", "qwen3.5:4b", "gemma4:e4b"]}

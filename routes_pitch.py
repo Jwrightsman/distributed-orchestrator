@@ -481,7 +481,13 @@ async def pitch_distributed(req: PitchRequest, request: Request):
 
     # Same extract → verify → repair guarantees as the local pipeline
     final_output, code_files, code_problems = await extract_and_repair(
-        req.task, final_output, review_output, project_dir
+        req.task,
+        final_output,
+        review_output,
+        project_dir,
+        builder_outputs={
+            f"builder {st['id']} ({st['title']})": results[st["id"]] for st in subtasks
+        },
     )
 
     log = {

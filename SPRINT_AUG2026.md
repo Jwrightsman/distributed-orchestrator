@@ -69,16 +69,21 @@ repo must be demo-able at all times._
 - [x] Wraps the existing async job API (localhost:8000) — thin adapter, no pipeline changes
 - [x] stdio transport first (Claude Desktop local); streamable HTTP via `--http` flag
 - [x] `docs/MCP.md`: Claude Desktop config snippet + 60-second setup
-- [ ] Verified end-to-end: an MCP client pitches a task → swarm executes → result returns to the client
-      _(stdio client handshake + all 5 tools verified against a live server; the full real-inference
-      pitch runs once the demo gauntlet frees the CPU)_
+- [x] Verified end-to-end: an MCP client pitches a task → swarm executes → result returns to the client
+      — **passed Aug 2** (run `20260802_044626`): real stdio client → `pitch_task` → job ran → polled
+      `get_job_status` → `get_result` returned the deliverable. Exposed a reasoning-leak bug, now fixed
+      (see session log).
 - [x] On-camera flow documented in docs/demo-script.md ("I ask my AI; it delegates to the swarm")
 
 ### 2.2 Showcase demo  _(the visual money shot)_
 - [x] `--demo-showcase`: pitches "Build a retro Snake game as a single self-contained HTML file with
       neon styling, scoreboard, and keyboard controls"
 - [x] Extractor writes the .html; CLI auto-opens it in the default browser on completion
-- [ ] Tune prompts until the game is reliably playable with qwen3.5:4b (iterate; this is output-quality work)
+- [x] Tune prompts until the game is reliably playable with qwen3.5:4b — **verified playable in a real
+      browser** (run `20260802_043911`): no JS errors, canvas renders, arrow keys steer, score/collision/
+      food/game-over/restart all work. Residual quirk: the model sometimes reuses the game-over overlay
+      as a start screen, so the file can open showing "GAME OVER" until you click restart. Prompt now
+      forbids a start screen outright; docs/demo-script.md carries the recording workaround.
 - [x] Keep --demo (expense tracker) as the memory/iteration story; showcase is the visual pop
 
 ### 2.3 Dashboard camera polish
@@ -101,6 +106,8 @@ repo must be demo-able at all times._
       hints in printed messages neutralized to `python`; .gitattributes forces LF on shell scripts)
 
 **Week 2 exit criteria: MCP flow works end-to-end; showcase demo reliably produces a playable game; dashboard looks good at 1080p; join is one line per OS.**
+**→ MET, Aug 2 2026.** MCP round-trip verified with a real client; showcase game verified playable in a
+browser; dashboard type/contrast/animations done; one-line installers for both OSes. 174 tests green.
 
 ---
 
@@ -158,7 +165,8 @@ next, any warnings for Jett._
 **Week 1 CLOSED.** `--demo` passed end-to-end: both pitches PASS (3028s + 3149s), memory carried across
 2 iterations. All five Week 1 exit criteria met. Merged to master via [PR #14].
 
-**Two output-quality bugs found by inspecting real runs (not by tests):**
+**Four output-quality bugs found by inspecting real runs (not by tests) — every one of them was
+invisible to the PASS rating:**
 1. The demo's extracted Python had a syntax error while the reviewer rated it PASS — the reviewer grades
    prose, not runnability. Added `extract.check_code_files()` (ast.parse for Python, structural checks for
    HTML) plus an automatic repair pass that quotes the exact defect; leftover problems now print as a CLI
@@ -169,11 +177,47 @@ next, any warnings for Jett._
    the local and both distributed paths, and taught the planner to repeat format constraints into every
    subtask. This was an architectural gap affecting every multi-file task, not just the showcase.
 
+3. **The 4096-token ceiling.** Ollama defaults to a 4096-token context; the reviewer's assembled output
+   hit it and got cut off mid-statement. The showcase game was truncated this way, and so was the demo's
+   pitch-2 output (`output/20260801_235313` ends mid-JavaScript) — a run that was rated PASS. Now sends
+   `num_ctx` from config `context_tokens` (default 8192; measured cost on this machine: 5.8GB → 5.9GB).
+4. **Unfenced deliverables extracted nothing.** The showcase reviewer returned a complete HTML document
+   with no markdown fences, so the extractor — which only looked for fenced blocks — produced zero files
+   and the CLI had nothing to open. Now detects a response that opens with a document signature
+   (`<!DOCTYPE html`, `<html`, shebangs) and saves it as one file; fenced blocks still take precedence.
+
 **Also:** `docs/community-pitch.md` rewritten for the current feature set (3.3 item, done early).
 
-**Where things stand:** Week 2 items 2.3/2.4/2.5 complete; 2.1 complete but for a real-inference MCP
-round-trip; 2.2 has the showcase running with the builder-context fix — that run is the playability check.
-150 tests green.
+**The showcase DOES produce a playable game.** Run `20260802_023417` was verified in a real browser:
+no JS errors, canvas renders, game loop runs, arrow keys steer, plus score/collision/food/game-over/
+restart. One cosmetic defect — the game-over overlay shipped visible on load — now addressed by stating
+the required load-time state in the showcase prompt.
+
+**A correction worth recording, because it cost an hour.** I first reported the game had "no game logic".
+That was a bad grep: `\|` inside `grep -E` matches a literal pipe, not alternation, so every mechanic
+read as absent. Acting on that, I added a "prefer a builder's artifact over the reviewer's merge"
+fallback — then removed it once the corrected check showed the merge was fine. **Verify a negative
+result before building on it.** Related: raising context to 16384 to "let the reviewer see more" made
+the reviewer exceed its timeout and abort the run; 8192 is the configuration that actually works on this
+machine. Both changes were reverted. Kept: `num_ctx` being sent at all (Ollama's 4096 default truncated
+deliverables), the budget helper that scales with context, and the timeout raise to 1800s.
+
+**WEEK 2 CLOSED (Aug 2).** MCP round-trip passed with a real stdio client — pitch → job → poll → result.
+Showcase game verified playable in a browser. 174 tests green.
+
+**Fifth bug, found by the MCP e2e run:** the reviewer's response contained draft haiku lines followed by
+an orphan `</think>`, and all of it shipped as the deliverable. Reasoning models emit these tags even
+with `think=false`. Worse, it corrupted grading — `_extract_rating` read NEEDS_WORK off the leaked
+reasoning when the reviewer had said FAIL. `strip_thinking()` now sanitizes every model response.
+
+**Known-remaining quality issue (not yet addressed):** when the reviewer decides the builders' work is
+unusable, it writes a bracketed refusal into the Final Assembled Output section (`[Cannot be assembled
+into a complete, usable deliverable...]`) and the pipeline ships that as the result. A rating of FAIL
+plus a bracketed-refusal body should probably trigger a rebuild rather than a delivery. Deliberately
+NOT fixed on speculation — needs a couple of real occurrences first to design against.
+
+**Where things stand:** Weeks 1 and 2 both closed. Next is Week 3 (deploy + freeze), whose first item
+needs Jett.
 
 **Next session:** check the showcase output (`output/<latest>/code/*.html`) — does it have a canvas, a game
 loop, and keyboard handlers, and does `check_code_files` pass it? Iterate the prompt if not. Then the MCP
