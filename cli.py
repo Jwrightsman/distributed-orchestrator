@@ -155,6 +155,13 @@ async def run_task(task: str, project_id: str | None = None):
         for f in result["code_files"]:
             console.print(f"  [dim]{f}[/dim]")
 
+    # Surface code that still doesn't parse after the repair pass — never let a
+    # PASS rating imply the code runs
+    if result.get("code_problems"):
+        console.print("\n[bold yellow]Warning — extracted code has problems:[/bold yellow]")
+        for p in result["code_problems"]:
+            console.print(f"  [yellow]{p}[/yellow]")
+
     elapsed = time.time() - start
     pid = result.get("project_id") or project_id
     if pid:
