@@ -233,6 +233,14 @@ executed or explicitly labelled as not verified. No result in this entry is assu
   planning around — the remaining audit items need Jett's machine.
 - The suite ran in 3 seconds and I nearly did not look at timing; the chaos tests then pushed it to
   30s because one test waited out a real 25-second long poll. Now 5.5s total.
+- **The audit's own instruction proved itself.** "Check CI is green, not just configured" — my first
+  push went red on GitHub while passing locally. **CI runs Python 3.14; my container had 3.11.**
+  `_emit()` used `asyncio.get_event_loop()`, which on 3.12+ raises `RuntimeError` outside a
+  coroutine but on 3.11 quietly creates a loop. The new chaos tests call the janitor synchronously
+  and tripped it. So the production code carried a latent 3.14 incompatibility on the version the
+  project actually targets — invisible until something called `_emit` from a sync context. Fixed
+  (and the same fix stopped broadcasts being garbage-collected before delivery). **A green local
+  suite is not evidence about CI here.** Verified green on GitHub afterwards.
 
 #### Built this session
 
