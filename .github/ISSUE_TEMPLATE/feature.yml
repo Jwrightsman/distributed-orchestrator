@@ -1,0 +1,48 @@
+name: Feature or idea
+description: Suggest something the project should do
+title: "[idea] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Worth knowing before you write: the current bottleneck is **reliability
+        and output quality**, not capability, and new user-facing surface area
+        is deliberately on hold until that's solid. An idea that makes the
+        existing pipeline produce better output is far more likely to land than
+        one that adds a feature.
+
+        Also permanently out of scope: tokens, coins, and anything on-chain.
+        That's a design constraint, not an oversight.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: >
+        Describe the situation you hit, not the solution you have in mind.
+        "I wanted to X and couldn't" is the most useful shape.
+    validations:
+      required: true
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you'd like to happen
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you tried or considered instead
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: offer
+    attributes:
+      label: Would you want to build it?
+      options:
+        - label: I'd be up for implementing this myself
+          required: false

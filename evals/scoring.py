@@ -386,7 +386,11 @@ def render_markdown(summary: dict, records: list[dict], meta: dict) -> str:
     rate = summary.get("success_rate", 0.0)
     lines.append(f"# Eval run — {meta.get('run_id', 'unknown')}")
     lines.append("")
-    lines.append(f"**Model:** `{meta.get('model', '?')}` · **Mode:** {meta.get('mode', '?')}")
+    lines.append(
+        f"**Model:** `{meta.get('model', '?')}` · "
+        f"**Prompt set:** `{meta.get('prompt_set', '?')}` · "
+        f"**Mode:** {meta.get('mode', '?')}"
+    )
     lines.append("")
     lines.append(
         f"**Success rate: {rate:.0%}** ({summary.get('success', 0)}/{summary.get('total', 0)}) "

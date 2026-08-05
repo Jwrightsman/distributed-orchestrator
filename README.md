@@ -48,9 +48,11 @@ All agents use local models via [Ollama](https://ollama.com). No data leaves you
 
 ## Quick start
 
-**Requirements:** Python 3.12+ (tested on 3.14), [Ollama](https://ollama.com)
+**Requirements:** Python 3.12+ (tested on 3.14), [Ollama](https://ollama.com) installed and running
 
 ```bash
+git clone https://github.com/Jwrightsman/distributed-orchestrator.git
+cd distributed-orchestrator
 pip install -r requirements.txt
 ollama pull qwen3.5:4b
 ```
@@ -75,12 +77,18 @@ Ollama
   Active:  qwen3.5:4b
 
 Config
-  Model:    qwen3.5:4b
-  Timeout:  600s
-  Retries:  3
+  Model:       qwen3.5:4b
+  Timeout:     1800s
+  Retries:     3
+  Node auth:   off (any node can join)
+  Pitch auth:  off (anyone can pitch)
+  Role routing: any node
+  Provider:    Ollama only
 ```
 
-If Ollama isn't running, start it with `ollama serve` and re-run. If the model is missing, run `ollama pull qwen3.5:4b`.
+`Status: offline` means Ollama isn't running — start it with `ollama serve` and re-run. If the model is missing, run `ollama pull qwen3.5:4b`. The two `off` lines are expected on your own machine; you turn them on before exposing the server to the internet ([docs/DEPLOY.md](docs/DEPLOY.md)).
+
+`status.py` reads local files only, so it works with Ollama stopped — as do `python cli.py --history`, `--standings` and `--projects`.
 
 ### CLI
 
@@ -101,14 +109,15 @@ Open **http://localhost:8000/dashboard** — pitch tasks from the UI, watch the 
 Tasks are one-and-done by default. Projects let you iterate on the same thing across multiple sessions — each run loads previous output as context so the AI knows what's already been built.
 
 ```bash
-# Start a new project
+# Start a new project — prints the project id it created
 python cli.py --new-project "My App" "Build a FastAPI todo app with SQLite"
 
-# Continue later — the AI remembers what it already built
+# Continue later — the AI remembers what it already built.
+# Use the id printed above (a slug of the name, e.g. "my-app").
 python cli.py --project my-app "Add user authentication"
 python cli.py --project my-app "Add a React frontend"
 
-# List all projects
+# Forgotten the id? List all projects (works with Ollama stopped)
 python cli.py --projects
 ```
 
@@ -147,7 +156,11 @@ curl -fsSL https://raw.githubusercontent.com/Jwrightsman/distributed-orchestrato
 $env:SWARM_SERVER="http://ORCHESTRATOR_IP:8000"; irm https://raw.githubusercontent.com/Jwrightsman/distributed-orchestrator/master/install.ps1 | iex
 ```
 
-The installer checks Python and Ollama, downloads the repo, pulls the model, and starts working. Omit the address to auto-discover an orchestrator on your LAN. Already have the repo?
+The installer checks Python and Ollama, downloads the repo, pulls the model, and starts working. Omit the address to auto-discover an orchestrator on your LAN.
+
+Piping a script from the internet into your shell deserves a look first — it's short, and reading it is the right instinct: [install.sh](install.sh) · [install.ps1](install.ps1).
+
+Already have the repo?
 
 ```bash
 # One-command join (checks deps, pulls model, registers, starts polling):
@@ -179,7 +192,10 @@ memory.py           # Persistent project memory across sessions
 ledger.py           # Contribution ledger (append-only JSON)
 extract.py          # Extracts runnable code files from pipeline output
 config.py           # Centralized settings (model, auth keys, provider routing)
-tests/              # 114 pytest tests — run with: pytest
+prompts/            # Versioned prompt sets — v1 is the measured baseline
+evals/              # Eval harness: prompts, scoring, results (see evals/README.md)
+scripts/            # restart_recovery.py + soak_test.py — no Ollama needed
+tests/              # pytest suite — run with: pytest -q
 docs/DEPLOY.md      # LAN / Tailscale / cloud deployment for beginners
 Dockerfile          # + docker-compose.yml: one-command orchestrator + Ollama
 output/             # Saved results, one directory per run
@@ -293,3 +309,11 @@ This is Phase 0 of a three-layer system:
 - Python 3.12+ (tested on 3.14) · FastAPI · httpx · rich
 - [Ollama](https://ollama.com) for local inference
 - qwen3.5:4b (default) · auto-detect ladder for whatever you have pulled
+
+## Contributing
+
+The most useful contribution is joining a node and reporting where you got stuck — see [CONTRIBUTING.md](CONTRIBUTING.md). Prompt changes are judged by measurement, not by reading: [`evals/README.md`](evals/README.md) explains the harness and the numbers.
+
+## License
+
+[MIT](LICENSE).

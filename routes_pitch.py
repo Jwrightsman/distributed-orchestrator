@@ -15,8 +15,8 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from ollama_client import generate
+import orchestrator
 from orchestrator import (
-    BUILDER_SYSTEM,
     _extract_final_output,
     _extract_issues,
     _extract_rating,
@@ -156,7 +156,7 @@ async def _run_job(job_id: str, task: str, project_id: str | None = None, trace_
                 "task_id": task_id,
                 "title": st["title"],
                 "prompt": prompt,
-                "system": BUILDER_SYSTEM,
+                "system": orchestrator.BUILDER_SYSTEM,
                 "trace_id": trace_id,
                 "job_id": job_id,
                 "subtask_id": st["id"],
@@ -168,11 +168,11 @@ async def _run_job(job_id: str, task: str, project_id: str | None = None, trace_
                 if time.time() > deadline:
                     # Timeout — fall back to local inference
                     task_queue[:] = [t for t in task_queue if t["task_id"] != task_id]
-                    return await generate(prompt, system=BUILDER_SYSTEM)
+                    return await generate(prompt, system=orchestrator.BUILDER_SYSTEM)
                 await asyncio.sleep(1)
             tr = task_results.pop(task_id)
             if tr.get("error") or not tr.get("output"):
-                return await generate(prompt, system=BUILDER_SYSTEM)
+                return await generate(prompt, system=orchestrator.BUILDER_SYSTEM)
             _dist_nodes_used.add(tr.get("node_id", "unknown"))
             return tr["output"]
 
@@ -360,20 +360,20 @@ async def _dispatch_subtask(
         "task_id": task_id,
         "title": st["title"],
         "prompt": prompt,
-        "system": BUILDER_SYSTEM,
+        "system": orchestrator.BUILDER_SYSTEM,
     })
 
     deadline = time.time() + 600
     while task_id not in task_results:
         if time.time() > deadline:
-            output = await generate(prompt, system=BUILDER_SYSTEM)
+            output = await generate(prompt, system=orchestrator.BUILDER_SYSTEM)
             nodes_used.add("local")
             return st["id"], output
         await asyncio.sleep(1)
 
     tr = task_results.pop(task_id)
     if tr.get("error") or not tr.get("output"):
-        output = await generate(prompt, system=BUILDER_SYSTEM)
+        output = await generate(prompt, system=orchestrator.BUILDER_SYSTEM)
         nodes_used.add("local")
     else:
         output = tr["output"]

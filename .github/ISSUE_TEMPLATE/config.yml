@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Questions and general discussion
+    url: https://github.com/Jwrightsman/distributed-orchestrator/discussions
+    about: Ask anything here — how it works, whether it'll run on your hardware, ideas.
+  - name: Setup guide (deploying beyond your own machine)
+    url: https://github.com/Jwrightsman/distributed-orchestrator/blob/master/docs/DEPLOY.md
+    about: LAN, Tailscale, or a public orchestrator — start here before filing a setup issue.
