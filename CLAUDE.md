@@ -76,10 +76,15 @@ A collectively-owned AI system powered by consumer hardware. Phase 0 demo: local
 - He can't assess security risk himself. Flag it clearly in plain language.
 
 ### What to build next
-Read **MASTER_PLAN.md** (project north star — direction, launch plan, division of labor)
-and **SPRINT_AUG2026.md** (the current execution plan and cross-session memory: work its
-items top to bottom, check them off, and append to its Session Log). Those two files
-override any older priority list, including anything cached from previous sessions.
+Read **MASTER_PLAN.md** (project north star — direction, launch plan, division of labor),
+then **SPRINT_AUG2026.md**'s Session Log for history, then **SPRINT_PHASE2.md** — that is
+the *active* plan and cross-session memory as of Aug 5, 2026. Work its items top to bottom,
+check them off, and append to its Session Log. Those files override any older priority list,
+including anything cached from previous sessions.
+
+Phase 2's priority is **output quality**, measured — not new features. The eval harness in
+`evals/` is the instrument; see its README. Do not tune a prompt without re-running it, and
+revert changes that don't move the score.
 
 ### What NOT to do
 - Don't rewrite things that work. The pipeline is tested and passes.
@@ -91,10 +96,21 @@ override any older priority list, including anything cached from previous sessio
 
 ### Testing
 After making changes, verify:
-1. `py -c "from server import app; print('server imports ok')"` — server starts clean
-2. `py status.py` — Ollama connection works
-3. `py cli.py --history` — CLI works
-4. `py cli.py "Build a hello world Python script"` — full pipeline runs (takes ~5 min on CPU)
+1. `py -m pytest -q` — the suite (242 tests, no Ollama needed). This is the fastest signal.
+2. `ruff check .` — CI fails on this, so run it before pushing
+3. `py -c "from server import app; print('server imports ok')"` — server starts clean
+4. `py status.py` — Ollama connection works
+5. `py cli.py --history` — CLI works with Ollama stopped too (it reads local files only)
+6. `py cli.py "Build a hello world Python script"` — full pipeline runs (takes ~5 min on CPU)
+
+For anything touching the planner/builder/reviewer/reviser prompts, the test suite is not
+enough — those changes are judged by measurement:
+`py evals/run_evals.py --only web_app` for a fast signal, then the full set.
+`py evals/run_evals.py --fake` checks the harness itself without a model.
+
+**CI runs Python 3.14.** Passing locally on an older Python is not proof — `asyncio`
+in particular behaves differently (3.12+ raises where 3.11 quietly created an event loop).
+Check the actual run on GitHub rather than assuming the badge is current.
 
 ### Git workflow
 - Commit after each logical change with a descriptive message
