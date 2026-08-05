@@ -638,7 +638,7 @@
     <div id="nodes-list">
       <div class="empty-state">
         <div class="icon">-</div>
-        <p>No nodes connected yet.<br>Run <code style="color:#00FFAA">py node.py --server http://YOUR_IP:8000</code> on another machine to join.</p>
+        <p>No nodes connected yet.<br>Run <code style="color:#00FFAA">python node.py --server http://YOUR_IP:8000</code> on another machine to join.</p>
       </div>
     </div>
 
@@ -767,7 +767,7 @@ async function refresh() {
       nodesList.innerHTML = `
         <div class="empty-state">
           <div class="icon">-</div>
-          <p>No nodes connected yet.<br>Run <code style="color:#00FFAA">py join.py http://YOUR_IP:8000</code> on another machine to join.</p>
+          <p>No nodes connected yet.<br>Run <code style="color:#00FFAA">python join.py http://YOUR_IP:8000</code> on another machine to join.</p>
         </div>`;
     } else {
       nodesList.innerHTML = nodes.nodes.map(n => {

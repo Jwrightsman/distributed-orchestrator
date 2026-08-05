@@ -91,6 +91,14 @@ DEFAULTS = {
     # Set 0 to disable pruning.
     "output_max_mb": 500,
 
+    # Pitch rate limit, per IP: at most `pitch_rate_max` pitches per
+    # `pitch_rate_window` seconds on /pitch, /pitch/async and /pitch/distributed.
+    # The default (5 per minute) is right for a public server. Raise it for a
+    # soak test or a demo where you pitch several times in quick succession —
+    # the 6th pitch inside a minute otherwise comes back 429.
+    "pitch_rate_max": 5,
+    "pitch_rate_window": 60,
+
     # Public pitch page (/try): lets anyone submit a task from a browser with
     # NO key — hard-limited to 2 pitches/hour per IP, 3 concurrent public jobs,
     # 300-char tasks, and a basic content filter. Off by default; understand

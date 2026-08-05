@@ -196,6 +196,13 @@ ws_manager = _WSManager()
 
 
 # ── Event emission ────────────────────────────────────────────────────
+
+# Strong references to in-flight broadcasts. Without these, asyncio only holds
+# a weak reference and a broadcast can be garbage-collected before it is
+# delivered ("Task was destroyed but it is pending!").
+_broadcast_tasks: set = set()
+
+
 def _emit(event_type: str, data: dict):
     """Push an event to the pipeline log, SQLite, and broadcast to WebSocket clients."""
     event = {
@@ -209,32 +216,59 @@ def _emit(event_type: str, data: dict):
         if len(pipeline_events) > 100:
             pipeline_events.pop(0)
         event["id"] = _db_write_event(event_type, event["time"], data)
-    asyncio.get_event_loop().create_task(ws_manager.broadcast(event))
+
+    # Emitting from a sync context (a script, a test, the CLI) must record the
+    # event rather than blow up: with no loop running there is no WebSocket
+    # client to broadcast to anyway. get_event_loop() used to be used here,
+    # which raises on Python 3.12+ outside a coroutine.
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    task = loop.create_task(ws_manager.broadcast(event))
+    _broadcast_tasks.add(task)
+    task.add_done_callback(_broadcast_tasks.discard)
 
 
 # ── Rate limiting ─────────────────────────────────────────────────────
+def _rate_limits() -> tuple[int, int]:
+    """(max pitches, window seconds) per IP, from config.
+
+    The module constants stay as the fallback so a malformed config can never
+    disable the limiter — it just reverts to the safe default.
+    """
+    cfg = get_config()
+    try:
+        return int(cfg.get("pitch_rate_max", _RATE_MAX)), int(
+            cfg.get("pitch_rate_window", _RATE_WINDOW)
+        )
+    except (TypeError, ValueError):
+        return _RATE_MAX, _RATE_WINDOW
+
+
 def _check_rate_limit(request: Request) -> int:
-    """Raise 429 if this IP has exceeded _RATE_MAX pitches in the last _RATE_WINDOW seconds.
+    """Raise 429 if this IP has exceeded the configured pitch rate.
 
     Returns the number of remaining pitches allowed in the current window.
     """
+    rate_max, rate_window = _rate_limits()
     ip = request.client.host if request.client else "unknown"
     now = time.time()
-    window_start = now - _RATE_WINDOW
+    window_start = now - rate_window
     timestamps = [t for t in _pitch_timestamps.get(ip, []) if t > window_start]
-    if len(timestamps) >= _RATE_MAX:
+    if len(timestamps) >= rate_max:
         raise HTTPException(
             status_code=429,
-            detail=f"Rate limit: max {_RATE_MAX} pitches per {_RATE_WINDOW}s. Try again shortly.",
+            detail=f"Rate limit: max {rate_max} pitches per {rate_window}s. Try again shortly.",
             headers={
-                "X-RateLimit-Limit": str(_RATE_MAX),
+                "X-RateLimit-Limit": str(rate_max),
                 "X-RateLimit-Remaining": "0",
-                "X-RateLimit-Reset": str(int(min(timestamps)) + _RATE_WINDOW),
+                "X-RateLimit-Reset": str(int(min(timestamps)) + rate_window),
             },
         )
     timestamps.append(now)
     _pitch_timestamps[ip] = timestamps
-    return _RATE_MAX - len(timestamps)
+    return rate_max - len(timestamps)
 
 
 # ── Pitch auth ───────────────────────────────────────────────────────
@@ -370,64 +404,73 @@ async def _cleanup_stale_nodes():
     """
     while True:
         await asyncio.sleep(30)
-        now = time.time()
+        _cleanup_pass()
 
-        # 1. Dead nodes
-        cutoff = now - _NODE_TIMEOUT
-        stale = [nid for nid, n in nodes.items() if n.get("last_seen", 0) < cutoff]
-        for nid in stale:
-            nodes.pop(nid, None)
-            # Reclaim any in-flight tasks assigned to this dead node
-            reclaimed = [
-                tid for tid, t in task_inflight.items()
-                if t.get("assigned_to") == nid
-            ]
-            for tid in reclaimed:
-                task = task_inflight.pop(tid)
-                task.pop("assigned_to", None)
-                task.pop("assigned_at", None)
-                task_queue.append(task)
-                _emit("task_reclaimed", {"task_id": tid, "node_id": nid})
 
-        # 2. Old task results (only needed long enough for the caller to collect them)
-        result_cutoff = now - _RESULT_TTL
-        stale_results = [
-            tid for tid, r in task_results.items()
-            if r.get("completed_at", now) < result_cutoff
+def _cleanup_pass():
+    """One sweep of the janitor. Split out from the loop so it can be tested.
+
+    Never raises: this runs unattended behind a background task, and a failure
+    here must not take the orchestrator down mid-demo.
+    """
+    now = time.time()
+
+    # 1. Dead nodes
+    cutoff = now - _NODE_TIMEOUT
+    stale = [nid for nid, n in nodes.items() if n.get("last_seen", 0) < cutoff]
+    for nid in stale:
+        nodes.pop(nid, None)
+        # Reclaim any in-flight tasks assigned to this dead node
+        reclaimed = [
+            tid for tid, t in task_inflight.items()
+            if t.get("assigned_to") == nid
         ]
-        for tid in stale_results:
-            task_results.pop(tid, None)
+        for tid in reclaimed:
+            task = task_inflight.pop(tid)
+            task.pop("assigned_to", None)
+            task.pop("assigned_at", None)
+            task_queue.append(task)
+            _emit("task_reclaimed", {"task_id": tid, "node_id": nid})
 
-        # 3. Old async jobs (finished jobs older than 7 days)
-        job_cutoff = now - _JOB_TTL
-        stale_jobs = []
-        for jid, job in jobs.items():
-            finished = job.get("finished_at")
-            if finished and job["status"] in ("complete", "failed"):
-                try:
-                    finished_ts = datetime.fromisoformat(finished).timestamp()
-                    if finished_ts < job_cutoff:
-                        stale_jobs.append(jid)
-                except Exception:
-                    pass
-        for jid in stale_jobs:
-            jobs.pop(jid, None)
+    # 2. Old task results (only needed long enough for the caller to collect them)
+    result_cutoff = now - _RESULT_TTL
+    stale_results = [
+        tid for tid, r in task_results.items()
+        if r.get("completed_at", now) < result_cutoff
+    ]
+    for tid in stale_results:
+        task_results.pop(tid, None)
 
-        # 4. Prune SQLite event log — keep only the last 2000 rows
-        try:
-            with _db_lock:
-                con = sqlite3.connect(_DB_PATH)
-                con.execute(
-                    "DELETE FROM events WHERE id NOT IN "
-                    "(SELECT id FROM events ORDER BY id DESC LIMIT 2000)"
-                )
-                con.commit()
-                con.close()
-        except Exception:
-            pass
+    # 3. Old async jobs (finished jobs older than 7 days)
+    job_cutoff = now - _JOB_TTL
+    stale_jobs = []
+    for jid, job in jobs.items():
+        finished = job.get("finished_at")
+        if finished and job["status"] in ("complete", "failed"):
+            try:
+                finished_ts = datetime.fromisoformat(finished).timestamp()
+                if finished_ts < job_cutoff:
+                    stale_jobs.append(jid)
+            except Exception:
+                pass
+    for jid in stale_jobs:
+        jobs.pop(jid, None)
 
-        # 5. Enforce the output/ directory size cap (config: output_max_mb)
-        try:
-            _prune_output_dir()
-        except Exception:
-            pass
+    # 4. Prune SQLite event log — keep only the last 2000 rows
+    try:
+        with _db_lock:
+            con = sqlite3.connect(_DB_PATH)
+            con.execute(
+                "DELETE FROM events WHERE id NOT IN "
+                "(SELECT id FROM events ORDER BY id DESC LIMIT 2000)"
+            )
+            con.commit()
+            con.close()
+    except Exception:
+        pass
+
+    # 5. Enforce the output/ directory size cap (config: output_max_mb)
+    try:
+        _prune_output_dir()
+    except Exception:
+        pass

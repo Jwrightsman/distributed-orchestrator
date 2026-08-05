@@ -9,7 +9,7 @@ import asyncio
 import json
 import re
 import shutil
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import platform
@@ -552,6 +552,35 @@ async def review(task: str, subtasks: list[dict], results: dict[int, str], memor
 
 # ── Full pipeline ───────────────────────────────────────────────────────
 
+# Hard cap on revision passes. The loop also breaks early when the reviewer is
+# satisfied or the reviser returns junk, but this is the bound that guarantees
+# a pitch always terminates — a reviewer that is never happy must not spin.
+_MAX_REVISIONS = 2
+
+
+def make_run_dir(output_dir: Path | None = None) -> tuple[str, Path]:
+    """Create a fresh output/<timestamp> directory and return (timestamp, path).
+
+    Run directories are named to the second, so two pitches that finish inside
+    the same second used to collide with FileExistsError — reachable whenever
+    jobs run concurrently through /pitch/async. On a collision we step forward
+    a second at a time rather than adding a suffix, because the history views
+    parse these names with a strict %Y%m%d_%H%M%S.
+    """
+    base = output_dir or OUTPUT_DIR
+    base.mkdir(exist_ok=True)
+    when = datetime.now(timezone.utc)
+    for _ in range(120):
+        timestamp = when.strftime("%Y%m%d_%H%M%S")
+        project_dir = base / timestamp
+        try:
+            project_dir.mkdir()
+            return timestamp, project_dir
+        except FileExistsError:
+            when += timedelta(seconds=1)
+    raise RuntimeError("Could not allocate an output directory — 120 seconds all taken")
+
+
 async def run_pipeline(
     task: str,
     on_plan=None,
@@ -645,7 +674,6 @@ async def run_pipeline(
     final_output = _extract_final_output(review_output)
     issues = _extract_issues(review_output)
 
-    _MAX_REVISIONS = 2
     for _rev_pass in range(_MAX_REVISIONS):
         if rating not in ("NEEDS_WORK", "FAIL") or not issues or not final_output:
             break
@@ -661,10 +689,7 @@ async def run_pipeline(
             break
 
     # 5. Save everything
-    OUTPUT_DIR.mkdir(exist_ok=True)
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    project_dir = OUTPUT_DIR / f"{timestamp}"
-    project_dir.mkdir()
+    timestamp, project_dir = make_run_dir()
 
     (project_dir / "plan.json").write_text(json.dumps(subtasks, indent=2))
 

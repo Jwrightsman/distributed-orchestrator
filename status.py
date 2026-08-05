@@ -124,7 +124,7 @@ async def main():
                     console.print(table)
         except httpx.ConnectError:
             console.print("  Status:  [dim]offline[/dim]")
-            console.print(f"  Start:   py -m uvicorn server:app --host 0.0.0.0 --port {config['port']}")
+            console.print(f"  Start:   python -m uvicorn server:app --host 0.0.0.0 --port {config['port']}")
     else:
         console.print("[dim]Run with --server to check orchestrator + nodes[/dim]")
 

@@ -22,6 +22,7 @@ from orchestrator import (
     _extract_rating,
     compose_builder_prompt,
     extract_and_repair,
+    make_run_dir,
     plan,
     review,
     revise,
@@ -30,7 +31,6 @@ from orchestrator import (
 from config import get as get_config
 import server_state as state
 from server_state import (
-    OUTPUT_DIR,
     PitchRequest,
     PitchResponse,
     _check_pitch_key,
@@ -51,7 +51,7 @@ async def pitch(req: PitchRequest, request: Request, response: Response):
     """Run the full pipeline locally (no distributed execution)."""
     _check_pitch_key(request)
     remaining = _check_rate_limit(request)
-    response.headers["X-RateLimit-Limit"] = str(state._RATE_MAX)
+    response.headers["X-RateLimit-Limit"] = str(state._rate_limits()[0])
     response.headers["X-RateLimit-Remaining"] = str(remaining)
     trace_id = str(uuid.uuid4())
     _emit("pitch", {"task": req.task, "trace_id": trace_id})
@@ -87,7 +87,7 @@ async def pitch_async(req: PitchRequest, request: Request, response: Response):
     """
     _check_pitch_key(request)
     remaining = _check_rate_limit(request)
-    response.headers["X-RateLimit-Limit"] = str(state._RATE_MAX)
+    response.headers["X-RateLimit-Limit"] = str(state._rate_limits()[0])
     response.headers["X-RateLimit-Remaining"] = str(remaining)
     job_id = f"job_{int(time.time() * 1000)}"
     trace_id = str(uuid.uuid4())
@@ -466,10 +466,7 @@ async def pitch_distributed(req: PitchRequest, request: Request):
             break
 
     # 6. Save output files
-    OUTPUT_DIR.mkdir(exist_ok=True)
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    project_dir = OUTPUT_DIR / timestamp
-    project_dir.mkdir()
+    timestamp, project_dir = make_run_dir()
 
     (project_dir / "plan.json").write_text(json.dumps(subtasks, indent=2))
     for st in subtasks:

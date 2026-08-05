@@ -124,3 +124,69 @@ Open source, no API keys, nothing leaves the machines you own.
 Repo: https://github.com/Jwrightsman/distributed-orchestrator
 
 I need nodes — if you've got a spare machine, one command joins it.
+
+---
+
+## Anticipated questions — pre-written replies
+
+r/LocalLLaMA rewards fast, specific, non-defensive answers. These are drafted so you can
+reply in under a minute without thinking. Edit tone freely; keep the honesty.
+
+### "How is this different from Exo / llama.cpp RPC / distributed inference?"
+
+> Different layer, and worth being precise about. Exo and llama.cpp's RPC mode shard **one model**
+> across machines so you can run a model bigger than any single box. This shards **the task** — each
+> machine runs its own small model on a different subtask, in parallel, and a reviewer merges the
+> results. So it's an orchestration and contribution layer, not an inference backend.
+>
+> They compose, in principle: an RPC-sharded cluster could be one fat node in this network. I
+> prototyped nothing there yet — it's on the list, honestly labelled as unbuilt.
+
+### "Isn't this just a task queue with extra steps? Why not Celery?"
+
+> Fair. The queue part genuinely is boring — long-poll, reclaim on timeout, circuit breaker on
+> repeated failure. If that were all it did, Celery would be the right answer.
+>
+> The parts that aren't a task queue: a planner that decomposes a plain-English pitch into a
+> dependency graph, wave-based parallel execution over that graph, a reviewer that has to integrate
+> outputs from agents that never saw each other's work, and an auto-revision loop when it doesn't
+> hold together. Cross-agent integration is the failure mode unique to this shape, and most of the
+> engineering is there rather than in the dispatch.
+
+### "What stops a malicious node from returning garbage?"
+
+> Right now: not enough, and I'd rather say so than hand-wave it. Nodes authenticate with a shared
+> secret, so it's a trusted-network model — fine for you and three friends, not fine for open
+> internet volunteers. A node that fails repeatedly trips a circuit breaker and sits out; a node
+> that returns *plausible* garbage gets through to the reviewer, which is the last line of defence
+> and is itself a small model.
+>
+> The designed answer is redundant execution on a sample of subtasks plus per-node reputation
+> feeding routing weight. It's specced, not built. If you want to open the network to strangers
+> safely, that's the piece to build, and I'd take the help.
+
+### "How good is the output really, on a 4B model?"
+
+> Being straight with you: good enough for a self-contained web app, a CLI tool, or a data script;
+> not good enough to architect anything large. Rather than guess, there's an eval harness in the
+> repo — ~30 varied pitches, scored on whether the extractor produced files, whether they parse,
+> whether they actually execute (HTML gets loaded in a headless browser and fails on JS errors),
+> plus a model judgment and wall-clock cost. The measured number goes in the README, including if
+> it's unflattering. A "PASS" rating that doesn't run counts as a failure by construction.
+
+### "Is there a token? Are you going to rug this?"
+
+> No token, no blockchain, no fundraise, and that's a deliberate design constraint rather than a
+> "not yet". The ledger is an append-only JSON file that counts contributions. If this ever becomes
+> a real guild, the interesting problem is governance among people who show up, not a coin.
+
+### "What do I need to join?"
+
+> An 8GB machine and Ollama. One command:
+>
+> ```
+> python join.py http://<orchestrator>:8000
+> ```
+>
+> It checks your deps, pulls the model if you don't have it, registers, and starts taking builder
+> tasks. Close the lid whenever you want — in-flight work gets reclaimed and re-assigned.

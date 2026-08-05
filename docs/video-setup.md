@@ -17,7 +17,7 @@ Both machines need:
 1. Python 3.12+ installed
 2. [Ollama](https://ollama.com) installed and running
 3. The repo cloned: `git clone https://github.com/Jwrightsman/distributed-orchestrator`
-4. Dependencies: `pip install fastapi uvicorn httpx rich`
+4. Dependencies: `pip install -r requirements.txt`
 5. Model pulled: `ollama pull gemma3:4b`
 
 Both machines must be on the **same Wi-Fi network**.
@@ -32,7 +32,7 @@ Open **3 separate terminal windows**.
 
 **Terminal 1 — Start the server:**
 ```bash
-py -m uvicorn server:app --host 0.0.0.0 --port 8000
+python -m uvicorn server:app --host 0.0.0.0 --port 8000
 ```
 
 > ⚠️ **Security note:** `--host 0.0.0.0` makes the server visible to every device on your Wi-Fi.
@@ -43,7 +43,7 @@ Wait until you see: `Uvicorn running on http://0.0.0.0:8000`
 
 **Terminal 2 — Join as a node (your machine earns credits too):**
 ```bash
-py node.py --server http://localhost:8000 --node-id Laptop-1
+python node.py --server http://localhost:8000 --node-id Laptop-1
 ```
 
 Wait until you see: `Registered as Laptop-1`
@@ -64,9 +64,9 @@ ipconfig
 
 Tell your friend your IP. On their machine, one terminal:
 ```bash
-py join.py http://192.168.1.42:8000
+python join.py http://192.168.1.42:8000
 # Or if auto-discovery works (same network):
-py join.py
+python join.py
 ```
 
 Wait until they see: `Registered as` and a node ID.
@@ -90,7 +90,7 @@ If you only see 1, Machine 2 hasn't connected yet. Wait a moment and refresh.
 Run these on your machine before you start OBS:
 
 ```bash
-py status.py --server   # should show 2 nodes, Ollama running
+python status.py --server   # should show 2 nodes, Ollama running
 ```
 
 Expected output:
@@ -101,7 +101,7 @@ Server       running · 2 nodes connected
 
 If that looks good, do a fast dry run (skips pauses, no recording):
 ```bash
-py cli.py --demo-fast
+python cli.py --demo-fast
 ```
 
 This should finish with a PASS rating and no errors. If it fails, fix it before recording.
@@ -113,7 +113,7 @@ This should finish with a PASS rating and no errors. If it fails, fix it before 
 In Terminal 3 (the one you keep on screen):
 
 ```bash
-py cli.py --demo-live
+python cli.py --demo-live
 ```
 
 This is the live distributed version. It:
@@ -141,7 +141,7 @@ This is the live distributed version. It:
 
 **Friend can't connect:**
 - Check you're on the same Wi-Fi
-- Try `py join.py http://YOUR_IP:8000` with your actual IP instead of auto-discovery
+- Try `python join.py http://YOUR_IP:8000` with your actual IP instead of auto-discovery
 - Make sure Windows Firewall isn't blocking port 8000:
   `netsh advfirewall firewall add rule name="Orchestrator" dir=in action=allow protocol=TCP localport=8000`
 
@@ -156,7 +156,7 @@ This is the live distributed version. It:
 **Only 1 node showing in dashboard:**
 - Refresh the dashboard (F5)
 - Check Terminal 2 on your machine — the node.py process must still be running
-- Re-run: `py node.py --server http://localhost:8000 --node-id Laptop-1`
+- Re-run: `python node.py --server http://localhost:8000 --node-id Laptop-1`
 
 ---
 
