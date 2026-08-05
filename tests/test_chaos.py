@@ -1,0 +1,418 @@
+"""Chaos tests — the failure modes that would show up on camera.
+
+SPRINT_PHASE2 §2. Every scenario here is something a real volunteer network
+does routinely: laptops sleep, wifi drops, models return garbage, two workers
+race for the same task. The bar is not "handled gracefully" in the abstract —
+it is that the orchestrator keeps serving, the work is not lost, and the
+operator sees a clear message instead of a stack trace.
+
+No Ollama and no network: the worker protocol is exercised through the real
+FastAPI app in-process.
+"""
+
+import time
+
+import pytest
+from fastapi.testclient import TestClient
+
+import routes_pitch
+import server
+import server_state
+
+
+@pytest.fixture(autouse=True)
+def clean_server_state():
+    for d in (
+        server.nodes,
+        server.task_results,
+        server.task_inflight,
+        server.node_failure_count,
+        server.node_blacklist,
+        server.jobs,
+        server._pitch_timestamps,
+    ):
+        d.clear()
+    server.task_queue.clear()
+    server.pipeline_events.clear()
+    server_state._init_db()
+    yield
+
+
+@pytest.fixture
+def client():
+    with TestClient(server.app) as c:
+        yield c
+
+
+def register(client, node_id="node-a", model="qwen3.5:4b"):
+    resp = client.post(
+        "/nodes/register",
+        json={
+            "node_id": node_id,
+            "model": model,
+            "platform": "Linux",
+            "machine": "x86_64",
+            "hostname": node_id,
+            "cpu_count": 4,
+            "ram_gb": 8.0,
+            "gpu": "",
+            "capabilities": [],
+        },
+    )
+    assert resp.status_code == 200
+    return resp
+
+
+def queue_task(task_id="t1", title="Build a thing"):
+    server.task_queue.append(
+        {
+            "task_id": task_id,
+            "title": title,
+            "prompt": "do the thing",
+            "system": "you are a builder",
+            "trace_id": "trace-1",
+            "job_id": "job-1",
+            "subtask_id": 1,
+            "requires": [],
+        }
+    )
+
+
+# ── A node disappears mid-task ──────────────────────────────────────────────
+
+def test_task_is_reclaimed_when_node_goes_silent(client):
+    """Laptop closes mid-build. The task must go back in the queue, not vanish."""
+    register(client, "ghost")
+    queue_task("t-ghost")
+
+    task = client.get("/tasks/next", params={"node_id": "ghost"}).json()
+    assert task["task_id"] == "t-ghost"
+    assert server.task_inflight["t-ghost"]["assigned_to"] == "ghost"
+    assert not server.task_queue
+
+    # The node stops sending heartbeats and ages past the staleness cutoff.
+    server.nodes["ghost"]["last_seen"] = time.time() - (server_state._NODE_TIMEOUT + 10)
+    server_state._cleanup_pass()
+
+    assert "ghost" not in server.nodes
+    assert "t-ghost" not in server.task_inflight
+    assert [t["task_id"] for t in server.task_queue] == ["t-ghost"]
+    # The reclaimed task must be assignable again — no stale assignment left on it
+    assert "assigned_to" not in server.task_queue[0]
+
+
+def test_reclaimed_task_can_be_picked_up_by_another_node(client):
+    register(client, "dead")
+    register(client, "alive")
+    queue_task("t-move")
+
+    client.get("/tasks/next", params={"node_id": "dead"})
+    server.nodes["dead"]["last_seen"] = time.time() - (server_state._NODE_TIMEOUT + 10)
+    server_state._cleanup_pass()
+
+    task = client.get("/tasks/next", params={"node_id": "alive"}).json()
+    assert task["task_id"] == "t-move"
+    assert server.task_inflight["t-move"]["assigned_to"] == "alive"
+
+
+def test_healthy_node_is_not_reclaimed(client):
+    register(client, "steady")
+    queue_task("t-keep")
+    client.get("/tasks/next", params={"node_id": "steady"})
+
+    server_state._cleanup_pass()
+
+    assert "steady" in server.nodes
+    assert "t-keep" in server.task_inflight
+
+
+# ── A node returns malformed, empty, or refusing output ─────────────────────
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"output": "", "error": None},
+        {"output": None, "error": "model crashed"},
+        {"output": "", "error": "timeout"},
+    ],
+)
+def test_bad_results_are_accepted_and_counted_as_failures(client, payload):
+    """A bad result must be recorded, not rejected — the caller needs to see it."""
+    register(client, "flaky")
+    queue_task("t-bad")
+    client.get("/tasks/next", params={"node_id": "flaky"})
+
+    resp = client.post(
+        "/tasks/t-bad/result",
+        json={"node_id": "flaky", "elapsed_seconds": 1.0, **payload},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["credits_earned"] == 0
+    assert server.node_failure_count["flaky"] == 1
+    assert "t-bad" in server.task_results
+
+
+def test_refusal_text_still_counts_as_a_completed_task(client):
+    """A model that says "I can't help with that" returns output, not an error.
+
+    It must not be silently treated as a failure at this layer — the pipeline's
+    refusal detection handles the content. What matters here is that the
+    orchestrator does not lose the result.
+    """
+    register(client, "refuser")
+    queue_task("t-refuse")
+    client.get("/tasks/next", params={"node_id": "refuser"})
+
+    resp = client.post(
+        "/tasks/t-refuse/result",
+        json={
+            "node_id": "refuser",
+            "output": "I'm sorry, but I cannot assist with that request.",
+            "error": None,
+            "elapsed_seconds": 2.0,
+        },
+    )
+
+    assert resp.status_code == 200
+    assert server.task_results["t-refuse"]["output"].startswith("I'm sorry")
+
+
+def test_result_for_unknown_task_does_not_crash(client):
+    """A node reconnecting with a stale task id must not take the server down."""
+    register(client, "zombie")
+
+    resp = client.post(
+        "/tasks/does-not-exist/result",
+        json={"node_id": "zombie", "output": "late work", "error": None, "elapsed_seconds": 1.0},
+    )
+
+    assert resp.status_code == 200
+    assert "does-not-exist" in server.task_results
+
+
+def test_stream_from_stale_task_is_ignored_not_fatal(client):
+    register(client, "streamer")
+
+    resp = client.post(
+        "/tasks/gone/stream",
+        json={"node_id": "streamer", "tokens": "hello"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is False
+
+
+# ── Circuit breaker opens and recovers ──────────────────────────────────────
+
+def test_circuit_breaker_opens_after_repeated_failures(client):
+    register(client, "broken")
+
+    for i in range(server_state._FAILURE_THRESHOLD):
+        queue_task(f"t-fail-{i}")
+        client.get("/tasks/next", params={"node_id": "broken"})
+        client.post(
+            f"/tasks/t-fail-{i}/result",
+            json={"node_id": "broken", "output": "", "error": "boom", "elapsed_seconds": 0.1},
+        )
+
+    assert "broken" in server.node_blacklist
+
+    resp = client.get("/tasks/next", params={"node_id": "broken"})
+    assert resp.status_code == 429
+    assert resp.json()["error"] == "circuit_open"
+    assert resp.json()["retry_after"] > 0
+
+
+def test_circuit_breaker_recovers_after_the_blacklist_expires(client):
+    register(client, "recovering")
+    queue_task("t-later")
+
+    server.node_blacklist["recovering"] = time.time() - 1  # expired a second ago
+    server.node_failure_count["recovering"] = server_state._FAILURE_THRESHOLD
+
+    task = client.get("/tasks/next", params={"node_id": "recovering"}).json()
+
+    assert task["task_id"] == "t-later"
+    assert "recovering" not in server.node_blacklist
+    assert server.node_failure_count["recovering"] == 0
+
+
+def test_one_success_clears_the_failure_streak(client):
+    register(client, "wobbly")
+    server.node_failure_count["wobbly"] = server_state._FAILURE_THRESHOLD - 1
+
+    queue_task("t-good")
+    client.get("/tasks/next", params={"node_id": "wobbly"})
+    client.post(
+        "/tasks/t-good/result",
+        json={"node_id": "wobbly", "output": "a real answer", "error": None, "elapsed_seconds": 3.0},
+    )
+
+    assert server.node_failure_count["wobbly"] == 0
+    assert "wobbly" not in server.node_blacklist
+
+
+def test_blacklisting_one_node_does_not_affect_others(client):
+    register(client, "bad")
+    register(client, "good")
+    server.node_blacklist["bad"] = time.time() + 60
+    queue_task("t-shared")
+
+    assert client.get("/tasks/next", params={"node_id": "bad"}).status_code == 429
+    assert client.get("/tasks/next", params={"node_id": "good"}).json()["task_id"] == "t-shared"
+
+
+# ── Two nodes racing for the same task ──────────────────────────────────────
+
+def test_a_task_is_handed_to_exactly_one_node(client, monkeypatch):
+    """Two workers polling at once must not both get the same task."""
+    # The loser long-polls for the full timeout before giving up; shorten it so
+    # the suite does not sit for 25 seconds proving it.
+    monkeypatch.setattr(server_state, "_LONG_POLL_TIMEOUT", 0.5)
+    register(client, "racer-1")
+    register(client, "racer-2")
+    queue_task("t-solo")
+
+    first = client.get("/tasks/next", params={"node_id": "racer-1"}).json()
+    second = client.get("/tasks/next", params={"node_id": "racer-2"})
+
+    assert first["task_id"] == "t-solo"
+    # Nothing left to hand out — the second poll long-polls and returns empty
+    assert second.status_code == 204
+    assert len(server.task_inflight) == 1
+
+
+def test_duplicate_result_submissions_do_not_double_pay(client):
+    """A node that retries its submission must not earn credits twice."""
+    register(client, "double")
+    queue_task("t-dup")
+    client.get("/tasks/next", params={"node_id": "double"})
+
+    body = {"node_id": "double", "output": "work", "error": None, "elapsed_seconds": 1.0}
+    first = client.post("/tasks/t-dup/result", json=body)
+    second = client.post("/tasks/t-dup/result", json=body)
+
+    assert first.json()["credits_earned"] == 5
+    # The task is no longer in flight, so the retry must not be paid again.
+    assert second.json()["credits_earned"] == 0
+    assert server.nodes["double"]["credits_earned"] == 5
+
+
+# ── The orchestrator survives its dependencies ──────────────────────────────
+
+def test_health_reports_ollama_down_without_crashing(client):
+    """Ollama restarting mid-pipeline must not take /health down.
+
+    Nothing is listening on the Ollama port during tests, so this exercises the
+    real unreachable path rather than a mock of it.
+    """
+    resp = client.get("/health")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ollama"] == "unavailable"
+    assert body["status"] == "degraded"
+    # Node bookkeeping still answers while the model backend is gone
+    assert "nodes_online" in body and "tasks_pending" in body
+
+
+def test_pipeline_failure_returns_a_message_not_a_stack_trace(client, monkeypatch):
+    """A planner blow-up must reach the user as an explanation."""
+    async def exploding_pipeline(*a, **k):
+        raise ValueError("Planner failed after 3 attempts: Subtask 1 is missing a title")
+
+    monkeypatch.setattr(routes_pitch, "run_pipeline", exploding_pipeline)
+
+    resp = client.post("/pitch", json={"task": "build something"})
+
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert "Planner failed" in detail
+    assert "Traceback" not in detail
+
+
+def test_unexpected_error_is_json_not_a_traceback(monkeypatch):
+    """Anything unhandled still leaves the API contract intact."""
+    async def exploding_pipeline(*a, **k):
+        raise RuntimeError("something nobody predicted")
+
+    monkeypatch.setattr(routes_pitch, "run_pipeline", exploding_pipeline)
+
+    # Let the app's own handler answer instead of re-raising into the test.
+    with TestClient(server.app, raise_server_exceptions=False) as c:
+        resp = c.post("/pitch", json={"task": "build something"})
+
+    assert resp.status_code == 500
+    assert resp.json()["error"] == "Internal server error"
+    assert "Traceback" not in resp.text
+
+
+def test_async_job_records_failure_instead_of_hanging(client, monkeypatch):
+    """A job whose pipeline dies must end up 'failed', never stuck 'running'."""
+    async def exploding_pipeline(*a, **k):
+        raise RuntimeError("node fell over")
+
+    monkeypatch.setattr(routes_pitch, "run_pipeline", exploding_pipeline)
+
+    job_id = client.post("/pitch/async", json={"task": "build something"}).json()["job_id"]
+
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        job = client.get(f"/jobs/{job_id}").json()
+        if job["status"] in ("complete", "failed"):
+            break
+        time.sleep(0.1)
+
+    assert job["status"] == "failed"
+    assert "node fell over" in (job["error"] or "")
+
+
+# ── Queue and state hygiene under churn ─────────────────────────────────────
+
+def test_cleanup_pass_is_safe_to_run_repeatedly_on_empty_state():
+    for _ in range(5):
+        server_state._cleanup_pass()
+
+    assert server.nodes == {}
+    assert server.task_queue == []
+
+
+def test_old_task_results_are_pruned(client):
+    server.task_results["ancient"] = {
+        "task_id": "ancient",
+        "node_id": "n",
+        "output": "x",
+        "completed_at": time.time() - (server_state._RESULT_TTL + 60),
+    }
+    server.task_results["fresh"] = {
+        "task_id": "fresh",
+        "node_id": "n",
+        "output": "x",
+        "completed_at": time.time(),
+    }
+
+    server_state._cleanup_pass()
+
+    assert "ancient" not in server.task_results
+    assert "fresh" in server.task_results
+
+
+def test_many_nodes_churning_does_not_lose_queued_work(client):
+    """20 nodes register, take work, and half of them vanish."""
+    for i in range(20):
+        register(client, f"churn-{i}")
+    for i in range(20):
+        queue_task(f"t-churn-{i}")
+
+    for i in range(20):
+        client.get("/tasks/next", params={"node_id": f"churn-{i}"})
+    assert len(server.task_inflight) == 20
+
+    for i in range(0, 20, 2):
+        server.nodes[f"churn-{i}"]["last_seen"] = time.time() - (server_state._NODE_TIMEOUT + 10)
+    server_state._cleanup_pass()
+
+    # Nothing lost: every task is either still in flight or back in the queue.
+    assert len(server.task_inflight) + len(server.task_queue) == 20
+    assert len(server.task_queue) == 10

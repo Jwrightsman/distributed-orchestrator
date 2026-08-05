@@ -130,6 +130,12 @@ async def submit_result(task_id: str, result: TaskResult, request: Request):
     task = task_inflight.pop(task_id, None)
     trace_id = task.get("trace_id", "") if task else ""
 
+    # Only work we actually handed out earns credit. A node retrying after a
+    # dropped connection, or reporting a task that was already reclaimed, still
+    # gets its result recorded — but paying twice would inflate the ledger and
+    # the standings on the dashboard.
+    was_inflight = task is not None
+
     task_results[task_id] = {
         "task_id": task_id,
         "node_id": result.node_id,
@@ -157,10 +163,11 @@ async def submit_result(task_id: str, result: TaskResult, request: Request):
 
     credits_earned = 0
     if result.node_id in nodes:
-        nodes[result.node_id]["tasks_completed"] += 1
+        if was_inflight:
+            nodes[result.node_id]["tasks_completed"] += 1
         nodes[result.node_id]["last_seen"] = time.time()
         nodes[result.node_id]["current_task"] = None
-    if success:
+    if success and was_inflight:
         credits_earned = 5
         log_contribution(result.node_id, "compute", credits=credits_earned, task=task_id)
         if result.node_id in nodes:

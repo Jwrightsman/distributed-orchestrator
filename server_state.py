@@ -370,64 +370,73 @@ async def _cleanup_stale_nodes():
     """
     while True:
         await asyncio.sleep(30)
-        now = time.time()
+        _cleanup_pass()
 
-        # 1. Dead nodes
-        cutoff = now - _NODE_TIMEOUT
-        stale = [nid for nid, n in nodes.items() if n.get("last_seen", 0) < cutoff]
-        for nid in stale:
-            nodes.pop(nid, None)
-            # Reclaim any in-flight tasks assigned to this dead node
-            reclaimed = [
-                tid for tid, t in task_inflight.items()
-                if t.get("assigned_to") == nid
-            ]
-            for tid in reclaimed:
-                task = task_inflight.pop(tid)
-                task.pop("assigned_to", None)
-                task.pop("assigned_at", None)
-                task_queue.append(task)
-                _emit("task_reclaimed", {"task_id": tid, "node_id": nid})
 
-        # 2. Old task results (only needed long enough for the caller to collect them)
-        result_cutoff = now - _RESULT_TTL
-        stale_results = [
-            tid for tid, r in task_results.items()
-            if r.get("completed_at", now) < result_cutoff
+def _cleanup_pass():
+    """One sweep of the janitor. Split out from the loop so it can be tested.
+
+    Never raises: this runs unattended behind a background task, and a failure
+    here must not take the orchestrator down mid-demo.
+    """
+    now = time.time()
+
+    # 1. Dead nodes
+    cutoff = now - _NODE_TIMEOUT
+    stale = [nid for nid, n in nodes.items() if n.get("last_seen", 0) < cutoff]
+    for nid in stale:
+        nodes.pop(nid, None)
+        # Reclaim any in-flight tasks assigned to this dead node
+        reclaimed = [
+            tid for tid, t in task_inflight.items()
+            if t.get("assigned_to") == nid
         ]
-        for tid in stale_results:
-            task_results.pop(tid, None)
+        for tid in reclaimed:
+            task = task_inflight.pop(tid)
+            task.pop("assigned_to", None)
+            task.pop("assigned_at", None)
+            task_queue.append(task)
+            _emit("task_reclaimed", {"task_id": tid, "node_id": nid})
 
-        # 3. Old async jobs (finished jobs older than 7 days)
-        job_cutoff = now - _JOB_TTL
-        stale_jobs = []
-        for jid, job in jobs.items():
-            finished = job.get("finished_at")
-            if finished and job["status"] in ("complete", "failed"):
-                try:
-                    finished_ts = datetime.fromisoformat(finished).timestamp()
-                    if finished_ts < job_cutoff:
-                        stale_jobs.append(jid)
-                except Exception:
-                    pass
-        for jid in stale_jobs:
-            jobs.pop(jid, None)
+    # 2. Old task results (only needed long enough for the caller to collect them)
+    result_cutoff = now - _RESULT_TTL
+    stale_results = [
+        tid for tid, r in task_results.items()
+        if r.get("completed_at", now) < result_cutoff
+    ]
+    for tid in stale_results:
+        task_results.pop(tid, None)
 
-        # 4. Prune SQLite event log — keep only the last 2000 rows
-        try:
-            with _db_lock:
-                con = sqlite3.connect(_DB_PATH)
-                con.execute(
-                    "DELETE FROM events WHERE id NOT IN "
-                    "(SELECT id FROM events ORDER BY id DESC LIMIT 2000)"
-                )
-                con.commit()
-                con.close()
-        except Exception:
-            pass
+    # 3. Old async jobs (finished jobs older than 7 days)
+    job_cutoff = now - _JOB_TTL
+    stale_jobs = []
+    for jid, job in jobs.items():
+        finished = job.get("finished_at")
+        if finished and job["status"] in ("complete", "failed"):
+            try:
+                finished_ts = datetime.fromisoformat(finished).timestamp()
+                if finished_ts < job_cutoff:
+                    stale_jobs.append(jid)
+            except Exception:
+                pass
+    for jid in stale_jobs:
+        jobs.pop(jid, None)
 
-        # 5. Enforce the output/ directory size cap (config: output_max_mb)
-        try:
-            _prune_output_dir()
-        except Exception:
-            pass
+    # 4. Prune SQLite event log — keep only the last 2000 rows
+    try:
+        with _db_lock:
+            con = sqlite3.connect(_DB_PATH)
+            con.execute(
+                "DELETE FROM events WHERE id NOT IN "
+                "(SELECT id FROM events ORDER BY id DESC LIMIT 2000)"
+            )
+            con.commit()
+            con.close()
+    except Exception:
+        pass
+
+    # 5. Enforce the output/ directory size cap (config: output_max_mb)
+    try:
+        _prune_output_dir()
+    except Exception:
+        pass
