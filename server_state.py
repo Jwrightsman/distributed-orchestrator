@@ -231,28 +231,44 @@ def _emit(event_type: str, data: dict):
 
 
 # ── Rate limiting ─────────────────────────────────────────────────────
+def _rate_limits() -> tuple[int, int]:
+    """(max pitches, window seconds) per IP, from config.
+
+    The module constants stay as the fallback so a malformed config can never
+    disable the limiter — it just reverts to the safe default.
+    """
+    cfg = get_config()
+    try:
+        return int(cfg.get("pitch_rate_max", _RATE_MAX)), int(
+            cfg.get("pitch_rate_window", _RATE_WINDOW)
+        )
+    except (TypeError, ValueError):
+        return _RATE_MAX, _RATE_WINDOW
+
+
 def _check_rate_limit(request: Request) -> int:
-    """Raise 429 if this IP has exceeded _RATE_MAX pitches in the last _RATE_WINDOW seconds.
+    """Raise 429 if this IP has exceeded the configured pitch rate.
 
     Returns the number of remaining pitches allowed in the current window.
     """
+    rate_max, rate_window = _rate_limits()
     ip = request.client.host if request.client else "unknown"
     now = time.time()
-    window_start = now - _RATE_WINDOW
+    window_start = now - rate_window
     timestamps = [t for t in _pitch_timestamps.get(ip, []) if t > window_start]
-    if len(timestamps) >= _RATE_MAX:
+    if len(timestamps) >= rate_max:
         raise HTTPException(
             status_code=429,
-            detail=f"Rate limit: max {_RATE_MAX} pitches per {_RATE_WINDOW}s. Try again shortly.",
+            detail=f"Rate limit: max {rate_max} pitches per {rate_window}s. Try again shortly.",
             headers={
-                "X-RateLimit-Limit": str(_RATE_MAX),
+                "X-RateLimit-Limit": str(rate_max),
                 "X-RateLimit-Remaining": "0",
-                "X-RateLimit-Reset": str(int(min(timestamps)) + _RATE_WINDOW),
+                "X-RateLimit-Reset": str(int(min(timestamps)) + rate_window),
             },
         )
     timestamps.append(now)
     _pitch_timestamps[ip] = timestamps
-    return _RATE_MAX - len(timestamps)
+    return rate_max - len(timestamps)
 
 
 # ── Pitch auth ───────────────────────────────────────────────────────

@@ -230,7 +230,20 @@ This is a **Phase 0 trusted-network prototype**. Here's exactly what's durable a
 
 **Execution guarantees:** Tasks are at-least-once in the distributed path — if a node goes offline mid-task, the task is re-queued and can run on another node. There's no deduplication guard, so in rare race conditions a task may run twice. The final reviewer sees all outputs and merges them, so this typically doesn't affect the result.
 
-**Trust model:** Worker nodes authenticate with a shared secret (`node_secret`), task submission can be gated with `pitch_key`, pitch endpoints are rate-limited (5/min/IP), and `output/` disk usage is capped (`output_max_mb`). All auth is off by default for trusted-network mode; **set both keys before any internet exposure** — [docs/DEPLOY.md](docs/DEPLOY.md) walks through it. No HTTPS out of the box: treat pitched tasks and outputs as public on a public deployment.
+**Trust model:** Worker nodes authenticate with a shared secret (`node_secret`), task submission can be gated with `pitch_key`, pitch endpoints are rate-limited (`pitch_rate_max`, default 5/min/IP), and `output/` disk usage is capped (`output_max_mb`). All auth is off by default for trusted-network mode; **set both keys before any internet exposure** — [docs/DEPLOY.md](docs/DEPLOY.md) walks through it. No HTTPS out of the box: treat pitched tasks and outputs as public on a public deployment.
+
+**Verified, not assumed.** `scripts/restart_recovery.py` kills a running server with `SIGKILL` mid-job and checks what comes back: jobs and event history survive, nodes re-register, the dashboard recovers, and WebSocket clients reconnect (17/17 checks). `scripts/soak_test.py` runs 60 consecutive pitches through one server session: **+0.9 MB RSS growth, no orphaned tasks, no latency drift**. Both run without Ollama, so you can check your own deployment in under a minute.
+
+## Limitations
+
+Stated plainly, because you'll find them anyway:
+
+- **Small models have a ceiling.** The default is a 4B model on consumer hardware. It writes a working single-file web app or a useful script; it will not architect your microservice. Output quality is the project's current focus, measured by the eval harness in [`evals/`](evals/) rather than asserted.
+- **CPU-only is slow.** A full pitch is minutes, not seconds — the planner, each builder, and the reviewer are each a separate model call, and the reviewer has to re-emit the whole deliverable. A GPU changes this dramatically.
+- **Generated code is not sandboxed.** The pipeline writes runnable files to `output/`. It checks that Python parses and HTML is structurally sound, but *you* are responsible for reading anything before you run it.
+- **It's a trusted network, not a trustless one.** `node_secret` is a shared password, not per-node identity. A node that authenticates can return whatever it likes. The circuit breaker catches a node that fails repeatedly; it does not catch a node that returns plausible-looking garbage. Redundant execution and per-node reputation are designed but not built.
+- **One orchestrator, no failover.** The planner and reviewer always run on the orchestrator; only builder subtasks are distributed. If the orchestrator goes down, the swarm stops — it restarts cleanly, but there's no second one.
+- **No HTTPS, no accounts, no multi-tenancy.** This is a prototype you run for yourself or a group you know.
 
 ## What's built
 

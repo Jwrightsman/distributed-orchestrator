@@ -51,7 +51,7 @@ async def pitch(req: PitchRequest, request: Request, response: Response):
     """Run the full pipeline locally (no distributed execution)."""
     _check_pitch_key(request)
     remaining = _check_rate_limit(request)
-    response.headers["X-RateLimit-Limit"] = str(state._RATE_MAX)
+    response.headers["X-RateLimit-Limit"] = str(state._rate_limits()[0])
     response.headers["X-RateLimit-Remaining"] = str(remaining)
     trace_id = str(uuid.uuid4())
     _emit("pitch", {"task": req.task, "trace_id": trace_id})
@@ -87,7 +87,7 @@ async def pitch_async(req: PitchRequest, request: Request, response: Response):
     """
     _check_pitch_key(request)
     remaining = _check_rate_limit(request)
-    response.headers["X-RateLimit-Limit"] = str(state._RATE_MAX)
+    response.headers["X-RateLimit-Limit"] = str(state._rate_limits()[0])
     response.headers["X-RateLimit-Remaining"] = str(remaining)
     job_id = f"job_{int(time.time() * 1000)}"
     trace_id = str(uuid.uuid4())

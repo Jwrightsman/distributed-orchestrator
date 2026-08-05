@@ -90,8 +90,13 @@ This is grinding, iterative work and it is the best possible use of the remainin
       node build fails ✓, revision loop is bounded by `_MAX_REVISIONS` and a run always terminates ✓.
       **Outstanding: WebSocket clients surviving a server restart** — needs a real server restart,
       not an in-process client.
-- [ ] **Soak test:** 20 consecutive pitches in one server session. Watch for memory growth, SQLite
+- [x] **Soak test:** 20 consecutive pitches in one server session. Watch for memory growth, SQLite
       bloat, event-buffer leaks, orphaned tasks, degraded latency. Fix what it surfaces.
+      — `scripts/soak_test.py`, run at 20 and 60 pitches against a real server with the model
+      stubbed (leaks are infrastructure, not model behavior). **60 pitches: +0.9 MB RSS, 96 KB
+      SQLite, 0 orphaned tasks, latency flat (-3%), 60 output dirs — clean.** It surfaced one thing:
+      the per-IP rate limit was hardcoded at 5/min, so the 6th pitch in a minute 429s. Now
+      configurable (`pitch_rate_max` / `pitch_rate_window`), default unchanged.
 - [x] Every failure path produces a clear message rather than a stack trace — assume it happens live
       — found by the restart check below: a job that failed because Ollama was down reported
       httpx's "All connection attempts failed", which tells a viewer nothing. Both `generate` and
@@ -337,3 +342,26 @@ in-process test client (`scripts/restart_recovery.py`, 17/17):
 
 Lesson consistent with the rest of this audit: the in-process test client could not have found
 either of these. Running the real thing did.
+
+**Soak test done too (§2), same trick — real server, stubbed model.** 60 consecutive pitches:
++0.9 MB RSS, 96 KB SQLite, zero orphaned tasks, latency flat, one output directory per pitch (which
+also proves the run-directory collision fix holds under back-to-back load). No leaks to fix.
+
+It surfaced one operational thing: **the per-IP pitch rate limit was hardcoded at 5/minute**, so the
+6th pitch inside a minute returns 429. That is a sane public default but it blocked the soak, and it
+would bite on camera during a run of quick demo pitches. Now configurable via `pitch_rate_max` /
+`pitch_rate_window`, default unchanged.
+
+**Two §5 launch-prep items done early** (both were listed but missing):
+- README now has an honest **Limitations** section — small-model ceiling, CPU slowness, generated
+  code is not sandboxed, trusted-network rather than trustless, single orchestrator with no failover.
+  It also states the verified restart/soak numbers, which is the kind of measured claim r/LocalLLaMA
+  rewards.
+- `docs/community-pitch.md` now carries **six pre-written replies** to the questions that post will
+  actually get: how this differs from Exo/llama.cpp RPC, why not Celery, what stops a malicious
+  node, how good the output really is, is there a token, and what you need to join. Written to be
+  posted in under a minute without thinking.
+
+**Still genuinely blocked on a machine with Ollama:** the eval baseline and everything downstream of
+it (§1.2, §1.3), plus `--demo`, `--demo-showcase`, and the MCP flow with real inference. §3 needs
+the SSH key, which lives only on Jett's laptop.
