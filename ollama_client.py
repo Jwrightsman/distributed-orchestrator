@@ -200,6 +200,19 @@ async def generate(
             f"Model call timed out after {timeout}s (model={model}). On slow CPU "
             f"hardware, raise \"timeout\" in config.json."
         ) from e
+    except httpx.ConnectError as e:
+        # httpx says "All connection attempts failed", which tells a user nothing.
+        # This is the failure that shows up on a dashboard mid-demo.
+        raise RuntimeError(
+            f"Could not reach Ollama at {OLLAMA_URL}. Is it running? "
+            f"Start it with: ollama serve"
+        ) from e
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            raise RuntimeError(
+                f"Model \"{model}\" is not installed. Pull it with: ollama pull {model}"
+            ) from e
+        raise
 
 
 async def generate_stream(prompt: str, system: str = "", model: str | None = None, role: str | None = None):
@@ -260,3 +273,14 @@ async def generate_stream(prompt: str, system: str = "", model: str | None = Non
             f"Model stream stalled past {timeout}s (model={model}). The Ollama "
             f"runner may have died mid-generation, or the machine slept."
         ) from e
+    except httpx.ConnectError as e:
+        raise RuntimeError(
+            f"Could not reach Ollama at {OLLAMA_URL}. Is it running? "
+            f"Start it with: ollama serve"
+        ) from e
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            raise RuntimeError(
+                f"Model \"{model}\" is not installed. Pull it with: ollama pull {model}"
+            ) from e
+        raise

@@ -92,8 +92,16 @@ This is grinding, iterative work and it is the best possible use of the remainin
       not an in-process client.
 - [ ] **Soak test:** 20 consecutive pitches in one server session. Watch for memory growth, SQLite
       bloat, event-buffer leaks, orphaned tasks, degraded latency. Fix what it surfaces.
-- [ ] Every failure path produces a clear message rather than a stack trace — assume it happens live
-- [ ] Kill-and-restart recovery: server restarts mid-job → nodes reconnect, dashboard recovers state
+- [x] Every failure path produces a clear message rather than a stack trace — assume it happens live
+      — found by the restart check below: a job that failed because Ollama was down reported
+      httpx's "All connection attempts failed", which tells a viewer nothing. Both `generate` and
+      `generate_stream` now name the cause and the fix, for the two failures an audience actually
+      triggers (Ollama not running; model never pulled). 4 tests in `tests/test_error_messages.py`.
+- [x] Kill-and-restart recovery: server restarts mid-job → nodes reconnect, dashboard recovers state
+      — `scripts/restart_recovery.py` drives a real uvicorn server: **17/17 checks pass**, including
+      SIGKILL (not a graceful stop). Jobs and event history survive via SQLite, the node registry
+      correctly empties so nodes re-register, dashboard and landing page still render, and a
+      WebSocket client reconnects and resumes receiving. No Ollama required to run it.
 
 ---
 
@@ -310,3 +318,22 @@ with no credentials works, so a stranger can genuinely get the code now. Consequ
 - The repo is discoverable but not announced. There is no CTA pointing at the live orchestrator yet
   — the README still says an address "will be posted here". That is the right state until the video
   is recorded; flipping to a real address is a launch-day edit, not a today edit.
+
+#### Addendum — §2 continued (still Aug 5, no laptop needed)
+
+Two more §2 items closed without a model, by driving a **real uvicorn server** rather than an
+in-process test client (`scripts/restart_recovery.py`, 17/17):
+
+- **Kill-and-restart recovery works, including SIGKILL.** Jobs and event history survive the
+  restart through SQLite; the node registry correctly empties so workers re-register; dashboard and
+  landing page render; a WebSocket client reconnects and resumes. That closes the last outstanding
+  piece of the "verify under stress" item too.
+- **It immediately found a bad failure message.** With Ollama down, a failed job reported httpx's
+  `All connection attempts failed` — which is what would appear on the dashboard if Ollama hiccups
+  mid-demo. `generate` and `generate_stream` now explain themselves for the two failures an
+  audience actually causes: Ollama not running ("Start it with: ollama serve") and the model never
+  pulled ("Pull it with: ollama pull <model>"). The timeout path already did this; connection and
+  404 did not.
+
+Lesson consistent with the rest of this audit: the in-process test client could not have found
+either of these. Running the real thing did.
