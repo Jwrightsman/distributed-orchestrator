@@ -440,3 +440,43 @@ It would be useless — no key opens a blocked TCP port — and it is a live cre
 secret that cannot help is pure downside. If a future session *can* reach port 8000, the harness
 reads it from `PITCH_KEY` in the environment or an untracked `.pitch_key` file; `.gitignore` covers
 both. Nothing needs it committed, ever.
+
+#### Step 3 — launch-readiness work (all doable without a model)
+
+- **Governance files the public repo lacked.** LICENSE (MIT), CONTRIBUTING.md, three issue templates
+  (including a dedicated **Node won't connect** form — the failure that actually stops people
+  contributing — which asks for the four things that diagnose it), a PR template, and an issue
+  chooser linking Discussions and DEPLOY.md.
+- **Versioned prompt sets (`prompts/`).** v1 is the current prompts, extracted **byte-identical**
+  and pinned by tests so a reword has to be a conscious decision to break comparability. v2 is an
+  **unmeasured candidate** aimed at the failure modes this project has actually logged (wrong output
+  format, cross-agent name drift, truncation, reviewer refusals shipped as the deliverable) — it
+  exists so the next session with a model can measure in one command instead of starting cold.
+  Select with `--prompt-set`, `PROMPT_SET`, or `prompt_set` in config.json; the run summary records
+  which set produced a score.
+  - Two bugs found while wiring it: `routes_pitch` bound `BUILDER_SYSTEM` **by value** at import, so
+    a prompt switch would have applied to local builds but not to work sent to worker nodes — the
+    two halves of a comparison silently disagreeing. And the **Dockerfile would have shipped without
+    `prompts/`** (`COPY *.py` skips package directories), dying at startup with ModuleNotFoundError.
+    Verified both ways by simulating the image's exact file layout; CI now asserts the sets load
+    inside the built image.
+- **README read cold as a stranger.** Four things were wrong, not merely improvable: Quick start
+  never said to **clone the repo** (it opened with `pip install -r requirements.txt`, impossible
+  before you have the repo); the documented `status.py` output showed `Timeout: 600s` against a real
+  default of 1800 and omitted four lines the command prints; "114 pytest tests" (259); and
+  `prompts/`, `evals/`, `scripts/` were missing from the structure. All 11 relative links verified.
+  Two things were checked and found **correct** rather than "fixed" — `install.sh` does forward its
+  argument and `install.ps1` does read `$env:SWARM_SERVER`.
+- **Docker build:** no daemon in this environment, so it could not be built here. CI builds it on
+  every push and is green, and the image's file layout was simulated locally both with and without
+  the fix to confirm the diagnosis.
+- **Demo fallback assets — tooling built, folder deliberately EMPTY.**
+  `scripts/capture_demo_asset.py` archives a real run (deliverable, code, plan, review, builder
+  transcripts) into the committed `docs/demo-assets/`, with a manifest recording model, prompt set,
+  rating and mechanical checks. It **refuses** to capture a run whose code fails `check_code_files`
+  unless forced, so "known good" means something.
+  **Nothing was captured, on purpose.** Every asset must be a real run captured verbatim, and this
+  session had no model. Hand-writing plausible "example output" would have put fabricated material
+  in the exact folder Jett reaches for when a take goes wrong — worse than an empty folder. First
+  two to capture, both in the demo script: `--demo-showcase` (Snake) and `--demo` (memory across
+  two iterations).
