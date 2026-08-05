@@ -59,6 +59,12 @@ This is grinding, iterative work and it is the best possible use of the remainin
       prompts); one command on Jett's machine produces the real baseline: `python evals/run_evals.py`
 
 ### 1.2 Tune against the baseline
+> **BLOCKED — not startable from a cloud session (re-tested Aug 5, conclusive).** Every item below
+> needs a model. The remote workaround (`--orchestrator`) was built for exactly this and is verified
+> working, but this environment cannot reach *any* host on a non-443 port, so it cannot pitch to the
+> live server either. See "Addendum 3" in the Session Log for the proof. Nothing here is startable
+> until a session runs somewhere with either local Ollama or unrestricted network egress.
+
 - [ ] Iterate on planner prompt: subtask granularity (too many tiny subtasks fragments the output;
       too few defeats the swarm story), explicit file-boundary instructions, dependency correctness
 - [ ] Iterate on builder prompt: complete-file output, no placeholders/TODOs, no prose outside code
@@ -395,3 +401,42 @@ one. Two tests pin that.
 **Recommended loop for the next session,** now written into `evals/README.md`: iterate on
 `--only web_app` (six prompts, ~3-5 hours, and the category the demo depends on), then pay for a
 full run before believing a change.
+
+---
+
+### Session 2 — August 5, 2026 (later) · Step 1 verdict + launch-readiness
+
+#### Addendum 3 — §1.2 is BLOCKED from a cloud session. Proof, not assumption.
+
+Jett asked the right question: is §1.2 *actually* blocked, or was that assumed? Tested directly.
+
+**Result: (b) not reachable — network restriction in the session environment.**
+
+| Test | Result |
+| --- | --- |
+| `167.233.239.33:8000` direct TCP (no proxy) | timeout |
+| `167.233.239.33:8000` via agent proxy | timeout |
+| `167.233.239.33:22` raw socket | timeout |
+| `api.github.com:443` | **HTTP 200** |
+| `portquiz.net:443` (third-party control) | **OK** |
+| `portquiz.net:8000` (third-party control) | timeout |
+| `portquiz.net:22` (third-party control) | timeout |
+
+The controls are the point. `portquiz.net` exists to answer "is this port open outbound" and it has
+8000 and 22 listening — both time out, while 443 to the same host succeeds. **The restriction is
+this environment's egress policy, not the orchestrator.**
+
+**This says nothing about whether Jett's server is healthy.** It very likely is; this session simply
+cannot see it. Do not read this as an outage.
+
+**Consequence:** the `--orchestrator` remote path built last session — verified working against a
+real server — cannot help here, because the blocked hop is the network itself. §1.2, §1.3, the eval
+baseline, `--demo`, `--demo-showcase`, the MCP flow with real inference and all of §3 are unstartable
+from a cloud session. They need a session with local Ollama, or one whose network allows arbitrary
+outbound ports.
+
+**The pitch key was deliberately NOT requested.** Jett offered to paste it from the Hetzner console.
+It would be useless — no key opens a blocked TCP port — and it is a live credential. Asking for a
+secret that cannot help is pure downside. If a future session *can* reach port 8000, the harness
+reads it from `PITCH_KEY` in the environment or an untracked `.pitch_key` file; `.gitignore` covers
+both. Nothing needs it committed, ever.
