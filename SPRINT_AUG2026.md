@@ -102,8 +102,12 @@ repo must be demo-able at all times._
 - [x] `install.ps1` (Windows) + `install.sh` (Mac/Linux): check Python/Ollama → install deps →
       pull model → run join.py
 - [x] README join section: one copy-paste line per OS
-- [x] Cross-platform paths/subprocess audit (all subprocess calls list-arg + guarded; `py` launcher
-      hints in printed messages neutralized to `python`; .gitattributes forces LF on shell scripts)
+- [x] Cross-platform paths/subprocess audit (all subprocess calls list-arg + guarded; .gitattributes
+      forces LF on shell scripts)
+      ⚠️ **Re-opened and fixed by the Phase 2 audit (Aug 5).** The `py` → `python` half of this item
+      was checked off but never done: 27 `py ...` hints remained in program output and docs, including
+      the dashboard's "no nodes" empty state and the MCP connection-error message. `py` is the Windows
+      launcher, so every one of those instructions failed for the Mac/Linux majority. Now actually done.
 
 **Week 2 exit criteria: MCP flow works end-to-end; showcase demo reliably produces a playable game; dashboard looks good at 1080p; join is one line per OS.**
 **→ MET, Aug 2 2026.** MCP round-trip verified with a real client; showcase game verified playable in a
@@ -114,8 +118,8 @@ browser; dashboard type/contrast/animations done; one-line installers for both O
 ## Week 3 (Aug 15–20): Deploy + freeze
 
 ### 3.1 Live public orchestrator  _(needs Jett for account creation)_
-- [ ] **JETT: create an Oracle Cloud free tier (or Hetzner) account + SSH key** — DEPLOY.md §3a walks
-      through it. This is the only remaining blocker in the whole sprint.
+- [x] **JETT: create an Oracle Cloud free tier (or Hetzner) account + SSH key** — done. Hetzner CX33
+      at 167.233.239.33, deployed Aug 5 with node_secret and pitch_key set.
 - [x] VM setup automated: `deploy.sh` takes a fresh Ubuntu box to a live, secured orchestrator in one
       command (installs Docker, clones, generates node_secret + pitch_key, starts the stack, pulls the
       model, waits for health, prints the join/pitch commands with the real public IP)
