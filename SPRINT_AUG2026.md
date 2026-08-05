@@ -187,13 +187,19 @@ key → 401; `/public/pitch` → 404 (feature off); landing page → 200; `/heal
 Jett's Windows laptop. Without it there is no VM access. A phone/web session can do repo work — code,
 docs, planning — but cannot deploy, SSH, or run the pipeline (no local Ollama).
 
-**Deploying updates to the live server** (the repo is private, so the VM cannot clone or pull):
+**Deploying updates to the live server.** The repo went public on Aug 5, so the VM can now pull
+directly — no more shipping a tarball over SSH:
 ```
-git archive --format=tar HEAD | ssh -i ~/.ssh/swarm_orchestrator root@167.233.239.33 \
-  "tar -x -C ~/distributed-orchestrator"
 ssh -i ~/.ssh/swarm_orchestrator root@167.233.239.33 \
-  "cd ~/distributed-orchestrator && docker compose up -d --build"
+  "cd ~/distributed-orchestrator && git pull && docker compose up -d --build"
 ```
+(The VM was originally set up by `deploy.sh` from a checkout rather than a clone. If `git pull`
+reports "not a git repository", run this once to reconnect it to the public remote:
+`cd ~/distributed-orchestrator && git init && git remote add origin \
+https://github.com/Jwrightsman/distributed-orchestrator.git && git fetch origin master && \
+git reset --hard origin/master`. The old tar-over-SSH method still works either way:
+`git archive --format=tar HEAD | ssh -i ~/.ssh/swarm_orchestrator root@167.233.239.33 \
+"tar -x -C ~/distributed-orchestrator"`.)
 
 ### Session 2 — August 1, 2026 (continued, after credit top-up)
 

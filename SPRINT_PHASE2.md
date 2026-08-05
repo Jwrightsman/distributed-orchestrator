@@ -31,8 +31,9 @@ The previous sprint completed faster than planned. Verify what is actually true 
 - [x] Verify a **fresh-clone install** works: clone to a clean directory, follow README exactly as a
       stranger would, note every friction point. This is the single most launch-critical check.
       — done on a clean container; three friction points found and fixed.
-- [x] **Repo visibility:** confirmed **PRIVATE** as of Aug 5. Steps for Jett are in the Session Log.
-      Repo settings not touched. Git history scanned: no secrets committed, safe to publish.
+- [x] **Repo visibility:** was **PRIVATE**; Jett made it **PUBLIC** on Aug 5, same session.
+      Verified: anonymous clone with credentials disabled succeeds, and raw file access returns 200.
+      Git history was scanned before publishing — no secrets committed.
 - [x] Write an honest audit summary in the Session Log: what's real, what's not, what surprised you.
 
 ---
@@ -137,7 +138,7 @@ model together."
       is follow-the-script with zero decisions to make
 - [ ] `docs/community-pitch.md` final — r/LocalLLaMA post drafted in full, title leading with the
       result, plus 3–4 anticipated-question replies pre-written
-- [ ] Confirm repo is PUBLIC (Jett action)
+- [x] Confirm repo is PUBLIC (Jett action) — done Aug 5, verified by anonymous clone
 
 ---
 
@@ -295,3 +296,17 @@ strings in `data/config.json` on the server and restart it — nothing else brea
 
 **4. Nothing else needs your action right now.** The next session's work needs your laptop (the one
 with Ollama) rather than a decision from you.
+
+**UPDATE, same session — the repo is now PUBLIC.** Jett flipped it. Verified from outside: a clone
+with no credentials works, so a stranger can genuinely get the code now. Consequences worth knowing:
+
+- The CI badge in the README now renders for everyone. It is green.
+- Deploying to the live server got simpler — the VM can `git pull` instead of being handed a
+  tarball over SSH. Updated above.
+- **Everything in this repo is now world-readable, including these sprint files** — which name the
+  server (167.233.239.33) and say ports 22 and 8000 are open on it. That was always going to be
+  public (people need the address to join), and both locks are on, so this is a "know it, not fix
+  it" item. Nothing here contains a key.
+- The repo is discoverable but not announced. There is no CTA pointing at the live orchestrator yet
+  — the README still says an address "will be posted here". That is the right state until the video
+  is recorded; flipping to a real address is a launch-day edit, not a today edit.
