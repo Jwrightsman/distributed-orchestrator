@@ -103,6 +103,33 @@ def test_missing_judge_score_is_not_a_pass():
     assert scoring.is_success(record) is False
 
 
+def test_mechanical_only_scoring_drops_the_judge_gate():
+    """--no-judge runs score without a judge, but only when asked."""
+    record = {
+        "extracted": True,
+        "parses": True,
+        "executes": True,
+        "artifact_match": True,
+        "keywords_ok": True,
+        "judge_score": None,
+    }
+    assert scoring.is_success(record) is False
+    assert scoring.is_success(record, require_judge=False) is True
+
+
+def test_mechanical_only_scoring_still_requires_runnable_output():
+    """Dropping the judge must not turn into dropping every standard."""
+    record = {
+        "extracted": True,
+        "parses": False,
+        "executes": False,
+        "artifact_match": True,
+        "keywords_ok": True,
+        "judge_score": None,
+    }
+    assert scoring.is_success(record, require_judge=False) is False
+
+
 @pytest.mark.parametrize(
     "response,expected",
     [("5", 5), ("4/5", 4), ("I would say 3.", 3), ("score: 1", 1), ("", None), ("nine", None)],

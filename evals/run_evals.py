@@ -31,7 +31,9 @@ import sys
 import time
 import traceback
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+
+import httpx
 
 EVALS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = EVALS_DIR.parent
@@ -39,6 +41,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 import config  # noqa: E402
 import ollama_client  # noqa: E402
+from extract import extract_code_files  # noqa: E402
 from orchestrator import run_pipeline  # noqa: E402
 
 from scoring import (  # noqa: E402
@@ -94,7 +97,60 @@ async def judge(task: str, deliverable: str) -> int | None:
     return None
 
 
-async def run_one(prompt: dict, args) -> dict:
+async def run_remote(task: str, args) -> dict:
+    """Pitch to a running orchestrator and return a run_pipeline-shaped result.
+
+    Lets the eval set run on whatever machine has the model — a 24/7 server, a
+    spare desktop — instead of pinning a laptop for the whole run. The
+    deliverable comes back as text and is re-extracted locally, so scoring is
+    identical either way.
+    """
+    headers = {"X-Pitch-Key": args.pitch_key} if args.pitch_key else {}
+    base = args.orchestrator.rstrip("/")
+
+    async with httpx.AsyncClient(base_url=base, headers=headers, timeout=60) as client:
+        resp = await client.post("/pitch/async", json={"task": task})
+        if resp.status_code != 200:
+            raise RuntimeError(f"pitch rejected: HTTP {resp.status_code} {resp.text[:200]}")
+        job_id = resp.json()["job_id"]
+
+        deadline = time.time() + args.remote_timeout
+        while time.time() < deadline:
+            job = (await client.get(f"/jobs/{job_id}")).json()
+            status = job.get("status")
+            if status == "failed":
+                raise RuntimeError(job.get("error") or "job failed")
+            if status == "complete":
+                break
+            await asyncio.sleep(args.poll_interval)
+        else:
+            raise RuntimeError(f"job did not finish within {args.remote_timeout}s")
+
+        timestamp = PurePosixPath(str(job.get("project_dir") or "")).name
+        if not timestamp:
+            raise RuntimeError("job completed without a project_dir")
+        detail = (await client.get(f"/history/{timestamp}")).json()
+
+    return {
+        "final_output": detail.get("final_output", ""),
+        "review": detail.get("review", ""),
+        "plan": detail.get("plan", []),
+        "rating": detail.get("rating"),
+        "project_dir": f"{base}/history/{timestamp}",
+        "code_problems": detail.get("code_problems", []),
+        "_remote_timestamp": timestamp,
+    }
+
+
+def extract_remote_files(result: dict, run_dir: Path, prompt_id: str) -> list[str]:
+    """Re-extract the remote deliverable locally so it can be parsed and run."""
+    target = run_dir / "artifacts" / prompt_id
+    target.mkdir(parents=True, exist_ok=True)
+    text = result.get("final_output") or result.get("review", "")
+    return [str(p) for p in extract_code_files(text, target)]
+
+
+async def run_one(prompt: dict, args, run_dir: Path) -> dict:
     """Run a single pitch end-to-end and score it."""
     expect = prompt.get("expect", {})
     record: dict = {
@@ -107,7 +163,10 @@ async def run_one(prompt: dict, args) -> dict:
 
     start = time.time()
     try:
-        result = await run_pipeline(prompt["task"])
+        if args.orchestrator:
+            result = await run_remote(prompt["task"], args)
+        else:
+            result = await run_pipeline(prompt["task"])
     except Exception as e:
         record.update(
             {
@@ -127,7 +186,10 @@ async def run_one(prompt: dict, args) -> dict:
         return record
 
     seconds = round(time.time() - start, 1)
-    code_files = [str(f) for f in result.get("code_files", [])]
+    if args.orchestrator:
+        code_files = extract_remote_files(result, run_dir, prompt["id"])
+    else:
+        code_files = [str(f) for f in result.get("code_files", [])]
 
     parses, problems = check_parses(code_files)
     keywords_ok, missing = check_keywords(code_files, expect.get("keywords", []))
@@ -166,7 +228,7 @@ async def run_one(prompt: dict, args) -> dict:
             "pipeline_code_problems": result.get("code_problems", []),
         }
     )
-    record["success"] = is_success(record)
+    record["success"] = is_success(record, require_judge=not args.no_judge)
     return record
 
 
@@ -262,12 +324,32 @@ async def main() -> int:
     parser.add_argument("--id", action="append", help="run specific prompt id(s)")
     parser.add_argument("--limit", type=int, help="cap the number of prompts")
     parser.add_argument("--resume", help="continue an existing run id")
+    parser.add_argument("--retry-failed", action="store_true",
+                        help="with --resume, also re-run prompts that errored")
     parser.add_argument("--label", default="", help="label recorded in the summary")
     parser.add_argument("--no-exec", action="store_true", help="skip executing generated code")
     parser.add_argument("--no-judge", action="store_true", help="skip the model judgment step")
     parser.add_argument("--exec-timeout", type=int, default=15)
     parser.add_argument("--fake", action="store_true", help="stubbed model — plumbing self-test")
+    parser.add_argument(
+        "--orchestrator",
+        help="run pitches on a running orchestrator (e.g. http://1.2.3.4:8000) "
+             "instead of locally — lets the eval set run on whatever machine has the model",
+    )
+    parser.add_argument("--pitch-key", default="", help="X-Pitch-Key for --orchestrator")
+    parser.add_argument("--remote-timeout", type=int, default=3600,
+                        help="seconds to wait for one remote job (default 1h)")
+    parser.add_argument("--poll-interval", type=float, default=5.0)
+    parser.add_argument("--concurrency", type=int, default=1,
+                        help="pitches in flight at once. Leave at 1 for a single local "
+                             "Ollama; raise it only when the far end can genuinely "
+                             "serve parallel requests")
     args = parser.parse_args()
+
+    if args.concurrency < 1:
+        parser.error("--concurrency must be at least 1")
+    if args.pitch_key and not args.orchestrator:
+        parser.error("--pitch-key only applies with --orchestrator")
 
     if args.fake:
         install_fake_backend()
@@ -283,43 +365,78 @@ async def main() -> int:
     run_dir.mkdir(parents=True, exist_ok=True)
 
     records = load_existing(run_dir) if args.resume else []
+    if args.resume and args.retry_failed:
+        # A prompt that died on a network blip three hours in should not be
+        # silently dropped from the run. Forget those records and re-run them.
+        retrying = [r["id"] for r in records if r.get("error")]
+        records = [r for r in records if not r.get("error")]
+        with (run_dir / "results.jsonl").open("w", encoding="utf-8") as fh:
+            for r in records:
+                fh.write(json.dumps(r) + "\n")
+        if retrying:
+            print(f"Retrying {len(retrying)} previously failed prompt(s): {', '.join(retrying)}")
+
     done_ids = {r["id"] for r in records}
     todo = [p for p in prompts if p["id"] not in done_ids]
 
     model = config.get().get("model", "?")
+    if args.fake:
+        where = "fake-backend"
+    elif args.orchestrator:
+        where = f"remote {args.orchestrator}"
+    else:
+        where = "local"
     meta = {
         "run_id": run_id,
         "model": "fake-backend" if args.fake else model,
         "mode": "fake" if args.fake else "real",
+        "executed_on": where,
         "label": args.label,
         "prompt_count": len(prompts),
         "exec_enabled": not args.no_exec,
         "judge_enabled": not args.no_judge,
+        "concurrency": args.concurrency,
         "started_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
 
-    print(f"Run {run_id} — {len(todo)} prompt(s) to go ({len(done_ids)} already done)")
+    print(f"Run {run_id} — {len(todo)} prompt(s) to go ({len(done_ids)} already done), on {where}")
     if not args.fake:
-        print(f"Model: {model}. Expect this to take hours on CPU; safe to interrupt and --resume.")
+        print("Expect hours on CPU. Every prompt is flushed as it finishes, so "
+              f"interrupting is safe: resume with --resume {run_id}")
+    if args.no_judge:
+        print("NOTE: --no-judge — mechanical checks only. Do not compare this "
+              "score against a judged run.")
 
-    for i, prompt in enumerate(todo, 1):
-        print(f"[{i}/{len(todo)}] {prompt['id']} … ", end="", flush=True)
-        record = await run_one(prompt, args)
-        records.append(record)
-        with (run_dir / "results.jsonl").open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record) + "\n")
-        summary = write_outputs(run_dir, records, meta)
-        verdict = "PASS" if record["success"] else "fail"
-        detail = record.get("error") or record.get("exec_outcome", "")
-        print(
-            f"{verdict} ({record.get('seconds', 0)}s, judge "
-            f"{record.get('judge_score')}, {detail}) — running "
-            f"{summary['success_rate']:.0%}"
-        )
+    write_lock = asyncio.Lock()
+    limiter = asyncio.Semaphore(args.concurrency)
+    done_count = 0
+
+    async def worker(index: int, prompt: dict) -> None:
+        nonlocal done_count
+        async with limiter:
+            record = await run_one(prompt, args, run_dir)
+        async with write_lock:
+            records.append(record)
+            with (run_dir / "results.jsonl").open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(record) + "\n")
+            summary = write_outputs(run_dir, records, meta)
+            done_count += 1
+            verdict = "PASS" if record["success"] else "fail"
+            detail = record.get("error") or record.get("exec_outcome", "")
+            print(
+                f"[{done_count}/{len(todo)}] {record['id']} … {verdict} "
+                f"({record.get('seconds', 0)}s, judge {record.get('judge_score')}, "
+                f"{detail}) — running {summary['success_rate']:.0%}",
+                flush=True,
+            )
+
+    await asyncio.gather(*(worker(i, p) for i, p in enumerate(todo, 1)))
 
     summary = write_outputs(run_dir, records, meta)
     print()
     print(f"Success rate: {summary['success_rate']:.0%} ({summary['success']}/{summary['total']})")
+    if args.no_judge:
+        print("(mechanical checks only — --no-judge was set)")
     print(f"Summary: {run_dir / 'summary.md'}")
     return 0
 

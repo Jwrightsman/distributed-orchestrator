@@ -298,18 +298,25 @@ def parse_judge_score(response: str) -> int | None:
 
 # ── aggregation ─────────────────────────────────────────────────────────────
 
-def is_success(record: dict) -> bool:
-    """The headline definition of 'runnable, on-spec output'."""
+def is_success(record: dict, require_judge: bool = True) -> bool:
+    """The headline definition of 'runnable, on-spec output'.
+
+    require_judge=False drops the model-judgment gate, for runs made with
+    --no-judge (no local model available). That is a *different, weaker*
+    measure — mechanical checks only — so runs scored the two ways must never
+    be compared with each other. The summary records which was used.
+    """
     judge = record.get("judge_score")
-    return bool(
+    mechanical = bool(
         record.get("extracted")
         and record.get("parses")
         and record.get("executes")
         and record.get("artifact_match")
         and record.get("keywords_ok")
-        and judge is not None
-        and judge >= PASS_JUDGE_SCORE
     )
+    if not require_judge:
+        return mechanical
+    return mechanical and judge is not None and judge >= PASS_JUDGE_SCORE
 
 
 def summarize(records: list[dict]) -> dict:

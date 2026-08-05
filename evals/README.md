@@ -12,19 +12,51 @@ python evals/run_evals.py
 
 # Continue where an interrupted run left off
 python evals/run_evals.py --resume 20260806_101500
+python evals/run_evals.py --resume 20260806_101500 --retry-failed   # also re-run errors
 
 # Smaller slices while iterating on a prompt
 python evals/run_evals.py --only web_app
 python evals/run_evals.py --id web-snake --id cli-todo
 python evals/run_evals.py --limit 5
 
+# Run the pitches on another machine that has the model
+python evals/run_evals.py --orchestrator http://1.2.3.4:8000 --pitch-key KEY
+
 # Plumbing self-test — no Ollama, finishes in seconds
 python evals/run_evals.py --fake
 ```
 
-Ollama must be running for a real run (`python status.py` to check). Each
+Ollama must be running for a local run (`python status.py` to check). Each
 prompt is written to disk the moment it finishes, so a crash or a Ctrl-C never
 costs more than the run in flight.
+
+## Budget the time before you start
+
+This is the thing to plan around: **a full local run on CPU is on the order of
+15–25 hours** (28 prompts, each a planner call, 3–5 builder calls and a
+reviewer call that re-emits the whole deliverable). That is fine once for a
+baseline, but §1.2 wants a re-run after *every* prompt change, and that does
+not fit in a sprint if each iteration costs a day.
+
+Three ways to make the loop usable, in order of what to reach for:
+
+1. **Iterate on a slice, confirm on the full set.** `--only web_app` is six
+   prompts (~3-5 hours) and covers the category the demo depends on.
+   `--id a --id b --id c` is faster still. Keep the change if the slice moves,
+   then pay for a full run before believing it.
+2. **Run it somewhere else.** `--orchestrator http://host:8000 --pitch-key KEY`
+   pitches to a running orchestrator instead of the local pipeline, so a
+   24/7 server or a spare desktop does the work while your laptop stays free.
+   The deliverable comes back as text and is re-extracted and scored locally,
+   so the numbers mean exactly the same thing.
+3. **`--concurrency N`** puts N pitches in flight at once. Leave it at 1 for a
+   single local Ollama — parallel requests just contend for the same CPU. Raise
+   it only when the far end can genuinely serve them.
+
+`--no-judge` skips the model-judgment step, which matters when the scoring
+machine has no Ollama (a remote run scored from a laptop, for instance). It
+produces a **weaker, mechanical-only score**, and the summary says so. Never
+compare a `--no-judge` number against a judged one.
 
 ## What gets scored
 

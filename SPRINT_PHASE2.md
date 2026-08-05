@@ -365,3 +365,33 @@ would bite on camera during a run of quick demo pitches. Now configurable via `p
 **Still genuinely blocked on a machine with Ollama:** the eval baseline and everything downstream of
 it (§1.2, §1.3), plus `--demo`, `--demo-showcase`, and the MCP flow with real inference. §3 needs
 the SSH key, which lives only on Jett's laptop.
+
+#### Addendum 2 — the §1.2 schedule problem, fixed before it bit
+
+Sizing the work revealed a planning problem worth more than another test: **a full local eval run is
+15-25 hours on CPU** (28 prompts × planner + 3-5 builders + a reviewer that re-emits the whole
+deliverable). One baseline at that cost is fine. But §1.2 wants a re-run after *every* prompt change,
+and at a day per iteration that does not fit in the days remaining. The tuning loop, as specified,
+was not executable.
+
+Three changes to the harness make it executable:
+
+- **`--orchestrator URL --pitch-key KEY`** runs the pitches on a machine that has the model — the
+  24/7 server, a spare desktop — instead of pinning the laptop. The deliverable comes back as text,
+  is re-extracted locally and scored by the same code, so the number means the same thing. Verified
+  end-to-end against a real server (auth, polling, `/history` fetch, local re-extraction, headless
+  browser execution) plus both failure paths: a wrong pitch key and an unreachable host both record
+  a readable error rather than dying.
+- **`--concurrency N`** puts N pitches in flight. Pointless against one local Ollama (they contend
+  for the same CPU) — it exists for the remote case.
+- **`--retry-failed`** re-runs prompts that errored on a previous `--resume`. Without it, a prompt
+  that died on a network blip three hours into a 20-hour run was silently dropped from the results.
+
+Also `--no-judge`, for scoring a remote run from a laptop with no model. It produces a deliberately
+**weaker, mechanical-only score**; `is_success` takes an explicit flag, the summary records it, and
+the runner prints a warning, so a mechanical number can never be quietly compared against a judged
+one. Two tests pin that.
+
+**Recommended loop for the next session,** now written into `evals/README.md`: iterate on
+`--only web_app` (six prompts, ~3-5 hours, and the category the demo depends on), then pay for a
+full run before believing a change.
