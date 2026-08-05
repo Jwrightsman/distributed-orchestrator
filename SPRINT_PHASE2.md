@@ -84,6 +84,11 @@ This is grinding, iterative work and it is the best possible use of the remainin
 - [ ] Verify under stress: circuit breaker opens and recovers, task reclaim reassigns correctly,
       local fallback fires, revision loop terminates (no infinite loops), WebSocket clients survive
       a server restart
+      **MOSTLY DONE (Aug 5)** in `tests/test_chaos.py` + `tests/test_resilience.py`: circuit breaker
+      opens/recovers/isolates ✓, reclaim reassigns to a live node ✓, local fallback fires when the
+      node build fails ✓, revision loop is bounded by `_MAX_REVISIONS` and a run always terminates ✓.
+      **Outstanding: WebSocket clients surviving a server restart** — needs a real server restart,
+      not an in-process client.
 - [ ] **Soak test:** 20 consecutive pitches in one server session. Watch for memory growth, SQLite
       bloat, event-buffer leaks, orphaned tasks, degraded latency. Fix what it surfaces.
 - [ ] Every failure path produces a clear message rather than a stack trace — assume it happens live

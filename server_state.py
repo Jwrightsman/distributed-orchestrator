@@ -196,6 +196,13 @@ ws_manager = _WSManager()
 
 
 # ── Event emission ────────────────────────────────────────────────────
+
+# Strong references to in-flight broadcasts. Without these, asyncio only holds
+# a weak reference and a broadcast can be garbage-collected before it is
+# delivered ("Task was destroyed but it is pending!").
+_broadcast_tasks: set = set()
+
+
 def _emit(event_type: str, data: dict):
     """Push an event to the pipeline log, SQLite, and broadcast to WebSocket clients."""
     event = {
@@ -209,7 +216,18 @@ def _emit(event_type: str, data: dict):
         if len(pipeline_events) > 100:
             pipeline_events.pop(0)
         event["id"] = _db_write_event(event_type, event["time"], data)
-    asyncio.get_event_loop().create_task(ws_manager.broadcast(event))
+
+    # Emitting from a sync context (a script, a test, the CLI) must record the
+    # event rather than blow up: with no loop running there is no WebSocket
+    # client to broadcast to anyway. get_event_loop() used to be used here,
+    # which raises on Python 3.12+ outside a coroutine.
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    task = loop.create_task(ws_manager.broadcast(event))
+    _broadcast_tasks.add(task)
+    task.add_done_callback(_broadcast_tasks.discard)
 
 
 # ── Rate limiting ─────────────────────────────────────────────────────
