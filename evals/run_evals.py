@@ -42,6 +42,7 @@ sys.path.insert(0, str(REPO_ROOT))
 import config  # noqa: E402
 import ollama_client  # noqa: E402
 from extract import extract_code_files  # noqa: E402
+import orchestrator  # noqa: E402
 from orchestrator import run_pipeline  # noqa: E402
 
 from scoring import (  # noqa: E402
@@ -331,6 +332,7 @@ async def main() -> int:
     parser.add_argument("--no-judge", action="store_true", help="skip the model judgment step")
     parser.add_argument("--exec-timeout", type=int, default=15)
     parser.add_argument("--fake", action="store_true", help="stubbed model — plumbing self-test")
+    parser.add_argument("--prompt-set", help="prompt set to run (default: the active one)")
     parser.add_argument(
         "--orchestrator",
         help="run pitches on a running orchestrator (e.g. http://1.2.3.4:8000) "
@@ -350,6 +352,12 @@ async def main() -> int:
         parser.error("--concurrency must be at least 1")
     if args.pitch_key and not args.orchestrator:
         parser.error("--pitch-key only applies with --orchestrator")
+
+    if args.prompt_set:
+        try:
+            orchestrator.apply_prompt_set(args.prompt_set)
+        except KeyError as e:
+            parser.error(str(e))
 
     if args.fake:
         install_fake_backend()
@@ -396,10 +404,12 @@ async def main() -> int:
         "exec_enabled": not args.no_exec,
         "judge_enabled": not args.no_judge,
         "concurrency": args.concurrency,
+        "prompt_set": orchestrator.active_prompt_set().name,
         "started_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
 
     print(f"Run {run_id} — {len(todo)} prompt(s) to go ({len(done_ids)} already done), on {where}")
+    print(f"Prompt set: {orchestrator.active_prompt_set().name}")
     if not args.fake:
         print("Expect hours on CPU. Every prompt is flushed as it finishes, so "
               f"interrupting is safe: resume with --resume {run_id}")

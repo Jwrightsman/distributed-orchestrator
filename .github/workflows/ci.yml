@@ -40,6 +40,11 @@ jobs:
       - name: Dashboard templates present in image
         run: docker run --rm distributed-orchestrator python -c "import dashboard; print(sorted(p.name for p in dashboard._TEMPLATES_DIR.iterdir()))"
 
+      - name: Prompt sets present in image
+        # `COPY *.py` misses package directories, and a missing prompts/ breaks
+        # startup. Assert the sets load rather than discovering it on deploy.
+        run: docker run --rm distributed-orchestrator python -c "import prompts, orchestrator; print('prompt sets:', [p.name for p in prompts.list_prompt_sets()], '| active:', orchestrator.active_prompt_set().name)"
+
       - name: Compose file is valid
         run: docker compose config --quiet
 
