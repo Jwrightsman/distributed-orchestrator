@@ -44,7 +44,7 @@ def show_projects():
     """List all projects with iteration counts."""
     projects = list_projects()
     if not projects:
-        console.print("[dim]No projects yet. Start one with:[/dim] py cli.py --new-project \"name\" \"task\"")
+        console.print("[dim]No projects yet. Start one with:[/dim] python cli.py --new-project \"name\" \"task\"")
         return
 
     table = Table(title="Projects", border_style="dim")
@@ -62,7 +62,7 @@ def show_projects():
             ts,
         )
     console.print(table)
-    console.print("[dim]Continue a project: py cli.py --project <id> \"next task\"[/dim]")
+    console.print("[dim]Continue a project: python cli.py --project <id> \"next task\"[/dim]")
 
 
 async def run_task(task: str, project_id: str | None = None):
@@ -166,7 +166,7 @@ async def run_task(task: str, project_id: str | None = None):
     pid = result.get("project_id") or project_id
     if pid:
         console.print(f"\n[dim]Completed in {elapsed:.0f}s — saved to: {result['project_dir']}[/dim]")
-        console.print(f"[dim]Continue this project: py cli.py --project {pid} \"your next task\"[/dim]")
+        console.print(f"[dim]Continue this project: python cli.py --project {pid} \"your next task\"[/dim]")
     else:
         console.print(f"\n[dim]Completed in {elapsed:.0f}s — output saved to: {result['project_dir']}[/dim]")
     return result
@@ -433,7 +433,7 @@ async def run_demo(fast: bool = False):
         f"  [bold]Memory:[/bold]     {memory_lines} lines / {memory_bytes / 1024:.1f} KB of context accumulated\n\n"
         f"[dim]The memory file now contains both iterations — every future pitch on\n"
         f"this project starts with that full context loaded automatically.[/dim]\n\n"
-        f"  Continue: [cyan]py cli.py --project {project_id} \"your next task\"[/cyan]\n"
+        f"  Continue: [cyan]python cli.py --project {project_id} \"your next task\"[/cyan]\n"
         f"  Share:    open [cyan]http://localhost:8000/dashboard[/cyan] → Gallery",
         title="[bold cyan]Project Memory in Action[/bold cyan]",
         border_style="green",
@@ -445,11 +445,11 @@ async def run_demo_live():
     route to connected nodes. Designed for the two-laptop screen recording.
 
     Both machines must be ready before running:
-      Machine 1 (you):   py -m uvicorn server:app --host 0.0.0.0 --port 8000
-                         py node.py --server http://localhost:8000 --node-id Laptop-1
-      Machine 2 (friend): py join.py  (auto-discovers you on the LAN)
+      Machine 1 (you):   python -m uvicorn server:app --host 0.0.0.0 --port 8000
+                         python node.py --server http://localhost:8000 --node-id Laptop-1
+      Machine 2 (friend): python join.py  (auto-discovers you on the LAN)
 
-    Then on Machine 1:   py cli.py --demo-live
+    Then on Machine 1:   python cli.py --demo-live
     """
     PITCH_1 = "Build a Python expense tracker with CSV import and monthly budgets"
     PITCH_2 = "Add monthly budget warnings and dark mode to the CLI"
@@ -463,7 +463,7 @@ async def run_demo_live():
             console.print(Panel(
                 "[red bold]Server not running.[/red bold]\n\n"
                 "Start it first:\n"
-                "  [cyan]py -m uvicorn server:app --host 0.0.0.0 --port 8000[/cyan]",
+                "  [cyan]python -m uvicorn server:app --host 0.0.0.0 --port 8000[/cyan]",
                 border_style="red",
             ))
             return
@@ -475,7 +475,7 @@ async def run_demo_live():
     if node_count == 0:
         node_status = (
             "[yellow]⚠  No worker nodes connected — tasks will run locally as fallback.[/yellow]\n"
-            "[dim]To add a node: py node.py --server http://localhost:8000 --node-id Laptop-1[/dim]"
+            "[dim]To add a node: python node.py --server http://localhost:8000 --node-id Laptop-1[/dim]"
         )
     else:
         node_lines = []
@@ -722,20 +722,17 @@ def import_fork(zip_path: str):
         f"[bold green]Fork imported as project:[/bold green] [cyan]{project_id}[/cyan]{origin_note}\n\n"
         f"[bold]Task:[/bold]\n{task}\n\n"
         f"[dim]Memory context loaded from fork.[/dim]\n\n"
-        f"[bold]Run it:[/bold]\n  py cli.py --project {project_id} \"{task}\"",
+        f"[bold]Run it:[/bold]\n  python cli.py --project {project_id} \"{task}\"",
         title="[bold cyan]Fork Imported[/bold cyan]",
         border_style="cyan",
     ))
 
 
 async def main():
-    # Pre-flight: check Ollama is running
-    status = await check_ollama()
-    if not status["ok"]:
-        console.print(f"[red bold]ERROR:[/red bold] {status['error']}")
-        sys.exit(1)
-
     # ── Flags that don't need Ollama ──
+    # These read local files only, so they must work with Ollama stopped —
+    # checking first would make `--history` fail on a machine that has never
+    # installed a model.
     import_zip = _flag_value("--import")
     if import_zip:
         import_fork(import_zip)
@@ -751,13 +748,19 @@ async def main():
         show_projects()
         return
 
+    # Pre-flight: everything below this point runs inference
+    status = await check_ollama()
+    if not status["ok"]:
+        console.print(f"[red bold]ERROR:[/red bold] {status['error']}")
+        sys.exit(1)
+
     # ── Create a new named project ──
-    # Usage: py cli.py --new-project "name" "initial task"
+    # Usage: python cli.py --new-project "name" "initial task"
     if "--new-project" in sys.argv:
         idx = sys.argv.index("--new-project")
         remaining = sys.argv[idx + 1:]
         if len(remaining) < 2:
-            console.print("[red]Usage:[/red] py cli.py --new-project \"project name\" \"initial task\"")
+            console.print("[red]Usage:[/red] python cli.py --new-project \"project name\" \"initial task\"")
             return
         proj_name = remaining[0]
         task = " ".join(remaining[1:])
@@ -767,7 +770,7 @@ async def main():
         return
 
     # ── Continue an existing project ──
-    # Usage: py cli.py --project my-app "next task"
+    # Usage: python cli.py --project my-app "next task"
     project_id = _flag_value("--project")
     if project_id:
         args = [a for a in sys.argv[1:] if not a.startswith("--") and a != project_id]

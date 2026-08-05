@@ -21,7 +21,7 @@ the same network.
 **On the main machine (orchestrator):**
 
 ```bash
-py -m uvicorn server:app --host 0.0.0.0 --port 8000
+python -m uvicorn server:app --host 0.0.0.0 --port 8000
 ```
 
 Find your local IP address:
@@ -35,12 +35,12 @@ Look for "IPv4 Address" (something like `192.168.1.23`).
 **On each other machine (worker node):**
 
 ```bash
-py join.py http://192.168.1.23:8000
+python join.py http://192.168.1.23:8000
 ```
 
 (Replace the IP with the orchestrator's. `join.py` checks Python and Ollama,
 pulls the model, and connects. On the same LAN it can usually find the
-orchestrator automatically: `py join.py` with no address.)
+orchestrator automatically: `python join.py` with no address.)
 
 Dashboard: `http://192.168.1.23:8000/dashboard` from any device on the network.
 

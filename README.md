@@ -51,7 +51,7 @@ All agents use local models via [Ollama](https://ollama.com). No data leaves you
 **Requirements:** Python 3.12+ (tested on 3.14), [Ollama](https://ollama.com)
 
 ```bash
-pip install fastapi uvicorn httpx rich
+pip install -r requirements.txt
 ollama pull qwen3.5:4b
 ```
 

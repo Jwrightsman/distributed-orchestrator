@@ -190,7 +190,7 @@ async def fork_template(timestamp: str):
         "## How to use\n\n"
         "1. **Install the orchestrator** — follow the README at https://github.com/yourusername/distributed-orchestrator\n"
         "2. **Import this fork** — run:\n"
-        f"   ```\n   py cli.py --import fork_{timestamp}.zip\n   ```\n"
+        f"   ```\n   python cli.py --import fork_{timestamp}.zip\n   ```\n"
         "3. **Or paste manually** — copy the content of `task.txt` into the dashboard pitch input at http://localhost:8000/dashboard\n\n"
         "## Files\n\n"
         "- `task.txt` — the original task prompt\n"

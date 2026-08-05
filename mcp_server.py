@@ -5,15 +5,15 @@ tasks to the swarm.
 A thin adapter over the orchestrator's async job API: nothing here touches the
 pipeline. The orchestrator must be running separately:
 
-    py -m uvicorn server:app --host 0.0.0.0 --port 8000
+    python -m uvicorn server:app --host 0.0.0.0 --port 8000
 
 Run this server (stdio, for Claude Desktop):
 
-    py mcp_server.py
+    python mcp_server.py
 
 Or as a streamable-HTTP server (remote orchestrator scenarios):
 
-    py mcp_server.py --http            # serves on 127.0.0.1:8765/mcp
+    python mcp_server.py --http            # serves on 127.0.0.1:8765/mcp
 
 Environment:
     ORCHESTRATOR_URL  where the orchestrator lives (default http://localhost:8000)
@@ -53,7 +53,7 @@ def _client() -> httpx.AsyncClient:
 def _connection_help(exc: Exception) -> str:
     return (
         f"Could not reach the orchestrator at {ORCHESTRATOR_URL} ({exc}). "
-        "Is it running? Start it with: py -m uvicorn server:app --host 0.0.0.0 --port 8000"
+        "Is it running? Start it with: python -m uvicorn server:app --host 0.0.0.0 --port 8000"
     )
 
 
