@@ -37,12 +37,21 @@ DOCKER="docker"
 docker info >/dev/null 2>&1 || DOCKER="sudo docker"
 
 # ── 2. Repo ───────────────────────────────────────────────────────────
-if [ -d "$DEST/.git" ]; then
+# Three cases: files already uploaded (private repo — no clone possible), an
+# existing git checkout to refresh, or a clean clone.
+if [ -f "$DEST/docker-compose.yml" ] && [ ! -d "$DEST/.git" ]; then
+  say "Using the code already present at $DEST"
+elif [ -d "$DEST/.git" ]; then
   say "Updating existing checkout at $DEST"
-  git -C "$DEST" pull --ff-only
+  git -C "$DEST" pull --ff-only || warn "Could not pull (private repo or local changes) — using what is here"
 else
   say "Cloning to $DEST"
-  git clone --depth 1 "$REPO_URL" "$DEST"
+  if ! git clone --depth 1 "$REPO_URL" "$DEST"; then
+    warn "Clone failed. If the repository is private, copy the code up instead:"
+    warn "  git archive --format=tar HEAD | ssh root@THIS_HOST 'mkdir -p ~/distributed-orchestrator && tar -x -C ~/distributed-orchestrator'"
+    warn "then re-run this script."
+    exit 1
+  fi
 fi
 cd "$DEST"
 mkdir -p data

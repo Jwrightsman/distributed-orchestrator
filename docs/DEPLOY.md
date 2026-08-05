@@ -86,7 +86,15 @@ else's machine joins as a worker from anywhere. **Do not skip step 4.**
 
 ### 3a. Get a VM
 
-**Oracle Cloud (free forever, best value):**
+**Oracle Cloud (free forever, but frequently out of stock):**
+
+> **Try Hetzner first if you're on a deadline.** Oracle's free ARM capacity is
+> heavily oversubscribed — "Out of capacity for shape VM.Standard.A1.Flex" in
+> every availability domain is the common result, and Always Free resources can
+> only be created in your account's home region, so there's nowhere else to try.
+> Attempts can take days or weeks to succeed. Verified Aug 2026 in us-chicago-1:
+> all three ADs full.
+
 1. Sign up at https://www.oracle.com/cloud/free/ (credit card required for
    identity, not charged).
 2. Create an instance: shape **VM.Standard.A1.Flex** (Ampere ARM), 4 CPUs,
@@ -97,13 +105,20 @@ else's machine joins as a worker from anywhere. **Do not skip step 4.**
 4. Open port 8000: Networking → Virtual Cloud Network → Security Lists →
    Add Ingress Rule: source `0.0.0.0/0`, protocol TCP, destination port `8000`.
 
-**Hetzner (~€4/month, simpler UI):**
+**Hetzner (a few euros a month, simpler UI, always has capacity):**
 1. Sign up at https://www.hetzner.com/cloud
-2. Create a server: type **CX22** (2 vCPU, 4 GB) works for orchestrator-only
-   (planner/reviewer routed to nodes); pick **CAX21** (ARM, 8 GB) if the VM
-   itself should run inference. OS: Ubuntu 24.04.
-3. Add your SSH key during creation (Hetzner shows how to make one).
-4. In the server's Firewall tab, allow inbound TCP on ports 22 and 8000.
+2. Create a server: **CAX21** (Arm64, 4 vCPU, 8 GB). 8 GB is the floor for
+   running `qwen3.5:4b` on the VM — the model needs ~6 GB resident, so the
+   4 GB types can't load it.
+   > **The Arm64 types are only offered in Hetzner's European locations**
+   > (Falkenstein, Nuremberg, Helsinki). Pick one of those. Trans-atlantic
+   > latency is irrelevant here: pipeline stages take minutes of inference and
+   > worker nodes hold a 25-second long-poll, so ~100ms of network is noise.
+   > A US x86 machine with the same 8 GB costs roughly double.
+3. OS: **Ubuntu 24.04**.
+4. Add your SSH key during creation (`ssh-keygen -t ed25519` locally, then
+   paste the contents of the `.pub` file).
+5. In the server's Firewall tab, allow inbound TCP on ports 22 and 8000.
 
 ### 3b. Install and run — one command
 

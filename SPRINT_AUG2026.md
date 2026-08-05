@@ -162,6 +162,35 @@ next, any warnings for Jett._
 
 <!-- sessions append below -->
 
+### LIVE INFRASTRUCTURE (as of Aug 5, 2026)
+
+**The orchestrator is deployed and running 24/7.**
+
+- Host: Hetzner CX33 (4 vCPU, 8GB, Ubuntu 24.04), **167.233.239.33**
+- Dashboard: `http://167.233.239.33:8000/dashboard` · Landing: `http://167.233.239.33:8000/`
+- Deployed via `deploy.sh`; code lives at `/root/distributed-orchestrator` on the VM
+- Firewall: inbound TCP 22 and 8000 only
+
+**Secrets are NOT in this repo and must never be committed** (it goes public at launch).
+`node_secret` and `pitch_key` live in `/root/distributed-orchestrator/data/config.json` on the VM,
+and Jett has copies. Read them with:
+`ssh -i ~/.ssh/swarm_orchestrator root@167.233.239.33 "cat ~/distributed-orchestrator/data/config.json"`
+
+**Verified from outside the network:** node registration without the secret → 401; pitch without the
+key → 401; `/public/pitch` → 404 (feature off); landing page → 200; `/health` → ok with the model loaded.
+
+**Note for a session on a different machine:** the SSH key (`~/.ssh/swarm_orchestrator`) exists only on
+Jett's Windows laptop. Without it there is no VM access. A phone/web session can do repo work — code,
+docs, planning — but cannot deploy, SSH, or run the pipeline (no local Ollama).
+
+**Deploying updates to the live server** (the repo is private, so the VM cannot clone or pull):
+```
+git archive --format=tar HEAD | ssh -i ~/.ssh/swarm_orchestrator root@167.233.239.33 \
+  "tar -x -C ~/distributed-orchestrator"
+ssh -i ~/.ssh/swarm_orchestrator root@167.233.239.33 \
+  "cd ~/distributed-orchestrator && docker compose up -d --build"
+```
+
 ### Session 2 — August 1, 2026 (continued, after credit top-up)
 
 **Week 1 CLOSED.** `--demo` passed end-to-end: both pitches PASS (3028s + 3149s), memory carried across
