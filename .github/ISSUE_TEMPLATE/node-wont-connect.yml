@@ -1,0 +1,80 @@
+name: Node won't connect
+description: You ran join.py or node.py and it didn't work
+title: "[node] "
+labels: ["node-connection"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This is the most useful issue you can file — a node that won't join is
+        the failure that stops people contributing. Four things diagnose almost
+        every case.
+
+  - type: textarea
+    id: command
+    attributes:
+      label: What you ran
+      description: The exact command, with the orchestrator address redacted if it's private.
+      placeholder: python join.py http://192.168.1.42:8000
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: output
+    attributes:
+      label: What it printed
+      description: >
+        The whole output, not just the last line. If there's a traceback, all of
+        it — that's the part that identifies the cause.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: status
+    attributes:
+      label: Output of `python status.py`
+      description: >
+        Run this on the machine that's trying to join. It shows whether Ollama
+        is running and which model you have — that's two of the four common
+        causes right there.
+      render: shell
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Linux
+        - Other / WSL
+    validations:
+      required: true
+
+  - type: dropdown
+    id: network
+    attributes:
+      label: Where is the orchestrator relative to you?
+      options:
+        - Same home/office network (LAN)
+        - Over the internet (public address)
+        - Over Tailscale or a VPN
+        - On this same machine (localhost)
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: anything_else
+    attributes:
+      label: Anything else
+      description: >
+        Firewall you know about, corporate network, unusual Python install,
+        whether it ever worked before.
+    validations:
+      required: false

@@ -1,0 +1,71 @@
+name: Bug report
+description: Something behaves differently than it should
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce it
+      description: >
+        The exact commands. If it involves a pitch, include the task text —
+        output problems are often specific to the wording of the request.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: output
+    attributes:
+      label: Output or traceback
+      description: Paste the whole thing, including the traceback if there is one.
+      render: shell
+    validations:
+      required: false
+
+  - type: input
+    id: python
+    attributes:
+      label: Python version
+      description: "`python --version`"
+      placeholder: "3.14.3"
+    validations:
+      required: true
+
+  - type: input
+    id: model
+    attributes:
+      label: Model
+      description: Which model was in use (see `python status.py`).
+      placeholder: "qwen3.5:4b"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: How were you running it?
+      options:
+        - CLI (python cli.py)
+        - Server + dashboard
+        - Distributed across nodes
+        - MCP client (Claude Desktop etc.)
+        - Docker
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        **If the deliverable was poor quality rather than broken**, that's worth
+        filing too — but say so explicitly, and include the task text and what
+        you got. Output quality is measured by the eval harness in `evals/`, and
+        a concrete bad case is genuinely useful there.
