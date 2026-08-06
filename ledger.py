@@ -36,7 +36,7 @@ def _load() -> list[dict]:
 
     if LEDGER_FILE.exists():
         try:
-            _cache = json.loads(LEDGER_FILE.read_text())
+            _cache = json.loads(LEDGER_FILE.read_text(encoding="utf-8"))
             _cache_mtime = mtime
             return _cache
         except (json.JSONDecodeError, OSError):
@@ -49,7 +49,7 @@ def _load() -> list[dict]:
 def _save(entries: list[dict]):
     """Save the ledger to disk and invalidate cache."""
     global _cache, _cache_mtime
-    LEDGER_FILE.write_text(json.dumps(entries, indent=2))
+    LEDGER_FILE.write_text(json.dumps(entries, indent=2), encoding="utf-8")
     _cache = entries
     try:
         _cache_mtime = LEDGER_FILE.stat().st_mtime

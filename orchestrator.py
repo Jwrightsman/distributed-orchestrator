@@ -485,7 +485,7 @@ async def extract_and_repair(
         shutil.rmtree(candidate_dir, ignore_errors=True)
 
     final_output = repaired
-    (project_dir / "output.md").write_text(final_output)
+    (project_dir / "output.md").write_text(final_output, encoding="utf-8")
     for stale in (project_dir / "code").glob("*"):
         stale.unlink()
     code_files = extract_code_files(final_output, project_dir)
@@ -654,16 +654,16 @@ async def run_pipeline(
     # 5. Save everything
     timestamp, project_dir = make_run_dir()
 
-    (project_dir / "plan.json").write_text(json.dumps(subtasks, indent=2))
+    (project_dir / "plan.json").write_text(json.dumps(subtasks, indent=2), encoding="utf-8")
 
     for st in subtasks:
         safe_title = re.sub(r"[^\w\s-]", "", st["title"]).strip().replace(" ", "_")
-        (project_dir / f"builder_{st['id']}_{safe_title}.md").write_text(results[st["id"]])
+        (project_dir / f"builder_{st['id']}_{safe_title}.md").write_text(results[st["id"]], encoding="utf-8")
 
-    (project_dir / "review.md").write_text(review_output)
+    (project_dir / "review.md").write_text(review_output, encoding="utf-8")
 
     if final_output:
-        (project_dir / "output.md").write_text(final_output)
+        (project_dir / "output.md").write_text(final_output, encoding="utf-8")
 
     # Extract runnable code files, then mechanically verify and repair them
     final_output, code_files, code_problems = await extract_and_repair(
@@ -688,7 +688,7 @@ async def run_pipeline(
         "mode": "local",
         "project_id": project_id or "",
     }
-    (project_dir / "full_log.json").write_text(json.dumps(log, indent=2))
+    (project_dir / "full_log.json").write_text(json.dumps(log, indent=2), encoding="utf-8")
 
     result = {
         "project_dir": str(project_dir),
@@ -709,11 +709,11 @@ async def run_pipeline(
             add_iteration(project_id, result, task)
             memory_file = _PROJ_DIR / project_id / "memory.md"
             if memory_file.exists():
-                raw = memory_file.read_text(errors="ignore")
+                raw = memory_file.read_text(errors="ignore", encoding="utf-8")
                 if len(raw) > SUMMARIZE_THRESHOLD:
                     compressed = await _summarize_memory(raw)
                     if compressed and compressed != raw:
-                        memory_file.write_text(compressed)
+                        memory_file.write_text(compressed, encoding="utf-8")
         except Exception:
             pass  # memory write failure never blocks the pipeline
 

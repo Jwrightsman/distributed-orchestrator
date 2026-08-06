@@ -95,11 +95,11 @@ def create_project(name: str, initial_task: str) -> str:
         "last_updated": datetime.now(timezone.utc).isoformat(),
         "iteration_count": 0,
     }
-    (project_dir / "meta.json").write_text(json.dumps(meta, indent=2))
+    (project_dir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
     # Seed memory.md with the initial goal
     memory = f"# Project: {name}\n\n## Goal\n{initial_task}\n\n## Iterations\n_(none yet)_\n"
-    (project_dir / "memory.md").write_text(memory)
+    (project_dir / "memory.md").write_text(memory, encoding="utf-8")
 
     return project_id
 
@@ -109,7 +109,7 @@ def load_project(project_id: str) -> dict:
     meta_file = PROJECTS_DIR / project_id / "meta.json"
     if not meta_file.exists():
         raise FileNotFoundError(f"Project '{project_id}' not found")
-    return json.loads(meta_file.read_text())
+    return json.loads(meta_file.read_text(encoding="utf-8"))
 
 
 def list_projects() -> list[dict]:
@@ -124,7 +124,7 @@ def list_projects() -> list[dict]:
         if not meta_file.exists():
             continue
         try:
-            meta = json.loads(meta_file.read_text())
+            meta = json.loads(meta_file.read_text(encoding="utf-8"))
             projects.append(meta)
         except (json.JSONDecodeError, OSError):
             pass
@@ -140,7 +140,7 @@ def get_memory_context(project_id: str) -> str:
     memory_file = PROJECTS_DIR / project_id / "memory.md"
     if not memory_file.exists():
         return ""
-    content = memory_file.read_text(errors="ignore")
+    content = memory_file.read_text(errors="ignore", encoding="utf-8")
     if "_(none yet)_" in content:
         return ""
     if len(content) > _MAX_MEMORY_CHARS:
@@ -192,14 +192,14 @@ def add_iteration(project_id: str, result: dict, task: str) -> int:
 
     # Append to memory.md, replacing the "(none yet)" placeholder on first iteration
     memory_file = project_dir / "memory.md"
-    memory = memory_file.read_text(errors="ignore")
+    memory = memory_file.read_text(errors="ignore", encoding="utf-8")
     memory = memory.replace("_(none yet)_", "")
     memory = memory.rstrip() + "\n" + entry
-    memory_file.write_text(memory)
+    memory_file.write_text(memory, encoding="utf-8")
 
     # Update meta
     meta["iteration_count"] = iteration
     meta["last_updated"] = datetime.now(timezone.utc).isoformat()
-    (project_dir / "meta.json").write_text(json.dumps(meta, indent=2))
+    (project_dir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
     return iteration

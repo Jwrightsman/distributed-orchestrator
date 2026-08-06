@@ -208,7 +208,7 @@ def show_history():
         if not log_file.exists():
             continue
         try:
-            log = json.loads(log_file.read_text())
+            log = json.loads(log_file.read_text(encoding="utf-8"))
             task = log.get("task", "?")
             if len(task) > 60:
                 task = task[:57] + "..."
@@ -220,7 +220,7 @@ def show_history():
             review_file = d / "review.md"
             rating = "?"
             if review_file.exists():
-                review = review_file.read_text(errors="ignore")
+                review = review_file.read_text(errors="ignore", encoding="utf-8")
                 if "PASS" in review:
                     rating = "[green]PASS[/green]"
                 elif "NEEDS_WORK" in review:
@@ -421,7 +421,7 @@ async def run_demo(fast: bool = False):
     memory_bytes = 0
     memory_file = PROJECTS_DIR / project_id / "memory.md"
     if memory_file.exists():
-        raw = memory_file.read_text(errors="ignore")
+        raw = memory_file.read_text(errors="ignore", encoding="utf-8")
         memory_lines = len([ln for ln in raw.splitlines() if ln.strip()])
         memory_bytes = len(raw.encode())
 
@@ -601,7 +601,7 @@ async def run_demo_live():
     # ── Pitch 2 ──────────────────────────────────────────────────────────
     memory_file = PROJECTS_DIR / project_id / "memory.md"
     if memory_file.exists():
-        raw = memory_file.read_text(errors="ignore")
+        raw = memory_file.read_text(errors="ignore", encoding="utf-8")
         lines = len([ln for ln in raw.splitlines() if ln.strip()])
         console.print(f"[dim]Loading project memory: {lines} lines of context from Pitch 1[/dim]\n")
 
@@ -611,7 +611,7 @@ async def run_demo_live():
     memory_lines = 0
     memory_bytes = 0
     if memory_file.exists():
-        raw = memory_file.read_text(errors="ignore")
+        raw = memory_file.read_text(errors="ignore", encoding="utf-8")
         memory_lines = len([ln for ln in raw.splitlines() if ln.strip()])
         memory_bytes = len(raw.encode())
 

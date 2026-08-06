@@ -169,7 +169,7 @@ def extract_code_files(review_text: str, output_dir: Path) -> list[str]:
             filename = f"output_{counters[ext]}{ext}"
 
         filepath = code_dir / filename
-        filepath.write_text(block["code"])
+        filepath.write_text(block["code"], encoding="utf-8")
         saved.append(str(filepath))
 
     return saved
