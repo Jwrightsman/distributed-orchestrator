@@ -6,3 +6,4 @@ ledger.json
 config.json
 projects/
 events.db
+scripts/wan_results/
