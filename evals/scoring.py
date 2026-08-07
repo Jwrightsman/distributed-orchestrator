@@ -119,7 +119,40 @@ def _classify_python_failure(stderr: str) -> str:
     if "EOFError" in stderr and "input" in stderr:
         # Ran fine, then asked for interactive input we did not supply.
         return "needs_stdin"
+    if _wants_cli_arguments(stderr):
+        # Imported, built its parser, and rejected an empty command line —
+        # which is a CLI tool working correctly, not a broken program.
+        return "needs_args"
     return "error"
+
+
+# argparse's own wording for a missing required argument, plus the shapes
+# click/typer and hand-rolled parsers use.
+_ARGPARSE_REQUIRED = re.compile(
+    r"(the following arguments are required"
+    r"|error: argument .* is required"
+    r"|too few arguments"
+    r"|Missing argument"
+    r"|Error: Missing option)",
+    re.IGNORECASE,
+)
+
+
+def _wants_cli_arguments(stderr: str) -> bool:
+    """True when the program exited because the command line was empty.
+
+    We run generated code with no arguments, so a tool whose whole job needs
+    input paths will always exit non-zero. Counting that as "does not run"
+    penalised correct programs — it hid three passing CLI tools in the first
+    baseline. A usage message is evidence the program got far enough to parse
+    arguments, which is as much as running it bare can ever show.
+    """
+    if _ARGPARSE_REQUIRED.search(stderr):
+        return True
+    # A bare usage banner with no traceback is the same signal.
+    return bool(re.search(r"^usage:", stderr, re.MULTILINE | re.IGNORECASE)) and (
+        "Traceback" not in stderr
+    )
 
 
 def execute_python(paths: list[str], timeout: int = EXEC_TIMEOUT) -> dict:
@@ -163,9 +196,10 @@ def execute_python(paths: list[str], timeout: int = EXEC_TIMEOUT) -> dict:
 
     stderr = (proc.stderr or "").strip()
     outcome = _classify_python_failure(stderr)
-    # A script that only wanted stdin did run — count it, but label it.
+    # Scripts that only wanted stdin, or arguments we never supplied, did run —
+    # count them, but keep the label so the distinction stays visible.
     return {
-        "ok": outcome == "needs_stdin",
+        "ok": outcome in ("needs_stdin", "needs_args"),
         "outcome": outcome,
         "detail": stderr.splitlines()[-1][:300] if stderr else f"exit {proc.returncode}",
     }
