@@ -468,13 +468,13 @@ async def pitch_distributed(req: PitchRequest, request: Request):
     # 6. Save output files
     timestamp, project_dir = make_run_dir()
 
-    (project_dir / "plan.json").write_text(json.dumps(subtasks, indent=2))
+    (project_dir / "plan.json").write_text(json.dumps(subtasks, indent=2), encoding="utf-8")
     for st in subtasks:
         safe_title = _re.sub(r"[^\w\s-]", "", st["title"]).strip().replace(" ", "_")
-        (project_dir / f"builder_{st['id']}_{safe_title}.md").write_text(results[st["id"]])
-    (project_dir / "review.md").write_text(review_output)
+        (project_dir / f"builder_{st['id']}_{safe_title}.md").write_text(results[st["id"]], encoding="utf-8")
+    (project_dir / "review.md").write_text(review_output, encoding="utf-8")
     if final_output:
-        (project_dir / "output.md").write_text(final_output)
+        (project_dir / "output.md").write_text(final_output, encoding="utf-8")
 
     # Same extract → verify → repair guarantees as the local pipeline
     final_output, code_files, code_problems = await extract_and_repair(
@@ -500,7 +500,7 @@ async def pitch_distributed(req: PitchRequest, request: Request):
         "nodes_used": list(nodes_used),
         "project_id": req.project_id or "",
     }
-    (project_dir / "full_log.json").write_text(json.dumps(log, indent=2))
+    (project_dir / "full_log.json").write_text(json.dumps(log, indent=2), encoding="utf-8")
 
     # 7. Save iteration to project memory, auto-summarize if grown large
     if req.project_id:
@@ -514,11 +514,11 @@ async def pitch_distributed(req: PitchRequest, request: Request):
             }, req.task)
             memory_file = _PROJ_DIR / req.project_id / "memory.md"
             if memory_file.exists():
-                raw = memory_file.read_text(errors="ignore")
+                raw = memory_file.read_text(errors="ignore", encoding="utf-8")
                 if len(raw) > SUMMARIZE_THRESHOLD:
                     compressed = await _summarize_memory(raw)
                     if compressed and compressed != raw:
-                        memory_file.write_text(compressed)
+                        memory_file.write_text(compressed, encoding="utf-8")
         except Exception:
             pass
 

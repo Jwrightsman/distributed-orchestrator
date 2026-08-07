@@ -15,6 +15,7 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
+import routes_events
 import routes_pitch
 import server
 import server_state
@@ -301,12 +302,15 @@ def test_duplicate_result_submissions_do_not_double_pay(client):
 
 # ── The orchestrator survives its dependencies ──────────────────────────────
 
-def test_health_reports_ollama_down_without_crashing(client):
+def test_health_reports_ollama_down_without_crashing(client, monkeypatch):
     """Ollama restarting mid-pipeline must not take /health down.
 
-    Nothing is listening on the Ollama port during tests, so this exercises the
-    real unreachable path rather than a mock of it.
+    Points the health check at a port nothing listens on, rather than assuming
+    the developer's machine has Ollama stopped — that assumption made this test
+    pass in CI and fail on the one machine that actually runs the pipeline.
     """
+    monkeypatch.setattr(routes_events, "OLLAMA_URL", "http://127.0.0.1:9")  # discard port
+
     resp = client.get("/health")
 
     assert resp.status_code == 200

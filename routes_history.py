@@ -34,7 +34,7 @@ async def history(search: str = "", limit: int = 50):
             if not log_file.exists():
                 continue
             try:
-                log = json.loads(log_file.read_text())
+                log = json.loads(log_file.read_text(encoding="utf-8"))
                 task = log.get("task", "Unknown")
                 if query and query not in task.lower():
                     continue
@@ -42,7 +42,7 @@ async def history(search: str = "", limit: int = 50):
                 if rating == "?":
                     review_f = d / "review.md"
                     if review_f.exists():
-                        for line in review_f.read_text(errors="ignore").splitlines():
+                        for line in review_f.read_text(errors="ignore", encoding="utf-8").splitlines():
                             if line.strip() in ("PASS", "NEEDS_WORK", "FAIL"):
                                 rating = line.strip()
                                 break
@@ -74,15 +74,15 @@ async def history_detail(timestamp: str):
         raise HTTPException(status_code=404, detail="Log file not found")
 
     try:
-        log = json.loads(log_file.read_text())
+        log = json.loads(log_file.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         raise HTTPException(status_code=500, detail="Corrupt log file")
 
     review_file = run_dir / "review.md"
-    review_content = review_file.read_text() if review_file.exists() else ""
+    review_content = review_file.read_text(encoding="utf-8") if review_file.exists() else ""
 
     output_file = run_dir / "output.md"
-    final_output = output_file.read_text() if output_file.exists() else ""
+    final_output = output_file.read_text(encoding="utf-8") if output_file.exists() else ""
 
     # Derive rating from review file (most reliable source)
     rating = "?"
@@ -146,7 +146,7 @@ async def fork_template(timestamp: str):
         raise HTTPException(status_code=404, detail="Log file not found")
 
     try:
-        log = json.loads(log_file.read_text())
+        log = json.loads(log_file.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         raise HTTPException(status_code=500, detail="Corrupt log file")
 
@@ -156,7 +156,7 @@ async def fork_template(timestamp: str):
 
     # Final output for memory summary
     output_file = run_dir / "output.md"
-    final_output = output_file.read_text(errors="ignore") if output_file.exists() else ""
+    final_output = output_file.read_text(errors="ignore", encoding="utf-8") if output_file.exists() else ""
 
     # memory.md — use project memory if available, else build a starter
     memory_content = ""
@@ -165,7 +165,7 @@ async def fork_template(timestamp: str):
             from memory import PROJECTS_DIR
             proj_memory_file = PROJECTS_DIR / project_id / "memory.md"
             if proj_memory_file.exists():
-                memory_content = proj_memory_file.read_text(errors="ignore")
+                memory_content = proj_memory_file.read_text(errors="ignore", encoding="utf-8")
         except Exception:
             pass
     if not memory_content:
@@ -229,7 +229,7 @@ async def share_page(timestamp: str, request: Request):
         raise HTTPException(status_code=404, detail="Log file not found")
 
     try:
-        log = json.loads(log_file.read_text())
+        log = json.loads(log_file.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         raise HTTPException(status_code=500, detail="Corrupt log file")
 
@@ -240,13 +240,13 @@ async def share_page(timestamp: str, request: Request):
     model = log.get("model", get_config().get("model", "qwen3.5:4b"))
 
     output_file = run_dir / "output.md"
-    final_output = output_file.read_text(errors="ignore") if output_file.exists() else ""
+    final_output = output_file.read_text(errors="ignore", encoding="utf-8") if output_file.exists() else ""
 
     # Derive rating from review if not in log
     if not rating or rating == "?":
         review_file = run_dir / "review.md"
         if review_file.exists():
-            for line in review_file.read_text(errors="ignore").splitlines():
+            for line in review_file.read_text(errors="ignore", encoding="utf-8").splitlines():
                 if line.strip() in ("PASS", "NEEDS_WORK", "FAIL"):
                     rating = line.strip()
                     break
@@ -465,13 +465,13 @@ async def gallery(limit: int = 30):
             if not log_file.exists():
                 continue
             try:
-                log = json.loads(log_file.read_text())
+                log = json.loads(log_file.read_text(encoding="utf-8"))
                 rating = log.get("rating", "?")
                 # Read first 300 chars of final output as preview
                 preview = ""
                 output_file = d / "output.md"
                 if output_file.exists():
-                    preview = output_file.read_text(errors="ignore")[:300]
+                    preview = output_file.read_text(errors="ignore", encoding="utf-8")[:300]
                 elif log.get("review"):
                     from orchestrator import _extract_final_output
                     fo = _extract_final_output(log["review"])

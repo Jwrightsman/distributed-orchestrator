@@ -124,7 +124,7 @@ def load() -> dict:
     config = DEFAULTS.copy()
     if CONFIG_FILE.exists():
         try:
-            overrides = json.loads(CONFIG_FILE.read_text())
+            overrides = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
             config.update(overrides)
         except (json.JSONDecodeError, OSError):
             pass
@@ -133,7 +133,7 @@ def load() -> dict:
 
 def save(config: dict):
     """Save config to config.json."""
-    CONFIG_FILE.write_text(json.dumps(config, indent=2))
+    CONFIG_FILE.write_text(json.dumps(config, indent=2), encoding="utf-8")
 
 
 def get() -> dict:

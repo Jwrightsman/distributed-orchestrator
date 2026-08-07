@@ -40,6 +40,28 @@ import httpx
 RESULTS_DIR = Path(__file__).parent / "wan_results"
 
 
+def cpu_contention_factor() -> float:
+    """How much slower a fixed CPU burst runs than on an idle machine.
+
+    Client-side timing is only meaningful when the client is idle. Measured
+    Aug 6: running this benchmark while a local eval pinned the CPU reported a
+    1513 ms median HTTP round-trip against a true figure near 190 ms — an 8x
+    overstatement that would have gone into the README as a real number.
+
+    Returns roughly 1.0 idle; climbs under load. No dependency on psutil.
+    """
+    best = None
+    for _ in range(5):
+        t0 = time.perf_counter()
+        x = 0
+        for i in range(200_000):
+            x += i * i
+        elapsed = time.perf_counter() - t0
+        best = elapsed if best is None else min(best, elapsed)
+    # Calibrated so a modern idle core lands near 1.0
+    return round(best / 0.012, 2)
+
+
 def _stats(samples: list[float]) -> dict:
     """Latency summary. Medians and p95 matter here; means hide the stalls."""
     if not samples:
@@ -201,13 +223,34 @@ async def main():
     ap.add_argument("--payload-kb", type=int, default=8, help="simulated builder output size")
     ap.add_argument("--idle-minutes", type=float, default=2.0)
     ap.add_argument("--task", default="Write a Python function that reverses a string, with a docstring")
+    ap.add_argument(
+        "--allow-loaded-client",
+        action="store_true",
+        help="record numbers even if this machine is busy (they will be marked untrusted)",
+    )
     args = ap.parse_args()
 
     server = args.server.rstrip("/")
+
+    contention = cpu_contention_factor()
+    trustworthy = contention < 2.0
+    if not trustworthy:
+        msg = (
+            f"This machine is busy (CPU contention factor {contention}). Client-side "
+            f"latency will be inflated and must not be published."
+        )
+        if not args.allow_loaded_client:
+            print(f"REFUSING TO MEASURE: {msg}")
+            print("Wait until nothing heavy is running, or pass --allow-loaded-client.")
+            return
+        print(f"WARNING: {msg}")
+
     results = {
         "measured_at": datetime.now(timezone.utc).isoformat(),
         "server": server,
         "client_platform": f"{platform.system()} {platform.machine()}",
+        "cpu_contention_factor": contention,
+        "trustworthy": trustworthy,
     }
 
     async with httpx.AsyncClient(timeout=60) as client:
