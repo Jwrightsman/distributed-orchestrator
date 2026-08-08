@@ -1,4 +1,53 @@
 {
+  "total": 28,
+  "success": 9,
+  "success_rate": 0.321,
+  "mean_judge_score": 4.29,
+  "mean_seconds": 3144.1,
+  "total_seconds": 88033.6,
+  "mean_subtasks": 3.86,
+  "by_category": {
+    "web_app": {
+      "total": 6,
+      "success": 2,
+      "rate": 0.333
+    },
+    "cli_tool": {
+      "total": 5,
+      "success": 3,
+      "rate": 0.6
+    },
+    "data_processing": {
+      "total": 5,
+      "success": 3,
+      "rate": 0.6
+    },
+    "api": {
+      "total": 4,
+      "success": 1,
+      "rate": 0.25
+    },
+    "algorithm": {
+      "total": 4,
+      "success": 0,
+      "rate": 0.0
+    },
+    "vague": {
+      "total": 4,
+      "success": 0,
+      "rate": 0.0
+    }
+  },
+  "by_stage": {
+    "no_files_extracted": 1,
+    "parse_failed": 0,
+    "execution_failed": 15,
+    "wrong_artifact_kind": 0,
+    "missing_keywords": 2,
+    "judged_below_bar": 1,
+    "judge_unparseable": 0,
+    "pipeline_error": 0
+  },
   "meta": {
     "run_id": "20260806_195850",
     "model": "qwen3.5:4b",
@@ -10,47 +59,7 @@
     "judge_enabled": true,
     "concurrency": 1,
     "prompt_set": "v1",
-    "started_at": "2026-08-06T19:58:50+00:00"
-  },
-  "summary": {
-    "total": 20,
-    "success": 8,
-    "success_rate": 0.4,
-    "mean_judge_score": 4.25,
-    "mean_seconds": 3678.2,
-    "total_seconds": 73564.9,
-    "mean_subtasks": 3.85,
-    "by_category": {
-      "web_app": {
-        "total": 6,
-        "success": 4,
-        "rate": 0.667
-      },
-      "cli_tool": {
-        "total": 5,
-        "success": 1,
-        "rate": 0.2
-      },
-      "data_processing": {
-        "total": 5,
-        "success": 2,
-        "rate": 0.4
-      },
-      "api": {
-        "total": 4,
-        "success": 1,
-        "rate": 0.25
-      }
-    },
-    "by_stage": {
-      "no_files_extracted": 1,
-      "parse_failed": 0,
-      "execution_failed": 9,
-      "wrong_artifact_kind": 0,
-      "missing_keywords": 2,
-      "judged_below_bar": 1,
-      "judge_unparseable": 0,
-      "pipeline_error": 0
-    }
+    "started_at": "2026-08-06T19:58:50+00:00",
+    "rescored": true
   }
 }
