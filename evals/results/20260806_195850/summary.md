@@ -2,7 +2,7 @@
 
 **Model:** `qwen3.5:4b` · **Prompt set:** `v1` · **Mode:** real
 
-**Success rate: 32%** (9/28) — target is 80%
+**Success rate: 36%** (10/28) — target is 80%
 
 Mean judge score: 4.29 · Mean wall clock: 3144.1s · Mean subtasks: 3.86
 
@@ -11,7 +11,7 @@ Mean judge score: 4.29 · Mean wall clock: 3144.1s · Mean subtasks: 3.86
 | Category | Pass | Total | Rate |
 | --- | ---: | ---: | ---: |
 | algorithm | 0 | 4 | 0% |
-| api | 1 | 4 | 25% |
+| api | 2 | 4 | 50% |
 | cli_tool | 3 | 5 | 60% |
 | data_processing | 3 | 5 | 60% |
 | vague | 0 | 4 | 0% |
@@ -23,7 +23,7 @@ Mean judge score: 4.29 · Mean wall clock: 3144.1s · Mean subtasks: 3.86
 | --- | ---: |
 | no files extracted | 1 |
 | parse failed | 0 |
-| execution failed | 15 |
+| execution failed | 14 |
 | wrong artifact kind | 0 |
 | missing keywords | 2 |
 | judged below bar | 1 |
@@ -53,7 +53,7 @@ Mean judge score: 4.29 · Mean wall clock: 3144.1s · Mean subtasks: 3.86
 | `api-todo-fastapi` | api | 1 | ✓ | ✓ | 5 | 1902 | ✅ |
 | `api-url-shortener` | api | 1 | ✓ | ✗ | 5 | 38134 | ❌ |
 | `api-http-server` | api | 1 | ✓ | ✗ | 4 | 865 | ❌ |
-| `api-weather-mock` | api | 1 | ✓ | ✗ | 5 | 2009 | ❌ |
+| `api-weather-mock` | api | 1 | ✓ | ✓ | 5 | 2009 | ✅ |
 | `algo-fizzbuzz-tests` | algorithm | 1 | ✓ | ✗ | 5 | 1215 | ❌ |
 | `algo-binary-search` | algorithm | 1 | ✓ | ✗ | 5 | 1004 | ❌ |
 | `algo-matrix` | algorithm | 1 | ✓ | ✗ | 4 | 1676 | ❌ |
@@ -75,7 +75,6 @@ Mean judge score: 4.29 · Mean wall clock: 3144.1s · Mean subtasks: 3.86
 - **data-json-to-csv** — exec error: exit 1
 - **api-url-shortener** — exec error: NameError: name 'Query' is not defined
 - **api-http-server** — exec error: NameError: name 'dataclass' is not defined
-- **api-weather-mock** — exec error: OSError: [WinError 10106] The requested service provider could not be loaded or initialized
 - **algo-fizzbuzz-tests** — exec error: FAILED (failures=1)
 - **algo-binary-search** — exec error: AssertionError
 - **algo-matrix** — exec error: IndexError: list index out of range

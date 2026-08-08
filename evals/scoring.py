@@ -173,6 +173,13 @@ def execute_python(paths: list[str], timeout: int = EXEC_TIMEOUT) -> dict:
         "PYTHONIOENCODING": "utf-8",
         "PYTHONDONTWRITEBYTECODE": "1",
     }
+    # Windows needs SystemRoot to initialise Winsock. Without it, anything that
+    # touches a socket dies with "WinError 10106: The requested service provider
+    # could not be loaded" before running a line of its own logic — which scored
+    # three correct API servers as broken code in the first two eval runs.
+    for winvar in ("SystemRoot", "SYSTEMROOT", "WINDIR", "TEMP", "TMP"):
+        if winvar in os.environ:
+            env[winvar] = os.environ[winvar]
     with tempfile.TemporaryDirectory(prefix="eval_exec_") as workdir:
         try:
             proc = subprocess.run(

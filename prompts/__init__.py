@@ -45,7 +45,7 @@ _SETS: dict[str, PromptSet] = {
     _v3.PROMPTS.name: _v3.PROMPTS,
 }
 
-DEFAULT_SET = "v1"
+DEFAULT_SET = "v3"  # promoted Aug 8: 61% vs v1 36% on the 28-prompt eval set
 
 
 def list_prompt_sets() -> list[PromptSet]:

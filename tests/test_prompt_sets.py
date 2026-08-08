@@ -28,8 +28,24 @@ def restore_prompt_set():
         os.environ["PROMPT_SET"] = original_env
 
 
-def test_v1_is_the_default():
-    assert prompts.DEFAULT_SET == "v1"
+def test_default_is_the_promoted_set():
+    """The default must be a set that beat the previous one on a measured run.
+
+    v1 was the default until Aug 8, when v3 scored 17/28 (61%) against v1's
+    10/28 (36%) on the same 28 prompts and the same model
+    (evals/results/20260808_050610 vs 20260806_195850). Promotion requires a
+    recorded run, not a preference — if this assertion is changed, the commit
+    doing it must cite the run that justifies it.
+    """
+    assert prompts.DEFAULT_SET == "v3"
+    assert prompts.DEFAULT_SET in {ps.name for ps in prompts.list_prompt_sets()}
+
+
+def test_v1_remains_available_as_the_baseline():
+    """Old scores refer to v1; it must stay loadable and untouched forever."""
+    v1 = prompts.get_prompt_set("v1")
+    assert v1.name == "v1"
+    assert "You are a task planner" in v1.planner
 
 
 def test_every_set_defines_all_four_prompts():
