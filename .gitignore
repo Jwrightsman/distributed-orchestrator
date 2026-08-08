@@ -7,3 +7,4 @@ config.json
 projects/
 events.db
 scripts/wan_results/
+scripts/showcase_results/

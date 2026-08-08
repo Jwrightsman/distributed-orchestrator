@@ -1,0 +1,30 @@
+[
+  {
+    "id": 1,
+    "title": "Page shell and neon styling",
+    "prompt": "Write the HTML document shell and all CSS for a retro Snake game in ONE self-contained HTML file. Set the document to use a dark background with a neon-glow color scheme. Include a <canvas id=\"gameCanvas\" width=\"400\" height=\"400\"> element. Create a <div id=\"score\">0</div> element near the canvas. Create exactly ONE overlay element (id=\"gameOverOverlay\") set to display:none, containing a 'GAME OVER' heading and a 'Restart' button. Place all CSS inside a single <style> block in the <head>.",
+    "depends_on": []
+  },
+  {
+    "id": 2,
+    "title": "Core logic and game loop",
+    "prompt": "Write the JavaScript game loop for a Snake game in ONE self-contained HTML file. Draw to <canvas id=\"gameCanvas\">. Define the snake as an array of {x,y} objects and food as {x,y}. Implement logic for the snake moving automatically on page load (no start screen) without needing a key press. Implement collision detection against walls and self. Expose a main function named update() that handles logic and a function named draw() for rendering. The game should run in an infinite loop driven by setInterval.",
+    "depends_on": []
+  },
+  {
+    "id": 3,
+    "title": "Input handling and game states",
+    "prompt": "Write the JavaScript keyboard handling for a Snake game in ONE self-contained HTML file. Use document.addEventListener('keydown', ...) to handle arrow keys for controlling the snake's direction. Implement a restart mechanism: when the 'Restart' button inside <div id=\"gameOverOverlay\"> is clicked, call the update() function and reset the game state. Ensure the <div id=\"gameOverOverlay\"> is visible only after a collision occurs and hidden again by the restart button. Ensure the text 'GAME OVER' is only visible when the game is over.",
+    "depends_on": [
+      2
+    ]
+  },
+  {
+    "id": 4,
+    "title": "Food generation and rendering",
+    "prompt": "Write the JavaScript logic to generate and render food in ONE self-contained HTML file. Place food randomly on the grid. Ensure food does not spawn on top of the snake. Update the <div id=\"score\"> element when food is eaten. This logic should be integrated into the update() function to draw to <canvas id=\"gameCanvas\">.",
+    "depends_on": [
+      2
+    ]
+  }
+]
