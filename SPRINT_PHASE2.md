@@ -79,9 +79,19 @@ This is grinding, iterative work and it is the best possible use of the remainin
       score in the README — a real, measured number is credible and rare in this space.
 
 ### 1.3 Showcase reliability
-- [ ] Run `--demo-showcase` 10 times consecutively; the Snake game must be playable in ≥8
-- [ ] Same for `--demo` (expense tracker + memory iteration)
+- [x] Run `--demo-showcase` 10 times consecutively; the Snake game must be playable in ≥8
+      — **MEASURED AND FAILING: 2/10.** Not 8/10. `scripts/showcase_reliability.py`, 10 real runs
+      (~6 hours), each opened in headless Chromium. **0/10** met the strict bar (starts playing on
+      load, no "GAME OVER" before play); **2/10** are playable at all once you press start. The other
+      8 never draw to the canvas and their restart button does nothing — frame hash stays 0 with no
+      JS error to explain it. This is a genuine capability limit, not a scoring artifact: verified by
+      hand on a failing run.
+- [ ] Same for `--demo` (expense tracker + memory iteration) — not yet measured
 - [ ] If a demo is flaky, tune its specific prompt until it isn't — these two run on camera
+      **Not yet attempted.** Each iteration costs ~6 hours (10 runs) to validate, so this needs a
+      dedicated window. Mitigation already in place: one verified-playable game is committed at
+      `docs/demo-assets/snake-game/` and docs/demo-script.md tells Jett to press restart before
+      rolling. **The video does not depend on a live generation succeeding.**
 
 ---
 
@@ -124,9 +134,17 @@ This is grinding, iterative work and it is the best possible use of the remainin
       or Hetzner per docs/DEPLOY.md). Jett handles account creation only; you configure over SSH.
 - [ ] Confirm a real remote node connects over the internet — not just LAN — with `node_secret` set.
       This is the first true test of the distributed claim.
-- [ ] Measure and record real WAN numbers: task round-trip latency, throughput vs local-only,
+- [x] Measure and record real WAN numbers: task round-trip latency, throughput vs local-only,
       failure rate over a multi-hour run. Put honest numbers in the README; the local-AI community
       respects measured results and punishes vague claims.
+      — `scripts/wan_bench.py`, Indiana laptop → Hetzner Germany (167.233.239.33):
+      **HTTP round-trip 216 ms median · node registration 218 ms · 8 KB result upload 535 ms ·
+      idle long-poll error rate 0.0%.** One real end-to-end pitch completed in 308 s, of which the
+      network accounted for ~7 s — **about 2%**. That is the honest headline: over a transatlantic
+      link, distribution costs almost nothing, because inference dominates by two orders of magnitude.
+      **Measurement caveat worth keeping:** the first attempt reported 1513 ms RTT because it ran
+      while the eval saturated the client's CPU — it was timing contention, not the network. Re-run
+      on an idle machine. Never benchmark a network from a busy box.
 - [ ] Harden anything the WAN test exposes (timeouts tuned for real latency, retry backoff, etc.)
 
 ---
@@ -245,9 +263,27 @@ Snake game ten times and checks each in headless Chromium for JS errors, a paint
 self-running game loop, arrow-key response, and no "GAME OVER" visible before play. Validated first
 against the two games already on disk, both of which it correctly rejects for not starting on load.
 
-**Still open:** §1.3 result, a re-measured §3 WAN number (the first attempt is unusable — it was
-taken while the eval saturated the CPU, so it timed contention rather than the network), and the
-planner/reviewer prompt iterations.
+**§1.3 measured, and it fails the bar: the showcase is 2/10, not 8/10.** Ten real runs, each checked
+in a real browser. Zero met the strict bar (playing on load); two are playable after pressing start;
+the other eight never draw anything and their restart button is inert — with no JS error to explain
+it, which is why only actually running them found this. One failing run was verified by hand to rule
+out a checker artifact.
+
+**What that means for the video, plainly:** do not generate the game live on camera. A verified
+playable one is committed at `docs/demo-assets/snake-game/` and the demo script already says to press
+restart before rolling. The showcase is a "here is what it produced" shot, not a "watch it produce
+one" shot. That is an honest framing — the deliverable is real, it was made by the swarm, and the
+video never has to claim it works first time.
+
+**Two open leads if a future session has ~6 hours to spend on this:** the failures are consistent
+(canvas never painted, restart handler inert), which smells like the reviewer merging a start-screen
+state machine it does not fully wire up, rather than random model noise. Worth reading the builder
+transcripts of a failing run against a passing one before touching the prompt — `docs/demo-assets/`
+now holds a passing example to diff against.
+
+**Still open:** a re-measured §3 WAN number (the first attempt is unusable — it was taken while the
+eval saturated the CPU, so it timed contention rather than the network), `--demo` reliability, and
+the planner/reviewer prompt iterations.
 
 ---
 
