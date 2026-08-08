@@ -54,21 +54,23 @@ This is grinding, iterative work and it is the best possible use of the remainin
       fail the run) with a static fallback, (d) reviewer-model judgment 1–5, (e) wall clock + subtasks
 - [x] `evals/results/` with timestamped JSONL + summary.json + a markdown summary table, including a
       "where runs failed" breakdown so tuning has somewhere to aim
-- [ ] **Baseline run recorded and committed — this is the number to beat.** BLOCKED: needs Ollama.
-      The harness is verified end-to-end against a fake backend (0 plumbing failures across all 28
-      prompts); one command on Jett's machine produces the real baseline: `python evals/run_evals.py`
+- [x] **Baseline run recorded and committed — this is the number to beat.**
+      **v1 baseline: 10/28 = 36%** (`evals/results/20260806_195850`, qwen3.5:4b, ~52 min/prompt).
+      Getting an honest number required fixing three scorer/environment bugs; see Session Log 3.
 
 ### 1.2 Tune against the baseline
-> **BLOCKED — not startable from a cloud session (re-tested Aug 5, conclusive).** Every item below
-> needs a model. The remote workaround (`--orchestrator`) was built for exactly this and is verified
-> working, but this environment cannot reach *any* host on a non-443 port, so it cannot pitch to the
-> live server either. See "Addendum 3" in the Session Log for the proof. Nothing here is startable
-> until a session runs somewhere with either local Ollama or unrestricted network egress.
+> **UNBLOCKED and underway (Aug 8, on Jett's machine).** First iteration measured and promoted:
+> **v3 scores 17/28 = 61% against v1's 36%**, same prompts, same model, one variable changed.
 
 - [ ] Iterate on planner prompt: subtask granularity (too many tiny subtasks fragments the output;
       too few defeats the swarm story), explicit file-boundary instructions, dependency correctness
-- [ ] Iterate on builder prompt: complete-file output, no placeholders/TODOs, no prose outside code
+      — untouched so far, deliberately: v3 changed only the builder so the gain was attributable.
+- [x] Iterate on builder prompt: complete-file output, no placeholders/TODOs, no prose outside code
       fences, consistent naming across subtasks so files actually integrate
+      — **v3 (`prompts/v3.py`), promoted to default.** Four rules, each aimed at a measured failure:
+      every name must be imported (fixed the api NameErrors), standard library unless the task names
+      a package (vague 0/4 → 2/4), trace your own test assertions by hand (algorithm 0/4 → 3/4), and
+      no JS console errors (web 2/6 → 3/6). No category regressed.
 - [ ] Iterate on reviewer prompt: catch missing integration between subtask outputs specifically —
       that is the failure mode unique to this architecture
 - [ ] Iterate on reviser prompt: fix without regressing working parts
@@ -188,6 +190,66 @@ when in doubt, choose what makes the video safer.
 _Append one entry per session: date, items completed, what's next, warnings for Jett._
 
 <!-- sessions append below -->
+
+### Session 3 — August 6–8, 2026 · §1.1 baseline + §1.2 first iteration (Jett's machine, real Ollama)
+
+**§1.1 baseline: v1 = 10/28 (36%).** `evals/results/20260806_195850`, qwen3.5:4b, ~52 min/prompt,
+~20 hours wall clock.
+
+**§1.2 first iteration: v3 = 17/28 (61%), promoted to default.** `evals/results/20260808_050610`.
+Same prompts, same model, one variable — only the builder prompt differs (planner/reviewer/reviser
+are byte-identical to v2), so the gain is attributable. No category regressed:
+
+| category | v1 | v3 |
+| --- | --- | --- |
+| algorithm | 0/4 | **3/4** |
+| vague | 0/4 | **2/4** |
+| web_app | 2/6 | **3/6** |
+| api | 2/4 | **3/4** |
+| cli_tool | 3/5 | 3/5 |
+| data_processing | 3/5 | 3/5 |
+
+The two big gains map exactly to the two rules aimed at them: "trace one input through your own
+implementation by hand" for the algorithm category, and "standard library unless the task names a
+package" for the vague one. That is the measurement loop working — the rules were derived from the
+baseline's actual failure text, not from taste.
+
+**Three scorer/environment bugs found, each of which moved the number.** Worth recording because
+every one made the instrument dishonest in a different direction:
+
+1. **Windows cp1252 crash killed 44% of the first attempt.** Any deliverable containing an emoji
+   crashed `write_text`. Fixed repo-wide (`encoding="utf-8"` everywhere); the invalidated run was
+   deleted rather than kept as a comparable number.
+2. **Correct CLI tools scored as broken.** The harness runs code with no arguments, so a tool that
+   requires them exits non-zero with a usage message — counted as "does not run". Three genuinely
+   correct tools were being failed. `needs_args` now counts as ran, with a test proving a usage line
+   *inside* a traceback still fails.
+3. **`SystemRoot` was stripped from the exec environment**, so on Windows every socket call died with
+   `WinError 10106` before reaching any of the program's own logic. Three API servers were scored as
+   broken code. Proven by opening one socket with and without the variable.
+
+**The most important correction went the other way.** Playwright was never installed, so every HTML
+run silently fell back to a static structure check — the "uncaught JS errors fail the run" criterion
+had never once executed. Installing chromium and re-scoring **lowered** v1 from 39% to 32% (before
+the socket fix), because two "passing" web apps throw on load. A measuring instrument that gets
+stricter and finds more problems is the one to trust; 39% was the comfortable number, 36% is the
+true one.
+
+**Method note for future sessions:** `evals/rescore.py` recomputes the mechanical checks for a
+finished run from its saved artifacts. All four corrections above were applied to already-completed
+runs in seconds instead of re-running ~20 hours of inference. Judge scores carry over; the original
+`results.jsonl` is preserved as `.pre-rescore`.
+
+**Running at time of writing:** `scripts/showcase_reliability.py --runs 10` (§1.3) — generates the
+Snake game ten times and checks each in headless Chromium for JS errors, a painted canvas, a
+self-running game loop, arrow-key response, and no "GAME OVER" visible before play. Validated first
+against the two games already on disk, both of which it correctly rejects for not starting on load.
+
+**Still open:** §1.3 result, a re-measured §3 WAN number (the first attempt is unusable — it was
+taken while the eval saturated the CPU, so it timed contention rather than the network), and the
+planner/reviewer prompt iterations.
+
+---
 
 ### Session 1 — August 5, 2026 · AUDIT + §1.1 + §2.1
 
