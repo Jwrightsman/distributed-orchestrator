@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Distributed AI Orchestrator</title>
+<title>Mycelium — Distributed Orchestrator</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -61,16 +61,16 @@
     margin-bottom: 6px;
   }
   .header h1 {
-    font-size: 20px;
+    font-size: 15px;
     font-weight: 600;
+    white-space: nowrap;
     color: var(--text);
     letter-spacing: -0.5px;
   }
-  .header h1 span { color: var(--text); font-weight: 600; }
+  .header h1 span { color: var(--text-muted); font-weight: 400; }
   .header-sub {
     color: var(--text-muted);
-    font-size:14px;
-    margin-top: 6px;
+    font-size: 13px;
   }
 
   .stats-bar {
@@ -634,9 +634,8 @@
 <body>
 
 <div class="header">
-  <div class="header-tag">DISTRIBUTED AI ORCHESTRATOR</div>
-  <h1>The <span>Superconscious</span></h1>
-  <div class="header-sub">Collectively-owned AI powered by consumer hardware</div>
+  <h1>Mycelium <span>Distributed Orchestrator</span></h1>
+  <div class="header-sub">A task, split across every machine that joined.</div>
 </div>
 
 <div class="stats-bar">
@@ -676,11 +675,6 @@
       </div>
     </div>
 
-    <h2 style="margin-top:24px">Guild Standings</h2>
-    <div id="standings-list">
-      <div class="empty-state"><p>No contributions yet.</p></div>
-    </div>
-
     <div style="display:flex;justify-content:space-between;align-items:center;margin-top:24px;margin-bottom:14px;">
       <h2 style="margin:0;">Projects</h2>
       <button onclick="promptNewProject()" style="background:rgba(63,185,80,0.05);border:1px solid rgba(63,185,80,0.12);border-radius:5px;padding:3px 10px;font-size:12px;font-weight:700;color:var(--accent);cursor:pointer;">+ New</button>
@@ -694,6 +688,7 @@
     <div class="tab-nav">
       <button class="tab-btn active" id="tab-live" onclick="showTab('live')">Live</button>
       <button class="tab-btn" id="tab-gallery" onclick="showTab('gallery')">Gallery</button>
+      <button class="tab-btn" id="tab-guild" onclick="showTab('guild')">Guild</button>
     </div>
 
     <!-- ── LIVE TAB ── -->
@@ -742,6 +737,17 @@
       </div>
       <div id="gallery-grid" class="gallery-grid">
         <div class="empty-state" style="grid-column:1/-1;"><p>No completed tasks yet.</p></div>
+      </div>
+    </div>
+
+    <!-- ── GUILD TAB ── -->
+    <div id="view-guild" style="display:none;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <h2 style="margin-bottom:0;">Guild Standings</h2>
+        <span style="font-size:13px;color:var(--text-muted);">Credits earned for compute, pitches and reviews</span>
+      </div>
+      <div id="standings-list">
+        <div class="empty-state"><p>No contributions yet.</p></div>
       </div>
     </div>
 
@@ -1522,12 +1528,14 @@ function clearProjectContext() {
 }
 
 // ── Tab switching ──
+const TABS = ['live', 'gallery', 'guild'];
 function showTab(name) {
-  document.getElementById('view-live').style.display    = name === 'live'    ? '' : 'none';
-  document.getElementById('view-gallery').style.display = name === 'gallery' ? '' : 'none';
-  document.getElementById('tab-live').classList.toggle('active',    name === 'live');
-  document.getElementById('tab-gallery').classList.toggle('active', name === 'gallery');
+  TABS.forEach(t => {
+    document.getElementById('view-' + t).style.display = t === name ? '' : 'none';
+    document.getElementById('tab-' + t).classList.toggle('active', t === name);
+  });
   if (name === 'gallery') loadGallery();
+  if (name === 'guild') loadStandings();
 }
 
 // ── Gallery ──
