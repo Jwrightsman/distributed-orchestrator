@@ -38,11 +38,13 @@ class PromptSet:
 from prompts import v1 as _v1  # noqa: E402
 from prompts import v2 as _v2  # noqa: E402
 from prompts import v3 as _v3  # noqa: E402
+from prompts import v4 as _v4  # noqa: E402
 
 _SETS: dict[str, PromptSet] = {
     _v1.PROMPTS.name: _v1.PROMPTS,
     _v2.PROMPTS.name: _v2.PROMPTS,
     _v3.PROMPTS.name: _v3.PROMPTS,
+    _v4.PROMPTS.name: _v4.PROMPTS,
 }
 
 DEFAULT_SET = "v3"  # promoted Aug 8: 61% vs v1 36% on the 28-prompt eval set
