@@ -471,6 +471,19 @@
   }
 
   /* Tab navigation */
+  .credit-chip {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-dim);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 10px;
+    white-space: nowrap;
+  }
+  .credit-chip #credit-value { color: var(--accent); font-weight: 600; }
+  .credit-sep { color: var(--text-muted); margin: 0 6px; }
+
   .tab-nav {
     display: flex;
     gap: 4px;
@@ -693,7 +706,12 @@
 
     <!-- ── LIVE TAB ── -->
     <div id="view-live">
-      <h2>Pitch a Task</h2>
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;">
+        <h2 style="margin-bottom:14px;">Pitch a Task</h2>
+        <span class="credit-chip" id="credit-chip" title="Credits earned by this orchestrator for pitches, local builds and reviews">
+          <span id="credit-host">—</span><span class="credit-sep">·</span><span id="credit-value">0</span> credits
+        </span>
+      </div>
       <!-- Hidden project context — set when "Continue" is clicked -->
       <div id="project-context" style="display:none;margin-bottom:10px;padding:8px 12px;background:rgba(63,185,80,0.04);border:1px solid rgba(63,185,80,0.12);border-radius:6px;justify-content:space-between;align-items:center;">
         <span style="font-size:14px;color:var(--accent);">Continuing project: <strong id="project-context-name"></strong></span>
@@ -800,6 +818,11 @@ async function refresh() {
       if (latEl) latEl.textContent = met.avg_task_latency_seconds != null ? met.avg_task_latency_seconds + 's' : '-';
       const doneEl = document.getElementById('stat-done');
       if (doneEl) doneEl.textContent = met.tasks_completed_total;
+      // Name whose balance this is — anyone can open this dashboard
+      const hostEl = document.getElementById('credit-host');
+      if (hostEl && met.orchestrator_id) hostEl.textContent = met.orchestrator_id;
+      const credEl = document.getElementById('credit-value');
+      if (credEl) credEl.textContent = met.orchestrator_credits ?? 0;
     }
 
     const nodesList = document.getElementById('nodes-list');

@@ -4,6 +4,7 @@ standings, metrics, and the raw contribution ledger.
 """
 
 import json
+import platform
 import sqlite3
 import time
 
@@ -127,7 +128,16 @@ async def metrics():
         if time.time() < until
     ]
 
+    # This machine's own ledger balance. The orchestrator earns credits for
+    # pitches, local builds and reviews under its hostname, so a dashboard can
+    # show whose balance it is displaying instead of implying it is the
+    # viewer's — anyone can open this page.
+    host = platform.node()
+    host_entry = next((c for c in s if c["contributor"] == host), None)
+
     return {
+        "orchestrator_id": host,
+        "orchestrator_credits": round(host_entry["total_credits"], 1) if host_entry else 0,
         "tasks_completed_total": tasks_completed_total,
         "tasks_in_queue":        len(task_queue),
         "tasks_inflight":        len(task_inflight),
