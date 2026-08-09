@@ -1,0 +1,66 @@
+{
+  "meta": {
+    "run_id": "20260809_053327",
+    "model": "qwen3.5:4b",
+    "mode": "real",
+    "executed_on": "local",
+    "label": "v4-reviewer-merge-rules-vs-v3-61pct",
+    "prompt_count": 28,
+    "exec_enabled": true,
+    "judge_enabled": true,
+    "concurrency": 1,
+    "prompt_set": "v4",
+    "started_at": "2026-08-09T05:33:27+00:00"
+  },
+  "summary": {
+    "total": 28,
+    "success": 11,
+    "success_rate": 0.393,
+    "mean_judge_score": 4.39,
+    "mean_seconds": 1817.8,
+    "total_seconds": 50897.5,
+    "mean_subtasks": 3.89,
+    "by_category": {
+      "web_app": {
+        "total": 6,
+        "success": 3,
+        "rate": 0.5
+      },
+      "cli_tool": {
+        "total": 5,
+        "success": 1,
+        "rate": 0.2
+      },
+      "data_processing": {
+        "total": 5,
+        "success": 2,
+        "rate": 0.4
+      },
+      "api": {
+        "total": 4,
+        "success": 3,
+        "rate": 0.75
+      },
+      "algorithm": {
+        "total": 4,
+        "success": 0,
+        "rate": 0.0
+      },
+      "vague": {
+        "total": 4,
+        "success": 2,
+        "rate": 0.5
+      }
+    },
+    "by_stage": {
+      "no_files_extracted": 2,
+      "parse_failed": 1,
+      "execution_failed": 13,
+      "wrong_artifact_kind": 0,
+      "missing_keywords": 2,
+      "judged_below_bar": 2,
+      "judge_unparseable": 0,
+      "pipeline_error": 0
+    }
+  }
+}
