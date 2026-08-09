@@ -250,11 +250,38 @@ This is a **Phase 0 trusted-network prototype**. Here's exactly what's durable a
 
 **Verified, not assumed.** `scripts/restart_recovery.py` kills a running server with `SIGKILL` mid-job and checks what comes back: jobs and event history survive, nodes re-register, the dashboard recovers, and WebSocket clients reconnect (17/17 checks). `scripts/soak_test.py` runs 60 consecutive pitches through one server session: **+0.9 MB RSS growth, no orphaned tasks, no latency drift**. Both run without Ollama, so you can check your own deployment in under a minute.
 
+## Measured results
+
+Numbers, not adjectives. Every one is reproducible with a command in this repo.
+
+**Output quality — 61% of 28 pitches produce runnable, on-spec output** on `qwen3.5:4b`, up from 36% before prompt tuning. A run counts only if the extractor produced files, they parse, they *execute* (Python in a subprocess; HTML in headless Chromium, where an uncaught JS error fails the run), the artifact is the kind that was asked for, and a reviewer model rates it ≥3/5.
+
+| prompt set | overall | algorithm | api | cli | data | vague | web |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| v1 (baseline) | 10/28 · 36% | 0/4 | 2/4 | 3/5 | 3/5 | 0/4 | 2/6 |
+| **v3 (current)** | **17/28 · 61%** | 3/4 | 3/4 | 3/5 | 3/5 | 2/4 | 3/6 |
+
+Reproduce: `python evals/run_evals.py` (~20 h on CPU, resumable). Raw results are committed under [`evals/results/`](evals/results/).
+
+**Distribution over the internet costs about 2%.** Measured from a laptop in Indiana to an orchestrator in Germany (`scripts/wan_bench.py`):
+
+| | median |
+| --- | --- |
+| HTTP round-trip | 216 ms |
+| Node registration | 218 ms |
+| Result upload (8 KB) | 535 ms |
+| Idle long-poll error rate | 0.0% |
+
+A real pitch took 308 s, of which the network accounted for ~7 s. Inference dominates by two orders of magnitude, which is why a worker on the other side of an ocean is as useful as one on your LAN.
+
+**What the numbers don't say:** 61% is not 100%, and the failures are honest failures — see [Limitations](#limitations).
+
 ## Limitations
 
 Stated plainly, because you'll find them anyway:
 
-- **Small models have a ceiling.** The default is a 4B model on consumer hardware. It writes a working single-file web app or a useful script; it will not architect your microservice. Output quality is the project's current focus, measured by the eval harness in [`evals/`](evals/) rather than asserted.
+- **Small models have a ceiling, and here is where it is.** The default is a 4B model on consumer hardware. Measured: **61% of 28 varied pitches produce runnable, on-spec output** ([Measured results](#measured-results)). It writes a working single-file web app or a useful script; it will not architect your microservice. The remaining 39% mostly fail by writing code that looks right and doesn't run.
+- **A one-shot game is at the edge of what it can do.** Generating a complete playable Snake game succeeded in **2 of 10 consecutive attempts** (`scripts/showcase_reliability.py`, each checked in a real browser). The failures load without errors but never start. Treat `--demo-showcase` as something you run a few times and pick from, not a one-command guarantee — a verified-playable example is committed at [`docs/demo-assets/snake-game/`](docs/demo-assets/snake-game/).
 - **CPU-only is slow.** A full pitch is minutes, not seconds — the planner, each builder, and the reviewer are each a separate model call, and the reviewer has to re-emit the whole deliverable. A GPU changes this dramatically.
 - **Generated code is not sandboxed.** The pipeline writes runnable files to `output/`. It checks that Python parses and HTML is structurally sound, but *you* are responsible for reading anything before you run it.
 - **It's a trusted network, not a trustless one.** `node_secret` is a shared password, not per-node identity. A node that authenticates can return whatever it likes. The circuit breaker catches a node that fails repeatedly; it does not catch a node that returns plausible-looking garbage. Redundant execution and per-node reputation are designed but not built.
