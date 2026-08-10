@@ -38,13 +38,15 @@ class PromptSet:
 from prompts import v1 as _v1  # noqa: E402
 from prompts import v2 as _v2  # noqa: E402
 from prompts import v3 as _v3  # noqa: E402
-from prompts import v5 as _v5  # noqa: E402
 
+# v4 and v5 were measured and deleted — see prompts/v3.py's docstring for what
+# each one changed, what it scored, and (for v5) the eval noise floor that
+# comparison uncovered. Deleted sets stay deleted: a set nobody can promote is
+# a set nobody should be able to select.
 _SETS: dict[str, PromptSet] = {
     _v1.PROMPTS.name: _v1.PROMPTS,
     _v2.PROMPTS.name: _v2.PROMPTS,
     _v3.PROMPTS.name: _v3.PROMPTS,
-    _v5.PROMPTS.name: _v5.PROMPTS,
 }
 
 DEFAULT_SET = "v3"  # promoted Aug 8: 61% vs v1 36% on the 28-prompt eval set

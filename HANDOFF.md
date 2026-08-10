@@ -107,8 +107,13 @@ That is the cheapest shot at making the demo's weakest number better.
 ## Jett context
 
 No programming experience — make the technical calls, explain in plain language,
-warn before anything network-facing. He is at IU and can record the video in
-roughly 1–2 weeks; that is the real bottleneck, not code.
+warn before anything network-facing.
+
+**He is NOT at IU yet.** He travels there in roughly 1–2 weeks (from Aug 10,
+2026) and records the video *after* arriving. Do not plan around him having
+campus hardware or a second machine before then. When he says he is within ~3
+days of leaving, stop feature work and switch to stabilising — see Freeze
+discipline below.
 
 **Open question for him:** the brand is spelled `Mycelium` (one L) throughout. He
 wrote "Mycellium". Flagged, not yet confirmed.
