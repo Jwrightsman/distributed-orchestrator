@@ -1,7 +1,7 @@
 # Handoff — Mycelium / distributed-orchestrator
 
-_Written Aug 10, 2026, at the end of a long session. Paste the prompt at the
-bottom into a new Claude Code session._
+_Rewritten Aug 10, 2026, end of session 4. Paste the prompt at the bottom into a
+new Claude Code session._
 
 ---
 
@@ -13,140 +13,185 @@ bottom into a new Claude Code session._
 3. `CLAUDE.md` — house rules
 4. This file
 
+## Jett context — read this before planning anything
+
+No programming experience. Make the technical calls, explain in plain language,
+warn before anything network-facing, and tell him only what he must act on.
+
+**He is NOT at IU yet.** As of Aug 10 he is roughly **1–2 weeks** from
+travelling, and the video is recorded **after** he arrives. Do not plan around
+campus hardware or a second machine before then. (An earlier handoff said he was
+already there — that was wrong and cost planning accuracy.)
+
+**Freeze discipline:** when he says he is within ~3 days of leaving, stop
+feature work. Switch to: full regression, fresh-clone install check, docs and
+demo script final, launch post final. He would rather arrive with a repo that
+has been stable for 72 hours than three more features and an untested merge.
+
 ## State right now
 
-**`master` is launch-ready. Do not destabilise it.** 293 tests green, CI green,
-the orchestrator is live 24/7 at `167.233.239.33:8000` (Hetzner CX33).
-
-Everything measurable has a number:
+**`master` is launch-ready and was not touched this session.** All work is on
+`claude/mycelium-v5-eval-7bc393` (pushed, no PR opened yet). 314 tests green,
+ruff clean.
 
 | what | measured |
 | --- | --- |
-| Output quality | **61%** of 28 eval prompts runnable + on-spec (`v3` prompts, was 36%) |
-| WAN overhead | 216 ms RTT Indiana→Germany; network is **~2%** of a real pitch |
-| `--demo-showcase` | **2/10** playable — do not generate live on camera |
+| Output quality | **61%** of 28 eval prompts runnable + on-spec (`v3`) |
+| WAN overhead | 216 ms RTT Indiana→Germany; network is **~2%** of a pitch |
+| `--demo-showcase chart` | **4/4** — safe to generate live on camera |
+| `--demo-showcase` (Snake) | **2/10** — pre-generate only |
 | `--demo` | **2/3** clean, and failures are loud (red panel, exit 1) |
 | Restart recovery | 17/17 incl. SIGKILL |
 | Soak | 60 pitches, +0.9 MB RSS, no leaks |
 
+## ⚠️ One thing needs Jett, and it affects the video
+
+**The live orchestrator is running an image with a broken WebSocket.** Found
+this session: `requirements.txt` pinned bare `uvicorn`, which ships with **no
+WebSocket implementation**, so `/ws/events` returns 404 on every deployment —
+verified 404 on the live box, on Jett's local server, and on a fresh one. The
+dashboard silently falls back to 3-second polling and **live token streaming has
+never worked**. That is the dashboard's best moment on camera.
+
+Fixed in the repo (`websockets` added to requirements.txt, verified: the upgrade
+returns 101 and the dashboard console is clean). **The live server still needs a
+redeploy to pick it up** — that needs the SSH key, which is only on Jett's
+laptop. Until then the live dashboard has no live stream.
+
+Why nothing caught it for months: no test drives the WebSocket through a real
+server, and `TestClient` implements WebSockets itself instead of going through
+uvicorn's protocol layer, so a TestClient test passes either way.
+`tests/test_runtime_deps.py` now pins the dependency.
+
+## The most important finding: what the eval can and cannot measure
+
+**Between any two eval runs, 11–18 of the 28 prompts flip outcome.** Half the
+set is unstable run to run.
+
+| pair | up | down | net |
+| --- | --- | --- | --- |
+| v1 → v3 | 9 | 2 | **+7** |
+| v3 → v4 | 4 | 10 | **-6** |
+| v3 → v5 | 7 | 8 | **-1** |
+
+So this instrument resolves large effects and nothing smaller. **v5 was deleted**
+on that basis (16/28 vs v3's 17/28, McNemar p ≈ 1.0). The previous session had
+kept it as a "special-purpose set" because web_app went 3/6 → 5/6 — that is
+three prompts up and one down out of six, p ≈ 0.63. Noise. The full reasoning is
+in `prompts/v3.py`'s docstring, which is where the promote-or-delete rule lives.
+
+**The highest-value eval nobody has run: the same prompt set twice.** No set has
+ever been repeated, so prompt-change and run-to-run variance have never been
+separated. It costs the same ~9 hours as any other run and would tell you what
+every number in this project is actually worth. Do this before writing a v6.
+
+## What shipped this session
+
+1. **v5 deleted**, its measured run preserved at `evals/results/20260810_041455`
+   (it existed only in an untracked worktree and would have been lost).
+2. **Showcase alternatives measured** — the launch's money shot. Same harness,
+   model and prompt set as the game, all checked in a real browser:
+
+   | showcase | result | avg run |
+   | --- | --- | --- |
+   | `chart` | **4/4** (n=10 confirmation was running at session end) | 22 min |
+   | `clock` | 3/4 | 28 min |
+   | `particles` | 3/4 | 20 min |
+   | `snake` | 2/10 | ~50 min |
+
+   `showcase.py` holds the pitches and per-artifact checks so `cli.py` and the
+   harness cannot drift apart. `--demo-showcase [id]` selects one; bare
+   `--demo-showcase` is still Snake so every existing doc and the 2/10 stay
+   reproducible. **The game was not removed** — it is the honest hard case.
+3. **Verification wired into the dispatcher**, off by default (`verify_rate: 0`).
+   Sampled duplication to a second node (`exclude_node` stops a node grading its
+   own homework), background comparison so it never delays the deliverable,
+   `rank()` giving better nodes *first refusal* rather than exclusion, and
+   routing weight on the dashboard node cards. Verified in a real browser.
+4. **The WebSocket fix above.**
+
 ## Branches
 
-- `master` — stable, launch-ready
-- `experiment/showcase-quality` — holds `docs/showcase-ceiling.md` (a negative
-  result, see below)
-- `experiment/verification` — **current branch.** New `verification.py` +
-  22 tests. Module is written and tested but **not wired into the dispatcher**
+- `master` — stable, launch-ready, untouched this session
+- `claude/mycelium-v5-eval-7bc393` — **this session's work**, pushed, no PR yet
+- `experiment/showcase-quality`, `experiment/verification` — already merged, stale
 
-## The v5 result — finished, and it is the most useful finding here
+## What to do next, best first
 
-`evals/results/20260810_041455`. **v5 = 16/28 (57%) vs v3's 17/28 (61%)** — one
-prompt behind, which is noise at n=28. The category split is the real result:
+1. **Finish/confirm the chart at n=10** if the run did not complete — check
+   `scripts/showcase_results/` for the newest log. `scripts/showcase_rescore.py`
+   re-scores saved artifacts without regenerating. Then update the number in
+   `docs/showcase-ceiling.md`, `docs/demo-script.md` and this file.
+2. **Get the WebSocket fix onto the live server** (needs Jett's SSH key).
+3. **Open a PR for this branch** and merge once CI is green.
+4. **Run v3 against itself** for a real noise floor, before any new prompt set.
+5. Only then: a conditional v6, if the noise floor says it could ever be seen.
 
-| category | v3 | v5 |
-| --- | --- | --- |
-| **web_app** | 3/6 | **5/6** |
-| **data_processing** | **3/5** | 1/5 |
+## Do NOT build
 
-Mean subtasks fell 3.86 → 2.46, so the change landed as intended: the planner
-stopped fragmenting single files. Tightly-coupled deliverables (web apps)
-improved more than any single-category change measured on this project.
-Separable work (data processing) got worse for the same reason.
-
-**Kept, not promoted, not deleted.** v3 remains the default. Use v5 where the
-deliverable is one coupled file — notably the showcase:
-
-    PROMPT_SET=v5 python cli.py --demo-showcase
-
-**The highest-value next experiment is a v6** that makes the rule conditional
-instead of global: keep v5's "one coupled file goes to one builder" AND restore
-v3's willingness to split genuinely separable work. Both branches in one prompt.
-It should beat both — but measure it, do not assume.
-
-**Also worth running:** `PROMPT_SET=v5 python scripts/showcase_reliability.py
---runs 10`. The showcase is 2/10 on v3, and v5 is the set that fixes web apps.
-That is the cheapest shot at making the demo's weakest number better.
-
-## The four things asked for, and their status
-
-1. **Planner tuning (v5)** — **DONE and measured** (see the v5 section above).
-   Kept as a special-purpose set for coupled single-file work; v3 stays default.
-   Follow-up is a conditional v6.
-2. **Verification + reputation** — module + tests done on `experiment/verification`.
-   **Next: wire it into `routes_pitch.dist_build_fn`** — duplicate a sampled task
-   to a second node, call `pool.record_comparison(...)`, and use `pool.rank()`
-   when choosing a node. Then surface `routing_weight` on the dashboard node cards.
-3. **Org multi-tenancy** — **not started.** Design note: an org can already get a
-   private pool today by running its own instance (`node_secret` gates joining;
-   `docs/DEPLOY.md` covers it). What does not exist is several orgs isolated on
-   ONE orchestrator — that needs per-org identity, task routing by tenant, and
-   output visibility rules. Build it on a branch, not on master.
-4. **Showcase alternative** — **not started.** See `docs/showcase-ceiling.md`:
-   prompting cannot fix the game (2/10, failures have no JS errors and simply
-   never animate; builder outputs in isolation are not playable either, so it is
-   not the merge). The open idea is a *less coupled* visual deliverable — a
-   clock, a chart, a CSS animation — which hits the same "it opens in your
-   browser" moment with far less integration risk. That is a demo-design change,
-   and it needs measuring with `scripts/showcase_reliability.py`.
+**Org multi-tenancy.** Enterprise plumbing for a system with zero external
+users, in neither MASTER_PLAN's roadmap nor its parking lot, and an org can
+already get a private pool by running its own instance. Jett confirmed this call
+on Aug 10. Revisit only if a real person asks for it.
 
 ## How this project works (earned the hard way)
 
-- **Measure before and after every prompt change.** One variable at a time, or
-  the result is unattributable. v3 gained 25 points; the obvious follow-up v4 lost
-  22 and was deleted. Without the eval it would have shipped.
-- **`evals/rescore.py` re-scores a finished run from saved artifacts** — a scoring
-  fix costs seconds, not another 20 h of inference.
-- **Verify negative results before acting on them.** A bad `grep -E` (using `\|`,
-  which matches a literal pipe) once "proved" a working game had no game logic and
-  triggered an hour of wrong work. Run the artifact; don't pattern-match it.
-- **Never run tests/servers/Docker while a pipeline run is going.** 8 GB, CPU-only
-  — it starves Ollama and wedges the run.
-- **Windows specifics:** everything writes UTF-8 explicitly (cp1252 crashed on
-  emoji); `SystemRoot` must survive into subprocess envs or sockets die with
-  WinError 10106.
-
-## Jett context
-
-No programming experience — make the technical calls, explain in plain language,
-warn before anything network-facing.
-
-**He is NOT at IU yet.** He travels there in roughly 1–2 weeks (from Aug 10,
-2026) and records the video *after* arriving. Do not plan around him having
-campus hardware or a second machine before then. When he says he is within ~3
-days of leaving, stop feature work and switch to stabilising — see Freeze
-discipline below.
-
-**Open question for him:** the brand is spelled `Mycelium` (one L) throughout. He
-wrote "Mycellium". Flagged, not yet confirmed.
+- **Measure before and after every prompt change**, one variable at a time —
+  and now, know that a delta under ~6 prompts is not distinguishable from noise.
+- **`evals/rescore.py`** re-scores a finished eval from saved artifacts;
+  **`scripts/showcase_rescore.py`** does the same for showcase runs. A scoring
+  fix costs seconds, not another 9–20 hours.
+- **Verify negative results by running the artifact.** Done twice this session:
+  a bad glob "proved" the committed Snake asset was missing (it was one
+  directory deeper), and a clock that failed the animation check turned out to
+  be genuinely broken — settled by a full-pixel canvas diff and a screenshot,
+  not by the subsampled hash that flagged it.
+- **Only running the real server finds server bugs.** The WebSocket 404, the
+  bad Ollama error messages, and the restart-recovery gaps were all invisible to
+  the in-process test client.
+- **Never run tests/servers/Docker/browsers while a pipeline or eval is going.**
+  8 GB, CPU-only — it starves Ollama.
+- **Windows specifics:** write UTF-8 explicitly everywhere; `SystemRoot` must
+  survive into subprocess envs or sockets die with WinError 10106.
 
 ## Secrets
 
 Not in the repo and must never be. `node_secret` and `pitch_key` live in
-`/root/distributed-orchestrator/data/config.json` on the VM, and Jett has copies.
-SSH key is `~/.ssh/swarm_orchestrator` on his laptop only.
+`/root/distributed-orchestrator/data/config.json` on the VM, and Jett has
+copies. SSH key is `~/.ssh/swarm_orchestrator` on his laptop only. The harness
+reads `PITCH_KEY` from the environment or an untracked `.pitch_key` file — never
+ask him to paste a key into chat.
+
+**Note on running evals remotely:** pitching to the live orchestrator does *not*
+free Jett's laptop. `/pitch/async` hands builder subtasks out to connected
+nodes, and his laptop is the only connected node, so the work returns to it plus
+216 ms each way. It only helps if his local `node.py` processes are stopped
+first.
 
 ---
 
 ## Paste this into a new session
 
-> I'm continuing work on Mycelium (the distributed-orchestrator repo,
-> github.com/Jwrightsman/distributed-orchestrator). Read `HANDOFF.md` first, then
-> `MASTER_PLAN.md` and `SPRINT_PHASE2.md` — the sprint file's Session Log is the
-> real history and has every measured number.
+> I'm continuing work on Mycelium (github.com/Jwrightsman/distributed-orchestrator).
+> Read `HANDOFF.md` first, then `MASTER_PLAN.md` and `SPRINT_PHASE2.md` — the
+> sprint file's Session Log is the real history and carries every measured number.
+> Then `CLAUDE.md` for house rules.
 >
-> Short version: master is launch-ready and I don't want it destabilised. Prompt
-> tuning is measured and settled for now — v3 is the default at 61%, and v5 is
-> kept as a special-purpose set that is much better on single-file web apps
-> (5/6 vs 3/6) and worse on separable work.
+> master is launch-ready and I don't want it destabilised. Session 4's work is on
+> `claude/mycelium-v5-eval-7bc393`, pushed with no PR yet.
 >
-> The queue, best first: (1) build a conditional "v6" planner combining v5's
-> rule for coupled artifacts with v3's for separable ones, and measure it against
-> both; (2) run `PROMPT_SET=v5 python scripts/showcase_reliability.py --runs 10`
-> — the showcase is our worst number at 2/10 and v5 is the set that fixes web
-> apps; (3) wire the verification/reputation module on `experiment/verification`
-> into the dispatcher and show reputation on the dashboard node cards; (4) org
-> multi-tenancy on its own branch.
+> The queue, best first: (1) confirm the `chart` showcase at 10 runs if that
+> didn't finish, and update the number everywhere it appears; (2) open a PR for
+> that branch and merge it once CI is green; (3) run prompt set v3 against itself
+> to get a real noise floor — no set has ever been run twice, and until that
+> exists no prompt change under about six prompts can be believed; (4) leave org
+> multi-tenancy alone, that's decided.
 >
-> Work on branches, keep master stable, measure every prompt change against the
-> eval set before promoting it, and append to SPRINT_PHASE2.md's Session Log as
-> you go. I have no programming experience — make the technical calls yourself and
-> tell me only what I actually need to act on.
+> One thing that needs me: the live orchestrator still serves a 404 on
+> /ws/events until it's redeployed with the websockets fix. Tell me the exact
+> commands and I'll run them.
+>
+> Work on branches, measure every prompt change against the eval set before
+> promoting anything, and append to SPRINT_PHASE2.md's Session Log as you go. I
+> have no programming experience — make the technical calls yourself and tell me
+> only what I actually need to act on.
