@@ -39,11 +39,50 @@ from server_state import (
     _emit,
     jobs,
     nodes,
+    task_inflight,
     task_queue,
     task_results,
 )
 
 router = APIRouter()
+
+# Strong references to in-flight verification collectors. Without these asyncio
+# only holds a weak reference and the task can be garbage-collected before it
+# finishes — the same trap the WebSocket broadcaster hit in server_state.
+_verify_tasks: set = set()
+
+
+def _spawn_comparison(dup_id, subtask_title, job_id, trace_id,
+                      primary_node, primary_output, await_result, pool):
+    """Wait for the duplicate answer in the background and record the verdict.
+
+    Never raises into the pipeline: a spot check that fails must not be able to
+    fail the deliverable it was checking.
+    """
+    async def _collect():
+        try:
+            dup = await await_result(dup_id, 600)
+            if not dup or dup.get("error") or not dup.get("output"):
+                return
+            verdict = pool.record_comparison(
+                primary_node, primary_output,
+                dup.get("node_id", "unknown"), dup["output"],
+            )
+            _emit("verification", {
+                "subtask": subtask_title,
+                "job_id": job_id,
+                "trace_id": trace_id,
+                **verdict,
+            })
+        except Exception:
+            pass
+
+    try:
+        task = asyncio.get_running_loop().create_task(_collect())
+    except RuntimeError:
+        return  # no loop (sync context) — nothing to collect against
+    _verify_tasks.add(task)
+    task.add_done_callback(_verify_tasks.discard)
 
 
 @router.post("/pitch", response_model=PitchResponse)
@@ -141,7 +180,6 @@ async def _run_job(job_id: str, task: str, project_id: str | None = None, trace_
             # Same prompt the local builder would see — including the overall
             # project, so remote nodes don't drift off-format
             prompt = compose_builder_prompt(st, context, task)
-            task_id = f"build_{st['id']}_{int(time.time() * 1000)}"
             # Soft model routing: if role_model_map specifies a preferred model for
             # builders, only add a "requires" tag when at least one connected node
             # has that model — otherwise fall through to any node (no deadlock).
@@ -152,27 +190,82 @@ async def _run_job(job_id: str, task: str, project_id: str | None = None, trace_
                 if any(model_tag in set(n.get("capabilities", [])) for n in nodes.values()):
                     requires = [model_tag]
 
-            task_queue.append({
-                "task_id": task_id,
-                "title": st["title"],
-                "prompt": prompt,
-                "system": orchestrator.BUILDER_SYSTEM,
-                "trace_id": trace_id,
-                "job_id": job_id,
-                "subtask_id": st["id"],
-                "requires": requires,
-            })
-            _emit("node_task_queued", {"task_id": task_id, "subtask": st["title"], "job_id": job_id, "trace_id": trace_id})
-            deadline = time.time() + 600
-            while task_id not in task_results:
-                if time.time() > deadline:
-                    # Timeout — fall back to local inference
-                    task_queue[:] = [t for t in task_queue if t["task_id"] != task_id]
-                    return await generate(prompt, system=orchestrator.BUILDER_SYSTEM)
-                await asyncio.sleep(1)
-            tr = task_results.pop(task_id)
-            if tr.get("error") or not tr.get("output"):
+            def _enqueue(tid: str, exclude: str | None = None) -> None:
+                entry = {
+                    "task_id": tid,
+                    "title": st["title"],
+                    "prompt": prompt,
+                    "system": orchestrator.BUILDER_SYSTEM,
+                    "trace_id": trace_id,
+                    "job_id": job_id,
+                    "subtask_id": st["id"],
+                    "requires": requires,
+                }
+                if exclude:
+                    entry["exclude_node"] = exclude
+                task_queue.append(entry)
+                _emit("node_task_queued", {
+                    "task_id": tid, "subtask": st["title"], "job_id": job_id,
+                    "trace_id": trace_id, "verification": bool(exclude),
+                })
+
+            async def _await_result(tid: str, budget: float) -> dict | None:
+                deadline = time.time() + budget
+                while tid not in task_results:
+                    if time.time() > deadline:
+                        task_queue[:] = [t for t in task_queue if t["task_id"] != tid]
+                        return None
+                    await asyncio.sleep(1)
+                return task_results.pop(tid)
+
+            async def _holder_of(tid: str, wait: float) -> str | None:
+                """Which node took this task. Needed before a duplicate can be
+                queued, because the duplicate has to go somewhere else."""
+                end = time.time() + wait
+                while time.time() < end:
+                    t = task_inflight.get(tid)
+                    if t and t.get("assigned_to"):
+                        return t["assigned_to"]
+                    await asyncio.sleep(0.2)
+                return None
+
+            stamp = int(time.time() * 1000)
+            primary_id = f"build_{st['id']}_{stamp}"
+            _enqueue(primary_id)
+
+            # Sampled second opinion on a different node. Off entirely at the
+            # default verify_rate of 0, and never attempted with one node.
+            pool = state.verification_pool
+            state._refresh_verify_rate()
+            dup_id = None
+            if pool.should_verify(len(nodes)):
+                holder = await _holder_of(primary_id, wait=5.0)
+                if holder:  # nobody picked it up yet — skip, don't stall
+                    dup_id = f"verify_{st['id']}_{stamp}"
+                    _enqueue(dup_id, exclude=holder)
+
+            tr = await _await_result(primary_id, 600)
+            if tr is None or tr.get("error") or not tr.get("output"):
+                # Timeout or bad output — fall back to local inference. There is
+                # nothing left to compare the duplicate against, so drop it from
+                # the queue and move on. Waiting for it here would add the whole
+                # duplicate's latency to a task that has already failed; a result
+                # that arrives late is swept by the janitor's result TTL.
+                if dup_id:
+                    task_queue[:] = [t for t in task_queue if t["task_id"] != dup_id]
+                    task_results.pop(dup_id, None)
                 return await generate(prompt, system=orchestrator.BUILDER_SYSTEM)
+
+            if dup_id:
+                # Collect the second opinion in the background. Verification is
+                # a spot check on node honesty, not a gate on the deliverable —
+                # making the pipeline wait for it would charge every sampled
+                # task the slower node's latency for no benefit to the output.
+                _spawn_comparison(
+                    dup_id, st["title"], job_id, trace_id,
+                    tr.get("node_id", "unknown"), tr["output"], _await_result, pool,
+                )
+
             _dist_nodes_used.add(tr.get("node_id", "unknown"))
             return tr["output"]
 

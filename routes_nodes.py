@@ -31,6 +31,32 @@ from server_state import (
 router = APIRouter()
 
 
+def _should_defer(node_id: str, waiting_since: float) -> bool:
+    """Should this node hold back and let a better-rated one take the work?
+
+    Reputation orders who gets *first refusal*, never who is eligible: after a
+    short grace period this node takes the task regardless. A poorly-rated node
+    is offered work last, not never — exclusion is the circuit breaker's job.
+
+    Returns False whenever every waiting node has the same routing weight,
+    which is always the case while verification is off. That keeps
+    verify_rate=0 a genuine no-op rather than a silent reordering.
+    """
+    if time.time() - waiting_since >= state._ROUTING_DEFER:
+        return False  # waited long enough — never starve a node
+    now = time.time()
+    contenders = [node_id] + [
+        n for n, ts in state.waiting_nodes.items()
+        if n != node_id and now - ts < state._WAITING_FRESH
+    ]
+    if len(contenders) < 2:
+        return False
+    pool = state.verification_pool
+    if len({pool.reputation(n).routing_weight for n in contenders}) < 2:
+        return False  # nothing to choose between
+    return pool.rank(contenders)[0] != node_id
+
+
 @router.post("/nodes/register")
 async def register_node(reg: NodeRegistration, request: Request):
     _check_node_auth(request)
@@ -63,7 +89,17 @@ async def register_node(reg: NodeRegistration, request: Request):
 
 @router.get("/nodes")
 async def list_nodes():
-    return {"nodes": list(nodes.values()), "count": len(nodes)}
+    """Connected nodes, each with its verification record attached.
+
+    Reputation is merged in here rather than stored on the node record so a
+    node that disconnects and comes back does not reset its history.
+    """
+    pool = state.verification_pool
+    out = []
+    for n in nodes.values():
+        rep = pool.reputation(n["node_id"]).as_dict()
+        out.append({**n, **{k: v for k, v in rep.items() if k != "node_id"}})
+    return {"nodes": out, "count": len(nodes), "verify_rate": pool.verify_rate}
 
 
 @router.get("/tasks/next")
@@ -96,31 +132,47 @@ async def next_task(node_id: str, request: Request):
     # Collect this node's capabilities for task matching
     node_caps: set[str] = set(nodes[node_id].get("capabilities", [])) if node_id in nodes else set()
 
-    def _pick_task() -> dict | None:
-        """Return the first task this node can handle, respecting capability requirements."""
+    def _find_task() -> int | None:
+        """Index of the first task this node may take, or None.
+
+        Peeks rather than pops: whether this node is *allowed* to take it may
+        still depend on which other nodes are waiting.
+        """
         for i, t in enumerate(task_queue):
+            # A verification duplicate must land on a different node than the
+            # original, or it compares a node against itself and proves nothing.
+            if t.get("exclude_node") and t["exclude_node"] == node_id:
+                continue
             required = set(t.get("requires", []))
             if not required or required.issubset(node_caps):
-                return task_queue.pop(i)
+                return i
         return None
 
     # Long-poll: wait up to _LONG_POLL_TIMEOUT for a task to appear
     deadline = time.time() + state._LONG_POLL_TIMEOUT
-    while True:
-        task = _pick_task()
-        if task:
-            task["assigned_to"] = node_id
-            task["assigned_at"] = time.time()
-            if node_id in nodes:
-                nodes[node_id]["current_task"] = task.get("title", task["task_id"])
-            task_inflight[task["task_id"]] = task
-            _emit("node_busy", {"node_id": node_id, "task_title": task.get("title", task["task_id"])})
-            return task
+    waiting_since = time.time()
+    state.waiting_nodes[node_id] = waiting_since
+    try:
+        while True:
+            state.waiting_nodes[node_id] = time.time()  # liveness, not wait start
+            idx = _find_task()
+            if idx is not None and not _should_defer(node_id, waiting_since):
+                task = task_queue.pop(idx)
+                task["assigned_to"] = node_id
+                task["assigned_at"] = time.time()
+                if node_id in nodes:
+                    nodes[node_id]["current_task"] = task.get("title", task["task_id"])
+                task_inflight[task["task_id"]] = task
+                _emit("node_busy", {"node_id": node_id, "task_title": task.get("title", task["task_id"])})
+                return task
 
-        if time.time() >= deadline:
-            return Response(status_code=204)
+            if time.time() >= deadline:
+                return Response(status_code=204)
 
-        await asyncio.sleep(0.5)
+            # Poll faster while deferring so the grace period costs little.
+            await asyncio.sleep(0.25 if idx is not None else 0.5)
+    finally:
+        state.waiting_nodes.pop(node_id, None)
 
 
 @router.post("/tasks/{task_id}/result")

@@ -34,6 +34,7 @@ from orchestrator import run_pipeline, OUTPUT_DIR
 from ollama_client import check_ollama, auto_detect_model, DEFAULT_MODEL
 from ledger import get_standings
 from memory import create_project, load_project, list_projects, PROJECTS_DIR
+import showcase
 
 SERVER_URL = "http://localhost:8000"
 
@@ -311,42 +312,35 @@ def _flag_value(flag: str) -> str | None:
     return None
 
 
-# The showcase task, tuned for reliability on a 4B model:
-# - "ONE single self-contained HTML file" repeated so the planner doesn't split
-#   the game across incompatible files
-# - concrete feature list keeps builders from inventing scope
-# - "runs by double-clicking" forces a complete document, not a fragment
-SHOWCASE_TASK = (
-    "Build a retro Snake game as ONE single self-contained HTML file with all CSS and "
-    "JavaScript inline in that file. Dark background with neon-glow styling, a live score "
-    "display, arrow-key controls, collision detection, and a game-over screen with a "
-    "restart button. The final deliverable must be one complete HTML document starting "
-    "with <!DOCTYPE html> that runs by double-clicking the file — no external files, "
-    "no frameworks, no image assets (draw everything on a <canvas>). "
-    # Observed failures across runs: the game-over overlay shipped visible on load
-    # (run 023417), then reappeared as a start screen still labelled GAME OVER
-    # (run 043911). Both look broken on camera, so pin the start state hard.
-    "REQUIRED BEHAVIOUR ON LOAD: the snake must already be moving the moment the page "
-    "opens — no start screen, no title screen, no 'press any key' prompt, and no click "
-    "required to begin. There must be exactly ONE overlay element, used only for game "
-    "over; it starts with style=\"display:none\" in the HTML, is shown only when the "
-    "snake dies, and is hidden again by the restart button. The text 'GAME OVER' must "
-    "never be visible before the snake has died."
-)
+# The showcase pitches live in showcase.py so that cli.py and the reliability
+# harness that measures them can never drift apart. SHOWCASE_TASK is kept as an
+# alias because the Snake wording is cited by docs/showcase-ceiling.md.
+SHOWCASE_TASK = showcase.SNAKE.pitch
 
 
-async def run_demo_showcase():
-    """Showcase demo — the swarm builds a playable Snake game, then it opens in your browser."""
+async def run_demo_showcase(candidate_id: str = showcase.DEFAULT_CANDIDATE, open_browser: bool = True):
+    """Showcase demo — the swarm builds a visual artifact, then it opens in your browser."""
     import webbrowser
 
+    try:
+        cand = showcase.get(candidate_id)
+    except KeyError as e:
+        console.print(f"[red]{e}[/red]\n")
+        console.print("[bold]Available showcases:[/bold]")
+        console.print(showcase.describe())
+        sys.exit(2)
+
     console.print(Panel(
-        "[bold]SHOWCASE[/bold] — the swarm builds a neon Snake game, live.\n"
-        "[dim]When the pipeline finishes, the game opens in your default browser.[/dim]",
+        f"[bold]SHOWCASE[/bold] — the swarm builds {cand.title.lower()}, live.\n"
+        f"[dim]{cand.blurb.capitalize()}. "
+        + ("When the pipeline finishes, it opens in your default browser."
+           if open_browser else "Browser launch disabled (--no-open).")
+        + "[/dim]",
         border_style="magenta",
     ))
     console.print()
 
-    result = await run_task(SHOWCASE_TASK)
+    result = await run_task(cand.pitch)
     if not result:
         console.print("[bold red]✗ Showcase aborted[/bold red] — pipeline failed (error above).")
         sys.exit(1)
@@ -359,9 +353,12 @@ async def run_demo_showcase():
         )
         return
 
-    game = Path(html_files[0]).resolve()
-    console.print(f"\n[bold green]Opening the game:[/bold green] [cyan]{game}[/cyan]")
-    webbrowser.open(game.as_uri())
+    artifact = Path(html_files[0]).resolve()
+    if open_browser:
+        console.print(f"\n[bold green]Opening it:[/bold green] [cyan]{artifact}[/cyan]")
+        webbrowser.open(artifact.as_uri())
+    else:
+        console.print(f"\n[bold green]Built:[/bold green] [cyan]{artifact}[/cyan]")
 
 
 async def run_demo(fast: bool = False):
@@ -791,7 +788,13 @@ async def main():
 
     # ── Demo mode ──────────────────────────────────────────────────────
     if "--demo-showcase" in sys.argv:
-        await run_demo_showcase()
+        # Optional candidate id right after the flag: --demo-showcase clock
+        idx = sys.argv.index("--demo-showcase")
+        rest = [a for a in sys.argv[idx + 1:] if not a.startswith("--")]
+        await run_demo_showcase(
+            rest[0] if rest else showcase.DEFAULT_CANDIDATE,
+            open_browser="--no-open" not in sys.argv,
+        )
         return
     if "--demo-fast" in sys.argv:
         await run_demo(fast=True)
