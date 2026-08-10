@@ -1,4 +1,4 @@
-"""Prompt set v5 — UNMEASURED candidate. v3 with one planner instruction inverted.
+"""Prompt set v5 — MEASURED. v3 with one planner instruction inverted.
 
 v3 (17/28 = 61%) tuned the builder. This changes the *planner*, and it changes
 exactly one thing, because a specific line in v3's planner appears to be causing
@@ -41,11 +41,36 @@ story is worth nothing if the artifact does not run.
 Only the planner differs from v3 — builder, reviewer and reviser are
 byte-identical — so any score change is attributable to one variable.
 
-**Unmeasured.** Compare against v3's 17/28 on the same set:
+MEASURED (run `evals/results/20260810_041455`): **16/28 = 57%** against v3's
+17/28 = 61%. One prompt behind — noise at this sample size. **Not promoted to
+default, and deliberately not deleted**, because the category breakdown is the
+real result:
 
-    python evals/run_evals.py --prompt-set v5
+| category | v3 | v5 |
+| --- | --- | --- |
+| web_app | 3/6 | **5/6** |
+| data_processing | **3/5** | 1/5 |
+| algorithm | 3/4 | 3/4 |
+| api | 3/4 | 2/4 |
+| cli_tool | 3/5 | 3/5 |
+| vague | 2/4 | 2/4 |
 
-If it does not move the score, delete it.
+Mean subtasks fell 3.86 -> 2.46, so the instruction landed: the planner stopped
+fragmenting single files. Web apps — the most tightly-coupled deliverable in the
+set — improved more than any single-category change measured on this project.
+Data processing, which genuinely decomposes, got worse for exactly the same
+reason: v5 discourages a split that was helping.
+
+**So the rule is correct for coupled artifacts and wrong for separable ones.**
+Use v5 where the deliverable is one tightly-coupled file:
+
+    PROMPT_SET=v5 python cli.py --demo-showcase
+
+**The obvious next experiment** is a v6 that makes this conditional rather than
+global — keep v5's "one file goes to one builder" and restore v3's willingness
+to split when the deliverable is genuinely several parts. That is a single
+prompt with both branches in it, and it should beat both. Measure it; do not
+assume it.
 """
 
 from prompts import PromptSet
@@ -95,9 +120,9 @@ Example:
 PROMPTS = PromptSet(
     name="v5",
     description=(
-        "UNMEASURED candidate. v3 with the planner's 'split one file by concern' "
-        "rule inverted: tightly-coupled single-file deliverables go to one builder "
-        "whole, splitting is reserved for genuinely separable work."
+        "MEASURED 16/28 (57%) vs v3's 17/28 — but web_app 5/6 vs 3/6, the "
+        "largest single-category gain measured. Use for tightly-coupled "
+        "single-file deliverables; v3 stays the general default."
     ),
     planner=PLANNER_SYSTEM,
     builder=BUILDER_SYSTEM,

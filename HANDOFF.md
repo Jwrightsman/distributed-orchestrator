@@ -37,16 +37,34 @@ Everything measurable has a number:
 - `experiment/verification` — **current branch.** New `verification.py` +
   22 tests. Module is written and tested but **not wired into the dispatcher**
 
-## In flight when this was written
+## The v5 result — finished, and it is the most useful finding here
 
-`python evals/run_evals.py --prompt-set v5` — started Aug 10, takes ~20 h,
-resumable. **Check `evals/results/` for the newest directory and compare its
-success rate against v3's 17/28 (61%).**
+`evals/results/20260810_041455`. **v5 = 16/28 (57%) vs v3's 17/28 (61%)** — one
+prompt behind, which is noise at n=28. The category split is the real result:
 
-- If v5 ≥ v3: promote it (`DEFAULT_SET` in `prompts/__init__.py`) and update the
-  test in `tests/test_prompt_sets.py` that asserts which set is default
-- If v5 < v3: delete `prompts/v5.py`, unregister it, record why in `v3.py`'s
-  docstring. That is the rule and it has already been applied once to a v4
+| category | v3 | v5 |
+| --- | --- | --- |
+| **web_app** | 3/6 | **5/6** |
+| **data_processing** | **3/5** | 1/5 |
+
+Mean subtasks fell 3.86 → 2.46, so the change landed as intended: the planner
+stopped fragmenting single files. Tightly-coupled deliverables (web apps)
+improved more than any single-category change measured on this project.
+Separable work (data processing) got worse for the same reason.
+
+**Kept, not promoted, not deleted.** v3 remains the default. Use v5 where the
+deliverable is one coupled file — notably the showcase:
+
+    PROMPT_SET=v5 python cli.py --demo-showcase
+
+**The highest-value next experiment is a v6** that makes the rule conditional
+instead of global: keep v5's "one coupled file goes to one builder" AND restore
+v3's willingness to split genuinely separable work. Both branches in one prompt.
+It should beat both — but measure it, do not assume.
+
+**Also worth running:** `PROMPT_SET=v5 python scripts/showcase_reliability.py
+--runs 10`. The showcase is 2/10 on v3, and v5 is the set that fixes web apps.
+That is the cheapest shot at making the demo's weakest number better.
 
 ## The four things asked for, and their status
 

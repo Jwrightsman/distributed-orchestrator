@@ -1,0 +1,66 @@
+{
+  "meta": {
+    "run_id": "20260810_041455",
+    "model": "qwen3.5:4b",
+    "mode": "real",
+    "executed_on": "local",
+    "label": "v5-planner-no-file-fragmenting-vs-v3-61pct",
+    "prompt_count": 28,
+    "exec_enabled": true,
+    "judge_enabled": true,
+    "concurrency": 1,
+    "prompt_set": "v5",
+    "started_at": "2026-08-10T04:14:55+00:00"
+  },
+  "summary": {
+    "total": 28,
+    "success": 16,
+    "success_rate": 0.571,
+    "mean_judge_score": 4.61,
+    "mean_seconds": 1112.4,
+    "total_seconds": 31148.0,
+    "mean_subtasks": 2.46,
+    "by_category": {
+      "web_app": {
+        "total": 6,
+        "success": 5,
+        "rate": 0.833
+      },
+      "cli_tool": {
+        "total": 5,
+        "success": 3,
+        "rate": 0.6
+      },
+      "data_processing": {
+        "total": 5,
+        "success": 1,
+        "rate": 0.2
+      },
+      "api": {
+        "total": 4,
+        "success": 2,
+        "rate": 0.5
+      },
+      "algorithm": {
+        "total": 4,
+        "success": 3,
+        "rate": 0.75
+      },
+      "vague": {
+        "total": 4,
+        "success": 2,
+        "rate": 0.5
+      }
+    },
+    "by_stage": {
+      "no_files_extracted": 0,
+      "parse_failed": 0,
+      "execution_failed": 10,
+      "wrong_artifact_kind": 1,
+      "missing_keywords": 2,
+      "judged_below_bar": 1,
+      "judge_unparseable": 0,
+      "pipeline_error": 0
+    }
+  }
+}
