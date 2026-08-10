@@ -274,6 +274,62 @@ nodes have *different* weights, which cannot happen before any sampling has occu
 with both honest caveats: it costs a whole extra inference per sampled task, and it self-disables
 below two nodes.
 
+#### §1.3 the showcase, solved by changing the artifact rather than the prompt
+
+`docs/showcase-ceiling.md` closed with a guess: a less coupled visual deliverable would hit the
+same "it opens in your browser" moment with far less integration risk. Measured — same harness,
+same model, same prompt set (v3), same real-browser checks, round-robin so partial results stay
+comparable:
+
+| showcase | screen (n=4) | confirmation | avg run |
+| --- | --- | --- | --- |
+| `chart` — labelled bar chart | **4/4** | running to n=10 | 22 min |
+| `clock` — animated analog clock | 3/4 | — | 28 min |
+| `particles` — drifting particle field | 3/4 | — | 20 min |
+| `snake` — playable game | (2/10, prior) | — | ~50 min |
+
+Every alternative beat the game at roughly half the runtime. **The chart is the winner and is safe
+to generate live on camera**, which upgrades the video's money shot from "here is what it produced"
+to "watch it produce one now". The game stays as `--demo-showcase` and as the honest hard case.
+
+**Both of my predictions were wrong, which is the argument for measuring rather than reasoning:**
+
+1. The particle field should have been unfailable — no correct answer to get wrong — and it threw
+   `Cannot access 'particles' before initialization` and drew nothing. No correctness criterion
+   does not protect you from the code not running.
+2. The clock's single failure is the camera-fatal kind: a neon rim, **no hands, no hour markers**,
+   and a digital readout still ticking underneath. It looked alive by two of three obvious signals.
+   Verified genuine by a **full-pixel** canvas diff (0 of 360,000 bytes changed over 2.5s) plus a
+   screenshot — the checker's subsampled hash flagged it, but a subsampled hash is exactly the kind
+   of evidence this project has been burned by, so it was settled by running the artifact.
+
+New: `showcase.py` holds the pitches and per-artifact checks, imported by both `cli.py` and the
+harness, so the thing measured cannot drift from the thing demoed. `--demo-showcase [id]` selects
+one; bare `--demo-showcase` is still Snake so every existing doc and the 2/10 number stay
+reproducible. `scripts/showcase_rescore.py` re-scores saved artifacts, the showcase equivalent of
+`evals/rescore.py`.
+
+#### A months-old production bug, found by verifying a UI change in a real browser
+
+`requirements.txt` pinned bare `uvicorn`, which ships **without a WebSocket implementation**.
+`/ws/events` returned **404 on every deployment** — verified on a fresh local server, on Jett's own
+server, and on the **live orchestrator**. The dashboard has been silently falling back to 3-second
+polling, and live token streaming has never worked outside a machine that happened to have
+`websockets` installed for another reason.
+
+Nothing caught it because **no test drives the WebSocket through a real server**, and `TestClient`
+implements WebSockets itself rather than going through uvicorn's protocol layer — so a TestClient
+test passes whether or not a deployed server can accept a connection. Same lesson as the
+restart-recovery and soak work: only running the real thing finds this class of bug.
+
+Fixed by declaring `websockets` explicitly (cheaper than `uvicorn[standard]`, which drags in five
+more packages). Verified after the fix: the upgrade request returns **101** and the dashboard
+console is clean. `tests/test_runtime_deps.py` pins it, since CI installs from requirements.txt.
+
+**Outstanding and needs Jett:** the live orchestrator still serves 404 until it is redeployed, and
+that needs the SSH key on his laptop. Merge to master first, then `git pull && docker compose up -d
+--build` on the VM.
+
 #### Org multi-tenancy: still not built, deliberately
 
 Agreed with Jett's call. It is enterprise plumbing for a system with zero external users, it is in
