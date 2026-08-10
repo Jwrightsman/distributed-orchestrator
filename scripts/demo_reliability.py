@@ -113,9 +113,21 @@ def main():
         new_projects = _dirs(proj_dir) - before_proj
         project = (proj_dir / sorted(new_projects)[0]) if new_projects else None
 
+        combined = proc.stdout + proc.stderr
         row = {"run": i, "seconds": elapsed, "exit_code": proc.returncode,
                "project": project.name if project else None}
-        row.update(check_run(new_runs, project, proc.stdout + proc.stderr))
+        row.update(check_run(new_runs, project, combined))
+
+        # Keep the transcript of anything that failed. A pass rate without the
+        # reason is a number you cannot act on — the first failing run of this
+        # harness was undiagnosable because the output was thrown away.
+        if not row["clean"]:
+            transcript = RESULTS / f"demo_{stamp}_run{i}_failed.log"
+            transcript.write_text(combined, encoding="utf-8", errors="replace")
+            row["transcript"] = str(transcript)
+            tail = [ln for ln in combined.splitlines() if ln.strip()][-4:]
+            row["last_output"] = tail
+
         rows.append(row)
 
         with log.open("a", encoding="utf-8") as fh:
