@@ -18,14 +18,32 @@ Do this in order. It removes every failure that has bitten a take so far.
    py status.py
    ```
    Confirm it prints `Active: qwen3.5:4b`.
-3. **Pre-generate the showcase game** — do NOT generate it live on camera, it
-   takes ~50 minutes:
+3. **Decide which showcase you are filming.** There are now two, and they are
+   for different shots. Both numbers are real runs checked in a real browser
+   (`docs/showcase-ceiling.md`):
+
+   | | measured | on camera |
+   | --- | --- | --- |
+   | `--demo-showcase chart` | **4/4** so far, ~22 min | **safe to generate live** |
+   | `--demo-showcase` (Snake) | **2/10**, ~50 min | pre-generate only |
+
+   **The chart is the one you can film being built.** It renders a small
+   dataset as a labelled bar chart, and every run so far got all seven labels
+   and all seven values right. That is what makes a "watch it build this right
+   now" shot possible:
+   ```bash
+   py cli.py --demo-showcase chart
+   ```
+
+   **Pre-generate the Snake game** if you want it — do NOT generate it live, it
+   is 2/10 and takes ~50 minutes:
    ```bash
    py cli.py --demo-showcase
    ```
    When it finishes, open the generated HTML and **click restart once so the
    snake is already moving**. Some runs open on a "GAME OVER" start screen;
-   starting it first means the camera never sees that.
+   starting it first means the camera never sees that. A verified-playable copy
+   is already committed at `docs/demo-assets/snake-game/` if a take goes wrong.
 4. **Pre-run the memory demo** the same way (`py cli.py --demo`) if you want the
    iteration story — it is ~100 minutes of runtime, so you are filming the
    *replay* of its output, not the wait.
@@ -49,6 +67,14 @@ cloud, no API keys."*
 
 Let the snake move for a full three seconds before cutting. Movement is the
 proof — a static screenshot reads as fake.
+
+> **Alternative hook, now that live generation is safe — your call, Jett.**
+> Open on the *pitch being typed*, then cut to the finished bar chart appearing
+> in the browser, and say *"I typed that thirty seconds ago"* (timelapse the
+> ~22 minutes). The chart is measured 4/4, so a take is very unlikely to be
+> wasted. It is a stronger claim than the game shot — the audience watches it
+> happen instead of taking your word for it — but the game is the prettier
+> image. Film both if you have the time; decide in the edit.
 
 ---
 

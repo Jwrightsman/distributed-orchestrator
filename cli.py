@@ -5,6 +5,17 @@ Usage:
     python cli.py "Build me a landing page for a coffee shop"
     python cli.py                           # interactive mode
     python cli.py --history                  # show past runs
+
+Showcases — the swarm builds something that opens in your browser:
+    python cli.py --demo-showcase chart      # bar chart, measured 4/4 (see below)
+    python cli.py --demo-showcase clock      # animated analog clock, 3/4
+    python cli.py --demo-showcase particles  # particle field, 3/4
+    python cli.py --demo-showcase            # Snake game, 2/10 — the hard case
+
+Reliability numbers are real runs checked in a real browser
+(docs/showcase-ceiling.md). The chart is the one that is safe to generate live
+on camera; the game is not, and a verified-playable copy is committed at
+docs/demo-assets/snake-game/. Add --no-open to skip launching the browser.
 """
 
 import asyncio
