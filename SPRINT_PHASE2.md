@@ -216,6 +216,70 @@ _Append one entry per session: date, items completed, what's next, warnings for 
 
 <!-- sessions append below -->
 
+### Session 4 — August 10, 2026 · v5 resolved · §1.3 showcase alternatives · verification wired
+
+Branch `claude/mycelium-v5-eval-7bc393`. Jett's machine, real Ollama, prompt set v3 throughout.
+
+#### v5 is deleted, and the comparison found something more useful than v5
+
+The v5 run finished at 09:19 (`evals/results/20260810_041455`, now committed — it lived only in
+an untracked worktree and would have been lost). **16/28 = 57% against v3's 17/28 = 61%.**
+
+The mechanism worked exactly as designed: mean subtasks 3.68 → 2.46, `no_files_extracted` 2 → 0,
+`parse_failed` 1 → 0. The planner did stop fragmenting single files. The score still did not move,
+so the rule in `prompts/v3.py` says delete, and it is deleted.
+
+**The previous session kept it as a "special-purpose set" on the strength of web_app 3/6 → 5/6.
+That was wrong, and here is the number that shows it.** Comparing per-prompt records across all
+four runs:
+
+| pair | up | down | net |
+| --- | --- | --- | --- |
+| v1 → v3 | 9 | 2 | **+7** |
+| v3 → v4 | 4 | 10 | **-6** |
+| v3 → v5 | 7 | 8 | **-1** |
+| v4 → v5 | 10 | 5 | +5 |
+
+**Between any two runs, 11–18 of the 28 prompts flip outcome.** Half the set is unstable run to
+run. v3 vs v5 is 8 discordant one way and 7 the other — McNemar p ≈ 1.0. The web_app "gain" is
+3 up and 1 down across six prompts, p ≈ 0.63: four coin flips landing 3–1.
+
+So the instrument resolves large effects (+7, -6) and nothing smaller. Written into `v3.py` as a
+rule for future sessions, along with the measurement nobody has done: **no prompt set has ever
+been run twice**, so prompt-change and run-to-run variance have never been separated. A repeat run
+of v3 against itself costs the same ~9 hours as any other run and would give a true noise floor.
+That is now the highest-value eval remaining, ahead of any new prompt set.
+
+#### §4 verification wired into the dispatcher (was: module with no callers)
+
+`verification.py` existed and was tested but nothing called it. Now connected, **off by default**
+(`verify_rate: 0.0`):
+
+- Sampled duplication — a fraction of builder subtasks also go to a second node. The duplicate
+  carries `exclude_node` so `/tasks/next` cannot hand it back to the node being checked.
+- `record_comparison` runs in the **background**. Waiting for the second opinion would charge every
+  sampled task the slower node's latency for no benefit to the deliverable, and a failing spot
+  check must never be able to fail the artifact it was checking.
+- `rank()` decides **first refusal, not eligibility**. Nodes pull work here rather than being
+  assigned it, so a worse-rated node defers ~1.5s while a better-rated one is also waiting, then
+  takes the work regardless. Poor record means offered last, never starved; exclusion stays the
+  circuit breaker's job.
+- `/nodes` merges each node's record into its payload; dashboard node cards show routing weight,
+  agreement and sample count — hidden until a node has actually been checked.
+
+Behaviour at `verify_rate=0` is unchanged by construction: the deferral only triggers when waiting
+nodes have *different* weights, which cannot happen before any sampling has occurred. 23 tests.
+
+`README.md` and `docs/community-pitch.md` now describe the mechanism instead of promising it,
+with both honest caveats: it costs a whole extra inference per sampled task, and it self-disables
+below two nodes.
+
+#### Org multi-tenancy: still not built, deliberately
+
+Agreed with Jett's call. It is enterprise plumbing for a system with zero external users, it is in
+neither MASTER_PLAN's roadmap nor its parking lot, and an org can already get a private pool by
+running its own instance. Revisit only if a real person asks.
+
 ### Session 3 — August 6–8, 2026 · §1.1 baseline + §1.2 first iteration (Jett's machine, real Ollama)
 
 **§1.1 baseline: v1 = 10/28 (36%).** `evals/results/20260806_195850`, qwen3.5:4b, ~52 min/prompt,
