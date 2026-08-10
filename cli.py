@@ -7,7 +7,7 @@ Usage:
     python cli.py --history                  # show past runs
 
 Showcases — the swarm builds something that opens in your browser:
-    python cli.py --demo-showcase chart      # bar chart, measured 4/4 (see below)
+    python cli.py --demo-showcase chart      # bar chart, measured 10/10 (see below)
     python cli.py --demo-showcase clock      # animated analog clock, 3/4
     python cli.py --demo-showcase particles  # particle field, 3/4
     python cli.py --demo-showcase            # Snake game, 2/10 — the hard case

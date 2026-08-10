@@ -283,7 +283,7 @@ comparable:
 
 | showcase | screen (n=4) | confirmation | avg run |
 | --- | --- | --- | --- |
-| `chart` — labelled bar chart | **4/4** | running to n=10 | 22 min |
+| `chart` — labelled bar chart | **4/4** | **10/10** | 22 min |
 | `clock` — animated analog clock | 3/4 | — | 28 min |
 | `particles` — drifting particle field | 3/4 | — | 20 min |
 | `snake` — playable game | (2/10, prior) | — | ~50 min |

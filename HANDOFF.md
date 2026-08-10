@@ -38,7 +38,7 @@ ruff clean.
 | --- | --- |
 | Output quality | **61%** of 28 eval prompts runnable + on-spec (`v3`) |
 | WAN overhead | 216 ms RTT Indiana→Germany; network is **~2%** of a pitch |
-| `--demo-showcase chart` | **4/4** — safe to generate live on camera |
+| `--demo-showcase chart` | **10/10** — safe to generate live on camera |
 | `--demo-showcase` (Snake) | **2/10** — pre-generate only |
 | `--demo` | **2/3** clean, and failures are loud (red panel, exit 1) |
 | Restart recovery | 17/17 incl. SIGKILL |
@@ -94,7 +94,7 @@ every number in this project is actually worth. Do this before writing a v6.
 
    | showcase | result | avg run |
    | --- | --- | --- |
-   | `chart` | **4/4** (n=10 confirmation was running at session end) | 22 min |
+   | `chart` | **10/10** (Fisher p=0.0004 vs the game; true rate >=74% at 95%) | 22 min |
    | `clock` | 3/4 | 28 min |
    | `particles` | 3/4 | 20 min |
    | `snake` | 2/10 | ~50 min |
@@ -118,14 +118,19 @@ every number in this project is actually worth. Do this before writing a v6.
 
 ## What to do next, best first
 
-1. **Finish/confirm the chart at n=10** if the run did not complete — check
-   `scripts/showcase_results/` for the newest log. `scripts/showcase_rescore.py`
-   re-scores saved artifacts without regenerating. Then update the number in
-   `docs/showcase-ceiling.md`, `docs/demo-script.md` and this file.
-2. **Get the WebSocket fix onto the live server** (needs Jett's SSH key).
-3. **Open a PR for this branch** and merge once CI is green.
-4. **Run v3 against itself** for a real noise floor, before any new prompt set.
-5. Only then: a conditional v6, if the noise floor says it could ever be seen.
+1. **Open a PR for this branch** and merge once CI is green. Nothing here is
+   half-finished — the chart reached its full 10/10 and every number in the docs
+   is final.
+2. **Get the WebSocket fix onto the live server** — merge first, then on the VM:
+   `cd /root/distributed-orchestrator && git pull && docker compose up -d --build`.
+   Confirm with a WebSocket upgrade request to `/ws/events`: **101 means fixed,
+   404 means it is still serving the old image.**
+3. **Run v3 against itself** for a real noise floor, before any new prompt set.
+   Everything this project believes about prompt quality rests on single runs.
+4. Only then: a conditional v6, if the noise floor says it could ever be seen.
+5. Optional, cheap: `clock` and `particles` are only measured at n=4. If the
+   chart's dataset ever feels too static for the video, the clock is the
+   prettier artifact and would need ~6 more runs to know if it clears the bar.
 
 ## Do NOT build
 

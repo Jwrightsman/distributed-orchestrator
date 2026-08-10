@@ -66,9 +66,24 @@ harness, same model, same prompt set (v3), same browser checks.
 | `snake` — playable game | **2/10** | ~50 min |
 | `clock` — animated analog clock | **3/4** | 28 min |
 | `particles` — drifting particle field | **3/4** | 20 min |
-| `chart` — labelled bar chart | **4/4** *(confirmation to n=10 in progress)* | 22 min |
+| `chart` — labelled bar chart | **10/10** | 22 min |
 
-Every alternative beat the game, and they are also roughly twice as fast.
+Every alternative beat the game, and they are also roughly twice as fast. The
+chart was screened at 4 runs alongside the others, then taken to a full 10.
+
+**The chart result is not a fluke.** 10/10 against the game's 2/10 is Fisher
+exact one-sided p = 0.00036. Stated honestly, though: ten for ten puts the true
+success rate at **≥74% with 95% confidence** (Clopper-Pearson), not ≥100%. It
+clears the sprint's "playable in at least 8 of 10" bar on observed runs, and the
+right expectation on camera is "this will almost certainly work", not "this
+cannot fail". Raw logs are committed in `scripts/showcase_results/`.
+
+Worth noting what the chart's 10/10 is actually asserting, because its checks
+are the strictest of the four: no uncaught JS error, at least 8 visibly-sized
+elements, no visible `NaN` or `undefined`, and **all seven day labels and all
+seven values present as real text on the page**. It is the only candidate whose
+correctness is externally checkable at all — the others can only be checked for
+"drew something and moved". Ten runs got the data right ten times.
 
 **Two things worth keeping from this, because both contradicted a prediction:**
 

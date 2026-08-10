@@ -24,7 +24,7 @@ Do this in order. It removes every failure that has bitten a take so far.
 
    | | measured | on camera |
    | --- | --- | --- |
-   | `--demo-showcase chart` | **4/4** so far, ~22 min | **safe to generate live** |
+   | `--demo-showcase chart` | **10/10**, ~22 min | **safe to generate live** |
    | `--demo-showcase` (Snake) | **2/10**, ~50 min | pre-generate only |
 
    **The chart is the one you can film being built.** It renders a small
@@ -71,7 +71,7 @@ proof — a static screenshot reads as fake.
 > **Alternative hook, now that live generation is safe — your call, Jett.**
 > Open on the *pitch being typed*, then cut to the finished bar chart appearing
 > in the browser, and say *"I typed that thirty seconds ago"* (timelapse the
-> ~22 minutes). The chart is measured 4/4, so a take is very unlikely to be
+> ~22 minutes). The chart is measured 10/10, so a take is very unlikely to be
 > wasted. It is a stronger claim than the game shot — the audience watches it
 > happen instead of taking your word for it — but the game is the prettier
 > image. Film both if you have the time; decide in the edit.

@@ -9,3 +9,9 @@ events.db
 scripts/wan_results/
 scripts/showcase_results/
 scripts/demo_results/
+# ...but keep the result logs themselves. They are the evidence behind the
+# reliability numbers published in the README and docs/showcase-ceiling.md, and
+# eval runs are committed for exactly the same reason. A few KB of JSONL is a
+# cheap price for a claim someone can audit.
+!scripts/showcase_results/
+!scripts/showcase_results/*.jsonl
