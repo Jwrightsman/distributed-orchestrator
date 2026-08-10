@@ -68,10 +68,9 @@ That is the cheapest shot at making the demo's weakest number better.
 
 ## The four things asked for, and their status
 
-1. **Planner tuning (v5)** — written, running. v5 inverts one v3 planner rule
-   that told it to split a single file by concern (markup/logic/behaviour). That
-   line produced the showcase's three-way fragmentation of one HTML file across
-   blind agents. v5 says: a tightly-coupled single file goes to ONE builder whole.
+1. **Planner tuning (v5)** — **DONE and measured** (see the v5 section above).
+   Kept as a special-purpose set for coupled single-file work; v3 stays default.
+   Follow-up is a conditional v6.
 2. **Verification + reputation** — module + tests done on `experiment/verification`.
    **Next: wire it into `routes_pitch.dist_build_fn`** — duplicate a sampled task
    to a second node, call `pool.record_comparison(...)`, and use `pool.rank()`
@@ -129,16 +128,18 @@ SSH key is `~/.ssh/swarm_orchestrator` on his laptop only.
 > `MASTER_PLAN.md` and `SPRINT_PHASE2.md` — the sprint file's Session Log is the
 > real history and has every measured number.
 >
-> Short version: master is launch-ready and I don't want it destabilised. An eval
-> run comparing prompt set v5 against v3's 61% was in flight — check
-> `evals/results/` for the newest run, compare, and either promote v5 or delete it
-> per the rule in `prompts/v3.py`'s docstring.
+> Short version: master is launch-ready and I don't want it destabilised. Prompt
+> tuning is measured and settled for now — v3 is the default at 61%, and v5 is
+> kept as a special-purpose set that is much better on single-file web apps
+> (5/6 vs 3/6) and worse on separable work.
 >
-> After that, the queue is: (1) wire the verification/reputation module on
-> `experiment/verification` into the dispatcher and show reputation on the
-> dashboard node cards, (2) org multi-tenancy on its own branch, (3) test a
-> less-coupled showcase artifact than the Snake game — see
-> `docs/showcase-ceiling.md` for why the game itself is a dead end.
+> The queue, best first: (1) build a conditional "v6" planner combining v5's
+> rule for coupled artifacts with v3's for separable ones, and measure it against
+> both; (2) run `PROMPT_SET=v5 python scripts/showcase_reliability.py --runs 10`
+> — the showcase is our worst number at 2/10 and v5 is the set that fixes web
+> apps; (3) wire the verification/reputation module on `experiment/verification`
+> into the dispatcher and show reputation on the dashboard node cards; (4) org
+> multi-tenancy on its own branch.
 >
 > Work on branches, keep master stable, measure every prompt change against the
 > eval set before promoting it, and append to SPRINT_PHASE2.md's Session Log as
