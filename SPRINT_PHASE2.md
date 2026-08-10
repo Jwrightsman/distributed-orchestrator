@@ -86,7 +86,14 @@ This is grinding, iterative work and it is the best possible use of the remainin
       8 never draw to the canvas and their restart button does nothing — frame hash stays 0 with no
       JS error to explain it. This is a genuine capability limit, not a scoring artifact: verified by
       hand on a failing run.
-- [ ] Same for `--demo` (expense tracker + memory iteration) — not yet measured
+- [x] Same for `--demo` (expense tracker + memory iteration)
+      — **2/3 clean** (`scripts/demo_reliability.py`, runs 35-56 min each). Checks the demo's
+      actual on-camera claim, not just completion: two pipeline runs produced, extracted Python
+      parses, and memory.md records BOTH iterations. Two takes were clean — memory carried and the
+      code parsed. One aborted after pitch 1 (invalid Python from pitch 1, then pitch 2 failed), so
+      memory recorded a single iteration and the demo exited 1. Materially better than the showcase's
+      2/10, and the failure is loud rather than silent: the run stops with a red panel and a non-zero
+      exit, so a bad take is obvious while filming rather than discovered in the edit.
 - [ ] If a demo is flaky, tune its specific prompt until it isn't — these two run on camera
       **Not yet attempted.** Each iteration costs ~6 hours (10 runs) to validate, so this needs a
       dedicated window. Mitigation already in place: one verified-playable game is committed at

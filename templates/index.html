@@ -3,13 +3,30 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Distributed AI Orchestrator</title>
+<title>Mycelium — Distributed Orchestrator</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg:            #0B0C0E;
+    --surface:       #131316;
+    --border:        rgba(255,255,255,0.09);
+    --text:          #EDEDEF;
+    --text-dim:      #A1A1AA;
+    --text-muted:    #8B8B96;
+    --accent:        #3FB950;
+    --accent-dim:    #2EA043;
+    --accent-wash:   rgba(63,185,80,0.10);
+    --warn:          #D29922;
+    --danger:        #F85149;
+    --mono: ui-monospace, 'SF Mono', 'Cascadia Code', Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, system-ui, sans-serif;
+  }
+
   body {
-    background: #08090C;
-    color: #D8D8D8;
-    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
     min-height: 100vh;
     display: flex;
     flex-direction: column;
@@ -19,28 +36,28 @@
     text-align: center;
   }
   .logo-tag {
-    font-family: 'Consolas', monospace;
+    font-family: var(--mono);
     font-size: 13px;
-    color: #00FFAA;
+    color: var(--accent);
     letter-spacing: 4px;
     font-weight: 700;
     margin-bottom: 24px;
   }
   h1 {
     font-size: clamp(28px, 5vw, 52px);
-    font-weight: 800;
-    color: #F0F0F0;
+    font-weight: 600;
+    color: var(--text);
     letter-spacing: -1px;
     line-height: 1.15;
     max-width: 800px;
   }
-  h1 .accent { color: #00FFAA; }
+  h1 .accent { color: var(--accent); }
   .sub {
     margin-top: 20px;
     max-width: 640px;
     font-size: clamp(15px, 2vw, 18px);
     line-height: 1.65;
-    color: #999;
+    color: var(--text-dim);
   }
   .stats-row {
     margin-top: 40px;
@@ -55,23 +72,20 @@
     gap: 4px;
   }
   .stat .num {
-    font-family: 'Consolas', monospace;
+    font-family: var(--mono);
     font-size: 40px;
-    font-weight: 700;
-    color: #00FFAA;
-    text-shadow: 0 0 24px rgba(0,255,170,0.35);
+    font-weight: 600;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
   }
+  .stat .num.live { color: var(--accent); }
   .stat .label {
     font-size: 12px;
-    color: #666;
+    color: var(--text-muted);
     letter-spacing: 2px;
     text-transform: uppercase;
   }
-  .pulse { animation: pulse 2.4s ease-in-out infinite; }
-  @keyframes pulse {
-    0%, 100% { text-shadow: 0 0 24px rgba(0,255,170,0.35); }
-    50% { text-shadow: 0 0 42px rgba(0,255,170,0.7); }
-  }
+
   .actions {
     margin-top: 44px;
     display: flex;
@@ -87,42 +101,42 @@
     text-decoration: none;
     transition: all 0.15s;
   }
-  .btn-primary { background: #00FFAA; color: #08090C; }
-  .btn-primary:hover { background: #00e899; box-shadow: 0 0 30px rgba(0,255,170,0.35); }
+  .btn-primary { background: var(--accent); color: var(--bg); }
+  .btn-primary:hover { background: var(--accent-dim); }
   .btn-secondary {
     background: none;
-    color: #00FFAA;
-    border: 1.5px solid rgba(0,255,170,0.4);
+    color: var(--accent);
+    border: 1.5px solid rgba(63,185,80,0.24);
   }
-  .btn-secondary:hover { background: rgba(0,255,170,0.08); border-color: #00FFAA; }
+  .btn-secondary:hover { background: rgba(63,185,80,0.05); border-color: var(--accent); }
   .join-line {
     margin-top: 40px;
-    font-family: 'Consolas', monospace;
+    font-family: var(--mono);
     font-size: 14px;
     background: rgba(255,255,255,0.04);
     border: 1px solid rgba(255,255,255,0.09);
     border-radius: 10px;
     padding: 14px 22px;
-    color: #B8B8B8;
+    color: var(--text-dim);
     cursor: pointer;
     transition: border-color 0.15s;
     user-select: all;
   }
-  .join-line:hover { border-color: rgba(0,255,170,0.5); }
-  .join-line .prompt { color: #00FFAA; }
-  .join-hint { margin-top: 10px; font-size: 12px; color: #555; }
+  .join-line:hover { border-color: rgba(63,185,80,0.30); }
+  .join-line .prompt { color: var(--accent); }
+  .join-hint { margin-top: 10px; font-size: 12px; color: var(--text-muted); }
   .footer {
     margin-top: 56px;
     font-size: 12px;
-    color: #444;
+    color: var(--text-muted);
   }
-  .footer a { color: #666; text-decoration: none; }
-  .footer a:hover { color: #00FFAA; }
+  .footer a { color: var(--text-muted); text-decoration: none; }
+  .footer a:hover { color: var(--accent); }
 </style>
 </head>
 <body>
-  <div class="logo-tag">DISTRIBUTED AI ORCHESTRATOR</div>
-  <h1>A swarm of AI agents,<br>running on <span class="accent">everyone's</span> hardware.</h1>
+  <div class="logo-tag">MYCELIUM</div>
+  <h1>One task, split across<br>every machine that <span class="accent">joined</span>.</h1>
   <p class="sub">
     Pitch a task. A planner splits it into subtasks, builder agents execute them in
     parallel across volunteer machines, a reviewer assembles and grades the result —
@@ -131,7 +145,7 @@
   </p>
 
   <div class="stats-row">
-    <div class="stat"><span class="num pulse" id="node-count">–</span><span class="label">nodes online</span></div>
+    <div class="stat"><span class="num" id="node-count">–</span><span class="label">nodes online</span></div>
     <div class="stat"><span class="num" id="task-count">–</span><span class="label">tasks completed</span></div>
   </div>
 
@@ -155,7 +169,9 @@
   async function refresh() {
     try {
       const m = await (await fetch('/metrics')).json();
-      document.getElementById('node-count').textContent = m.nodes_online;
+      const nc = document.getElementById('node-count');
+      nc.textContent = m.nodes_online;
+      nc.classList.toggle('live', m.nodes_online > 0);
       document.getElementById('task-count').textContent = m.tasks_completed_total;
     } catch (e) { /* leave placeholders */ }
   }

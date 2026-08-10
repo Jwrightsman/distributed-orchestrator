@@ -1,8 +1,8 @@
-"""Prompt set v3 — UNMEASURED candidate, built from the v1 baseline's actual failures.
+"""Prompt set v3 — the current default. Built from the v1 baseline's actual failures.
 
 v2 was written before any baseline existed and targets failures from the sprint
 logs. v3 keeps v2's wording and adds rules aimed at the failure modes the
-**measured** v1 baseline produced (run 20260806_195850, 9/28 = 32%). Every rule
+**measured** v1 baseline produced (run 20260806_195850, 10/28 = 36%). Every rule
 below cites the run that motivated it — if a rule cannot name a failure it
 fixed, it does not belong here.
 
@@ -34,12 +34,32 @@ Measured failures and the rule each one produced:
    having passed a static structure check. v3 adds the specific DOM discipline
    that avoids the common cause — referencing elements that don't exist.
 
-**None of this is known to be better.** Measure before promoting:
+Every candidate must be measured before promoting:
 
     python evals/run_evals.py --prompt-set v3
 
-Compare against 32% (9/28) from `evals/results/20260806_195850`. If it does
+Compare against 36% (10/28) from `evals/results/20260806_195850`. If it does
 not move the score, delete it. That is the rule.
+
+---
+
+MEASURED: v3 = 17/28 (61%) vs v1's 10/28 (36%). Promoted to default Aug 8.
+
+**A v4 was tried and deleted — read this before writing a v5.** It kept v3
+entirely and added three reviewer rules aimed at v3's largest remaining failure
+group (imports of sibling modules that the merge never produced, duplicate
+definitions, files that don't run as one unit). The reasoning was sound and the
+rules worked: v4 fixed all the prompts it targeted — web-todo, data-log-parser,
+api-url-shortener, vague-make-a-game.
+
+It still scored **11/28 (39%)**, twenty-two points *below* v3, because it broke
+ten prompts it was not aiming at — including the whole algorithm category, which
+v3 had at 3/4. Run: `evals/results/20260809_053327`.
+
+The lesson is about budget, not content: a 4B model has finite attention for
+instructions. Three new mandatory operations crowded out the reviewer's ability
+to do the merge it was already doing competently. **If you add a rule, cut one.**
+Measure a shorter reviewer prompt before a longer one.
 """
 
 from prompts import PromptSet
@@ -99,7 +119,8 @@ REVIEWER_SYSTEM = V2_REVIEWER
 PROMPTS = PromptSet(
     name="v3",
     description=(
-        "UNMEASURED candidate. v2 plus builder rules aimed at the four failure "
+        "MEASURED 17/28 (61%) vs v1 10/28 (36%). v2 plus builder rules aimed at "
+        "the four failure "
         "modes measured in the v1 baseline: undefined names, uninstalled "
         "third-party imports, self-contradicting tests, and JS console errors."
     ),
