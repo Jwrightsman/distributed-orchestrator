@@ -1,5 +1,11 @@
 fastapi>=0.115.0
 uvicorn>=0.34.0
+# uvicorn ships WITHOUT a WebSocket implementation. Without this, /ws/events
+# returns 404 and the dashboard silently falls back to 3-second polling — no
+# live token streaming. Nothing in the test suite catches it, because
+# TestClient handles WebSockets itself and never touches uvicorn's protocol
+# layer. Cheaper than uvicorn[standard], which drags in five more packages.
+websockets>=12.0
 httpx>=0.28.0
 rich>=13.9.0
 mcp>=2.0.0
