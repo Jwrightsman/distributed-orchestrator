@@ -96,7 +96,8 @@ revert changes that don't move the score.
 
 ### Testing
 After making changes, verify:
-1. `py -m pytest -q` — the suite (242 tests, no Ollama needed). This is the fastest signal.
+1. `py -m pytest -q` — the suite (314 tests as of Aug 11 2026, no Ollama needed). This is
+   the fastest signal.
 2. `ruff check .` — CI fails on this, so run it before pushing
 3. `py -c "from server import app; print('server imports ok')"` — server starts clean
 4. `py status.py` — Ollama connection works

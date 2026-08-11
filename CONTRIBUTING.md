@@ -32,7 +32,7 @@ Python 3.12+ (CI runs 3.14). No virtualenv is enforced; use one if you like.
 ## Before you open a pull request
 
 ```bash
-pytest -q        # ~250 tests, no Ollama needed — this is the fast signal
+pytest -q        # 300+ tests, no Ollama needed — this is the fast signal
 ruff check .     # CI fails on this
 ```
 
