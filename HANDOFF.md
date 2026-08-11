@@ -124,13 +124,21 @@ every number in this project is actually worth. Do this before writing a v6.
 ## Branches
 
 - `master` — stable, launch-ready, **contains session 4's work** (PR #27, CI green)
-- `claude/mycelium-v5-eval-7bc393` — merged, safe to delete
+- `claude/mycelium-v5-eval-7bc393` — merged (PR #27), safe to delete
+- `claude/eval-compare-tool`, `claude/eval-docs`, `claude/session-log-compare` —
+  merged (PRs #28–30), safe to delete
 - `experiment/showcase-quality`, `experiment/verification` — already merged, stale
 
 ## What to do next, best first
 
-1. **Score the v3-repeat run** when it finishes (see State above). That is the
-   error bar everything else depends on.
+1. **Score the v3-repeat run** when it finishes (see State above):
+
+       python evals/compare.py 20260808_050610 20260811_052310
+
+   It will print a NOISE FLOOR rather than a comparison, because both runs used
+   v3. That churn number is the error bar everything else depends on — write it
+   into `prompts/v3.py` rule 3 and use it as the bar every future candidate has
+   to clear.
 2. **Get the WebSocket fix onto the live server.** Already merged, so on the VM:
    `cd /root/distributed-orchestrator && git pull && docker compose up -d --build`.
    Confirm with a WebSocket upgrade request to `/ws/events`: **101 means fixed,
@@ -151,6 +159,13 @@ on Aug 10. Revisit only if a real person asks for it.
 
 - **Measure before and after every prompt change**, one variable at a time —
   and now, know that a delta under ~6 prompts is not distinguishable from noise.
+- **`evals/compare.py` decides promote-or-delete — do not eyeball two summary
+  files.** It reports churn (how many prompts flipped *each way*, which a
+  success-rate diff hides), an exact one-sided McNemar test, and the power of
+  the comparison. It reproduces every historical decision. Two things it will
+  tell you that are easy to get wrong: a 4–6 prompt category can **never** reach
+  p<0.05 on its own, and v1 → v3 — the best change ever made here — only clears
+  at p=0.033 and needed 9 of its 11 flips to go one way.
 - **`evals/rescore.py`** re-scores a finished eval from saved artifacts;
   **`scripts/showcase_rescore.py`** does the same for showcase runs. A scoring
   fix costs seconds, not another 9–20 hours.
