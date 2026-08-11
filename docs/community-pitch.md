@@ -179,9 +179,15 @@ reply in under a minute without thinking. Edit tone freely; keep the honesty.
 > not good enough to architect anything large. Rather than guess, there's an eval harness in the
 > repo — 28 varied pitches, scored on whether the extractor produced files, whether they parse,
 > whether they actually execute (HTML gets loaded in a headless browser and fails on JS errors),
-> plus a model judgment and wall-clock cost. **61% of them come back runnable and on-spec** on
-> `qwen3.5:4b`, up from 36% before prompt tuning. A "PASS" rating that doesn't run counts as a
-> failure by construction.
+> plus a model judgment and wall-clock cost. **About 57% come back runnable and on-spec** on
+> `qwen3.5:4b` (95% CI 44-69%), up from 36% before prompt tuning. A "PASS" rating that doesn't run
+> counts as a failure by construction.
+>
+> I know it's 57% and not 61% because I ran the identical set twice and got 17/28 then 15/28 —
+> with **18 of the 28 prompts flipping outcome** between two runs that differed by nothing at all.
+> If you take one thing from this repo, take that: a single eval number on a small model is a draw
+> from a wide distribution, and most of the prompt-tuning results you read (including two of mine)
+> are inside the noise.
 >
 > The more useful answer is that reliability depends enormously on how *coupled* the thing you
 > asked for is. Same model, same prompts, ten consecutive runs each, every result opened in a real

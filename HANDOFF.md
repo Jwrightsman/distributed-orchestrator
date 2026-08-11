@@ -47,7 +47,7 @@ the threshold for every future promote-or-delete decision.
 
 | what | measured |
 | --- | --- |
-| Output quality | **61%** of 28 eval prompts runnable + on-spec (`v3`) |
+| Output quality | **~57%** of 28 eval prompts runnable + on-spec, 95% CI 44-69% (`v3`) |
 | WAN overhead | 216 ms RTT Indiana→Germany; network is **~2%** of a pitch |
 | `--demo-showcase chart` | **10/10** — safe to generate live on camera |
 | `--demo-showcase` (Snake) | **2/10** — pre-generate only |

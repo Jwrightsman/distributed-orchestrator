@@ -254,14 +254,19 @@ This is a **Phase 0 trusted-network prototype**. Here's exactly what's durable a
 
 Numbers, not adjectives. Every one is reproducible with a command in this repo.
 
-**Output quality — 61% of 28 pitches produce runnable, on-spec output** on `qwen3.5:4b`, up from 36% before prompt tuning. A run counts only if the extractor produced files, they parse, they *execute* (Python in a subprocess; HTML in headless Chromium, where an uncaught JS error fails the run), the artifact is the kind that was asked for, and a reviewer model rates it ≥3/5.
+**Output quality — about 57% of 28 pitches produce runnable, on-spec output** on `qwen3.5:4b` (95% CI 44–69%), up from 36% before prompt tuning. A run counts only if the extractor produced files, they parse, they *execute* (Python in a subprocess; HTML in headless Chromium, where an uncaught JS error fails the run), the artifact is the kind that was asked for, and a reviewer model rates it ≥3/5.
 
 | prompt set | overall | algorithm | api | cli | data | vague | web |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | v1 (baseline) | 10/28 · 36% | 0/4 | 2/4 | 3/5 | 3/5 | 0/4 | 2/6 |
-| **v3 (current)** | **17/28 · 61%** | 3/4 | 3/4 | 3/5 | 3/5 | 2/4 | 3/6 |
+| **v3 (current), run 1** | 17/28 · 61% | 3/4 | 3/4 | 3/5 | 3/5 | 2/4 | 3/6 |
+| **v3 (current), run 2** | 15/28 · 54% | 1/4 | 0/4 | 4/5 | 3/5 | 4/4 | 3/6 |
 
-Reproduce: `python evals/run_evals.py` (~20 h on CPU, resumable). Raw results are committed under [`evals/results/`](evals/results/).
+**Those two rows are the same prompt set, the same model and the same 28 prompts, run twice.** They differ by two prompts overall — and **18 of the 28 individual prompts changed outcome between them.** That is the honest error bar on everything above, and it is why the headline is a range rather than the more flattering 61%.
+
+It is also a warning about reading the category columns: `api` went 3/4 → 0/4 and `vague` went 2/4 → 4/4 with *nothing changed*. A category here has 4–6 prompts, and at that size no result reaches significance on its own.
+
+Reproduce: `python evals/run_evals.py` (~20 h on CPU, resumable), then `python evals/compare.py <run_a> <run_b>`, which does the arithmetic — churn, an exact one-sided McNemar test, and the power of the comparison. Raw results are committed under [`evals/results/`](evals/results/).
 
 **Distribution over the internet costs about 2%.** Measured from a laptop in Indiana to an orchestrator in Germany (`scripts/wan_bench.py`):
 
@@ -274,13 +279,14 @@ Reproduce: `python evals/run_evals.py` (~20 h on CPU, resumable). Raw results ar
 
 A real pitch took 308 s, of which the network accounted for ~7 s. Inference dominates by two orders of magnitude, which is why a worker on the other side of an ocean is as useful as one on your LAN.
 
-**What the numbers don't say:** 61% is not 100%, and the failures are honest failures — see [Limitations](#limitations).
+**What the numbers don't say:** ~57% is not 100%, the interval is wide, and the failures are honest failures — see [Limitations](#limitations).
 
 ## Limitations
 
 Stated plainly, because you'll find them anyway:
 
-- **Small models have a ceiling, and here is where it is.** The default is a 4B model on consumer hardware. Measured: **61% of 28 varied pitches produce runnable, on-spec output** ([Measured results](#measured-results)). It writes a working single-file web app or a useful script; it will not architect your microservice. The remaining 39% mostly fail by writing code that looks right and doesn't run.
+- **Small models have a ceiling, and here is where it is.** The default is a 4B model on consumer hardware. Measured: **about 57% of 28 varied pitches produce runnable, on-spec output**, 95% CI 44–69% ([Measured results](#measured-results)). It writes a working single-file web app or a useful script; it will not architect your microservice. The rest mostly fail by writing code that looks right and doesn't run.
+- **That number is noisy, and we measured how noisy.** Running the identical prompt set twice moved the score from 17/28 to 15/28 and flipped **18 of the 28 individual prompts**. Treat any single eval number here — ours or yours — as ±2 prompts at best, and distrust per-category figures entirely.
 - **A one-shot game is at the edge of what it can do — a simpler artifact is not.** Generating a complete playable Snake game succeeded in **2 of 10 consecutive attempts** (`scripts/showcase_reliability.py`, each checked in a real browser). The failures load without errors but never start. Treat `--demo-showcase` as something you run a few times and pick from — a verified-playable example is committed at [`docs/demo-assets/snake-game/`](docs/demo-assets/snake-game/).
 
   Shrinking the ask fixes it. The same harness, model and prompts produce a labelled bar chart in **10 of 10 attempts** (`python cli.py --demo-showcase chart`), with all seven labels and values correct every time — Fisher exact p = 0.0004 against the game, though ten-for-ten still only puts the true rate at ≥74% with 95% confidence. An analog clock and a particle field both scored 3/4 at a smaller sample. The lesson is about coupling, not about the model being bad: [`docs/showcase-ceiling.md`](docs/showcase-ceiling.md) has the full write-up and `scripts/showcase_results/` has the raw logs.

@@ -31,7 +31,30 @@ def check(name: str, ok: bool, detail: str = "") -> None:
     print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f" — {detail}" if detail else ""))
 
 
+def _port_is_free() -> bool:
+    import socket
+
+    with socket.socket() as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind(("127.0.0.1", PORT))
+            return True
+        except OSError:
+            return False
+
+
 def start_server() -> subprocess.Popen:
+    # Health is checked over HTTP, so *any* process on this port satisfies it —
+    # including a server leaked by an earlier crashed run. That happened, and it
+    # produced a run where the hard kill "failed" because the thing still
+    # answering was never the thing being killed. Refuse to start ambiguous.
+    if not _port_is_free():
+        raise SystemExit(
+            f"Port {PORT} is already in use. Something else — probably a server "
+            f"leaked by an interrupted run — would answer the health checks and "
+            f"make these results meaningless. Kill it and re-run."
+        )
+
     proc = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "server:app",
          "--host", "127.0.0.1", "--port", str(PORT), "--log-level", "warning"],
@@ -56,7 +79,22 @@ def start_server() -> subprocess.Popen:
 
 
 def stop_server(proc: subprocess.Popen, hard: bool) -> None:
-    proc.send_signal(signal.SIGKILL if hard else signal.SIGTERM)
+    """Stop the server, gracefully or not.
+
+    Windows has no SIGKILL, and `signal.SIGKILL` does not merely fail to
+    deliver — the attribute does not exist, so this crashed with AttributeError
+    before reaching the hard-kill check at all. The recorded 17/17 was therefore
+    only ever obtainable on Linux, which made a published number impossible to
+    reproduce on the machine this project is actually developed on.
+
+    `Popen.kill()` is the portable equivalent: SIGKILL on POSIX,
+    TerminateProcess on Windows. Both are ungraceful by design — no cleanup
+    handlers run — which is exactly what this check needs.
+    """
+    if hard:
+        proc.kill()
+    else:
+        proc.send_signal(getattr(signal, "SIGTERM", signal.SIGINT))
     try:
         proc.wait(timeout=15)
     except subprocess.TimeoutExpired:
@@ -93,6 +131,26 @@ async def main() -> int:
     WORKDIR.mkdir(parents=True, exist_ok=True)
     for stale in ("events.db",):
         (WORKDIR / stale).unlink(missing_ok=True)
+
+    # This check wants pitches to fail fast so a job reaches a terminal state
+    # within seconds. With Ollama up they instead start real 20-minute
+    # inference, and three unrelated checks fail for a reason that has nothing
+    # to do with restart recovery. Say so plainly rather than reporting a
+    # confusing FAIL.
+    try:
+        from config import get as _get_config
+
+        url = _get_config().get("ollama_url", "http://localhost:11434")
+        httpx.get(f"{url}/api/tags", timeout=2)
+        print(
+            "\n!! Ollama is RUNNING. This check expects it stopped: pitches are\n"
+            "   supposed to fail fast so jobs reach a terminal state quickly.\n"
+            "   Expect spurious failures on the 'degraded health', 'terminal\n"
+            "   state' and 'readable message' checks. Stop Ollama for a clean\n"
+            "   run — everything else (restart, SIGKILL, WebSocket) is valid.\n"
+        )
+    except Exception:
+        pass  # Ollama unreachable — the intended environment
 
     print("\n[1] start server")
     proc = start_server()
