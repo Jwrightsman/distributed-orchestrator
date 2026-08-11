@@ -37,9 +37,12 @@ Measured failures and the rule each one produced:
 Every candidate must be measured before promoting:
 
     python evals/run_evals.py --prompt-set v3
+    python evals/compare.py <baseline_run_id> <candidate_run_id>
 
-Compare against 36% (10/28) from `evals/results/20260806_195850`. If it does
-not move the score, delete it. That is the rule.
+If it does not move the score, delete it. That is the rule — and `compare.py`
+now applies it for you, because applying it by eye is how v5 survived a session
+it should not have (see below). It reports churn, an exact one-sided McNemar
+test, the power of the comparison, and a promote/delete verdict.
 
 ---
 
@@ -95,6 +98,10 @@ That churn sets what this instrument can and cannot resolve:
   It is exactly the kind of post-hoc subgroup that this project's own
   discipline exists to reject.
 
+**`evals/compare.py` encodes all of this.** Run it instead of eyeballing two
+summary files; it reproduces every historical decision here (v3 promote, v4 and
+v5 delete) and refuses to let a category result stand in for an overall one.
+
 **Rules for anyone tuning prompts from here:**
 
 1. **A delta of 1-3 prompts means nothing.** Do not promote on it, and do not
@@ -102,11 +109,17 @@ That churn sets what this instrument can and cannot resolve:
    middle ground the rule forbids, and it is how unmeasured cruft accumulates.
 2. **Only large deltas are real** at n=28 — v1 -> v3's +7 and v3 -> v4's -6 are
    the only two movements this set has ever resolved.
-3. **Nobody has yet run the same prompt set twice.** The churn above is
-   prompt-change and run-to-run variance mixed together, and no measurement here
-   separates them. A repeat run of v3 against itself is the single most valuable
-   eval this project has not done: it would give a true noise floor, and it
-   costs the same ~9 hours as any other run.
+3. **The churn above mixes prompt-change and run-to-run variance**, and until
+   Aug 11 no measurement separated them. `evals/results/20260811_052310` is a
+   repeat of v3 against **itself** — same prompts, same model, nothing changed —
+   started to fix exactly that. When it finishes:
+
+       python evals/compare.py 20260808_050610 20260811_052310
+
+   `compare.py` will recognise the matching prompt set and report the result as
+   a **noise floor**. Whatever churn it shows is variance with no cause. Write
+   that number here and use it as the threshold for every future comparison:
+   a candidate has to beat the noise floor, not merely beat zero.
 
 v5's planner text is preserved in git history (`git show 3c4a7b0`) if a future
 conditional "v6" wants it, but do not restore it on the strength of the web_app
