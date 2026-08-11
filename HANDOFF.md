@@ -30,9 +30,20 @@ has been stable for 72 hours than three more features and an untested merge.
 
 ## State right now
 
-**`master` is launch-ready and was not touched this session.** All work is on
-`claude/mycelium-v5-eval-7bc393` (pushed, no PR opened yet). 314 tests green,
-ruff clean.
+**Session 4's work is merged.** PR #27 → `master`, CI green on the merge commit
+(tests + docker, Python 3.14). 314 tests, ruff clean. `master` is launch-ready.
+
+**A measurement is running as of Aug 11, 05:23 UTC:** `evals/results/20260811_052310`
+— prompt set **v3 run against itself**, to establish the noise floor described
+below. Expect 9–20 hours. It is resumable (`--resume 20260811_052310
+--retry-failed`). **Do not run tests, servers or browsers on this machine until
+it finishes** — check whether it is still going before doing anything CPU-heavy.
+
+When it lands, compare it prompt-by-prompt against `evals/results/20260808_050610`
+(the original v3 run, 17/28). The churn between those two runs is **pure
+run-to-run variance with zero prompt difference** — the first honest error bar
+this project has ever had. Write the number into `prompts/v3.py` and use it as
+the threshold for every future promote-or-delete decision.
 
 | what | measured |
 | --- | --- |
@@ -112,23 +123,20 @@ every number in this project is actually worth. Do this before writing a v6.
 
 ## Branches
 
-- `master` — stable, launch-ready, untouched this session
-- `claude/mycelium-v5-eval-7bc393` — **this session's work**, pushed, no PR yet
+- `master` — stable, launch-ready, **contains session 4's work** (PR #27, CI green)
+- `claude/mycelium-v5-eval-7bc393` — merged, safe to delete
 - `experiment/showcase-quality`, `experiment/verification` — already merged, stale
 
 ## What to do next, best first
 
-1. **Open a PR for this branch** and merge once CI is green. Nothing here is
-   half-finished — the chart reached its full 10/10 and every number in the docs
-   is final.
-2. **Get the WebSocket fix onto the live server** — merge first, then on the VM:
+1. **Score the v3-repeat run** when it finishes (see State above). That is the
+   error bar everything else depends on.
+2. **Get the WebSocket fix onto the live server.** Already merged, so on the VM:
    `cd /root/distributed-orchestrator && git pull && docker compose up -d --build`.
    Confirm with a WebSocket upgrade request to `/ws/events`: **101 means fixed,
-   404 means it is still serving the old image.**
-3. **Run v3 against itself** for a real noise floor, before any new prompt set.
-   Everything this project believes about prompt quality rests on single runs.
-4. Only then: a conditional v6, if the noise floor says it could ever be seen.
-5. Optional, cheap: `clock` and `particles` are only measured at n=4. If the
+   404 means it is still serving the old image.** Needs Jett's SSH key.
+3. Only then: a conditional v6, if the noise floor says it could ever be seen.
+4. Optional, cheap: `clock` and `particles` are only measured at n=4. If the
    chart's dataset ever feels too static for the video, the clock is the
    prettier artifact and would need ~6 more runs to know if it clears the bar.
 
