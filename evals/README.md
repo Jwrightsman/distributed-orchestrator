@@ -93,10 +93,47 @@ where prompt tuning should aim.
 1. Run the full set, commit the result as the baseline.
 2. Change **one** prompt (planner, builder, reviewer or reviser).
 3. Re-run — `--only <category>` first for a fast signal, then the full set.
-4. Keep the change if the score moved up; revert it if it did not. A change
-   that "feels better" but does not move the number is not an improvement.
+4. **Decide with `evals/compare.py`, not by eye.** Keep the change only if it
+   moves the score by more than the harness's own noise. A change that "feels
+   better" but does not move the number is not an improvement.
+
+```bash
+python evals/compare.py <baseline_run_id> <candidate_run_id>
+python evals/compare.py            # the two most recent runs
+```
 
 Target: **≥80% success on `qwen3.5:4b`**.
+
+### Do not trust a difference you have not tested
+
+This set is small and the model is stochastic, and the project has already made
+one wrong call by reading two `summary.json` files side by side. `compare.py`
+reports the things that actually decide it:
+
+- **Churn** — how many prompts flipped *in each direction*. Two runs can both
+  score 17/28 and disagree on fourteen prompts. A success-rate diff hides this
+  completely, and it is the single most important number on the page.
+- **Exact McNemar** on the discordant pairs, one-sided (a candidate is only ever
+  promoted on evidence of improvement, so the hypothesis is directional).
+- **Power** — how lopsided the flips had to be to mean anything at all.
+
+Two consequences worth knowing before you argue about a result:
+
+- **A category is never sufficient on its own.** Categories here have 4–6
+  prompts, and with four discordant pairs *no split reaches p<0.05, not even
+  4–0*. "But `web_app` improved" is not evidence. That is exactly the reasoning
+  that kept prompt set v5 alive for a session before it was deleted.
+- **v1 → v3, this project's best change, is p = 0.033** — and only because the
+  test is one-sided. It barely cleared. Nothing subtler than that has ever been
+  resolvable here.
+
+### Measuring the noise floor
+
+Run the **same** prompt set twice and compare those two runs. `compare.py`
+detects the matching set and reports a noise floor instead of a comparison:
+whatever churn it shows is pure run-to-run variance, with no prompt difference
+to explain any of it. That number is the threshold every future comparison
+should be judged against, and it costs the same ~9 hours as any other run.
 
 ## Notes
 
