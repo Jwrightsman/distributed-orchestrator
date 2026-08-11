@@ -19,6 +19,7 @@ from fastapi import HTTPException, Request, WebSocket
 from pydantic import BaseModel, field_validator
 
 from config import get as get_config
+from verification import VerificationPool
 
 # ── Node staleness threshold (seconds) ───────────────────────────────────
 _NODE_TIMEOUT = 90
@@ -61,6 +62,31 @@ task_inflight: dict[str, dict] = {}  # task_id -> task (assigned but not yet ret
 # ── Circuit breaker state ─────────────────────────────────────────────
 node_failure_count: dict[str, int] = {}   # node_id -> consecutive failure count
 node_blacklist: dict[str, float] = {}     # node_id -> blacklist_until timestamp
+
+# ── Verification & reputation ─────────────────────────────────────────
+# One pool for the process. verify_rate is read from config at first use rather
+# than captured at import, so a config edit takes effect on the next pitch
+# instead of needing a restart.
+verification_pool = VerificationPool(verify_rate=0.0)
+
+# node_id -> timestamp it started waiting in GET /tasks/next. Used to give
+# better-rated nodes first refusal on a task without ever starving a worse one.
+waiting_nodes: dict[str, float] = {}
+
+# A node counts as "currently waiting" only if it polled within this window.
+_WAITING_FRESH = 3.0
+# How long a lower-rated node defers before taking the work anyway.
+_ROUTING_DEFER = 1.5
+
+
+def _refresh_verify_rate() -> float:
+    """Sync the pool's sample rate with config. Returns the active rate."""
+    try:
+        rate = float(get_config().get("verify_rate", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        rate = 0.0
+    verification_pool.verify_rate = max(0.0, min(1.0, rate))
+    return verification_pool.verify_rate
 
 # ── Async job store ──────────────────────────────────────────────────
 # Jobs allow /pitch/async to return immediately with a job_id.

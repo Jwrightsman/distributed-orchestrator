@@ -116,6 +116,21 @@ DEFAULTS = {
     #
     # Leave empty {} to route tasks to any available node (default).
     "role_model_map": {},
+
+    # ── Verification & reputation (optional) ─────────────────────────
+    # Fraction of builder tasks that get sent to a SECOND node as well, so the
+    # two answers can be compared. This is the only mechanism that can notice a
+    # node returning plausible-looking garbage — the circuit breaker only sees
+    # nodes that fail outright.
+    #
+    # Each verified task costs a whole extra inference, so this is sampled, not
+    # universal. 0.1 means roughly one task in ten is double-run.
+    #
+    # 0 (default) disables it completely: no duplicate work, no reputation
+    # records, and routing order is unchanged. Verification also switches itself
+    # off whenever fewer than two nodes are connected — there is nobody to
+    # compare against, and it must never block work on a single-node network.
+    "verify_rate": 0.0,
 }
 
 

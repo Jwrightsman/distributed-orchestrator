@@ -155,15 +155,23 @@ reply in under a minute without thinking. Edit tone freely; keep the honesty.
 
 ### "What stops a malicious node from returning garbage?"
 
-> Right now: not enough, and I'd rather say so than hand-wave it. Nodes authenticate with a shared
-> secret, so it's a trusted-network model — fine for you and three friends, not fine for open
-> internet volunteers. A node that fails repeatedly trips a circuit breaker and sits out; a node
-> that returns *plausible* garbage gets through to the reviewer, which is the last line of defence
-> and is itself a small model.
+> Layered, and I'll be specific about what each layer does and doesn't cover. Nodes authenticate
+> with a shared secret, so joining is gated. A node that fails outright trips a circuit breaker and
+> sits out. Neither of those catches the interesting case: a node that returns *plausible* garbage.
 >
-> The designed answer is redundant execution on a sample of subtasks plus per-node reputation
-> feeding routing weight. It's specced, not built. If you want to open the network to strangers
-> safely, that's the piece to build, and I'd take the help.
+> For that there's sampled redundant execution — set `verify_rate` and a fraction of builder
+> subtasks get sent to a second node as well, with the duplicate deliberately routed away from the
+> node being checked. The two answers are compared on substance rather than text (same artifact
+> kind, both parse, comparable size — two honest small models never agree token-for-token), and
+> both nodes' agreement records update. Neither is assumed correct on a single disagreement; over
+> samples the consistently-odd node separates itself, and its routing weight drops so it gets
+> offered work last. It never gets excluded on reputation alone — that stays the circuit breaker's
+> job — and the weights are visible on each node card in the dashboard.
+>
+> Two honest caveats. Every verified task costs a whole extra inference, which is why it's sampled
+> and why it ships **off by default** (`verify_rate: 0`). And it needs at least two nodes to mean
+> anything, so it self-disables on a one-node network. It raises the cost of being a bad node; it
+> is not a proof of correctness, and I'm not going to claim it is.
 
 ### "How good is the output really, on a 4B model?"
 

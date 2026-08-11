@@ -216,6 +216,126 @@ _Append one entry per session: date, items completed, what's next, warnings for 
 
 <!-- sessions append below -->
 
+### Session 4 — August 10, 2026 · v5 resolved · §1.3 showcase alternatives · verification wired
+
+Branch `claude/mycelium-v5-eval-7bc393`. Jett's machine, real Ollama, prompt set v3 throughout.
+
+#### v5 is deleted, and the comparison found something more useful than v5
+
+The v5 run finished at 09:19 (`evals/results/20260810_041455`, now committed — it lived only in
+an untracked worktree and would have been lost). **16/28 = 57% against v3's 17/28 = 61%.**
+
+The mechanism worked exactly as designed: mean subtasks 3.68 → 2.46, `no_files_extracted` 2 → 0,
+`parse_failed` 1 → 0. The planner did stop fragmenting single files. The score still did not move,
+so the rule in `prompts/v3.py` says delete, and it is deleted.
+
+**The previous session kept it as a "special-purpose set" on the strength of web_app 3/6 → 5/6.
+That was wrong, and here is the number that shows it.** Comparing per-prompt records across all
+four runs:
+
+| pair | up | down | net |
+| --- | --- | --- | --- |
+| v1 → v3 | 9 | 2 | **+7** |
+| v3 → v4 | 4 | 10 | **-6** |
+| v3 → v5 | 7 | 8 | **-1** |
+| v4 → v5 | 10 | 5 | +5 |
+
+**Between any two runs, 11–18 of the 28 prompts flip outcome.** Half the set is unstable run to
+run. v3 vs v5 is 8 discordant one way and 7 the other — McNemar p ≈ 1.0. The web_app "gain" is
+3 up and 1 down across six prompts, p ≈ 0.63: four coin flips landing 3–1.
+
+So the instrument resolves large effects (+7, -6) and nothing smaller. Written into `v3.py` as a
+rule for future sessions, along with the measurement nobody has done: **no prompt set has ever
+been run twice**, so prompt-change and run-to-run variance have never been separated. A repeat run
+of v3 against itself costs the same ~9 hours as any other run and would give a true noise floor.
+That is now the highest-value eval remaining, ahead of any new prompt set.
+
+#### §4 verification wired into the dispatcher (was: module with no callers)
+
+`verification.py` existed and was tested but nothing called it. Now connected, **off by default**
+(`verify_rate: 0.0`):
+
+- Sampled duplication — a fraction of builder subtasks also go to a second node. The duplicate
+  carries `exclude_node` so `/tasks/next` cannot hand it back to the node being checked.
+- `record_comparison` runs in the **background**. Waiting for the second opinion would charge every
+  sampled task the slower node's latency for no benefit to the deliverable, and a failing spot
+  check must never be able to fail the artifact it was checking.
+- `rank()` decides **first refusal, not eligibility**. Nodes pull work here rather than being
+  assigned it, so a worse-rated node defers ~1.5s while a better-rated one is also waiting, then
+  takes the work regardless. Poor record means offered last, never starved; exclusion stays the
+  circuit breaker's job.
+- `/nodes` merges each node's record into its payload; dashboard node cards show routing weight,
+  agreement and sample count — hidden until a node has actually been checked.
+
+Behaviour at `verify_rate=0` is unchanged by construction: the deferral only triggers when waiting
+nodes have *different* weights, which cannot happen before any sampling has occurred. 23 tests.
+
+`README.md` and `docs/community-pitch.md` now describe the mechanism instead of promising it,
+with both honest caveats: it costs a whole extra inference per sampled task, and it self-disables
+below two nodes.
+
+#### §1.3 the showcase, solved by changing the artifact rather than the prompt
+
+`docs/showcase-ceiling.md` closed with a guess: a less coupled visual deliverable would hit the
+same "it opens in your browser" moment with far less integration risk. Measured — same harness,
+same model, same prompt set (v3), same real-browser checks, round-robin so partial results stay
+comparable:
+
+| showcase | screen (n=4) | confirmation | avg run |
+| --- | --- | --- | --- |
+| `chart` — labelled bar chart | **4/4** | **10/10** | 22 min |
+| `clock` — animated analog clock | 3/4 | — | 28 min |
+| `particles` — drifting particle field | 3/4 | — | 20 min |
+| `snake` — playable game | (2/10, prior) | — | ~50 min |
+
+Every alternative beat the game at roughly half the runtime. **The chart is the winner and is safe
+to generate live on camera**, which upgrades the video's money shot from "here is what it produced"
+to "watch it produce one now". The game stays as `--demo-showcase` and as the honest hard case.
+
+**Both of my predictions were wrong, which is the argument for measuring rather than reasoning:**
+
+1. The particle field should have been unfailable — no correct answer to get wrong — and it threw
+   `Cannot access 'particles' before initialization` and drew nothing. No correctness criterion
+   does not protect you from the code not running.
+2. The clock's single failure is the camera-fatal kind: a neon rim, **no hands, no hour markers**,
+   and a digital readout still ticking underneath. It looked alive by two of three obvious signals.
+   Verified genuine by a **full-pixel** canvas diff (0 of 360,000 bytes changed over 2.5s) plus a
+   screenshot — the checker's subsampled hash flagged it, but a subsampled hash is exactly the kind
+   of evidence this project has been burned by, so it was settled by running the artifact.
+
+New: `showcase.py` holds the pitches and per-artifact checks, imported by both `cli.py` and the
+harness, so the thing measured cannot drift from the thing demoed. `--demo-showcase [id]` selects
+one; bare `--demo-showcase` is still Snake so every existing doc and the 2/10 number stay
+reproducible. `scripts/showcase_rescore.py` re-scores saved artifacts, the showcase equivalent of
+`evals/rescore.py`.
+
+#### A months-old production bug, found by verifying a UI change in a real browser
+
+`requirements.txt` pinned bare `uvicorn`, which ships **without a WebSocket implementation**.
+`/ws/events` returned **404 on every deployment** — verified on a fresh local server, on Jett's own
+server, and on the **live orchestrator**. The dashboard has been silently falling back to 3-second
+polling, and live token streaming has never worked outside a machine that happened to have
+`websockets` installed for another reason.
+
+Nothing caught it because **no test drives the WebSocket through a real server**, and `TestClient`
+implements WebSockets itself rather than going through uvicorn's protocol layer — so a TestClient
+test passes whether or not a deployed server can accept a connection. Same lesson as the
+restart-recovery and soak work: only running the real thing finds this class of bug.
+
+Fixed by declaring `websockets` explicitly (cheaper than `uvicorn[standard]`, which drags in five
+more packages). Verified after the fix: the upgrade request returns **101** and the dashboard
+console is clean. `tests/test_runtime_deps.py` pins it, since CI installs from requirements.txt.
+
+**Outstanding and needs Jett:** the live orchestrator still serves 404 until it is redeployed, and
+that needs the SSH key on his laptop. Merge to master first, then `git pull && docker compose up -d
+--build` on the VM.
+
+#### Org multi-tenancy: still not built, deliberately
+
+Agreed with Jett's call. It is enterprise plumbing for a system with zero external users, it is in
+neither MASTER_PLAN's roadmap nor its parking lot, and an org can already get a private pool by
+running its own instance. Revisit only if a real person asks.
+
 ### Session 3 — August 6–8, 2026 · §1.1 baseline + §1.2 first iteration (Jett's machine, real Ollama)
 
 **§1.1 baseline: v1 = 10/28 (36%).** `evals/results/20260806_195850`, qwen3.5:4b, ~52 min/prompt,

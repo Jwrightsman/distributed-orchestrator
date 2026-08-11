@@ -60,6 +60,57 @@ The lesson is about budget, not content: a 4B model has finite attention for
 instructions. Three new mandatory operations crowded out the reviewer's ability
 to do the merge it was already doing competently. **If you add a rule, cut one.**
 Measure a shorter reviewer prompt before a longer one.
+
+**A v5 was tried and deleted — and it taught us the eval's noise floor.**
+v5 kept v3 entirely and inverted one planner rule: instead of splitting a
+single coupled file "by concern" across blind agents, a tightly-coupled
+single-file deliverable went to ONE builder whole. Run:
+`evals/results/20260810_041455`.
+
+The mechanism provably worked. Mean subtasks fell 3.68 -> 2.46, and the two
+failure modes it targeted went to zero (`no_files_extracted` 2 -> 0,
+`parse_failed` 1 -> 0). The planner did stop fragmenting single files.
+
+It scored **16/28 (57%)** against v3's 17/28 (61%). It did not move the score,
+so by the rule above it goes.
+
+**The far more useful result is why "but web_app went 3/6 -> 5/6!" is not a
+reason to keep it.** Comparing the per-prompt records of all four runs:
+
+    v1 -> v3   9 up,  2 down   net +7
+    v3 -> v4   4 up, 10 down   net -6
+    v3 -> v5   7 up,  8 down   net -1
+    v4 -> v5  10 up,  5 down   net +5
+
+**Between any two runs, 11-18 of the 28 prompts flip outcome.** Half the set is
+not stable from run to run. Whatever else these prompt sets differ by, a 4B
+model re-rolls a large fraction of the outcomes every time.
+
+That churn sets what this instrument can and cannot resolve:
+
+- v3 vs v5 overall: 8 discordant one way, 7 the other. McNemar p ~ 1.0. The
+  -1 is indistinguishable from zero.
+- v3 vs v5 on web_app: 3 up, 1 down out of 6 prompts. McNemar p ~ 0.63. The
+  category "gain" that motivated keeping v5 is four coin flips landing 3-1.
+  It is exactly the kind of post-hoc subgroup that this project's own
+  discipline exists to reject.
+
+**Rules for anyone tuning prompts from here:**
+
+1. **A delta of 1-3 prompts means nothing.** Do not promote on it, and do not
+   keep a set "for special cases" on the strength of one category. That is the
+   middle ground the rule forbids, and it is how unmeasured cruft accumulates.
+2. **Only large deltas are real** at n=28 — v1 -> v3's +7 and v3 -> v4's -6 are
+   the only two movements this set has ever resolved.
+3. **Nobody has yet run the same prompt set twice.** The churn above is
+   prompt-change and run-to-run variance mixed together, and no measurement here
+   separates them. A repeat run of v3 against itself is the single most valuable
+   eval this project has not done: it would give a true noise floor, and it
+   costs the same ~9 hours as any other run.
+
+v5's planner text is preserved in git history (`git show 3c4a7b0`) if a future
+conditional "v6" wants it, but do not restore it on the strength of the web_app
+split — that number is noise until a bigger n says otherwise.
 """
 
 from prompts import PromptSet
