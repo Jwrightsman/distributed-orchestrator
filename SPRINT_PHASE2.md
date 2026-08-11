@@ -367,6 +367,60 @@ comparison. Whatever churn it shows is variance with no cause, and it becomes th
 future candidate must beat — instead of the current rule of thumb, "a delta under about six
 prompts means nothing".
 
+#### THE NOISE FLOOR, MEASURED — and it reframes every number this project has
+
+`evals/results/20260811_052310`: v3 run against **itself**. Same 28 prompts, same model, same
+machine, nothing changed at all.
+
+    run 1 (Aug 8):  17/28 (61%)      run 2 (Aug 11): 15/28 (54%)
+    8 improved, 10 regressed
+    CHURN: 18 of 28 prompts changed outcome, with NO cause
+
+**Two identical runs disagree on 64% of the set.** That is *higher* churn than any prompt-set
+comparison ever produced here (v3→v4 was 14, v3→v5 was 15) — so every difference this project has
+attributed to a prompt change is consistent with dice. Per-category is worse: `api` went 3/4 → 0/4
+and `vague` went 2/4 → 4/4 with nothing changed.
+
+Verified it is not an artifact two ways: `evals/rescore.py --dry-run` re-scores the run with
+current code and still gives 15/28, and the branch switching I was doing in this worktree during
+the run could not have affected an already-imported process (confirmed by that same rescore).
+
+**What changed as a result:**
+
+- **README now publishes ~57% (95% CI 44–69%)** instead of 61%, and shows *both* runs side by side
+  with the churn stated. The comfortable number was 61%; the honest one is a range.
+- `prompts/v3.py` carries the measured floor and four rules replacing the old guesswork ones.
+  Headline: **a net difference of ≤2 prompts is noise**, and only v1→v3 has ever cleared the bar.
+- `docs/community-pitch.md` leads with it rather than hiding it — "most of the prompt-tuning
+  results you read (including two of mine) are inside the noise" is a stronger post than a clean
+  61%, and it is true.
+- `evals/README.md` documents how to reproduce it.
+
+**The uncomfortable implication, stated plainly:** this eval cannot resolve anything smaller than
+about six prompts, so v4's deletion is safe (−6) but no future prompt tuning at n=28 will be
+believable. Growing the set or averaging repeated runs is the only way forward. Do not write a v6
+expecting to be able to see it.
+
+#### restart_recovery.py could never have run on Windows
+
+Re-ran it now that `websockets` is actually installed. Two findings:
+
+1. **`signal.SIGKILL` does not exist on Windows** — not "fails to deliver", the attribute is
+   absent, so the script died with `AttributeError` before reaching the hard-kill check. The
+   published **17/17 was only ever obtainable on Linux**, i.e. not on the machine this project is
+   developed on. Fixed with `Popen.kill()`, which is SIGKILL on POSIX and TerminateProcess on
+   Windows.
+2. **A leaked server from the crashed run silently corrupted the next one.** `start_server()`
+   checks health over HTTP, so *any* process on the port satisfies it — the hard kill then
+   "failed" because the thing still answering was never the thing being killed. It now refuses to
+   start when the port is occupied.
+
+Clean result on Windows: **13/17**, with all four failures being the documented "Ollama must be
+stopped" checks (this script wants pitches to fail fast). Every restart mechanic passes — server
+down, server back, node registry cleared, node re-registers, event history survives, and the
+**WebSocket client reconnects and resumes**, which is the first time that check has been meaningful
+on this machine.
+
 #### Org multi-tenancy: still not built, deliberately
 
 Agreed with Jett's call. It is enterprise plumbing for a system with zero external users, it is in

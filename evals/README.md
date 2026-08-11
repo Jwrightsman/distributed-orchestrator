@@ -127,13 +127,36 @@ Two consequences worth knowing before you argue about a result:
   test is one-sided. It barely cleared. Nothing subtler than that has ever been
   resolvable here.
 
-### Measuring the noise floor
+### The noise floor, measured
 
-Run the **same** prompt set twice and compare those two runs. `compare.py`
-detects the matching set and reports a noise floor instead of a comparison:
-whatever churn it shows is pure run-to-run variance, with no prompt difference
-to explain any of it. That number is the threshold every future comparison
-should be judged against, and it costs the same ~9 hours as any other run.
+v3 was run against **itself** on Aug 11 — same prompts, same model, same
+machine, nothing changed:
+
+```
+python evals/compare.py 20260808_050610 20260811_052310
+
+run 1: 17/28 (61%)     run 2: 15/28 (54%)
+8 improved, 10 regressed
+CHURN: 18 of 28 prompts changed outcome, with no cause
+```
+
+**Two identical runs disagree on 64% of the set.** That is higher churn than any
+prompt-set comparison this project has ever produced (v3→v4 was 14, v3→v5 was
+15), which means those differences are entirely consistent with dice.
+
+Consequences, and they are not subtle:
+
+- **A net difference of ≤2 prompts is noise.** Measured, not estimated.
+- **Per-category numbers are worse than useless.** `api` went 3/4 → 0/4 and
+  `vague` went 2/4 → 4/4 between two runs of the same prompts.
+- **The headline score is a range, not a number.** Pooling both runs gives
+  32/56 ≈ 57%, 95% CI 44–69%. That is what the README publishes.
+- **Only v1 → v3 has ever cleared the bar** (one-sided p=0.033), and it needed 9
+  of its 11 flips to go one way. It got exactly 9.
+
+To resolve anything smaller, the sample has to grow — more prompts, or the same
+prompts repeated and averaged. Another single 28-prompt run cannot answer a
+question this instrument has already been shown unable to see.
 
 ## Notes
 

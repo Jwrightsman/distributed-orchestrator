@@ -102,24 +102,41 @@ That churn sets what this instrument can and cannot resolve:
 summary files; it reproduces every historical decision here (v3 promote, v4 and
 v5 delete) and refuses to let a category result stand in for an overall one.
 
+**THE NOISE FLOOR IS MEASURED. Read this before trusting any number above.**
+
+On Aug 11 v3 was run against **itself** — same prompts, same model, same
+machine, nothing changed at all (`evals/results/20260811_052310`, and the
+original is `evals/results/20260808_050610`).
+
+    python evals/compare.py 20260808_050610 20260811_052310
+
+    run 1: 17/28 (61%)      run 2: 15/28 (54%)
+    8 improved, 10 regressed
+    CHURN: 18 of 28 prompts changed outcome, with NO cause
+
+**Two identical runs disagree on 64% of the set and differ by 2 prompts.** That
+is the error bar. Note it is *higher* churn than any prompt-set comparison ever
+produced (v3->v4 was 14, v3->v5 was 15) — meaning the differences previously
+attributed to prompt changes are entirely consistent with dice.
+
+Per-category is worse than useless: `api` went 3/4 -> 0/4 and `vague` went
+2/4 -> 4/4 between two runs of the same prompts.
+
 **Rules for anyone tuning prompts from here:**
 
-1. **A delta of 1-3 prompts means nothing.** Do not promote on it, and do not
-   keep a set "for special cases" on the strength of one category. That is the
-   middle ground the rule forbids, and it is how unmeasured cruft accumulates.
-2. **Only large deltas are real** at n=28 — v1 -> v3's +7 and v3 -> v4's -6 are
-   the only two movements this set has ever resolved.
-3. **The churn above mixes prompt-change and run-to-run variance**, and until
-   Aug 11 no measurement separated them. `evals/results/20260811_052310` is a
-   repeat of v3 against **itself** — same prompts, same model, nothing changed —
-   started to fix exactly that. When it finishes:
-
-       python evals/compare.py 20260808_050610 20260811_052310
-
-   `compare.py` will recognise the matching prompt set and report the result as
-   a **noise floor**. Whatever churn it shows is variance with no cause. Write
-   that number here and use it as the threshold for every future comparison:
-   a candidate has to beat the noise floor, not merely beat zero.
+1. **A net difference of 2 prompts or fewer is noise.** Measured, not estimated.
+   Do not promote on it, and do not keep a set "for special cases" on the
+   strength of one category — that is how v5 survived a session it should not
+   have.
+2. **A category is never evidence.** With 4-6 prompts a category cannot reach
+   p<0.05 in any split; `evals/compare.py`'s `min_detectable(4)` returns None.
+3. **Only v1 -> v3 has ever cleared the bar**, at one-sided p=0.033, and it
+   needed 9 of its 11 flips to go one way. It got exactly 9. Everything else
+   this project has measured is inside the noise.
+4. **If you want to resolve something smaller, the sample has to grow.** More
+   prompts, or the same prompts run several times and averaged. Another single
+   28-prompt run cannot answer a question this instrument has already shown it
+   cannot see.
 
 v5's planner text is preserved in git history (`git show 3c4a7b0`) if a future
 conditional "v6" wants it, but do not restore it on the strength of the web_app
