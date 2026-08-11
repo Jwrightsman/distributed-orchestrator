@@ -177,10 +177,23 @@ reply in under a minute without thinking. Edit tone freely; keep the honesty.
 
 > Being straight with you: good enough for a self-contained web app, a CLI tool, or a data script;
 > not good enough to architect anything large. Rather than guess, there's an eval harness in the
-> repo — ~30 varied pitches, scored on whether the extractor produced files, whether they parse,
+> repo — 28 varied pitches, scored on whether the extractor produced files, whether they parse,
 > whether they actually execute (HTML gets loaded in a headless browser and fails on JS errors),
-> plus a model judgment and wall-clock cost. The measured number goes in the README, including if
-> it's unflattering. A "PASS" rating that doesn't run counts as a failure by construction.
+> plus a model judgment and wall-clock cost. **61% of them come back runnable and on-spec** on
+> `qwen3.5:4b`, up from 36% before prompt tuning. A "PASS" rating that doesn't run counts as a
+> failure by construction.
+>
+> The more useful answer is that reliability depends enormously on how *coupled* the thing you
+> asked for is. Same model, same prompts, ten consecutive runs each, every result opened in a real
+> browser: a labelled bar chart came out correct **10 times out of 10**; a playable Snake game
+> came out playable **2 times out of 10**. The game's failures are the interesting kind — no
+> JavaScript errors, the page just never animates. One tightly-coupled file split across agents
+> that can't see each other is where this architecture is weakest, and I'd rather show you that
+> number than hide it.
+>
+> Raw logs for both are in the repo (`scripts/showcase_results/`), and so is the write-up of what
+> did and didn't fix it (`docs/showcase-ceiling.md`) — including a prompt change that looked like
+> it worked and turned out to be statistical noise.
 
 ### "Is there a token? Are you going to rug this?"
 

@@ -330,6 +330,43 @@ console is clean. `tests/test_runtime_deps.py` pins it, since CI installs from r
 that needs the SSH key on his laptop. Merge to master first, then `git pull && docker compose up -d
 --build` on the VM.
 
+#### The promote-or-delete rule is now a tool, and writing it found another error
+
+`evals/compare.py` (PR #28) turns this session's hand analysis into something the next session can
+run in one command. It reports churn, an exact McNemar test on the discordant pairs, the power of
+the comparison, and a verdict. Validated against all four real runs — it reproduces every
+historical decision: v3 **promote**, v4 **delete**, v5 **delete**.
+
+**Writing it surfaced a mistake in my own reasoning.** The first version used a two-sided test at
+α=0.05, which *rejects v1 → v3* — 9 up, 2 down, p = 0.065. That is the single best change ever made
+to this project, the one that took it from 36% to 61%, and it is the current default. A
+promote/delete decision is directional (a candidate is only promoted on evidence of improvement;
+a regression and a wash lead to the same action), so the correct test is one-sided: p = 0.033, and
+v3 clears — barely. Both are reported now.
+
+Two facts fall out that are worth more than the tool:
+
+- **v1 → v3 needed 9 of its 11 flips to go one way to be significant. It got exactly 9.** The
+  project's flagship result is at the edge of what n=28 can detect.
+- **A category can never be evidence on its own.** With four discordant pairs there is no split
+  that reaches p<0.05 — not even 4–0. `min_detectable(4) is None`, with a test pinning it. That is
+  precisely the reasoning that kept v5 alive for a session.
+
+Documented in `evals/README.md`'s tuning loop and in `prompts/v3.py` where the rule lives (PR #29).
+
+#### The noise-floor run is live
+
+`evals/results/20260811_052310` — **v3 against itself**, same prompts, same model, nothing changed.
+Started Aug 11 05:23 UTC, expect 9–20 hours, resumable. This is the measurement rule 3 in
+`prompts/v3.py` has been asking for since it was written. When it lands:
+
+    python evals/compare.py 20260808_050610 20260811_052310
+
+`compare.py` detects the matching prompt set and reports a **noise floor** rather than a
+comparison. Whatever churn it shows is variance with no cause, and it becomes the threshold every
+future candidate must beat — instead of the current rule of thumb, "a delta under about six
+prompts means nothing".
+
 #### Org multi-tenancy: still not built, deliberately
 
 Agreed with Jett's call. It is enterprise plumbing for a system with zero external users, it is in
