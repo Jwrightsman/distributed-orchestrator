@@ -142,10 +142,15 @@ This is grinding, iterative work and it is the best possible use of the remainin
 
 ## 3. LIVE NETWORK (Aug 12–16)
 
-- [ ] If the 24/7 orchestrator from SPRINT_AUG2026 §3.1 is not live: deploy it now (Oracle free tier
+- [x] If the 24/7 orchestrator from SPRINT_AUG2026 §3.1 is not live: deploy it now (Oracle free tier
       or Hetzner per docs/DEPLOY.md). Jett handles account creation only; you configure over SSH.
-- [ ] Confirm a real remote node connects over the internet — not just LAN — with `node_secret` set.
+      — **live on Hetzner (167.233.239.33), verified Aug 12**: health ok, dashboard and landing 200,
+      container logs clean, and `/ws/events` returning 101 after the redeploy described below.
+- [x] Confirm a real remote node connects over the internet — not just LAN — with `node_secret` set.
       This is the first true test of the distributed claim.
+      — **confirmed Aug 12.** Jett's laptop in Indiana is registered against the Hetzner orchestrator
+      in Germany over the public internet with `node_secret` enforced; `/nodes` shows it online with
+      `routing_weight 1.0`. The distributed claim is real, not LAN-only.
 - [x] Measure and record real WAN numbers: task round-trip latency, throughput vs local-only,
       failure rate over a multi-hour run. Put honest numbers in the README; the local-AI community
       respects measured results and punishes vague claims.
@@ -478,6 +483,28 @@ would have gone into debugging a perfectly good MCP server. Now requires `job_\d
 Second, smaller fix from the same run: `check()` printed its failure text next to **passing**
 checks ("no function or code fence found" beside a PASS), which is how a green run gets misread as
 a broken one. Details are now true in both branches.
+
+#### Fresh-clone install re-verified — and a contributor could not run the tests
+
+The sprint calls this "the single most launch-critical check", and it had not been redone since
+`websockets` was added to `requirements.txt`. Ran it properly: cloned from GitHub into a clean
+directory, built a fresh venv, installed exactly what the README says.
+
+**Two results, one good and one a real bug:**
+
+- **The WebSocket fix reaches strangers.** A fresh install serves `/ws/events` with **101**. That
+  was the whole point of the dependency change and it is now verified from the outside.
+- **`pytest` was not installable from anything in the repo.** `CONTRIBUTING.md` tells a contributor
+  to run `pytest -q` and `ruff check .`; both were hardcoded inside `.github/workflows/ci.yml` and
+  declared nowhere else. A fresh clone answers `pytest -q` with `ModuleNotFoundError`. This is the
+  first thing a would-be contributor does, and it failed — the same class of bug as the README's
+  missing `mcp` in the Aug 5 audit.
+
+Fixed with `requirements-dev.txt` (pytest, pytest-asyncio, ruff), CONTRIBUTING updated, **and CI
+now installs from that file rather than its own list** — which is the part that matters, because a
+hardcoded CI list is exactly how the two drifted apart in the first place. Two tests pin it.
+
+Verified on the same clean venv that had just failed: **326 tests and ruff both pass.**
 
 #### Org multi-tenancy: still not built, deliberately
 

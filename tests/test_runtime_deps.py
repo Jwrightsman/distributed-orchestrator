@@ -72,3 +72,32 @@ def test_python_version_floor_matches_ci():
     if requires is None:
         pytest.skip("pyproject.toml does not declare requires-python")
     assert "3.1" in requires
+
+
+# ── Dev dependencies a contributor is told to use ────────────────────
+
+def _dev_requirements() -> list[str]:
+    lines = (REPO / "requirements-dev.txt").read_text(encoding="utf-8").splitlines()
+    return [ln.strip() for ln in lines if ln.strip() and not ln.strip().startswith("#")]
+
+
+def test_test_and_lint_tools_are_declared():
+    """CONTRIBUTING says to run `pytest -q` and `ruff check .`.
+
+    These used to be hardcoded inside .github/workflows/ci.yml and declared
+    nowhere else, so a fresh clone following CONTRIBUTING answered `pytest -q`
+    with ModuleNotFoundError. Verified on a real clean venv, Aug 12 2026.
+    """
+    declared = " ".join(_dev_requirements()).lower()
+    for tool in ("pytest", "pytest-asyncio", "ruff"):
+        assert tool in declared, f"{tool} missing from requirements-dev.txt"
+
+
+def test_ci_installs_the_declared_dev_requirements():
+    """The guard that matters: if CI keeps its own hardcoded list, the two drift
+    again and only a stranger finds out."""
+    ci = (REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert "requirements-dev.txt" in ci, (
+        "CI must install from requirements-dev.txt, not a hardcoded package list, "
+        "or contributors get a different environment from CI"
+    )
