@@ -43,6 +43,7 @@ PRs #27–#34 all merged. No open PRs, no unmerged work.
 | WAN overhead | 216 ms RTT Indiana→Germany; network is ~2% of a pitch |
 | Restart recovery | 17/17 on Linux; 13/17 on Windows **with Ollama running** — the 4 failures are all Ollama-dependent, so 17/17 on Windows is expected but UNVERIFIED |
 | Soak | 60 pitches, +0.9 MB RSS, no leaks |
+| MCP flow (video Shot 2) | **10/10 end to end** with real inference — `scripts/mcp_e2e.py` |
 
 **Nothing is running.** The CPU is free.
 

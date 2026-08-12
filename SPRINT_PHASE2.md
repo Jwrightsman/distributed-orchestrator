@@ -17,7 +17,7 @@ _Check items off (`- [x]`), append to the Session Log, and commit this file as y
 
 The previous sprint completed faster than planned. Verify what is actually true before building on it.
 
-- [ ] Confirm each SPRINT_AUG2026.md item marked complete is genuinely working, not just present:
+- [x] Confirm each SPRINT_AUG2026.md item marked complete is genuinely working, not just present:
       run the test suite, `python status.py`, `python cli.py --demo`, `python cli.py --demo-showcase`,
       and the MCP flow end-to-end. Check CI is green on GitHub, not just configured.
       **PARTIALLY DONE (Aug 5).** Verified: 235 tests + ruff green on a fresh clone, `status.py`,
@@ -25,6 +25,11 @@ The previous sprint completed faster than planned. Verify what is actually true 
       green on master. **Not verifiable in that session** — no Ollama and no reachable model host:
       `--demo`, `--demo-showcase`, and the MCP flow with real inference. Those three need a session
       on Jett's machine and are the remaining audit work.
+      **CLOSED Aug 12.** All three now verified with real inference on Jett's machine:
+      `--demo` (8 runs, see below), `--demo-showcase` (all four showcases, 21 runs total), and
+      **the MCP flow end to end** via the new `scripts/mcp_e2e.py` — **10/10 checks**, a real
+      stdio subprocess talking to a real orchestrator, a task pitched, polled and the deliverable
+      fetched back, ~9 minutes on qwen3.5:4b.
 - [x] List anything half-done, stubbed, skipped, or silently failing. Fix or explicitly re-open it
       in SPRINT_AUG2026.md rather than leaving it checked. — one false checkbox found and re-opened
       (§2.5 `py`→`python`), four bugs found and fixed. See Session Log.
@@ -449,6 +454,30 @@ degraded the same way, the headline finding would have been an artifact.
 in 0 minutes — Ollama had died overnight, taking `node.py` with it. The 0-minute runtimes were the
 tell. Restarted Ollama, discarded the results, re-ran. A 0/7 that gets published is worse than no
 measurement.
+
+#### The video's differentiator shot had never been tested. Now it has.
+
+`docs/demo-script.md` calls Shot 2 (MCP) "the shot nobody else has". Nothing had ever run it end
+to end. `tests/test_mcp_server.py` passes, but against a **fake pipeline** and an **in-process
+ASGI client** — it proves the tool logic, not that the stdio protocol works or that a real
+deliverable comes back. So "the MCP flow works" was true in a narrower sense than it read, the
+same shape of claim as the restart-recovery 17/17.
+
+`scripts/mcp_e2e.py` does what Claude Desktop does: starts a real uvicorn orchestrator, launches
+`mcp_server.py` as a real subprocess over stdio, completes the handshake, lists tools, pitches a
+task, polls until the swarm finishes on real Ollama, and fetches the deliverable.
+
+**Result: 10/10 checks pass.** ~9 minutes for a small task. Shot 2 is real.
+
+**The first run failed, and the bug was in the checker.** Every status poll 404'd on
+`/jobs/job_id` — the literal parameter name. The server replies "Task accepted. job_id: job_123",
+and the parser took the first token starting with `job_`, which is the label. Found by reading the
+actual HTTP requests rather than trusting the checker's verdict; had I trusted it, the next hour
+would have gone into debugging a perfectly good MCP server. Now requires `job_\d+`.
+
+Second, smaller fix from the same run: `check()` printed its failure text next to **passing**
+checks ("no function or code fence found" beside a PASS), which is how a green run gets misread as
+a broken one. Details are now true in both branches.
 
 #### Org multi-tenancy: still not built, deliberately
 
