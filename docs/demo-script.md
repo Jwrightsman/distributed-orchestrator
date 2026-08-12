@@ -13,11 +13,24 @@ Do this in order. It removes every failure that has bitten a take so far.
 
 1. **Free the machine.** Close Chrome, Slack, anything heavy. The pipeline needs
    the whole CPU; competition makes runs stall.
-2. **Warm up Ollama** so the first take isn't a 60-second model load:
+2. **RESTART Ollama, then warm it up.** Not optional — this is measured. Ollama
+   gets progressively slower over a long session, and a call that takes 30
+   minutes hits the timeout and kills the take.
    ```bash
+   # Windows: quit Ollama from the system tray, then reopen it. Or:
+   taskkill /IM ollama.exe /F
+   start "" "%LOCALAPPDATA%\Programs\Ollama\ollama.exe" serve
    py status.py
    ```
    Confirm it prints `Active: qwen3.5:4b`.
+
+   > **The evidence:** across seven back-to-back `--demo` runs, duration climbed
+   > 26 → 33 → 40 → 36 → 47 → 67 → 83 minutes (rank correlation with run order
+   > **0.96**), and the last two failed on 30-minute model-call timeouts.
+   > Restarting Ollama and immediately re-running the *same task* took it from
+   > **83 minutes back to 34, clean** — no cooldown, so this is Ollama's session
+   > state, not an overheating laptop. If you have been generating all day,
+   > restart it before you roll.
 3. **Decide which showcase you are filming.** There are now two, and they are
    for different shots. Both numbers are real runs checked in a real browser
    (`docs/showcase-ceiling.md`):
@@ -45,8 +58,14 @@ Do this in order. It removes every failure that has bitten a take so far.
    starting it first means the camera never sees that. A verified-playable copy
    is already committed at `docs/demo-assets/snake-game/` if a take goes wrong.
 4. **Pre-run the memory demo** the same way (`py cli.py --demo`) if you want the
-   iteration story — it is ~100 minutes of runtime, so you are filming the
-   *replay* of its output, not the wait.
+   iteration story — it is ~35 minutes on a freshly-restarted Ollama, so you are
+   filming the *replay* of its output, not the wait.
+
+   Measured over 8 runs: **6/8 clean overall — but 6/6 on a fresh Ollama and
+   0/2 once it had been running 5+ hours.** Both failures were 30-minute
+   model-call timeouts, not bad output. Follow prep step 2 and this shot is
+   reliable. A failure is loud anyway: red panel, non-zero exit, obvious while
+   filming rather than discovered in the edit.
 5. **Start the server and check the dashboard looks right:**
    ```bash
    py -m uvicorn server:app --host 127.0.0.1 --port 8000
