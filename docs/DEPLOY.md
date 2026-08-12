@@ -188,6 +188,54 @@ Generate the two random strings with `openssl rand -hex 24` (run it twice).
 
 ---
 
+## Updating a running orchestrator
+
+Once it is deployed, this is how you ship a fix to it. **Run it and then verify** —
+a deploy that silently did nothing looks exactly like a deploy that worked.
+
+```bash
+ssh -i ~/.ssh/YOUR_KEY root@YOUR_SERVER_IP "cd /root/distributed-orchestrator && git pull && docker compose up -d --build"
+```
+
+Then confirm the new code is actually serving:
+
+```bash
+# 101 = the WebSocket (live dashboard updates) is working. 404 = old image still running.
+curl -s -o /dev/null -w "%{http_code}\n" \
+  -H "Connection: Upgrade" -H "Upgrade: websocket" \
+  -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
+  http://YOUR_SERVER_IP:8000/ws/events
+```
+
+`docker compose ps` is the other quick tell: if the orchestrator's uptime is not
+a few seconds, it was never recreated and your change is not live.
+
+### "not a git repository" — the tarball trap
+
+If the server was set up before this repo was public, its code was copied over as
+a tarball and has **no `.git` directory**. `git pull` then fails with
+`fatal: not a git repository`, and because the command is chained with `&&`,
+**the rebuild never runs and nothing tells you** — the deploy appears to succeed.
+This happened to the live orchestrator and went unnoticed for a day.
+
+Convert it to a real checkout once, and every future update is a normal
+`git pull`. Your runtime state lives in `data/`, which is gitignored, so this
+does not touch `config.json`, the ledger, the event database or past output:
+
+```bash
+cd /root/distributed-orchestrator
+cp -a data /root/data-backup-$(date +%F)          # belt and braces
+git init -b master
+git remote add origin https://github.com/Jwrightsman/distributed-orchestrator.git
+git fetch origin master
+git reset --hard origin/master                     # untracked data/ is untouched
+git branch --set-upstream-to=origin/master master
+docker compose up -d --build
+```
+
+Then run the `curl` check above. If anything went wrong, `data/` is in the backup
+and the code is all in git, so nothing is unrecoverable.
+
 ## The public pitch page (`/try`) — read before enabling
 
 `"public_pitch": true` in config.json turns on a page where **anyone on the
