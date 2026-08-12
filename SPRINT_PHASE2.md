@@ -421,6 +421,35 @@ down, server back, node registry cleared, node re-registers, event history survi
 **WebSocket client reconnects and resumes**, which is the first time that check has been meaningful
 on this machine.
 
+#### `--demo` re-measured, and the failures were the machine, not the demo
+
+The published 2/3 was n=3 — far too small to publish, especially after the noise-floor result.
+Re-ran it. **6/8 clean**, but the raw number is misleading:
+
+| run | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 (fresh Ollama) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| min | 26 | 33 | 40 | 36 | 47 | **67** | **83** | **34** |
+| | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ |
+
+Rank correlation between run order and duration: **0.96**. Both failures are 30-minute
+*model-call timeouts*, not bad output. Restarting Ollama and immediately re-running the same task
+took it from **83 minutes to 34, clean** — with no cooldown, so this is Ollama's session state
+degrading, not a hot laptop.
+
+So the honest statement is **6/6 on a fresh Ollama, 0/2 once it has been running 5+ hours**, and
+the fix is a prep step rather than a prompt change. `docs/demo-script.md` step 2 is now "RESTART
+Ollama", with the evidence inline.
+
+**Checked whether this contaminated the noise floor — it did not.** Both v3 runs show no duration
+trend (rho −0.03 and −0.23) and flat success across halves, so the 18/28 churn remains genuine
+model stochasticity rather than a slowdown artifact. Worth having checked: if the eval had
+degraded the same way, the headline finding would have been an artifact.
+
+**One measurement was thrown away entirely.** The first attempt returned 0/7 with every run failing
+in 0 minutes — Ollama had died overnight, taking `node.py` with it. The 0-minute runtimes were the
+tell. Restarted Ollama, discarded the results, re-ran. A 0/7 that gets published is worse than no
+measurement.
+
 #### Org multi-tenancy: still not built, deliberately
 
 Agreed with Jett's call. It is enterprise plumbing for a system with zero external users, it is in

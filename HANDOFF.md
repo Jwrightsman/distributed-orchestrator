@@ -39,14 +39,23 @@ PRs #27–#34 all merged. No open PRs, no unmerged work.
 | Eval noise floor | **18 of 28 prompts flip between two identical runs** |
 | `--demo-showcase chart` | **10/10** — safe to generate live on camera |
 | `--demo-showcase` (Snake) | **2/10** — pre-generate only |
-| `--demo` | 2/3 at n=3 — **re-measuring at n=10, see below** |
+| `--demo` | **6/6 on a fresh Ollama, 0/2 after 5+ h** (6/8 overall) — restart Ollama before filming |
 | WAN overhead | 216 ms RTT Indiana→Germany; network is ~2% of a pitch |
 | Restart recovery | 17/17 on Linux; 13/17 on Windows **with Ollama running** — the 4 failures are all Ollama-dependent, so 17/17 on Windows is expected but UNVERIFIED |
 | Soak | 60 pitches, +0.9 MB RSS, no leaks |
 
-**Running right now:** `scripts/demo_reliability.py --runs 7`, adding to the
-3 existing runs to get `--demo` to n=10. Expect ~5 hours. **Do not run tests,
-servers, browsers or inference until it finishes.** Check first.
+**Nothing is running.** The CPU is free.
+
+**Ollama degrades over a long session, and it is worth knowing before any long
+measurement.** Across 7 back-to-back `--demo` runs, duration climbed
+26→33→40→36→47→67→83 min (rho with run order **0.96**) and the last two died on
+30-minute model-call timeouts. Restarting Ollama and immediately re-running the
+same task: **83 min → 34 min, clean.** No cooldown, so it is Ollama's session
+state, not thermal. Restart Ollama before filming and between long batches.
+
+Checked whether this contaminated the noise-floor eval: **it did not.** Both v3
+runs show no duration trend (rho −0.03 and −0.23) and flat per-half success, so
+the 18/28 churn is genuine model stochasticity.
 
 ## The finding that reframes everything: the eval is mostly noise
 
@@ -131,13 +140,11 @@ and routing weight on the dashboard node cards. Verified in a real browser.
 
 ## What to do next, best first
 
-1. **Score the `--demo` run** when it finishes: `scripts/demo_results/` has the
-   newest log. If it lands below ~8/10, say so plainly in `docs/demo-script.md`
-   — that shot is Shot 4 (memory) and it is not load-bearing for the video.
-2. **Rejoin Jett's node** (command above) once no measurement is running.
-3. **Grow the eval prompt set** if anyone wants to tune prompts again. Nothing
+1. **Rejoin Jett's node** (command above). Nothing is measuring now, so this is
+   safe and his live network currently shows 0 nodes.
+2. **Grow the eval prompt set** if anyone wants to tune prompts again. Nothing
    else makes prompt work measurable.
-4. Optional: `clock` and `particles` are only at n=4. The clock is the prettier
+3. Optional: `clock` and `particles` are only at n=4. The clock is the prettier
    artifact if the chart ever feels too static; ~6 more runs would settle it.
 
 ## Do NOT build
