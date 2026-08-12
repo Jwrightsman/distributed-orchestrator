@@ -41,7 +41,7 @@ PRs #27–#34 all merged. No open PRs, no unmerged work.
 | `--demo-showcase` (Snake) | **2/10** — pre-generate only |
 | `--demo` | 2/3 at n=3 — **re-measuring at n=10, see below** |
 | WAN overhead | 216 ms RTT Indiana→Germany; network is ~2% of a pitch |
-| Restart recovery | 13/17 on Windows (4 failures need Ollama stopped); 17/17 on Linux |
+| Restart recovery | 17/17 on Linux; 13/17 on Windows **with Ollama running** — the 4 failures are all Ollama-dependent, so 17/17 on Windows is expected but UNVERIFIED |
 | Soak | 60 pitches, +0.9 MB RSS, no leaks |
 
 **Running right now:** `scripts/demo_reliability.py --runs 7`, adding to the
