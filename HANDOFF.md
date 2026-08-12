@@ -55,24 +55,38 @@ the threshold for every future promote-or-delete decision.
 | Restart recovery | 17/17 incl. SIGKILL |
 | Soak | 60 pitches, +0.9 MB RSS, no leaks |
 
-## ⚠️ One thing needs Jett, and it affects the video
+## The live orchestrator: FIXED and verified (Aug 12)
 
-**The live orchestrator is running an image with a broken WebSocket.** Found
-this session: `requirements.txt` pinned bare `uvicorn`, which ships with **no
-WebSocket implementation**, so `/ws/events` returns 404 on every deployment —
-verified 404 on the live box, on Jett's local server, and on a fresh one. The
-dashboard silently falls back to 3-second polling and **live token streaming has
-never worked**. That is the dashboard's best moment on camera.
+`/ws/events` returned **404 on every deployment** for months — `requirements.txt`
+pinned bare `uvicorn`, which ships with no WebSocket implementation, so the
+dashboard silently fell back to 3-second polling and live token streaming never
+worked at all. Fixed in the repo, and now **deployed and verified on the live
+box**: `/ws/events` returns **101**, `/nodes` carries the new `verify_rate`
+field, dashboard and landing page both 200, container logs clean.
 
-Fixed in the repo (`websockets` added to requirements.txt, verified: the upgrade
-returns 101 and the dashboard console is clean). **The live server still needs a
-redeploy to pick it up** — that needs the SSH key, which is only on Jett's
-laptop. Until then the live dashboard has no live stream.
+**Why the first deploy attempt silently did nothing, because it will happen
+again to someone:** the server was set up before the repo went public, so its
+code arrived as a tarball with **no `.git` directory**. `git pull` failed with
+`fatal: not a git repository`, the `&&` chain stopped before the rebuild, and
+the deploy looked like it had worked. The container's uptime (6 days) was the
+tell.
 
-Why nothing caught it for months: no test drives the WebSocket through a real
-server, and `TestClient` implements WebSockets itself instead of going through
-uvicorn's protocol layer, so a TestClient test passes either way.
-`tests/test_runtime_deps.py` now pins the dependency.
+It is now a proper git checkout tracking `origin/master`, so the ordinary
+one-liner works from here on:
+
+    ssh -i ~/.ssh/swarm_orchestrator root@167.233.239.33       "cd /root/distributed-orchestrator && git pull && docker compose up -d --build"
+
+**Always verify after deploying** — a deploy that did nothing looks identical to
+one that worked. `docs/DEPLOY.md` now has an "Updating a running orchestrator"
+section with the exact WebSocket check (101 good, 404 stale) and the tarball
+recovery procedure. A backup of the server's `data/` is at
+`/root/data-backup-20260812_080526`.
+
+**Jett's laptop node was stopped** (Ollama died overnight, taking `node.py` with
+it; Ollama has been restarted). It was deliberately left unjoined while a
+measurement run was using the CPU. To rejoin:
+
+    py node.py --server http://167.233.239.33:8000 --secret <node_secret>
 
 ## The most important finding: what the eval can and cannot measure
 
