@@ -1,0 +1,18 @@
+# Development dependencies — what you need to run the tests and the linter.
+#
+#   pip install -r requirements.txt -r requirements-dev.txt
+#
+# This file exists because these were previously hardcoded inside
+# .github/workflows/ci.yml and nowhere else, so CONTRIBUTING.md told people to
+# run `pytest -q` and a fresh clone answered with ModuleNotFoundError. CI now
+# installs from this file, which means it is continuously verified rather than
+# quietly drifting from what contributors actually get.
+
+pytest>=8.0.0
+pytest-asyncio>=0.24.0
+ruff>=0.6.0
+
+# Optional, for the eval harness only. Without it, HTML deliverables are checked
+# structurally instead of being loaded in a real browser, and the harness says
+# which check it ran. See evals/README.md.
+#   pip install playwright && playwright install chromium

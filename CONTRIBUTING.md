@@ -22,7 +22,7 @@ for the four things needed to diagnose it.
 ```bash
 git clone https://github.com/Jwrightsman/distributed-orchestrator.git
 cd distributed-orchestrator
-pip install -r requirements.txt
+pip install -r requirements.txt -r requirements-dev.txt
 ollama pull qwen3.5:4b       # or anything on the auto-detect ladder
 python status.py             # confirms Ollama and your model
 ```
@@ -35,6 +35,9 @@ Python 3.12+ (CI runs 3.14). No virtualenv is enforced; use one if you like.
 pytest -q        # 300+ tests, no Ollama needed — this is the fast signal
 ruff check .     # CI fails on this
 ```
+
+Both come from `requirements-dev.txt`. If `pytest` is not found, you installed
+only `requirements.txt` — see Setup above.
 
 Both must pass. CI runs them on **Python 3.14**, and that has bitten us: code
 that passes on 3.11 can fail on 3.14, `asyncio` especially. If you can, check
