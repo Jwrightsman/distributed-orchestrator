@@ -248,7 +248,9 @@ This is a **Phase 0 trusted-network prototype**. Here's exactly what's durable a
 
 **Trust model:** Worker nodes authenticate with a shared secret (`node_secret`), task submission can be gated with `pitch_key`, pitch endpoints are rate-limited (`pitch_rate_max`, default 5/min/IP), and `output/` disk usage is capped (`output_max_mb`). All auth is off by default for trusted-network mode; **set both keys before any internet exposure** — [docs/DEPLOY.md](docs/DEPLOY.md) walks through it. No HTTPS out of the box: treat pitched tasks and outputs as public on a public deployment.
 
-**Verified, not assumed.** `scripts/restart_recovery.py` kills a running server with `SIGKILL` mid-job and checks what comes back: jobs and event history survive, nodes re-register, the dashboard recovers, and WebSocket clients reconnect (17/17 checks). `scripts/soak_test.py` runs 60 consecutive pitches through one server session: **+0.9 MB RSS growth, no orphaned tasks, no latency drift**. Both run without Ollama, so you can check your own deployment in under a minute.
+**Verified, not assumed.** `scripts/restart_recovery.py` hard-kills a running server mid-job and checks what comes back: jobs and event history survive, nodes re-register, the dashboard recovers, and WebSocket clients reconnect — **17/17 checks**. `scripts/soak_test.py` runs 60 consecutive pitches through one server session: **+0.9 MB RSS growth, no orphaned tasks, no latency drift**. Both run in under a minute.
+
+> Run the restart check with **Ollama stopped**. It wants pitches to fail fast so a job reaches a terminal state in seconds; with Ollama up they start real multi-minute inference instead and four unrelated checks fail. The script says so on startup.
 
 ## Measured results
 
