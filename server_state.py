@@ -79,6 +79,54 @@ _WAITING_FRESH = 3.0
 _ROUTING_DEFER = 1.5
 
 
+def touch_node(node_id: str) -> None:
+    """Mark a node alive, re-admitting it if the janitor already evicted it.
+
+    Closing a laptop lid is the most likely thing that happens to a volunteer
+    node, and it used to strand one permanently:
+
+      1. the lid closes, nothing reaches the server for `_NODE_TIMEOUT`, and the
+         janitor correctly evicts the node and reclaims its work;
+      2. the lid opens and the long poll simply *resumes* — the node never sees
+         a connection error, so it never re-registers;
+      3. the endpoint only refreshed `last_seen` `if node_id in nodes`, so the
+         node stayed absent from the registry forever.
+
+    An absent node is not merely cosmetic: both pitch paths only hand work to
+    nodes when the registry is non-empty, so the node polls indefinitely and
+    receives nothing while the dashboard shows an empty swarm. On camera that is
+    a demo that looks broken while it is in fact working.
+
+    Re-admitting server-side rather than asking the node to notice means this is
+    fixed for nodes already deployed, which cannot be updated remotely. The
+    placeholder record is replaced with full hardware details the next time the
+    node registers normally.
+    """
+    node = nodes.get(node_id)
+    if node is not None:
+        node["last_seen"] = time.time()
+        return
+    now = time.time()
+    nodes[node_id] = {
+        "node_id": node_id,
+        "model": "unknown",          # replaced on the next real registration
+        "platform": "unknown",
+        "machine": "unknown",
+        "hostname": node_id,
+        "cpu_count": None,
+        "ram_gb": None,
+        "gpu": None,
+        "capabilities": [],
+        "registered_at": datetime.now(timezone.utc).isoformat(),
+        "last_seen": now,
+        "tasks_completed": 0,
+        "credits_earned": 0,
+        "current_task": None,
+        "readmitted": True,
+    }
+    _emit("node_readmitted", {"node_id": node_id})
+
+
 def _refresh_verify_rate() -> float:
     """Sync the pool's sample rate with config. Returns the active rate."""
     try:

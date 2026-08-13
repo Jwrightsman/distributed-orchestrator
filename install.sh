@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Distributed AI Orchestrator — one-line node join (Mac / Linux)
+# Mycelium — one-line node join (Mac / Linux)
 #
 #   curl -fsSL https://raw.githubusercontent.com/Jwrightsman/distributed-orchestrator/master/install.sh | bash -s -- http://ORCHESTRATOR_IP:8000
 #

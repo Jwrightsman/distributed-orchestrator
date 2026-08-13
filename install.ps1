@@ -1,4 +1,4 @@
-# Distributed AI Orchestrator — one-line node join (Windows)
+# Mycelium — one-line node join (Windows)
 #
 #   $env:SWARM_SERVER="http://ORCHESTRATOR_IP:8000"; irm https://raw.githubusercontent.com/Jwrightsman/distributed-orchestrator/master/install.ps1 | iex
 #

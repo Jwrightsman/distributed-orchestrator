@@ -282,7 +282,7 @@ def show_standings():
 async def interactive():
     """Interactive mode — keep pitching tasks."""
     console.print(Panel(
-        "[bold]Distributed AI Orchestrator[/bold]\n"
+        "[bold]Mycelium[/bold]\n"
         "[dim]history · standings · projects · quit — or just type a task[/dim]",
         border_style="cyan",
     ))
@@ -391,7 +391,7 @@ async def run_demo(fast: bool = False):
         f"[bold]Pitch 2:[/bold] {PITCH_2}\n\n"
         "[dim]The second pitch loads full context from the first run — the AI knows\n"
         "exactly what was already built and picks up without repeating work.[/dim]",
-        title="[bold]Distributed AI Orchestrator — Demo[/bold]",
+        title="[bold]Mycelium — Demo[/bold]",
         border_style="cyan",
     ))
     console.print()
@@ -503,7 +503,7 @@ async def run_demo_live():
         f"{node_status}\n\n"
         "[dim]Builder tasks will distribute across all connected nodes.\n"
         "Each node earns credits. Watch the Guild Standings at the end.[/dim]",
-        title="[bold]Distributed AI Orchestrator — Live Demo[/bold]",
+        title="[bold]Mycelium — Live Demo[/bold]",
         border_style="cyan",
     ))
     console.print()

@@ -1,8 +1,14 @@
-# Distributed AI Orchestrator
+# Mycelium
+
+**An open orchestration layer for multi-agent task execution across contributor hardware.**
 
 [![CI](https://github.com/Jwrightsman/distributed-orchestrator/actions/workflows/ci.yml/badge.svg)](https://github.com/Jwrightsman/distributed-orchestrator/actions/workflows/ci.yml)
 
-An open orchestration layer for multi-agent task execution across contributor hardware. A planner agent decomposes work into subtasks, builder agents execute them in parallel across connected machines, and a reviewer agent assembles and validates the final output — all running on local models via Ollama, no cloud APIs required. If this is useful, drop a star
+A planner agent decomposes work into subtasks, builder agents execute them in parallel across connected machines, and a reviewer agent assembles and validates the final output — all running on local models via Ollama, no cloud APIs required.
+
+> The repository is still named `distributed-orchestrator`; **Mycelium** is the project name. The slug is deliberately left alone so existing clone URLs and links keep working.
+
+If this is useful, drop a star.
 
 > **Status (August 2026):** Phase 0 works end-to-end — distributed execution, persistent project memory, auto-revision, live dashboard, credit ledger. Now hardened for WAN use (`node_secret` + `pitch_key` auth, rate limits, disk caps) with a [beginner-friendly deploy guide](docs/DEPLOY.md). Looking for the first external nodes — see below.
 
@@ -18,7 +24,9 @@ The network gets real when strangers connect hardware. Joining takes one command
 python join.py http://ORCHESTRATOR_ADDRESS:8000
 ```
 
-A public orchestrator address will be posted here when the first community round opens. Until then: run your own on a LAN in minutes, or invite friends over [Tailscale](docs/DEPLOY.md) — and open an issue saying hi if you want in on the first tester wave.
+**There is a public orchestrator running 24/7 right now**, and during the tester phase joining it is by invite — the node endpoints require a shared key, so an address on its own would only get you a `401`. If you want a machine on it, **[open an issue](https://github.com/Jwrightsman/distributed-orchestrator/issues/new/choose) saying hi** and you'll get the address and join command back. Testers are being added deliberately, a few at a time, so that problems surface at a scale where they can be fixed.
+
+You don't have to wait for that to try it: `python cli.py "your task"` runs the whole pipeline on one machine, and [docs/DEPLOY.md](docs/DEPLOY.md) has a LAN setup that takes minutes, plus a [Tailscale](docs/DEPLOY.md) path for inviting friends to your own instance.
 
 ## How it works
 

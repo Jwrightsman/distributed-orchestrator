@@ -33,7 +33,7 @@ ORCHESTRATOR_URL = os.environ.get("ORCHESTRATOR_URL", "http://localhost:8000").r
 PITCH_KEY = os.environ.get("PITCH_KEY", "")
 
 server = MCPServer(
-    name="distributed-orchestrator",
+    name="mycelium",
     instructions=(
         "Delegate coding/writing/analysis tasks to a swarm of AI agents running "
         "on volunteer hardware. pitch_task returns a job_id immediately; the swarm "
