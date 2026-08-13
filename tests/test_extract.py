@@ -52,3 +52,68 @@ def test_extract_files_unknown_lang_gets_txt(tmp_path):
 def test_extract_files_no_blocks_returns_empty(tmp_path):
     assert extract_code_files("no code here at all", tmp_path) == []
     assert not (tmp_path / "code").exists()
+
+
+# ── Unfenced Python deliverables ─────────────────────────────────────
+#
+# Found by scripts/live_smoke.py on Aug 13: a real pitch to the live
+# orchestrator came back as good Python opening with `from collections import
+# namedtuple` — no fence, no shebang — and the extractor produced ZERO files.
+# The deliverable was fine; nothing runnable reached the user. The raw-document
+# fallback covered HTML, XML and shebang scripts but not a plain module.
+
+def test_unfenced_python_module_is_extracted():
+    text = (
+        "from collections import namedtuple\n\n"
+        "def celsius_to_fahrenheit(c: float) -> float:\n"
+        "    return round((c * 9 / 5) + 32, 2)\n\n"
+        "assert celsius_to_fahrenheit(0) == 32.0\n"
+    )
+    blocks = extract_code_blocks(text)
+    assert len(blocks) == 1
+    assert blocks[0]["lang"] == "python"
+
+
+def test_unfenced_python_starting_with_def_is_extracted():
+    text = "def add(a, b):\n    return a + b\n\nassert add(2, 3) == 5\n"
+    blocks = extract_code_blocks(text)
+    assert len(blocks) == 1 and blocks[0]["lang"] == "python"
+
+
+def test_prose_is_never_treated_as_python():
+    """The guard that keeps a refusal from becoming a .py file."""
+    for prose in (
+        "I could not complete this task. Please provide more detail about it.",
+        "Sorry, the request was ambiguous so nothing was produced this time.",
+        "Here is a summary of what a converter would need to do, in words only.",
+    ):
+        assert extract_code_blocks(prose) == []
+
+
+def test_bare_valid_expression_is_not_a_python_file():
+    """`Hello` parses as Python. Parsing alone is not enough evidence."""
+    assert extract_code_blocks("Hello" + " world" * 20) == []
+
+
+def test_syntactically_broken_python_is_not_extracted():
+    text = "import os\n\ndef broken(:\n    return 1\n"
+    assert extract_code_blocks(text) == []
+
+
+def test_fenced_blocks_still_win_over_the_raw_fallback():
+    text = (
+        "Some explanation first.\n\n"
+        "```python\n"
+        "import os\n\n\ndef listing():\n    return os.listdir('.')\n"
+        "```\n"
+    )
+    blocks = extract_code_blocks(text)
+    assert len(blocks) == 1
+    assert "listing" in blocks[0]["code"]
+    assert "explanation" not in blocks[0]["code"]
+
+
+def test_unfenced_html_still_extracted():
+    html = "<!doctype html>\n<html><body><h1>hi</h1></body></html>"
+    blocks = extract_code_blocks(html)
+    assert len(blocks) == 1 and blocks[0]["lang"] == "html"

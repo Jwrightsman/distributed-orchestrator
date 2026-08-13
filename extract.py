@@ -54,6 +54,30 @@ _RAW_DOCUMENT_SIGNATURES = (
 )
 
 
+def _looks_like_python_module(stripped: str) -> bool:
+    """Is this whole response a Python file rather than prose?
+
+    Found by the live-network smoke test (scripts/live_smoke.py): a pitch came
+    back as perfectly good Python opening with `from collections import
+    namedtuple` — no fence, no shebang — and the extractor produced **zero
+    files**. The deliverable was fine; nothing runnable reached the user.
+
+    Two conditions, and both matter:
+
+    - it must actually parse as Python, which rules out prose; and
+    - it must contain a real construct (import/def/class), because bare prose
+      like `Hello` is *also* a syntactically valid Python expression, so parsing
+      alone would happily turn an apology into a .py file.
+    """
+    if not any(marker in stripped for marker in ("import ", "def ", "class ")):
+        return False
+    try:
+        ast.parse(stripped)
+    except (SyntaxError, ValueError, MemoryError, RecursionError):
+        return False
+    return True
+
+
 def _detect_raw_document(text: str) -> dict | None:
     """Return a block for text that is itself a code document, else None."""
     stripped = text.strip()
@@ -61,6 +85,8 @@ def _detect_raw_document(text: str) -> dict | None:
     for signature, lang in _RAW_DOCUMENT_SIGNATURES:
         if lowered.startswith(signature):
             return {"lang": lang, "code": stripped}
+    if _looks_like_python_module(stripped):
+        return {"lang": "python", "code": stripped}
     return None
 
 
