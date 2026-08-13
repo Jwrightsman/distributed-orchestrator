@@ -4,24 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Mycelium — Distributed Orchestrator</title>
+<!-- THEME -->
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
-  :root {
-    --bg:            #0B0C0E;
-    --surface:       #131316;
-    --border:        rgba(255,255,255,0.09);
-    --text:          #EDEDEF;
-    --text-dim:      #A1A1AA;
-    --text-muted:    #8B8B96;
-    --accent:        #3FB950;
-    --accent-dim:    #2EA043;
-    --accent-wash:   rgba(63,185,80,0.10);
-    --warn:          #D29922;
-    --danger:        #F85149;
-    --mono: ui-monospace, 'SF Mono', 'Cascadia Code', Consolas, monospace;
-    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, system-ui, sans-serif;
-  }
+  /* Design tokens come from templates/_theme.html — see dashboard.py */
 
   body {
     background: var(--bg);
@@ -106,15 +93,15 @@
   .btn-secondary {
     background: none;
     color: var(--accent);
-    border: 1.5px solid rgba(63,185,80,0.24);
+    border: 1.5px solid var(--accent-border);
   }
-  .btn-secondary:hover { background: rgba(63,185,80,0.05); border-color: var(--accent); }
+  .btn-secondary:hover { background: var(--accent-wash); border-color: var(--accent); }
   .join-line {
     margin-top: 40px;
     font-family: var(--mono);
     font-size: 14px;
-    background: rgba(255,255,255,0.04);
-    border: 1px solid rgba(255,255,255,0.09);
+    background: var(--border-subtle);
+    border: 1px solid var(--border);
     border-radius: 10px;
     padding: 14px 22px;
     color: var(--text-dim);
@@ -122,7 +109,7 @@
     transition: border-color 0.15s;
     user-select: all;
   }
-  .join-line:hover { border-color: rgba(63,185,80,0.30); }
+  .join-line:hover { border-color: var(--accent-line); }
   .join-line .prompt { color: var(--accent); }
   .join-hint { margin-top: 10px; font-size: 12px; color: var(--text-muted); }
   .footer {

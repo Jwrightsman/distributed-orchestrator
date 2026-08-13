@@ -1,4 +1,4 @@
-# Distributed AI Orchestrator
+# Mycelium (repo: distributed-orchestrator)
 
 ## What this is
 A collectively-owned AI system powered by consumer hardware. Phase 0 demo: local planner/builder/reviewer pipeline hitting Ollama.

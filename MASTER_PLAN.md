@@ -1,4 +1,4 @@
-# MASTER PLAN — Distributed AI Orchestrator
+# MASTER PLAN — Mycelium
 
 _Last updated: August 1, 2026._
 _This file is the single source of truth for project direction. Any AI assistant working in this repo (Claude Code, etc.) must read this fully before making changes. It overrides older priority lists in CLAUDE.md._

@@ -186,7 +186,7 @@ async def fork_template(timestamp: str):
 
     readme_content = (
         "# Fork Template\n\n"
-        "This ZIP was exported from the Distributed AI Orchestrator.\n\n"
+        "This ZIP was exported from Mycelium.\n\n"
         "## How to use\n\n"
         "1. **Install the orchestrator** — follow the README at https://github.com/yourusername/distributed-orchestrator\n"
         "2. **Import this fork** — run:\n"
@@ -288,7 +288,7 @@ async def share_page(timestamp: str, request: Request):
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{esc(task)} — Distributed AI Orchestrator</title>
+<title>{esc(task)} — Mycelium</title>
 <meta property="og:title" content="{og_title}">
 <meta property="og:description" content="{og_desc}">
 <meta property="og:type" content="website">
@@ -443,7 +443,7 @@ async def share_page(timestamp: str, request: Request):
   </div>
 </div>
 <div class="footer">
-  Built with <a href="https://github.com/yourusername/distributed-orchestrator" target="_blank">Distributed AI Orchestrator</a>
+  Built with <a href="https://github.com/Jwrightsman/distributed-orchestrator" target="_blank">Mycelium</a>
   &nbsp;·&nbsp; Run your own on any hardware
 </div>
 </body>

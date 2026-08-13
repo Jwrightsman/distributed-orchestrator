@@ -113,8 +113,7 @@ async def next_task(node_id: str, request: Request):
     Returns 429 if the node is circuit-breaker blacklisted.
     """
     _check_node_auth(request)
-    if node_id in nodes:
-        nodes[node_id]["last_seen"] = time.time()
+    state.touch_node(node_id)
 
     # Circuit breaker — check if this node is blacklisted for repeated failures
     if node_id in node_blacklist:
@@ -214,11 +213,13 @@ async def submit_result(task_id: str, result: TaskResult, request: Request):
         node_failure_count[result.node_id] = 0  # reset on success
 
     credits_earned = 0
-    if result.node_id in nodes:
-        if was_inflight:
-            nodes[result.node_id]["tasks_completed"] += 1
-        nodes[result.node_id]["last_seen"] = time.time()
-        nodes[result.node_id]["current_task"] = None
+    # Re-admit first, then update. A node whose lid was closed long enough to be
+    # evicted still deserves credit for work it actually finished, and gating
+    # this on prior membership meant a returning node stayed invisible.
+    state.touch_node(result.node_id)
+    if was_inflight:
+        nodes[result.node_id]["tasks_completed"] += 1
+    nodes[result.node_id]["current_task"] = None
     if success and was_inflight:
         credits_earned = 5
         log_contribution(result.node_id, "compute", credits=credits_earned, task=task_id)

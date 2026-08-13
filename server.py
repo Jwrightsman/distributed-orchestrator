@@ -65,7 +65,7 @@ async def _lifespan(app: FastAPI):
         cleanup_task.cancel()
 
 
-app = FastAPI(title="Distributed AI Orchestrator", version="0.3.0", lifespan=_lifespan)
+app = FastAPI(title="Mycelium", version="0.3.0", lifespan=_lifespan)
 
 
 # ── Global exception handler — always return JSON, never leak stack traces ──

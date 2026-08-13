@@ -1,0 +1,183 @@
+<!-- Shared theme layer — injected into every page by dashboard.py.
+     Kept in one file because three copies of a palette drift, and a landing
+     page stuck in dark mode beside a themed dashboard is worse than no theming
+     at all. Edit here; every page follows. -->
+<script>
+  // Runs before paint: a theme applied after first render flashes the wrong
+  // colours, which is the tell of a bolted-on dark mode.
+  (function () {
+    try {
+      var saved = localStorage.getItem('mycelium-theme');
+      var system = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', saved || system);
+    } catch (e) {
+      document.documentElement.setAttribute('data-theme', 'dark');
+    }
+  })();
+</script>
+<style>
+  /* ── Design tokens ───────────────────────────────────────────────────
+     Dark is the default because this is a monitoring surface people leave
+     open; light ships alongside it rather than as an afterthought, which is
+     the one thing the previous version could not do — every colour below used
+     to be hardcoded at its point of use, so a light theme was impossible
+     without touching a hundred call sites.
+
+     Colour is reserved for state that means something. Structure comes from
+     typography and spacing, because a developer audience reads saturated
+     decoration as a toy. */
+  :root {
+    color-scheme: dark;
+
+    --bg:            #0B0C0E;
+    --bg-elevated:   #0F1013;
+    --surface:       #131316;
+    --surface-hover: #17171B;
+    --surface-sunken: #0A0A0C;
+
+    --border-subtle: rgba(255,255,255,0.06);
+    --border:        rgba(255,255,255,0.09);
+    --border-strong: rgba(255,255,255,0.16);
+
+    --text:          #EDEDEF;
+    --text-dim:      #A1A1AA;
+    --text-muted:    #8B8B96;
+
+    --accent:        #3FB950;
+    --accent-dim:    #2EA043;
+    --accent-text:   #3FB950;
+    --accent-wash:      rgba(63,185,80,0.06);
+    --accent-wash-mid:  rgba(63,185,80,0.13);
+    --accent-border:    rgba(63,185,80,0.24);
+    --accent-line:      rgba(63,185,80,0.35);
+    --accent-glow:      rgba(63,185,80,0.48);
+
+    --warn:          #D29922;
+    --danger:        #F85149;
+    --danger-wash:   rgba(248,81,73,0.10);
+
+    --highlight:      #E8FF47;
+    --highlight-line: rgba(232,255,71,0.5);
+    --highlight-wash: rgba(232,255,71,0.2);
+
+    --overlay:       rgba(0,0,0,0.85);
+    --scrim:         rgba(8,9,12,0.95);
+    --shadow:        rgba(0,0,0,0.30);
+    --danger-line:   rgba(248,81,73,0.28);
+    --info:          #64B4FF;
+    --info-wash:     rgba(100,180,255,0.08);
+    --info-line:     rgba(100,180,255,0.30);
+
+    /* Pipeline stages — distinguishable but low-chroma; these labels repeat on
+       every line of the activity log. */
+    --stage-pitch:  #8B949E;
+    --stage-plan:   #58A6FF;
+    --stage-build:  #3FB950;
+    --stage-review: #A371F7;
+
+    --radius:    8px;
+    --radius-sm: 6px;
+    --radius-lg: 12px;
+
+    --mono: ui-monospace, 'SF Mono', 'Cascadia Code', Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, system-ui, sans-serif;
+  }
+
+  /* Light theme. Not an inversion — greens that read well on black are too
+     bright on white, so the accent darkens to hold >=4.5:1 for text use. */
+  :root[data-theme="light"] {
+    color-scheme: light;
+
+    --bg:            #FFFFFF;
+    --bg-elevated:   #FFFFFF;
+    --surface:       #F6F7F8;
+    --surface-hover: #EFF1F3;
+    --surface-sunken: #F0F2F4;
+
+    --border-subtle: rgba(16,22,26,0.07);
+    --border:        rgba(16,22,26,0.13);
+    --border-strong: rgba(16,22,26,0.22);
+
+    --text:          #16181D;
+    --text-dim:      #4A5057;
+    --text-muted:    #656C74;
+
+    --accent:        #1A7F37;
+    --accent-dim:    #15703015;
+    --accent-dim:    #157030;
+    --accent-text:   #12692E;
+    --accent-wash:      rgba(26,127,55,0.06);
+    --accent-wash-mid:  rgba(26,127,55,0.12);
+    --accent-border:    rgba(26,127,55,0.28);
+    --accent-line:      rgba(26,127,55,0.40);
+    --accent-glow:      rgba(26,127,55,0.35);
+
+    --warn:          #9A6700;
+    --danger:        #CF222E;
+    --danger-wash:   rgba(207,34,46,0.08);
+
+    --highlight:      #6B7A00;
+    --highlight-line: rgba(107,122,0,0.45);
+    --highlight-wash: rgba(107,122,0,0.14);
+
+    --overlay:       rgba(20,24,31,0.45);
+    --scrim:         rgba(255,255,255,0.96);
+    --shadow:        rgba(16,22,26,0.14);
+    --danger-line:   rgba(207,34,46,0.30);
+    --info:          #0969DA;
+    --info-wash:     rgba(9,105,218,0.07);
+    --info-line:     rgba(9,105,218,0.28);
+
+    --stage-pitch:  #57606A;
+    --stage-plan:   #0969DA;
+    --stage-build:  #1A7F37;
+    --stage-review: #8250DF;
+  }
+</style>
+
+<script>
+// Every page must be able to switch theme. The dashboard has a designed slot in
+// its header; pages without one get a floating control here, so adding a new
+// page never means remembering to wire the toggle by hand.
+(function () {
+  function label(el, theme) {
+    var i = el.querySelector('[data-theme-icon]'), l = el.querySelector('[data-theme-label]');
+    if (i) i.textContent = theme === 'dark' ? '☀' : '☾';
+    if (l) l.textContent = theme === 'dark' ? 'Light' : 'Dark';
+  }
+  function current() { return document.documentElement.getAttribute('data-theme') || 'dark'; }
+
+  document.addEventListener('DOMContentLoaded', function () {
+    if (document.getElementById('theme-toggle')) return;  // page supplies its own
+
+    var btn = document.createElement('button');
+    btn.id = 'theme-toggle-floating';
+    btn.type = 'button';
+    btn.setAttribute('aria-label', 'Switch colour theme');
+    btn.innerHTML = '<span data-theme-icon aria-hidden="true"></span><span data-theme-label></span>';
+    btn.style.cssText = [
+      'position:fixed', 'top:16px', 'right:16px', 'z-index:60',
+      'display:inline-flex', 'align-items:center', 'gap:7px',
+      'padding:7px 12px', 'cursor:pointer',
+      'font-family:var(--sans)', 'font-size:12px', 'font-weight:500',
+      'color:var(--text-dim)', 'background:var(--surface)',
+      'border:1px solid var(--border)', 'border-radius:var(--radius-sm,6px)',
+      'transition:background .12s ease,color .12s ease,border-color .12s ease'
+    ].join(';');
+    btn.addEventListener('mouseenter', function () {
+      btn.style.background = 'var(--surface-hover)'; btn.style.color = 'var(--text)';
+    });
+    btn.addEventListener('mouseleave', function () {
+      btn.style.background = 'var(--surface)'; btn.style.color = 'var(--text-dim)';
+    });
+    btn.addEventListener('click', function () {
+      var next = current() === 'dark' ? 'light' : 'dark';
+      try { localStorage.setItem('mycelium-theme', next); } catch (e) {}
+      document.documentElement.setAttribute('data-theme', next);
+      label(btn, next);
+    });
+    document.body.appendChild(btn);
+    label(btn, current());
+  });
+})();
+</script>
