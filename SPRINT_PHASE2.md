@@ -112,14 +112,16 @@ This is grinding, iterative work and it is the best possible use of the remainin
 - [x] `tests/test_chaos.py`: node disappears mid-task, node returns malformed/empty output, node is
       very slow (timeout path), node returns a refusal, Ollama restarts mid-pipeline, two nodes
       claim the same task, node reconnects with a stale task ID — 22 tests, all green
-- [ ] Verify under stress: circuit breaker opens and recovers, task reclaim reassigns correctly,
+- [x] Verify under stress: circuit breaker opens and recovers, task reclaim reassigns correctly,
       local fallback fires, revision loop terminates (no infinite loops), WebSocket clients survive
       a server restart
       **MOSTLY DONE (Aug 5)** in `tests/test_chaos.py` + `tests/test_resilience.py`: circuit breaker
       opens/recovers/isolates ✓, reclaim reassigns to a live node ✓, local fallback fires when the
       node build fails ✓, revision loop is bounded by `_MAX_REVISIONS` and a run always terminates ✓.
-      **Outstanding: WebSocket clients surviving a server restart** — needs a real server restart,
-      not an in-process client.
+      **CLOSED Aug 13.** WebSocket survival across a restart is now genuinely verified: a real
+      uvicorn server, killed with a real hard kill, and a client that reconnects and resumes
+      (`6 -> 13` events in `scripts/restart_recovery.py`). Note this check was *incapable* of
+      passing before Aug 12 — no WebSocket library was installed, so it had never actually run.
 - [x] **Soak test:** 20 consecutive pitches in one server session. Watch for memory growth, SQLite
       bloat, event-buffer leaks, orphaned tasks, degraded latency. Fix what it surfaces.
       — `scripts/soak_test.py`, run at 20 and 60 pitches against a real server with the model
@@ -162,7 +164,15 @@ This is grinding, iterative work and it is the best possible use of the remainin
       **Measurement caveat worth keeping:** the first attempt reported 1513 ms RTT because it ran
       while the eval saturated the client's CPU — it was timing contention, not the network. Re-run
       on an idle machine. Never benchmark a network from a busy box.
-- [ ] Harden anything the WAN test exposes (timeouts tuned for real latency, retry backoff, etc.)
+- [x] Harden anything the WAN test exposes (timeouts tuned for real latency, retry backoff, etc.)
+      — **timeouts were never the problem**: registration is 218 ms against a 10 s timeout and a
+      real pitch spends ~2% of its life on the network. The retry *pattern* was. `node.py` slept a
+      flat 10 s forever, so when the orchestrator restarts — a redeploy, which happened Aug 12 —
+      every connected node drops at the same instant and retries in lockstep against a box that is
+      still booting. Now exponential backoff (2 s → 60 s) with ±25% jitter, reset on a clean poll.
+      Jitter is the part that matters; backoff alone just moves every node to the same later
+      instant. 6 tests in `tests/test_node_backoff.py`, one of which caught an `OverflowError` at
+      high attempt counts (a laptop left running through a long outage).
 
 ---
 
@@ -505,6 +515,38 @@ now installs from that file rather than its own list** — which is the part tha
 hardcoded CI list is exactly how the two drifted apart in the first place. Two tests pin it.
 
 Verified on the same clean venv that had just failed: **326 tests and ruff both pass.**
+
+#### The soak test's memory check had never run on Windows — and there is a real leak
+
+`scripts/soak_test.py` measured RSS by reading `/proc/{pid}/status`. That does not exist on
+Windows, so on the machine this project is developed on it silently returned `-1.0` and the script
+still printed **"SOAK CLEAN — no leaks"**. The published "+0.9 MB over 60 pitches" was a Linux
+number presented as a universal one. Third instance of this exact shape, after the WebSocket 404
+and `signal.SIGKILL`.
+
+Fixed the probe (psutil, with `/proc` as fallback; psutil now declared in `requirements-dev.txt`)
+and made the verdict refuse to claim a check that did not run. Then measured properly:
+
+| pitches | 20 | 40 | 60 | 80 | 100 | 120 |
+| --- | --- | --- | --- | --- | --- | --- |
+| RSS (MB) | 95 | 120 | 144 | 168 | 193 | 218 |
+
+**Dead linear, ~1.25 MB per pitch** from a 67 MB baseline. That is a leak, not allocator noise.
+
+**The verdict threshold was also wrong.** A flat 100 MB ceiling passes 60 pitches (78 MB) and
+fails the identical leak at 120 (151 MB). It is now a per-pitch rate, so the answer no longer
+depends on how long you happened to run it — and 60 pitches now flags it.
+
+**One hypothesis tried and rejected, honestly.** Finished jobs are held in memory for 7 days with
+their full deliverable, so I trimmed the payloads. Re-measured: 77.4 MB vs 78.0 MB — **no effect**,
+because the soak stubs the model and its results are tiny. Reverted, per this project's own rule
+about changes that do not move the number. `pipeline_events` (capped at 100) and `_broadcast_tasks`
+(has a done-callback) were both checked and cleared.
+
+**Left open deliberately.** The source is not found, and Linux has not been re-measured with the
+working probe — which matters, because production is Linux. At ~800 pitches per GB this is not a
+launch risk, and the video is the bottleneck. It is now in the README as a known issue with the
+numbers to reproduce it, rather than hidden behind a broken measurement.
 
 #### Org multi-tenancy: still not built, deliberately
 

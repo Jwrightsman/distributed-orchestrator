@@ -31,6 +31,19 @@ BASE = f"http://127.0.0.1:{PORT}"
 
 
 def rss_mb(pid: int) -> float:
+    """Resident memory of the server process, or -1.0 if it cannot be measured.
+
+    This read /proc only, which does not exist on Windows — so on the machine
+    this project is developed on it silently returned -1.0 while the summary
+    still announced "no leaks". The published "+0.9 MB RSS" was a Linux number
+    presented as a universal one. psutil first, /proc as the fallback.
+    """
+    try:
+        import psutil
+
+        return psutil.Process(pid).memory_info().rss / 1024 / 1024
+    except Exception:
+        pass
     try:
         for line in Path(f"/proc/{pid}/status").read_text().splitlines():
             if line.startswith("VmRSS:"):
@@ -133,7 +146,11 @@ def main() -> int:
 
     print("\n" + "=" * 64)
     print(f"pitches:        {args.pitches}  ({len(failures)} failed)")
-    print(f"RSS:            {baseline_rss:.1f} -> {final_rss:.1f} MB  (growth {growth:+.1f} MB)")
+    rss_measured = baseline_rss >= 0 and final_rss >= 0
+    if rss_measured:
+        print(f"RSS:            {baseline_rss:.1f} -> {final_rss:.1f} MB  (growth {growth:+.1f} MB)")
+    else:
+        print("RSS:            NOT MEASURED on this platform — pip install psutil")
     print(f"events.db:      {samples[-1]['db_kb']:.1f} KB")
     print(f"event log rows: {samples[-1]['events']} (server caps the API view at 100)")
     print(f"tasks pending:  {samples[-1]['inflight']} (must be 0 — orphaned tasks otherwise)")
@@ -154,8 +171,17 @@ def main() -> int:
     problems = []
     if failures:
         problems.append(f"{len(failures)} pitch(es) failed: {failures[:3]}")
-    if growth > 100:
-        problems.append(f"RSS grew {growth:.1f} MB over {args.pitches} pitches")
+    # Rate, not total. A flat 100 MB ceiling passes a 60-pitch run and fails the
+    # same leak at 120 — which is exactly what happened: 60 pitches grew 78 MB
+    # (under the bar) and 120 grew 151 MB (over it), from an identical
+    # 1.25 MB/pitch linear leak. A per-pitch rate makes the verdict independent
+    # of how long you happened to run it.
+    per_pitch = growth / max(1, args.pitches)
+    if rss_measured and per_pitch > 0.5:
+        problems.append(
+            f"RSS grew {growth:.1f} MB over {args.pitches} pitches "
+            f"({per_pitch:.2f} MB/pitch — linear growth means a leak)"
+        )
     if samples[-1]["inflight"] != 0:
         problems.append(f"{samples[-1]['inflight']} orphaned in-flight task(s)")
     if first_half and second_half and statistics.mean(second_half) > 3 * statistics.mean(first_half):
@@ -169,7 +195,13 @@ def main() -> int:
         print(f"\nworkdir kept for inspection: {workdir}")
         return 1
 
-    print("SOAK CLEAN — no leaks, no orphans, no latency drift")
+    if rss_measured:
+        print("SOAK CLEAN — no leaks, no orphans, no latency drift")
+    else:
+        # Never claim a check that did not run. This is exactly how "+0.9 MB
+        # RSS" became a repo-wide claim from a Linux-only measurement.
+        print("SOAK CLEAN — no orphans, no latency drift")
+        print("  (memory growth NOT checked: install psutil to measure it)")
     shutil.rmtree(workdir, ignore_errors=True)
     return 0
 

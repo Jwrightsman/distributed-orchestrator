@@ -12,6 +12,11 @@ pytest>=8.0.0
 pytest-asyncio>=0.24.0
 ruff>=0.6.0
 
+# scripts/soak_test.py measures the server's memory growth with this. Without
+# it the leak check silently does not run on Windows (it fell back to /proc,
+# which does not exist there) while still printing a clean verdict.
+psutil>=5.9.0
+
 # Optional, for the eval harness only. Without it, HTML deliverables are checked
 # structurally instead of being loaded in a real browser, and the harness says
 # which check it ran. See evals/README.md.
