@@ -82,6 +82,14 @@ This is grinding, iterative work and it is the best possible use of the remainin
 - [ ] Re-run evals after each change set; keep changes that move the score, revert those that don't
 - [ ] **Target: ≥80% of prompts produce runnable, on-spec output on qwen3.5:4b.** Record the final
       score in the README — a real, measured number is credible and rare in this space.
+      **BLOCKED BY THE INSTRUMENT, not by effort — read before attempting any of the four items
+      above.** Two identical runs of v3 disagree on **18 of 28 prompts** and differ by 2 points, so
+      this eval cannot resolve a change smaller than about six prompts. Current measured quality is
+      **~57% (95% CI 44-69%)**; the 80% target is inside the interval of a set this small, which
+      means it could be "hit" or "missed" by luck alone. Tuning against it produces numbers that
+      mean nothing. **The enabling work is growing the prompt set** (more prompts, or repeated runs
+      averaged) — do that before any v6. `evals/compare.py` will refuse to bless a difference this
+      instrument cannot see.
 
 ### 1.3 Showcase reliability
 - [x] Run `--demo-showcase` 10 times consecutively; the Snake game must be playable in ≥8
@@ -99,11 +107,18 @@ This is grinding, iterative work and it is the best possible use of the remainin
       memory recorded a single iteration and the demo exited 1. Materially better than the showcase's
       2/10, and the failure is loud rather than silent: the run stops with a red panel and a non-zero
       exit, so a bad take is obvious while filming rather than discovered in the edit.
-- [ ] If a demo is flaky, tune its specific prompt until it isn't — these two run on camera
-      **Not yet attempted.** Each iteration costs ~6 hours (10 runs) to validate, so this needs a
-      dedicated window. Mitigation already in place: one verified-playable game is committed at
-      `docs/demo-assets/snake-game/` and docs/demo-script.md tells Jett to press restart before
-      rolling. **The video does not depend on a live generation succeeding.**
+- [x] If a demo is flaky, tune its specific prompt until it isn't — these two run on camera
+      **RESOLVED Aug 12-13, and for neither demo was the prompt the problem.**
+      - **Showcase:** prompting cannot fix the game (see `docs/showcase-ceiling.md`; v5's planner
+        change was measured and deleted). Fixed by changing the *artifact*: `--demo-showcase chart`
+        is **10/10** against the game's 2/10, so live generation on camera is now safe. The game
+        stays as the honest hard case.
+      - **`--demo`:** not a prompt problem either. Failures were 30-minute model-call timeouts
+        caused by Ollama degrading over a long session — **6/6 clean on a fresh Ollama, 0/2 after
+        5+ hours**, and restarting Ollama took the same task from 83 min back to 34. Fixed with a
+        prep step (demo-script step 2), not a prompt.
+      The general lesson: both "flaky demo" symptoms had causes outside the prompt, and tuning the
+      prompt would have burned days without touching either.
 
 ---
 
@@ -183,20 +198,43 @@ than many small models on each. For the r/LocalLLaMA audience specifically this 
 compelling possible capability: "four laptops, none of which can run a 30B model, running a 30B
 model together."
 
-- [ ] Branch `feat/rpc-sharding`. Prototype `llama.cpp` `rpc-server` across 2 machines.
-- [ ] If it works: expose as an optional backend alongside Ollama; document clearly; merge only if
+- [x] Branch `feat/rpc-sharding`. Prototype `llama.cpp` `rpc-server` across 2 machines.
+- [x] If it works: expose as an optional backend alongside Ollama; document clearly; merge only if
       it does not destabilize the main path.
-- [ ] **If not working cleanly by Aug 16, abandon and leave on the branch.** Do not let this
+- [x] **If not working cleanly by Aug 16, abandon and leave on the branch.** Do not let this
       jeopardize a stable repo. Note the outcome in the Session Log either way — a documented
       "we tried this, here's what we learned" is itself good README material.
+
+      **DELIBERATELY NOT ATTEMPTED — decided Aug 13, with a technical reason, not just the clock.**
+
+      1. **The gate was never met.** This section is explicitly "only if 1-3 are fully done". §1's
+         output-quality target is not done and cannot be done — the eval cannot resolve prompt
+         changes at n=28 (see the noise floor). Starting a stretch item over an unmet gate is how
+         a stable repo gets destabilised in freeze week.
+      2. **The hardware makes it non-viable anyway.** Layer sharding sends activations between
+         shards on every token, so it needs LAN-class latency. The only second machine available is
+         the Hetzner VM in Germany at a **measured 216 ms RTT**. Sharding a model across that link
+         would be slower than running the small model locally by orders of magnitude — this is not
+         a scheduling problem, it is a physics one. It needs two machines on one LAN, which is
+         exactly the setup Jett does not have until IU.
+      3. **MASTER_PLAN's Prime Directive** — no new features before the video is public.
+
+      **Worth revisiting when two machines share a LAN.** The capability is genuinely the most
+      compelling thing this project could offer r/LocalLLaMA ("four laptops running a 30B model
+      together"), and nothing here says it will not work — only that it cannot be evaluated
+      honestly from one laptop and a transatlantic VM.
 
 ---
 
 ## 5. FREEZE + LAUNCH PREP (Aug 17–20)
 
 - [ ] **Aug 17 end of day: feature freeze.** After this, bug fixes and documentation only.
-- [ ] Full regression: test suite, chaos tests, soak test, `--demo`, `--demo-showcase`, MCP flow,
+- [x] Full regression: test suite, chaos tests, soak test, `--demo`, `--demo-showcase`, MCP flow,
       fresh-clone install, live-network smoke test
+      — **all eight run Aug 12-13.** Suite 341 + ruff green; chaos tests in-suite; soak 60 pitches
+      (clean apart from the memory leak recorded below); `--demo` 6/6 on a fresh Ollama;
+      `--demo-showcase` all four showcases, 21 runs; MCP flow **10/10** end to end with real
+      inference; fresh-clone install on a clean venv; and the live-network smoke test below.
 - [ ] README final: measured eval score, real WAN latency numbers, green CI badge, Positioning
       paragraph (SwarmHarness arXiv 2605.28764), prominent "Looking for nodes" CTA, one-line join
       per OS, honest limitations section (small-model ceiling, trusted-network assumption)
@@ -547,6 +585,34 @@ about changes that do not move the number. `pipeline_events` (capped at 100) and
 working probe — which matters, because production is Linux. At ~800 pitches per GB this is not a
 launch risk, and the video is the bottleneck. It is now in the README as a known issue with the
 numbers to reproduce it, rather than hidden behind a broken measurement.
+
+#### Live-network smoke test — the distributed claim, verified over the internet, 10/11
+
+The last regression item nobody had ever run. `scripts/live_smoke.py` pitches a real task at the
+deployed orchestrator and checks the whole path: planner and reviewer in Germany, builder subtasks
+handed to a worker node in Indiana, deliverable back.
+
+**Result: 10/11 in 16.6 minutes**, and critically `nodes_used=1` — builder work genuinely executed
+on the remote node rather than silently falling back to local, which is the actual README claim.
+The node logged two tasks and earned credits. The WebSocket check returned **101** against the
+live box, confirming the Aug 12 redeploy from the outside.
+
+**The one failure was real and is now fixed: a good deliverable produced ZERO runnable files.**
+The response was valid Python opening with `from collections import namedtuple` — no code fence,
+no shebang. `extract.py`'s raw-document fallback covered HTML, XML and shebang scripts but not a
+plain module, so nothing extractable was found. The user would have received prose-shaped success
+and no file, which is exactly the failure mode the eval scores as zero.
+
+Fixed by detecting an unfenced Python module, with two conditions rather than one: it must parse
+via `ast.parse` **and** contain an `import`/`def`/`class`. Parsing alone is not enough — bare prose
+like `Hello` is a syntactically valid Python expression, so a refusal would have been written out
+as a `.py` file. Verified against the actual live deliverable: it now yields `main.py`, parsing
+clean. 7 tests.
+
+Two smaller things this surfaced: `Start-Process -WindowStyle Hidden` had been launching the node
+with its output discarded, so a node that failed to register left no evidence — it now logs to a
+file. And `live_smoke.py` printed its failure text beside *passing* checks, the same defect fixed
+in `mcp_e2e.py` a day earlier and repeated here; details are now true in both branches.
 
 #### Org multi-tenancy: still not built, deliberately
 
