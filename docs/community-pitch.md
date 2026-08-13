@@ -6,7 +6,19 @@ Post this (adapted for each community) with your demo video.
 
 ## Long version — for r/LocalLLaMA / Ollama Discord / r/selfhosted / AI builders
 
-**Title:** I asked Claude to build me a game — it delegated the work to a swarm of small models on my own hardware, and the game opened in my browser
+**Title:** I made Claude delegate coding tasks to a swarm of 4B models on my own hardware — and measured it on 28 pitches instead of showing you the one that worked
+
+<!-- TITLE NOTE — Jett's call, but read this before reverting to the old one.
+The previous title was "…it delegated the work to a swarm…and the GAME opened in
+my browser", and the post told readers to run `python cli.py --demo-showcase`.
+That command generates the Snake game, which is **measured 2/10 playable**. So
+the headline claim was one that most readers reproducing it would NOT see — in
+front of the exact audience that punishes unreproducible claims.
+
+The chart showcase is 10/10 and is what the commands below now use. If the video
+shows the game, say in the post that the game is the hard case and the chart is
+the reliable one; both numbers are committed in the repo. Leading with the
+measurement is also just a stronger hook here than another "look what AI made". -->
 
 **Body:**
 
@@ -23,6 +35,10 @@ I've been building a distributed AI orchestrator that runs entirely on local har
 5. Extracted code is then **checked mechanically** — Python is parsed, HTML is structurally validated — and anything broken gets one more targeted repair pass. A "PASS" that doesn't actually run gets caught.
 
 Then I pitched a follow-up task to the same project, and it loaded the **project memory** from round 1: the planner knew what already existed and built only the new parts.
+
+**Three: I measured it instead of cherry-picking.** There's an eval harness in the repo — 28 varied pitches, scored on whether the extractor produced files, whether they parse, and whether they actually *run* (HTML gets loaded in a headless browser and fails on JS errors). **About 57% come back runnable and on-spec** on qwen3.5:4b, 95% CI 44–69%, up from 36% before prompt tuning.
+
+I know it's 57% and not the 61% I first got, because I ran the identical set twice: 17/28, then 15/28, with **18 of the 28 prompts flipping outcome between two runs that differed by nothing at all**. If you take one thing from this repo, take that — a single eval number on a small model is a draw from a wide distribution, and a lot of published prompt-tuning results (including two of my own) are inside the noise.
 
 **What makes this different from the usual agent swarm:**
 
@@ -44,8 +60,13 @@ This is Phase 0 of something bigger: an open protocol, then a contributor guild,
 git clone https://github.com/Jwrightsman/distributed-orchestrator
 pip install -r requirements.txt
 ollama pull qwen3.5:4b
-python cli.py --demo-showcase
+python cli.py --demo-showcase chart     # 10/10 in measured runs
 ```
+
+That builds a labelled bar chart and opens it in your browser. Want the honest
+hard case instead? `python cli.py --demo-showcase` builds a Snake game, and that
+one is **2/10** — same model, same prompts, just a far more coupled artifact.
+Both numbers are in the repo with the raw logs.
 
 **Connect a node (this is the part I actually need):**
 ```bash
@@ -62,25 +83,27 @@ Looking for people who want to contribute a node, stress-test distributed execut
 
 ## Short version — Discord channels / Twitter / Hacker News comment
 
-I asked Claude to build me a game. It delegated the job to a swarm of 4B models running on my own hardware — planner split it up, builders ran in parallel, a reviewer assembled it — and the finished game opened in my browser.
+I asked Claude to build something and it delegated the job to a swarm of 4B models running on my own hardware — planner split it up, builders ran in parallel across machines, a reviewer assembled it, and the finished thing opened in my browser.
 
 No cloud, no API keys. qwen3.5:4b via Ollama on an 8GB laptop. It's an MCP server, so any AI app can hand work to the swarm, and any machine can join as a worker with one command.
+
+Measured, not cherry-picked: **~57% of 28 varied pitches come back runnable and on-spec** — and I know the error bar because I ran the same set twice and 18 of 28 prompts flipped.
 
 Full demo: [video link]
 Repo: https://github.com/Jwrightsman/distributed-orchestrator
 
-Run it: `pip install -r requirements.txt && ollama pull qwen3.5:4b && python cli.py --demo-showcase`
+Run it: `pip install -r requirements.txt && ollama pull qwen3.5:4b && python cli.py --demo-showcase chart`
 
 ---
 
 ## Twitter/X thread version
 
 **Tweet 1 (hook):**
-I asked Claude to build me a game.
+I asked Claude to build something.
 
 It delegated the work to a swarm of small models running on my own hardware.
 
-A few minutes later the finished game opened in my browser.
+A few minutes later the finished thing opened in my browser.
 
 No cloud. No API keys. Thread 🧵
 
@@ -116,7 +139,14 @@ Persistent memory ties it together.
 
 Every run appends to memory.md, auto-summarized as it grows. The next pitch loads it — the swarm knows what it already built.
 
-**Tweet 7:**
+**Tweet 7 (the one that earns trust):**
+I measured it instead of posting the one that worked.
+
+28 varied pitches, scored on whether the output actually RUNS: ~57% pass.
+
+Ran the identical set twice and 18 of 28 flipped. So that number carries a wide error bar, and I'd rather say so.
+
+**Tweet 8:**
 qwen3.5:4b via Ollama. 8GB laptop, no GPU.
 
 Open source, no API keys, nothing leaves the machines you own.

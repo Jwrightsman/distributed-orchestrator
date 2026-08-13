@@ -235,12 +235,12 @@ model together."
       (clean apart from the memory leak recorded below); `--demo` 6/6 on a fresh Ollama;
       `--demo-showcase` all four showcases, 21 runs; MCP flow **10/10** end to end with real
       inference; fresh-clone install on a clean venv; and the live-network smoke test below.
-- [ ] README final: measured eval score, real WAN latency numbers, green CI badge, Positioning
+- [x] README final: measured eval score, real WAN latency numbers, green CI badge, Positioning
       paragraph (SwarmHarness arXiv 2605.28764), prominent "Looking for nodes" CTA, one-line join
       per OS, honest limitations section (small-model ceiling, trusted-network assumption)
-- [ ] `docs/demo-script.md` final — shot-by-shot for the new feature set, timed, so recording at IU
+- [x] `docs/demo-script.md` final — shot-by-shot for the new feature set, timed, so recording at IU
       is follow-the-script with zero decisions to make
-- [ ] `docs/community-pitch.md` final — r/LocalLLaMA post drafted in full, title leading with the
+- [x] `docs/community-pitch.md` final — r/LocalLLaMA post drafted in full, title leading with the
       result, plus 3–4 anticipated-question replies pre-written
 - [x] Confirm repo is PUBLIC (Jett action) — done Aug 5, verified by anonymous clone
 
@@ -613,6 +613,40 @@ Two smaller things this surfaced: `Start-Process -WindowStyle Hidden` had been l
 with its output discarded, so a node that failed to register left no evidence — it now logs to a
 file. And `live_smoke.py` printed its failure text beside *passing* checks, the same defect fixed
 in `mcp_e2e.py` a day earlier and repeated here; details are now true in both branches.
+
+#### Launch docs finalised early (Aug 13) — and the post had a credibility trap in it
+
+Done ahead of the Aug 17 freeze because they were ready, not to skip the freeze.
+
+**`docs/community-pitch.md` was about to burn the launch.** The title claimed
+"…and the game opened in my browser", and the post told readers to run
+`python cli.py --demo-showcase` — which builds the **Snake game, measured 2/10**.
+On launch day most people running the exact command in the post would get a broken
+game, in front of the one audience that punishes unreproducible claims. Fixed: every
+runnable command now uses `--demo-showcase chart` (10/10), and the game appears as an
+explicitly-labelled hard case. Retitled to lead with the measurement, since the honest
+number is a stronger hook here than another "look what AI made" — the old title is
+preserved in an HTML comment with the reasoning, because the final call is Jett's.
+Short version and Twitter thread were promising the game while pointing at the chart
+command; both now match. The body carries the ~57% and the 18-of-28 churn.
+
+**`docs/demo-script.md` failed its own criterion** — "so recording is follow-the-script
+with **zero decisions to make**" — while containing an explicit "your call, Jett" about
+the hook. Decision made and the reasoning recorded: Shot 1 is the chart generated live
+(10/10, and the audience watches it happen instead of taking his word for it). The game
+moves to a new **Shot 6, "What it can't do"**, stating 2/10 on camera. That beat is worth
+more than a prettier hook: it is what makes every other number in the video believable.
+Shot list retimed to land at exactly 1:30, and the cut-order guidance now forbids cutting
+Shot 6 to fit a runtime — cutting the limitation is how a credible video becomes a
+marketing one.
+
+**`README.md`** verified against every element its criterion lists (measured score, WAN
+numbers, CI badge, SwarmHarness positioning, node CTA, per-OS one-liners, limitations)
+and swept for stale figures. All present, all current.
+
+**Left open on purpose: the Aug 17 freeze date itself.** Declaring a freeze is Jett's
+call, not something to tick off early. The repo is in a freezable state — full regression
+green, docs final — so the date can be honoured or brought forward as he likes.
 
 #### Org multi-tenancy: still not built, deliberately
 

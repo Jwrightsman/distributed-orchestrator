@@ -31,9 +31,10 @@ Do this in order. It removes every failure that has bitten a take so far.
    > **83 minutes back to 34, clean** — no cooldown, so this is Ollama's session
    > state, not an overheating laptop. If you have been generating all day,
    > restart it before you roll.
-3. **Decide which showcase you are filming.** There are now two, and they are
-   for different shots. Both numbers are real runs checked in a real browser
-   (`docs/showcase-ceiling.md`):
+3. **Generate both showcases.** You are filming both — the chart live in Shot 1,
+   the game as the honest-limits beat in Shot 6. No decision to make here; the
+   numbers below are why (real runs, checked in a real browser,
+   `docs/showcase-ceiling.md`):
 
    | | measured | on camera |
    | --- | --- | --- |
@@ -77,27 +78,40 @@ Do this in order. It removes every failure that has bitten a take so far.
 
 ## Shot list
 
-### Shot 1 — The hook (0:00–0:08)
+### Shot 1 — The hook (0:00–0:10)
 
-**On screen:** the finished Snake game, already playing, filling the frame.
+**Film this one. Do not deliberate on the day — the reasoning is below and the
+decision is already made.**
 
-**Say / caption:** *"A swarm of AI agents built this game. On my laptop. No
-cloud, no API keys."*
+**On screen:** you typing the pitch, then the finished bar chart appearing in
+the browser. Timelapse the wait; land on the chart full-frame.
 
-Let the snake move for a full three seconds before cutting. Movement is the
-proof — a static screenshot reads as fake.
+**Say / caption:** *"I typed that a few minutes ago. A swarm of AI agents on my
+own machines built it. No cloud, no API keys."*
 
-> **Alternative hook, now that live generation is safe — your call, Jett.**
-> Open on the *pitch being typed*, then cut to the finished bar chart appearing
-> in the browser, and say *"I typed that thirty seconds ago"* (timelapse the
-> ~22 minutes). The chart is measured 10/10, so a take is very unlikely to be
-> wasted. It is a stronger claim than the game shot — the audience watches it
-> happen instead of taking your word for it — but the game is the prettier
-> image. Film both if you have the time; decide in the edit.
+Hold on the finished chart for three full seconds — long enough to read the
+labels. Labels are the proof here: they show it read real data rather than drew
+a pretty picture.
+
+**Why this and not the Snake game**, settled by measurement so you don't have to
+re-litigate it at 1am:
+
+| | measured | what the shot claims |
+| --- | --- | --- |
+| chart, generated live | **10/10** | "watch it happen" — audience sees it |
+| Snake game, pre-made | 2/10 | "here's what it made" — take my word |
+
+The game is the prettier image, and it is the weaker claim: you would be showing
+a finished artifact and asserting the swarm made it. The chart is watched being
+made. It is also the only one of the two you can safely generate on camera.
+
+**Keep the game for Shot 6 (the honest-limits beat, below).** It is worth more
+there — "here is the thing it only gets right 2 times in 10" buys more
+credibility with this audience than a prettier hook does.
 
 ---
 
-### Shot 2 — The MCP moment (0:08–0:25) ⭐ the differentiator
+### Shot 2 — The MCP moment (0:10–0:28) ⭐ the differentiator
 
 This is the shot nobody else has. Two windows side by side: **Claude Desktop on
 the left, the dashboard on the right.**
@@ -117,7 +131,7 @@ already working.
 
 ---
 
-### Shot 3 — Parallel execution + credits (0:25–0:45)
+### Shot 3 — Parallel execution + credits (0:28–0:45)
 
 **On screen:** dashboard, full frame.
 
@@ -135,7 +149,7 @@ lighting up beats one every time.
 
 ---
 
-### Shot 4 — Memory (0:45–1:00)
+### Shot 4 — Memory (0:45–0:57)
 
 **On screen:** terminal replay of `--demo`'s second pitch.
 
@@ -146,7 +160,7 @@ the new feature.
 
 ---
 
-### Shot 5 — It checks its own work (1:00–1:10)
+### Shot 5 — It checks its own work (0:57–1:08)
 
 **On screen:** terminal, the reviewer stage.
 
@@ -159,7 +173,27 @@ if it doesn't parse, it goes back for a fix."*
 
 ---
 
-### Shot 6 — The CTA (1:10–1:25)
+### Shot 6 — What it can't do (1:08–1:18)
+
+**This shot buys more credibility than any other one here.** r/LocalLLaMA has
+seen a hundred demos that only show the good take. Almost none show the number.
+
+**On screen:** the Snake game — a working one from `docs/demo-assets/snake-game/`
+— then cut to the measured line.
+
+**Say / caption:** *"It made this game too. But only 2 times out of 10 — I ran
+it ten times and counted. The chart was 10 out of 10. Tightly-coupled code is
+where a 4B swarm falls over, and I'd rather show you that than hide it."*
+
+Put the two numbers on screen as text. If you want one more beat: *"28 test
+pitches, about 57% come back actually runnable."*
+
+Do not apologise over this shot. Stated plainly, it is the most trustworthy
+fifteen seconds in the video.
+
+---
+
+### Shot 7 — The CTA (1:18–1:30)
 
 **On screen:** the landing page at `http://localhost:8000/` — live node count
 visible, join command on screen.
@@ -191,8 +225,12 @@ End card: repo URL.
 - **Cut every wait.** No viewer needs to see a 20-minute reviewer call. The
   honest framing is "this takes minutes on volunteer hardware" in a caption,
   not real-time footage.
-- **Length discipline:** if it's over 90 seconds, cut Shot 4 (memory) before
-  cutting Shots 2 or 3. MCP and parallel execution are what make this different.
+- **Length discipline:** the shot list above lands at exactly 1:30. If a take
+  runs long, cut in this order — **Shot 4 (memory), then Shot 5 (self-check)**.
+  Never cut Shots 2, 3 or 6: MCP and parallel execution are what make this
+  different from every other agent demo, and Shot 6 (the honest 2/10) is what
+  makes the rest of the numbers believable. Cutting the limitation to fit a
+  runtime is how a credible video becomes a marketing one.
 
 ## If something breaks mid-take
 
