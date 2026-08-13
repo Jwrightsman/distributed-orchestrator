@@ -4,41 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Mycelium — Distributed Orchestrator</title>
+<!-- THEME -->
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
   /* Design tokens — one restrained accent, neutral structure.
      A developer audience reads saturated neon as a toy; the credibility comes
      from typography and spacing, with colour reserved for state that matters. */
-  :root {
-    --bg:            #0B0C0E;
-    --surface:       #131316;
-    --surface-hover: #17171B;
-    --border:        rgba(255,255,255,0.09);
-    --border-strong: rgba(255,255,255,0.16);
 
-    --text:          #EDEDEF;
-    --text-dim:      #A1A1AA;
-    --text-muted:    #8B8B96;   /* >=4.5:1 on --bg (WCAG AA) */
-
-    --accent:        #3FB950;   /* success/active — GitHub-dark green */
-    --accent-dim:    #2EA043;
-    --accent-wash:   rgba(63,185,80,0.10);
-    --accent-line:   rgba(63,185,80,0.35);
-
-    --warn:          #D29922;
-    --danger:        #F85149;
-
-    /* Pipeline stages — distinguishable but deliberately low-chroma, because
-       these labels repeat on every line of the activity log. */
-    --stage-pitch:  #8B949E;
-    --stage-plan:   #58A6FF;
-    --stage-build:  #3FB950;
-    --stage-review: #A371F7;
-
-    --mono: ui-monospace, 'SF Mono', 'Cascadia Code', Consolas, monospace;
-    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, system-ui, sans-serif;
-  }
 
 
   body {
@@ -48,9 +21,23 @@
     min-height: 100vh;
   }
 
+  .header-main { min-width: 0; }
+  .theme-toggle {
+    display: inline-flex; align-items: center; gap: 7px;
+    background: var(--surface); color: var(--text-dim);
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    padding: 7px 12px; cursor: pointer;
+    font-family: var(--sans); font-size: 12px; font-weight: 500;
+    transition: background .12s ease, color .12s ease, border-color .12s ease;
+    flex-shrink: 0;
+  }
+  .theme-toggle:hover { background: var(--surface-hover); color: var(--text); border-color: var(--border-strong); }
+  .theme-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
   .header {
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 20px;
     padding: 28px 32px 20px;
-    border-bottom: 1px solid rgba(255,255,255,0.06);
+    border-bottom: 1px solid var(--border-subtle);
   }
   .header-tag {
     font-family: var(--mono);
@@ -77,14 +64,28 @@
     display: flex;
     gap: 24px;
     padding: 16px 32px;
-    border-bottom: 1px solid rgba(255,255,255,0.06);
-    background: rgba(255,255,255,0.015);
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--border-subtle);
   }
   .stat {
     display: flex;
     align-items: baseline;
     gap: 8px;
   }
+  .stat-status {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-family: var(--mono); font-size: 13px; font-weight: 500;
+    color: var(--text-dim); letter-spacing: -0.1px;
+  }
+  .stat-status i {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--text-muted); flex-shrink: 0;
+  }
+  .stat-status.is-ok    { color: var(--accent-text); }
+  .stat-status.is-ok i  { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-wash); }
+  .stat-status.is-down  { color: var(--danger); }
+  .stat-status.is-down i{ background: var(--danger); box-shadow: 0 0 0 3px var(--danger-wash); }
+
   .stat-value {
     font-size: 22px;
     font-weight: 700;
@@ -105,7 +106,7 @@
   }
 
   .sidebar {
-    border-right: 1px solid rgba(255,255,255,0.06);
+    border-right: 1px solid var(--border-subtle);
     padding: 20px;
   }
   .sidebar h2 {
@@ -125,21 +126,21 @@
     margin-bottom: 8px;
     transition: border-color 0.2s;
   }
-  .node-card.active { border-color: rgba(63,185,80,0.18); }
+  .node-card.active { border-color: var(--accent-wash-mid); }
   /* Camera-visible states: glow-pulse while working, one bright flash on finish */
   .node-card.working {
-    border-color: rgba(63,185,80,0.45);
+    border-color: var(--accent-glow);
     animation: cardWorking 1.6s ease-in-out infinite;
   }
   @keyframes cardWorking {
-    0%, 100% { box-shadow: 0 0 4px rgba(63,185,80,0.15); background: rgba(63,185,80,0.02); }
-    50% { box-shadow: 0 0 22px rgba(63,185,80,0.33); background: rgba(63,185,80,0.05); }
+    0%, 100% { box-shadow: 0 0 4px var(--accent-wash-mid); background: var(--accent-wash); }
+    50% { box-shadow: 0 0 22px var(--accent-line); background: var(--accent-wash); }
   }
   .node-card.finished {
     animation: cardFinished 1.2s ease-out;
   }
   @keyframes cardFinished {
-    0% { box-shadow: 0 0 34px rgba(63,185,80,0.50); background: rgba(63,185,80,0.13); border-color: var(--accent); }
+    0% { box-shadow: 0 0 34px var(--accent-glow); background: var(--accent-wash-mid); border-color: var(--accent); }
     100% { box-shadow: none; background: var(--surface); }
   }
   .node-name {
@@ -160,11 +161,11 @@
     border-radius: 50%;
     background: var(--accent);
     margin-right: 6px;
-    box-shadow: 0 0 8px rgba(63,185,80,0.24);
+    box-shadow: 0 0 8px var(--accent-border);
   }
   .node-dot.busy {
     background: var(--warn);
-    box-shadow: 0 0 8px rgba(232,255,71,0.5);
+    box-shadow: 0 0 8px var(--highlight-line);
     animation: dotPulse 1s ease-in-out infinite;
   }
   @keyframes dotPulse {
@@ -195,8 +196,8 @@
     border-radius: 3px;
     margin-top: 4px;
     color: var(--danger);
-    background: rgba(255,85,85,0.1);
-    border: 1px solid rgba(255,85,85,0.25);
+    background: var(--danger-wash);
+    border: 1px solid var(--danger-line);
   }
   .credit-flash {
     position: absolute;
@@ -231,7 +232,7 @@
   }
 
   .pipeline-card {
-    background: rgba(255,255,255,0.02);
+    background: var(--border-subtle);
     border: 1px solid var(--border);
     border-radius: 10px;
     padding: 18px 20px;
@@ -258,13 +259,13 @@
   }
   .status-running {
     color: var(--warn);
-    background: rgba(232,255,71,0.1);
-    border: 1px solid rgba(232,255,71,0.2);
+    background: var(--highlight-wash);
+    border: 1px solid var(--highlight-wash);
   }
   .status-complete {
     color: var(--accent);
-    background: rgba(63,185,80,0.06);
-    border: 1px solid rgba(63,185,80,0.12);
+    background: var(--accent-wash);
+    border: 1px solid var(--accent-wash-mid);
   }
   .status-pending {
     color: var(--text-muted);
@@ -278,7 +279,7 @@
     align-items: center;
     gap: 10px;
     padding: 8px 0;
-    border-top: 1px solid rgba(255,255,255,0.04);
+    border-top: 1px solid var(--border-subtle);
   }
   .subtask:first-child { border-top: none; }
   .subtask-id {
@@ -295,7 +296,7 @@
   .subtask-node {
     font-family: var(--mono);
     font-size:12px;
-    color: #A371F7;
+    color: var(--stage-review);
   }
   .subtask-check {
     color: var(--accent);
@@ -313,11 +314,17 @@
 
   .empty-state {
     text-align: center;
-    padding: 60px 20px;
-    color:var(--text-muted);
+    padding: 36px 20px;
+    color: var(--text-muted);
   }
-  .empty-state .icon { font-size: 40px; margin-bottom: 16px; opacity: 0.3; }
-  .empty-state p { font-size:15px; line-height: 1.6; }
+  .empty-state .icon {
+    width: 28px; height: 28px;
+    margin: 0 auto 12px;
+    color: var(--text-muted);
+    opacity: 0.55;
+  }
+  .empty-state .icon svg { width: 100%; height: 100%; display: block; }
+  .empty-state p { font-size: 14px; line-height: 1.6; }
 
   .pitch-form {
     display: flex;
@@ -327,7 +334,7 @@
   .pitch-input {
     flex: 1;
     background: var(--surface-hover);
-    border: 1px solid rgba(255,255,255,0.1);
+    border: 1px solid var(--border);
     border-radius: 8px;
     padding: 10px 14px;
     color: var(--text);
@@ -335,11 +342,11 @@
     outline: none;
     transition: border-color 0.2s;
   }
-  .pitch-input:focus { border-color: rgba(63,185,80,0.24); }
+  .pitch-input:focus { border-color: var(--accent-border); }
   .pitch-input::placeholder { color:var(--text-muted); }
   .pitch-btn {
-    background: rgba(63,185,80,0.07);
-    border: 1px solid rgba(63,185,80,0.18);
+    background: var(--accent-wash);
+    border: 1px solid var(--accent-wash-mid);
     border-radius: 8px;
     padding: 10px 20px;
     color: var(--accent);
@@ -349,7 +356,7 @@
     transition: all 0.15s;
     white-space: nowrap;
   }
-  .pitch-btn:hover { background: rgba(63,185,80,0.12); }
+  .pitch-btn:hover { background: var(--accent-wash-mid); }
   .pitch-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
   .log-entry {
@@ -357,20 +364,20 @@
     font-size:14px;
     color: var(--text-dim);
     padding: 4px 0;
-    border-bottom: 1px solid rgba(255,255,255,0.03);
+    border-bottom: 1px solid var(--border-subtle);
     animation: fadeIn 0.3s ease;
   }
   .log-time { color:var(--text-muted); margin-right: 8px; }
   .log-agent { color: var(--accent); font-weight: 600; }
-  .log-event { color: #AAAAAA; }
+  .log-event { color: var(--text-muted); }
 
   @keyframes fadeIn {
     from { opacity: 0; transform: translateY(4px); }
     to   { opacity: 1; transform: translateY(0); }
   }
   @keyframes pulseBorder {
-    0%, 100% { border-color: rgba(232,255,71,0.2); box-shadow: none; }
-    50%       { border-color: rgba(232,255,71,0.5); box-shadow: 0 0 16px rgba(232,255,71,0.08); }
+    0%, 100% { border-color: var(--highlight-wash); box-shadow: none; }
+    50%       { border-color: var(--highlight-line); box-shadow: 0 0 16px var(--highlight-wash); }
   }
   .pipeline-card { animation: fadeIn 0.25s ease; }
   .pipeline-card.running { animation: fadeIn 0.25s ease, pulseBorder 2s ease-in-out infinite; }
@@ -385,12 +392,12 @@
     flex: 1;
     height: 3px;
     border-radius: 2px;
-    background: rgba(255,255,255,0.06);
+    background: var(--border-subtle);
     position: relative;
     overflow: hidden;
   }
   .stage.done   { background: var(--accent); }
-  .stage.active { background: rgba(232,255,71,0.3); }
+  .stage.active { background: var(--highlight-line); }
   .stage.active::after {
     content: '';
     position: absolute;
@@ -431,7 +438,7 @@
     border: 1px solid var(--border);
   }
   .code-block-header {
-    background: rgba(255,255,255,0.05);
+    background: var(--border-subtle);
     padding: 5px 12px;
     font-family: var(--mono);
     font-size:12px;
@@ -454,11 +461,11 @@
   .code-block pre {
     margin: 0;
     padding: 14px 16px;
-    background: rgba(0,0,0,0.3);
+    background: var(--shadow);
     overflow-x: auto;
     font-family: var(--mono);
     font-size: 12.5px;
-    color: #C8E6C9;
+    color: var(--accent-text);
     line-height: 1.55;
     white-space: pre;
   }
@@ -488,7 +495,7 @@
     display: flex;
     gap: 4px;
     margin-bottom: 20px;
-    border-bottom: 1px solid rgba(255,255,255,0.06);
+    border-bottom: 1px solid var(--border-subtle);
     padding-bottom: 0;
   }
   .tab-btn {
@@ -516,7 +523,7 @@
   }
   .gallery-card {
     background: var(--surface);
-    border: 1px solid rgba(255,255,255,0.07);
+    border: 1px solid var(--border);
     border-radius: 10px;
     padding: 16px 18px;
     display: flex;
@@ -525,8 +532,8 @@
     transition: border-color 0.2s, background 0.2s;
   }
   .gallery-card:hover {
-    border-color: rgba(63,185,80,0.12);
-    background: rgba(255,255,255,0.035);
+    border-color: var(--accent-wash-mid);
+    background: var(--border-subtle);
   }
   .gallery-task {
     font-size:14px;
@@ -554,7 +561,7 @@
     position: absolute;
     bottom: 0; left: 0; right: 0;
     height: 24px;
-    background: linear-gradient(transparent, rgba(8,9,12,0.95));
+    background: linear-gradient(transparent, var(--scrim));
   }
   .gallery-files {
     display: flex;
@@ -562,8 +569,8 @@
     gap: 4px;
   }
   .gallery-file-chip {
-    background: rgba(63,185,80,0.05);
-    border: 1px solid rgba(63,185,80,0.11);
+    background: var(--accent-wash);
+    border: 1px solid var(--accent-wash-mid);
     border-radius: 4px;
     padding: 2px 8px;
     font-family: var(--mono);
@@ -578,7 +585,7 @@
   .gallery-btn {
     flex: 1;
     background: none;
-    border: 1px solid rgba(255,255,255,0.1);
+    border: 1px solid var(--border);
     border-radius: 6px;
     padding: 6px 10px;
     font-size:13px;
@@ -587,11 +594,11 @@
     transition: all 0.15s;
     font-weight: 600;
   }
-  .gallery-btn:hover { border-color: rgba(63,185,80,0.18); color: var(--accent); }
-  .gallery-btn.fork { border-color: rgba(63,185,80,0.12); color: var(--accent); }
-  .gallery-btn.fork:hover { background: rgba(63,185,80,0.05); }
-  .gallery-btn.share { border-color: rgba(100,180,255,0.2); color: #64B4FF; }
-  .gallery-btn.share:hover { background: rgba(100,180,255,0.08); border-color: rgba(100,180,255,0.5); }
+  .gallery-btn:hover { border-color: var(--accent-wash-mid); color: var(--accent); }
+  .gallery-btn.fork { border-color: var(--accent-wash-mid); color: var(--accent); }
+  .gallery-btn.fork:hover { background: var(--accent-wash); }
+  .gallery-btn.share { border-color: var(--info-line); color: var(--info); }
+  .gallery-btn.share:hover { background: var(--info-wash); border-color: var(--info-line); }
 
   /* ── Responsive / Mobile ─────────────────────────────────────── */
   @media (max-width: 768px) {
@@ -614,7 +621,7 @@
     }
     .sidebar {
       border-right: none;
-      border-top: 1px solid rgba(255,255,255,0.06);
+      border-top: 1px solid var(--border-subtle);
       padding: 16px;
       order: 2;          /* appears below content */
     }
@@ -647,8 +654,15 @@
 <body>
 
 <div class="header">
-  <h1>Mycelium <span>Distributed Orchestrator</span></h1>
-  <div class="header-sub">A task, split across every machine that joined.</div>
+  <div class="header-main">
+    <h1>Mycelium <span>Distributed Orchestrator</span></h1>
+    <div class="header-sub">A task, split across every machine that joined.</div>
+  </div>
+  <button class="theme-toggle" id="theme-toggle" onclick="toggleTheme()"
+          title="Switch between light and dark" aria-label="Switch colour theme">
+    <span id="theme-toggle-icon" aria-hidden="true"></span>
+    <span id="theme-toggle-label"></span>
+  </button>
 </div>
 
 <div class="stats-bar">
@@ -665,7 +679,7 @@
     <span class="stat-label">Models Available</span>
   </div>
   <div class="stat">
-    <span class="stat-value" id="stat-status">-</span>
+    <span class="stat-status" id="stat-status"><i></i>checking</span>
     <span class="stat-label">Ollama</span>
   </div>
   <div class="stat">
@@ -683,14 +697,14 @@
     <h2>Network Nodes</h2>
     <div id="nodes-list">
       <div class="empty-state">
-        <div class="icon">-</div>
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="18" r="2.2"/><path d="M10.5 6.8 6.5 15.8M13.5 6.8l4 9M7.4 18h9.2"/></svg></div>
         <p>No nodes connected yet.<br>Run <code style="color:var(--accent)">python node.py --server http://YOUR_IP:8000</code> on another machine to join.</p>
       </div>
     </div>
 
     <div style="display:flex;justify-content:space-between;align-items:center;margin-top:24px;margin-bottom:14px;">
       <h2 style="margin:0;">Projects</h2>
-      <button onclick="promptNewProject()" style="background:rgba(63,185,80,0.05);border:1px solid rgba(63,185,80,0.12);border-radius:5px;padding:3px 10px;font-size:12px;font-weight:700;color:var(--accent);cursor:pointer;">+ New</button>
+      <button onclick="promptNewProject()" style="background:var(--accent-wash);border:1px solid var(--accent-wash-mid);border-radius:5px;padding:3px 10px;font-size:12px;font-weight:700;color:var(--accent);cursor:pointer;">+ New</button>
     </div>
     <div id="projects-list">
       <div class="empty-state"><p>No projects yet.</p></div>
@@ -713,7 +727,7 @@
         </span>
       </div>
       <!-- Hidden project context — set when "Continue" is clicked -->
-      <div id="project-context" style="display:none;margin-bottom:10px;padding:8px 12px;background:rgba(63,185,80,0.04);border:1px solid rgba(63,185,80,0.12);border-radius:6px;justify-content:space-between;align-items:center;">
+      <div id="project-context" style="display:none;margin-bottom:10px;padding:8px 12px;background:var(--accent-wash);border:1px solid var(--accent-wash-mid);border-radius:6px;justify-content:space-between;align-items:center;">
         <span style="font-size:14px;color:var(--accent);">Continuing project: <strong id="project-context-name"></strong></span>
         <button onclick="clearProjectContext()" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:13px;">✕ clear</button>
       </div>
@@ -732,7 +746,7 @@
       <h2>Pipeline Runs</h2>
       <div id="pipeline-log">
         <div class="empty-state">
-          <div class="icon">-</div>
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l2.5-6 4 12 2.5-6h5"/></svg></div>
           <p>No active pipelines.<br>Pitch a task above to see agents work.</p>
         </div>
       </div>
@@ -740,7 +754,7 @@
       <div style="display:flex;justify-content:space-between;align-items:center;margin-top:24px;margin-bottom:8px;">
         <h2 style="margin:0;">History</h2>
         <input id="history-search" type="text" placeholder="search..." oninput="onHistorySearch()"
-          style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:5px;padding:3px 8px;font-size:13px;color:#CCC;outline:none;width:100px;">
+          style="background:var(--border-subtle);border:1px solid var(--border);border-radius:5px;padding:3px 8px;font-size:13px;color:var(--text-dim);outline:none;width:100px;">
       </div>
       <div id="history-list">
         <div class="empty-state"><p>No past runs yet.</p></div>
@@ -770,25 +784,25 @@
     </div>
 
     <!-- Node detail modal -->
-    <div id="node-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.85);z-index:100;overflow-y:auto;" onclick="if(event.target===this)closeNodeModal()">
-      <div style="max-width:560px;margin:60px auto;padding:28px;background:var(--surface);border:1px solid rgba(255,255,255,0.1);border-radius:12px;">
+    <div id="node-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:var(--overlay);z-index:100;overflow-y:auto;" onclick="if(event.target===this)closeNodeModal()">
+      <div style="max-width:560px;margin:60px auto;padding:28px;background:var(--surface);border:1px solid var(--border);border-radius:12px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
           <h2 id="node-modal-title" style="font-size:16px;font-weight:700;color:var(--text);margin:0;font-family:Consolas,monospace;"></h2>
-          <button onclick="closeNodeModal()" style="background:none;border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:6px 14px;color:var(--text-dim);cursor:pointer;font-size:14px;">Close</button>
+          <button onclick="closeNodeModal()" style="background:none;border:1px solid var(--border);border-radius:6px;padding:6px 14px;color:var(--text-dim);cursor:pointer;font-size:14px;">Close</button>
         </div>
-        <div id="node-modal-body" style="font-size:14px;color:#CCC;"></div>
+        <div id="node-modal-body" style="font-size:14px;color:var(--text-dim);"></div>
       </div>
     </div>
 
     <!-- Output viewer modal -->
-    <div id="output-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.85);z-index:100;overflow-y:auto;">
-      <div style="max-width:800px;margin:40px auto;padding:28px;background:var(--surface);border:1px solid rgba(255,255,255,0.1);border-radius:12px;">
+    <div id="output-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:var(--overlay);z-index:100;overflow-y:auto;">
+      <div style="max-width:800px;margin:40px auto;padding:28px;background:var(--surface);border:1px solid var(--border);border-radius:12px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
           <h2 id="modal-title" style="font-size:18px;font-weight:700;color:var(--text);margin:0;"></h2>
           <div style="display:flex;gap:8px;align-items:center;">
-            <button id="modal-download-btn" onclick="downloadOutput()" style="background:rgba(63,185,80,0.05);border:1px solid rgba(63,185,80,0.12);border-radius:6px;padding:6px 14px;color:var(--accent);cursor:pointer;font-size:13px;font-weight:600;">Download</button>
-            <button id="modal-share-btn" onclick="copyShareLink()" style="background:none;border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:6px 14px;color:var(--text-dim);cursor:pointer;font-size:13px;font-weight:600;">Copy link</button>
-            <button onclick="closeModal()" style="background:none;border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:6px 14px;color:var(--text-dim);cursor:pointer;font-size:14px;">Close</button>
+            <button id="modal-download-btn" onclick="downloadOutput()" style="background:var(--accent-wash);border:1px solid var(--accent-wash-mid);border-radius:6px;padding:6px 14px;color:var(--accent);cursor:pointer;font-size:13px;font-weight:600;">Download</button>
+            <button id="modal-share-btn" onclick="copyShareLink()" style="background:none;border:1px solid var(--border);border-radius:6px;padding:6px 14px;color:var(--text-dim);cursor:pointer;font-size:13px;font-weight:600;">Copy link</button>
+            <button onclick="closeModal()" style="background:none;border:1px solid var(--border);border-radius:6px;padding:6px 14px;color:var(--text-dim);cursor:pointer;font-size:14px;">Close</button>
           </div>
         </div>
         <div id="modal-plan" style="margin-bottom:20px;"></div>
@@ -800,6 +814,30 @@
 </div>
 
 <script>
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  const icon = document.getElementById('theme-toggle-icon');
+  const label = document.getElementById('theme-toggle-label');
+  // Label the destination, not the current state — "Light" on a dark page
+  // reads as "click for light", which is what people expect from a toggle.
+  if (icon) icon.textContent = theme === 'dark' ? '☀' : '☾';
+  if (label) label.textContent = theme === 'dark' ? 'Light' : 'Dark';
+}
+function toggleTheme() {
+  const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+  try { localStorage.setItem('mycelium-theme', next); } catch (e) { /* private mode */ }
+  applyTheme(next);
+}
+applyTheme(document.documentElement.getAttribute('data-theme') || 'dark');
+
+// Follow the OS only while the user has not chosen for themselves.
+try {
+  window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', (e) => {
+    try { if (localStorage.getItem('mycelium-theme')) return; } catch (_) {}
+    applyTheme(e.matches ? 'light' : 'dark');
+  });
+} catch (e) { /* older browsers */ }
+
 // Poll health + nodes + metrics every 3 seconds
 async function refresh() {
   try {
@@ -812,7 +850,9 @@ async function refresh() {
     document.getElementById('stat-nodes').textContent = nodes.count;
     document.getElementById('stat-tasks').textContent = health.tasks_pending;
     document.getElementById('stat-models').textContent = health.models.length;
-    document.getElementById('stat-status').textContent = health.ollama;
+    const st = document.getElementById('stat-status');
+    st.className = 'stat-status ' + (health.ollama === 'connected' ? 'is-ok' : 'is-down');
+    st.innerHTML = '<i></i>' + health.ollama;
     if (met) {
       const latEl = document.getElementById('stat-latency');
       if (latEl) latEl.textContent = met.avg_task_latency_seconds != null ? met.avg_task_latency_seconds + 's' : '-';
@@ -829,7 +869,7 @@ async function refresh() {
     if (nodes.count === 0) {
       nodesList.innerHTML = `
         <div class="empty-state">
-          <div class="icon">-</div>
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="18" r="2.2"/><path d="M10.5 6.8 6.5 15.8M13.5 6.8l4 9M7.4 18h9.2"/></svg></div>
           <p>No nodes connected yet.<br>Run <code style="color:var(--accent)">python join.py http://YOUR_IP:8000</code> on another machine to join.</p>
         </div>`;
     } else {
@@ -849,7 +889,7 @@ async function refresh() {
         // Filter auto-added model: tags from the visible chips — model is shown explicitly
         const visibleCaps = (n.capabilities || []).filter(c => !c.startsWith('model:'));
         const capsHtml = visibleCaps.length
-          ? visibleCaps.map(c => `<span style="background:rgba(63,185,80,0.05);border:1px solid rgba(63,185,80,0.12);border-radius:3px;padding:1px 5px;font-size:11px;color:var(--accent);margin-right:3px;">${escHtml(c)}</span>`).join('')
+          ? visibleCaps.map(c => `<span style="background:var(--accent-wash);border:1px solid var(--accent-wash-mid);border-radius:3px;padding:1px 5px;font-size:11px;color:var(--accent);margin-right:3px;">${escHtml(c)}</span>`).join('')
           : '';
         const capsRow = capsHtml ? `<div class="node-meta" style="margin-top:3px;">${capsHtml}</div>` : '';
         // Verification record. Hidden entirely until this node has actually been
@@ -858,7 +898,7 @@ async function refresh() {
         const weight = (n.routing_weight != null) ? n.routing_weight : 1;
         const repHtml = samples > 0
           ? `<div class="node-meta" style="margin-top:3px;" title="Sampled tasks are run on two nodes and the answers compared. Routing weight decides who is offered work first; it never excludes a node.">
-               <span style="color:${weight >= 0.9 ? 'var(--accent)' : '#d29922'};">&#9670; ${weight.toFixed(2)} routing weight</span>
+               <span style="color:${weight >= 0.9 ? 'var(--accent)' : 'var(--warn)'};">&#9670; ${weight.toFixed(2)} routing weight</span>
                <span style="color:var(--text-muted);"> &middot; ${Math.round((n.agreement_score != null ? n.agreement_score : 1) * 100)}% agreement over ${samples} check${samples === 1 ? '' : 's'}${n.trusted_for_routing ? '' : ' (still sampling)'}</span>
              </div>`
           : '';
@@ -876,7 +916,9 @@ async function refresh() {
       }).join('');
     }
   } catch(e) {
-    document.getElementById('stat-status').textContent = 'offline';
+    const stOff = document.getElementById('stat-status');
+    stOff.className = 'stat-status is-down';
+    stOff.innerHTML = '<i></i>offline';
   }
 }
 
@@ -929,8 +971,8 @@ async function pitchTask() {
       </div>
       <div id="pstages-${pipelineId}">${stageBarHtml(false, false, false)}</div>
       <pre id="token-stream-${pipelineId}"
-           style="margin-top:8px;padding:8px 10px;background:rgba(63,185,80,0.02);
-                  border:1px solid rgba(63,185,80,0.06);border-radius:4px;
+           style="margin-top:8px;padding:8px 10px;background:var(--accent-wash);
+                  border:1px solid var(--accent-wash);border-radius:4px;
                   font-size:13px;color:var(--text-dim);max-height:120px;overflow-y:auto;
                   white-space:pre-wrap;word-break:break-word;display:none;"></pre>
     </div>`;
@@ -1087,7 +1129,7 @@ function _showCompletedCard(pipelineId, task, result) {
       <span class="log-time">${new Date().toLocaleTimeString()}</span>
       <span class="log-event" style="color:var(--accent);">View output &#8594;</span>
     </div>` : ''}
-    ${result.error ? `<div style="margin-top:8px;padding:8px 10px;background:rgba(255,85,85,0.06);border:1px solid rgba(255,85,85,0.2);border-radius:4px;font-family:Consolas,monospace;font-size:13px;color:var(--danger);">${escHtml(result.error)}</div>` : ''}
+    ${result.error ? `<div style="margin-top:8px;padding:8px 10px;background:var(--danger-wash);border:1px solid var(--danger-line);border-radius:4px;font-family:Consolas,monospace;font-size:13px;color:var(--danger);">${escHtml(result.error)}</div>` : ''}
   `;
 }
 
@@ -1166,7 +1208,7 @@ async function viewRun(timestamp) {
 
     let planHtml = '<div style="margin-bottom:16px;">';
     data.plan.forEach(st => {
-      planHtml += `<div style="display:flex;gap:8px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.04);">
+      planHtml += `<div style="display:flex;gap:8px;padding:5px 0;border-bottom:1px solid var(--border-subtle);">
         <span style="font-family:Consolas,monospace;font-size:13px;color:var(--text-muted);min-width:20px;">${escHtml(String(st.id))}</span>
         <span style="font-size:14px;color:var(--accent);font-weight:600;">${escHtml(st.title)}</span>
       </div>`;
@@ -1193,7 +1235,7 @@ async function viewRun(timestamp) {
         <div style="font-size:12px;color:var(--text-muted);letter-spacing:2px;text-transform:uppercase;margin-bottom:8px;font-family:Consolas,monospace;">Extracted Files</div>
         <div style="display:flex;flex-wrap:wrap;gap:6px;">
           ${data.code_files.map(f => `
-            <span style="background:rgba(63,185,80,0.05);border:1px solid rgba(63,185,80,0.12);border-radius:4px;padding:3px 10px;font-family:Consolas,monospace;font-size:13px;color:var(--accent);">${escHtml(f)}</span>
+            <span style="background:var(--accent-wash);border:1px solid var(--accent-wash-mid);border-radius:4px;padding:3px 10px;font-family:Consolas,monospace;font-size:13px;color:var(--accent);">${escHtml(f)}</span>
           `).join('')}
         </div>`;
     } else {
@@ -1223,7 +1265,7 @@ function openNodeModal(nodeJson) {
   const rows = [];
   rows.push(`<div style="display:grid;grid-template-columns:120px 1fr;gap:8px 16px;line-height:1.7;">`);
   const row = (label, val) => val
-    ? `<span style="color:var(--text-muted);font-size:14px;">${label}</span><span style="color:#CCC;">${escHtml(String(val))}</span>`
+    ? `<span style="color:var(--text-muted);font-size:14px;">${label}</span><span style="color:var(--text-dim);">${escHtml(String(val))}</span>`
     : '';
 
   rows.push(row('Model', n.model));
@@ -1239,7 +1281,7 @@ function openNodeModal(nodeJson) {
   const visibleCaps = (n.capabilities || []).filter(c => !c.startsWith('model:'));
   if (visibleCaps.length) {
     const chips = visibleCaps.map(c =>
-      `<span style="background:rgba(63,185,80,0.05);border:1px solid rgba(63,185,80,0.12);border-radius:3px;padding:1px 6px;font-size:12px;color:var(--accent);margin-right:4px;">${escHtml(c)}</span>`
+      `<span style="background:var(--accent-wash);border:1px solid var(--accent-wash-mid);border-radius:3px;padding:1px 6px;font-size:12px;color:var(--accent);margin-right:4px;">${escHtml(c)}</span>`
     ).join('');
     rows.push(`<span style="color:var(--text-muted);font-size:14px;">Capabilities</span><span>${chips}</span>`);
   }
@@ -1247,7 +1289,7 @@ function openNodeModal(nodeJson) {
   rows.push('</div>');
 
   if (n.current_task) {
-    rows.push(`<div style="margin-top:16px;padding:10px 14px;background:rgba(63,185,80,0.03);border:1px solid rgba(63,185,80,0.09);border-radius:6px;font-size:14px;color:var(--accent);">&#9654; ${escHtml(n.current_task)}</div>`);
+    rows.push(`<div style="margin-top:16px;padding:10px 14px;background:var(--accent-wash);border:1px solid var(--accent-wash);border-radius:6px;font-size:14px;color:var(--accent);">&#9654; ${escHtml(n.current_task)}</div>`);
   }
 
   document.getElementById('node-modal-body').innerHTML = rows.filter(Boolean).join('');
@@ -1369,7 +1411,7 @@ function _setNodeBlacklisted(nodeId, seconds) {
   const card = document.getElementById(`nodecard-${nodeId}`);
   if (!card) return;
   const dot = card.querySelector('.node-dot');
-  if (dot) { dot.className = 'node-dot'; dot.style.background = 'var(--danger)'; dot.style.boxShadow = '0 0 8px rgba(255,85,85,0.4)'; }
+  if (dot) { dot.className = 'node-dot'; dot.style.background = 'var(--danger)'; dot.style.boxShadow = '0 0 8px var(--danger-line)'; }
   // Show or update circuit breaker badge
   let badge = card.querySelector('.node-breaker-badge');
   if (!badge) {
@@ -1521,7 +1563,7 @@ async function loadProjects() {
             <div class="node-meta" style="margin-top:3px;">${p.iteration_count} iteration${p.iteration_count !== 1 ? 's' : ''}</div>
           </div>
           <button onclick="continueProject('${escHtml(p.project_id)}','${escHtml(p.name)}')"
-            style="background:rgba(63,185,80,0.06);border:1px solid rgba(63,185,80,0.15);border-radius:5px;padding:4px 10px;color:var(--accent);font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;margin-left:8px;flex-shrink:0;">
+            style="background:var(--accent-wash);border:1px solid var(--accent-wash-mid);border-radius:5px;padding:4px 10px;color:var(--accent);font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;margin-left:8px;flex-shrink:0;">
             Continue
           </button>
         </div>
@@ -1597,7 +1639,7 @@ async function loadGallery() {
       const subtasksHtml = `<span style="font-family:Consolas,monospace;font-size:12px;color:var(--text-muted);">${c.subtask_count} tasks</span>`;
       const timeHtml = `<span style="font-family:Consolas,monospace;font-size:12px;color:var(--text-muted);">${relativeTime(c.timestamp)}</span>`;
       const nodesHtml = c.nodes_used > 0
-        ? `<span style="font-family:Consolas,monospace;font-size:12px;color:#4488BB;">${c.nodes_used} node${c.nodes_used > 1 ? 's' : ''}</span>`
+        ? `<span style="font-family:Consolas,monospace;font-size:12px;color:var(--info);">${c.nodes_used} node${c.nodes_used > 1 ? 's' : ''}</span>`
         : '';
       const previewHtml = c.preview
         ? `<div class="gallery-preview">${escHtml(c.preview)}</div>`
@@ -1677,9 +1719,9 @@ const _TEMPLATES = [
   _TEMPLATES.forEach(t => {
     const btn = document.createElement('button');
     btn.textContent = t;
-    btn.style.cssText = 'background:rgba(255,255,255,0.03);border: 1px solid var(--border);border-radius:5px;padding:4px 10px;font-size:13px;color:var(--text-muted);cursor:pointer;transition:all 0.15s;';
-    btn.onmouseover = () => { btn.style.borderColor='rgba(63,185,80,0.15)'; btn.style.color='var(--accent)'; };
-    btn.onmouseout  = () => { btn.style.borderColor='rgba(255,255,255,0.08)'; btn.style.color='var(--text-muted)'; };
+    btn.style.cssText = 'background:var(--border-subtle);border: 1px solid var(--border);border-radius:5px;padding:4px 10px;font-size:13px;color:var(--text-muted);cursor:pointer;transition:all 0.15s;';
+    btn.onmouseover = () => { btn.style.borderColor='var(--accent-wash-mid)'; btn.style.color='var(--accent)'; };
+    btn.onmouseout  = () => { btn.style.borderColor='var(--border)'; btn.style.color='var(--text-muted)'; };
     btn.onclick = () => { document.getElementById('pitch-input').value = t; document.getElementById('pitch-input').focus(); };
     el.appendChild(btn);
   });
