@@ -85,6 +85,42 @@ async def register(server: str, node_id: str, secret: str = "", capabilities: li
         return resp.json()
 
 
+# Reconnect backoff. Measured WAN numbers (scripts/wan_bench.py, Indiana ->
+# Germany) leave every timeout in this file with huge headroom — registration is
+# 218 ms against a 10 s timeout — so latency is not what needed hardening. The
+# retry *pattern* did.
+#
+# The old loop slept a flat 10 s forever. That is fine for one node and wrong for
+# a network: when the orchestrator restarts, every connected node drops at the
+# same instant and then retries in lockstep, hammering a box that is still
+# booting. A redeploy is exactly this event, and the launch plan targets 3-5
+# external nodes to start.
+_RECONNECT_BASE_S = 2.0
+_RECONNECT_CAP_S = 60.0
+
+
+def reconnect_delay(attempt: int, rng=None) -> float:
+    """Seconds to wait before retry number `attempt` (0-based).
+
+    Exponential to a cap, with +/-25% jitter so simultaneous drops do not stay
+    synchronised. Jitter is the part that actually breaks the thundering herd —
+    without it, backoff just moves every node's retry to the same later instant.
+
+    The result is clamped to the cap *after* jitter, so the cap means what it
+    says. Applying jitter last let it reach 75 s against a stated 60 s cap.
+    """
+    import random as _random
+
+    rng = rng or _random
+    # Clamp the exponent, not just the result: a node left running through a
+    # long outage reaches attempt counts where 2**attempt is an integer big
+    # enough to raise OverflowError on the float multiply. Found by a test
+    # asserting the cap holds for attempt=5000 — roughly three days of retries,
+    # which is an ordinary laptop left open over a weekend.
+    raw = min(_RECONNECT_CAP_S, _RECONNECT_BASE_S * (2 ** min(max(0, attempt), 30)))
+    return min(_RECONNECT_CAP_S, raw * (0.75 + rng.random() * 0.5))
+
+
 async def poll_and_execute(server: str, node_id: str, session: dict, secret: str = "") -> str | None:
     """Poll the orchestrator for tasks, execute them, return task_id or None.
 
@@ -245,6 +281,7 @@ async def main():
 
     session = {"tasks": 0, "credits": 0}
     registered = True
+    attempt = 0  # consecutive connection failures, drives the backoff
 
     while True:
         try:
@@ -258,19 +295,26 @@ async def main():
             # No sleep needed between polls; just loop immediately.
             await poll_and_execute(server, node_id, session, secret=secret)
 
+            attempt = 0  # a clean poll means the link is healthy again
+
         except httpx.ConnectError:
             if registered:
                 console.print("[yellow]Lost connection to orchestrator. Retrying...[/yellow]")
             registered = False
-            await asyncio.sleep(10)
+            delay = reconnect_delay(attempt)
+            attempt += 1
+            console.print(f"[dim]Reconnecting in {delay:.0f}s...[/dim]")
+            await asyncio.sleep(delay)
 
         except KeyboardInterrupt:
             _print_session_summary(node_id, session)
             break
 
         except Exception as e:
-            console.print(f"[red]Error:[/red] {e}. Retrying in 5s...")
-            await asyncio.sleep(5)
+            delay = reconnect_delay(attempt)
+            attempt += 1
+            console.print(f"[red]Error:[/red] {e}. Retrying in {delay:.0f}s...")
+            await asyncio.sleep(delay)
 
 
 def _print_session_summary(node_id: str, session: dict):
