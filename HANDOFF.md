@@ -1,6 +1,6 @@
 # Handoff — Mycelium / distributed-orchestrator
 
-_Rewritten Aug 12, 2026. Paste the prompt at the bottom into a new session._
+_Rewritten Aug 14, 2026. Paste the prompt at the bottom into a new session._
 
 ---
 
@@ -15,8 +15,8 @@ _Rewritten Aug 12, 2026. Paste the prompt at the bottom into a new session._
    external review, speculative ideas. Every item is gated on a trigger. **Do
    not pull work from it.** Read it to know why something isn't built, to avoid
    proposing something already rejected, and to avoid rebuilding something the
-   sprint files already shipped. Items move out of it into a sprint file only
-   when Jett says so.
+   sprint files already shipped. Items move into a sprint file only when Jett
+   says so.
 5. This file
 
 ## Jett context — read before planning anything
@@ -26,7 +26,7 @@ warn before anything network-facing, and tell him only what he must act on. He
 is comfortable with long autonomous stretches and would rather you keep working
 than stop to ask.
 
-**He is NOT at IU yet.** As of Aug 12 he is roughly **1–2 weeks** from
+**He is NOT at IU yet.** As of Aug 14 he is roughly **1–2 weeks** from
 travelling, and the video is recorded **after** he arrives. Do not plan around
 campus hardware or a second machine before then.
 
@@ -37,15 +37,13 @@ for 72 hours than three more features and an untested merge.
 
 ## State
 
-`master` has PRs #27–#44 merged. **Two PRs are open and unmerged:**
+`master` has PRs #27–#45 merged. **#45 (result binding) is merged** — it was
+already in when this session started, despite the previous handoff saying
+otherwise.
 
-- **#45 — result binding** (`claude/roadmap-and-binding`). The August review's
-  top finding, closed. 376 tests, ruff clean.
-- Everything before it is merged; #43 and #44 landed.
-
-**ROADMAP.md now exists** (added Aug 14) and its four integration points are
-done: MASTER_PLAN §8 is a pointer to it instead of a second parking lot, it is
-item 4 of the read-first list above, and README and CONTRIBUTING link it.
+**PR #46 is open, CI green** (`claude/mycelium-roadmap-rehearsal-e3d93e`):
+ROADMAP integration, the demo-script rehearsal, three bug fixes, and deploy
+verification. 390 tests, ruff clean. Merge it unless you find a reason not to.
 
 | what | measured |
 | --- | --- |
@@ -57,29 +55,119 @@ item 4 of the read-first list above, and README and CONTRIBUTING link it.
 | WAN overhead | 216 ms RTT Indiana→Germany; network ~2% of a pitch |
 | Restart recovery | 17/17 on Linux with Ollama stopped |
 | MCP flow | **10/10** end to end with real inference |
-| Live smoke | **11/11**, `nodes_used=1`, 7 min |
+| Planner non-determinism | same pitch → **5, 1 and 4 subtasks**; 181 s, 82 s, 97 s |
+| Builder subtask length | 41–329 s observed on qwen3.5:4b, CPU |
 | Known memory leak | ~1.25 MB/pitch, linear, source not found |
 
 **Nothing is running.** The CPU is free.
 
-## Result binding — what #45 does and does not do
+---
 
-`node_secret` is network admission, **not per-node identity**. Submission used to
-trust the `node_id` in the body, so any admitted node could take another node's
-credit. Now every handout mints an attempt (id + nonce, distinct from `task_id`),
-and settlement requires: right node, matching nonce, unexpired lease, unsettled
-attempt. Rejections are 403 + a `result_rejected` event. Settlement is idempotent
-— a retry replays the original outcome, never pays twice.
+## ⚠ Two things need Jett, in this order
 
-**Not equivalent to per-node keypairs.** It stops an admitted node stealing
-credit; it does not stop a holder of the shared secret joining under a chosen
-name. Signed receipts, revocation and rotation are deferred to ROADMAP §5 and
-noted in `server_state.py`.
+### 1. Merge #46, then redeploy the live orchestrator
 
-**Nodes must run current code to earn credit.** A node on an older build has its
-results *recorded but not settled* — deliberate, so no work is lost. Jett's
-laptop node needs restarting from current master after #45 merges, or it will
-stop earning.
+The live box has not picked up #43, #44 or #45. Merge #46 first so the deploy
+check below exists on the server side.
+
+```bash
+ssh -i ~/.ssh/swarm_orchestrator root@167.233.239.33 "cd /root/distributed-orchestrator && git pull && docker compose up -d --build"
+```
+
+Then **prove it actually landed** — from an up-to-date `master` checkout on his
+laptop:
+
+```bash
+python scripts/verify_deploy.py http://167.233.239.33:8000
+```
+
+`MATCH` means the live server is running exactly that code. `STALE` means it is
+not, and the script prints what to check. This is new in #46 and exists because
+a deploy that silently did nothing looks identical to one that worked — which
+has already cost this project a day. `/status.json` now carries a `build` hash
+computed inside the running process, so a `git pull` that succeeded while the
+rebuild didn't cannot fake it.
+
+If it prints **"no build field"**, the rebuild did not happen: the image
+predates #46 entirely.
+
+### 2. Restart his laptop node from current code
+
+**It is not currently joined.** After #45, a node running older code has its
+results *recorded but not settled* — it works but earns nothing, deliberately,
+so no work is lost. And without #46 it gets evicted mid-build on any subtask
+over 90 seconds (see below), which is most of them.
+
+```bash
+cd C:\Users\wrigh\Projects\distributed-orchestrator
+git pull
+py node.py --server http://167.233.239.33:8000 --secret <node_secret>
+```
+
+The secret is in `/root/distributed-orchestrator/data/config.json` on the VM;
+he has a copy. Never ask him to paste it into chat.
+
+---
+
+## What the dress rehearsal found (Aug 14) — read this before touching the node path
+
+`docs/demo-script.md` had never been executed by anyone. Running it literally
+found three code bugs. All are fixed in #46, all have regression tests confirmed
+to fail with the fix removed.
+
+**1. A node streaming tokens did not count as alive.** `last_seen` was refreshed
+only by `/tasks/next` and `/tasks/{id}/result`, so a node was "alive" only
+*between* tasks. Any builder subtask longer than `_NODE_TIMEOUT` (90 s) looked
+silent — while the node posted a token batch every 0.3 s. Observed on a real
+pitch: the subtask was reclaimed out from under the node, the node was evicted,
+the task was re-queued into an empty registry, and the node was paid **+0
+credits** for a 329-second build it went on to finish. `/metrics` said
+`nodes_online: 0` while the node's terminal showed it building.
+
+Note how this interacts with #45: the reclaim invalidates the attempt, so #45's
+settlement check *correctly* refuses to pay. Attempt binding working as designed
+on top of a broken liveness signal is exactly what produces "my laptop stopped
+earning and nobody can say why."
+
+After the fix, the same work re-run gave five subtasks at 87/138/282/236/269 s —
+four past the old cutoff — with `nodes_online` never below 1, zero reclaims, and
+all five paid.
+
+**2. Every 500 echoed its exception text.** Two `@app.exception_handler(Exception)`
+handlers were registered in `server.py`; Starlette keys them by class, so the
+later, leaky one silently replaced the hardened one. Live on the public
+orchestrator. The chaos test that should have caught it was asserting the
+*leaky* handler's response shape — it passed throughout.
+
+**3. The advertised one-line join could never finish.** `curl … | bash -s -- URL`
+gives bash the downloaded script as stdin, so `install.sh`'s closing
+`exec join.py` inherited a pipe, and join.py's consent gate correctly refuses
+without a terminal. The installer did all its work and stopped on "Not running
+in a terminal, so nobody can consent." Fixed by handing over on `/dev/tty` —
+**not** with `--yes`, which would consent on the machine owner's behalf. A test
+blocks that shortcut. It survived because the launch checklist tested
+`join.py` directly, which is a different code path from the piped one-liner.
+
+---
+
+## The demo script is now honest about the rebuilt dashboard
+
+Prep gained two missing prerequisites — **start a worker node** (Shots 2 and 3
+are blank without one) and **clear `events.db`** (Live Activity opens showing
+entries from days earlier). The "15-minute prep" claim was replaced with a real
+budget: ~2 hours, or ~35 minutes on the short path.
+
+Shot 3 no longer says "dashboard, full frame": after the rebuild the plan is in
+**Overview**, node cards in **Nodes**, credits on the node card or in **Guild**.
+And **with one machine nothing runs in parallel** — five subtasks queued at once
+went strictly sequentially through one node — so that shot needs a second
+machine or a different caption. Do not narrate parallel execution over one node.
+
+`docs/demo-script.md` ends with a provenance section: what was actually executed
+in the rehearsal and what is still on trust (Shot 1's live chart, the Claude
+Desktop MCP take, the `--demo` memory run, Snake generation).
+
+---
 
 ## The finding that reframes everything: the eval is mostly noise
 
@@ -90,109 +178,22 @@ changed (`evals/results/20260811_052310` vs `20260808_050610`):
     8 improved, 10 regressed
     CHURN: 18 of 28 prompts changed outcome, with NO cause
 
-That is **higher** churn than any prompt-set comparison ever produced here
-(v3→v4 was 14, v3→v5 was 15), so every difference previously attributed to a
-prompt change is consistent with dice. Per-category is worse than useless: `api`
-went 3/4 → 0/4 and `vague` went 2/4 → 4/4 with nothing changed.
-
-**Consequences, already applied to the docs:**
+That is **higher** churn than any prompt-set comparison ever produced here, so
+every difference previously attributed to a prompt change is consistent with
+dice. Per-category is worse than useless: `api` went 3/4 → 0/4 and `vague` went
+2/4 → 4/4 with nothing changed.
 
 - README publishes **~57% (95% CI 44–69%)** and shows both runs with the churn.
 - `prompts/v3.py` carries the floor: **a net difference of ≤2 prompts is noise.**
-  Only v1→v3 ever cleared the bar (one-sided p=0.033, needing 9 of its 11 flips
-  one way — it got exactly 9).
-- `evals/compare.py` does the arithmetic: churn, exact one-sided McNemar, power,
-  and a promote/delete verdict. It reproduces every historical decision.
+- `evals/compare.py` does the arithmetic and reproduces every historical decision.
 
 **Do not write a v6 expecting to see it.** At n=28 this instrument cannot resolve
 anything smaller than about six prompts. Growing the prompt set, or averaging
-repeated runs, is the only way to measure anything subtler.
+repeated runs, is the only way to measure anything subtler. The rehearsal added
+a reason: the *planner* is non-deterministic too — the same pitch decomposed
+into 5, 1 and 4 subtasks on three consecutive runs.
 
-## The live orchestrator: fixed and verified (Aug 12)
-
-`/ws/events` returned **404 on every deployment** for months — `requirements.txt`
-pinned bare `uvicorn`, which ships with no WebSocket implementation, so the
-dashboard silently fell back to 3-second polling and live token streaming never
-worked. **Now deployed and verified live:** `/ws/events` returns **101**,
-`/nodes` carries `verify_rate`, dashboard and landing page 200, logs clean.
-
-**Why the first deploy silently did nothing** — it will happen to someone else:
-the server predates the repo going public, so its code arrived as a tarball with
-**no `.git`**. `git pull` failed with `fatal: not a git repository`, the `&&`
-chain stopped before the rebuild, and it looked like success. The container's
-6-day uptime was the only tell.
-
-It is now a proper git checkout tracking `origin/master`, so the ordinary
-one-liner works from here:
-
-    ssh -i ~/.ssh/swarm_orchestrator root@167.233.239.33 \
-      "cd /root/distributed-orchestrator && git pull && docker compose up -d --build"
-
-**Always verify after deploying.** `docs/DEPLOY.md` has the WebSocket check
-(101 good, 404 stale) and the tarball recovery procedure. Server `data/` backup:
-`/root/data-backup-20260812_080526`.
-
-**Jett's laptop node is NOT joined.** Ollama died overnight and took `node.py`
-with it; Ollama was restarted, the node deliberately was not, because a
-measurement run needs the CPU. To rejoin once measurements are done:
-
-    py node.py --server http://167.233.239.33:8000 --secret <node_secret>
-
-## The showcase: live generation is now safe
-
-Same harness, model and prompt set, every artifact opened in a real browser:
-
-| showcase | result | avg run |
-| --- | --- | --- |
-| `chart` | **10/10** (Fisher p=0.0004 vs the game; true rate ≥74% at 95%) | 22 min |
-| `clock` | 3/4 | 28 min |
-| `particles` | 3/4 | 20 min |
-| `snake` | 2/10 | ~50 min |
-
-`showcase.py` holds the pitches and per-artifact checks so `cli.py` and the
-harness cannot drift. `--demo-showcase [id]` selects one; bare `--demo-showcase`
-is still Snake, so every existing doc and the 2/10 stay reproducible. **The game
-was not removed** — it is the honest hard case. `docs/demo-script.md` says which
-showcase is for which shot.
-
-## Verification is wired, and off by default
-
-`verify_rate: 0`. Sampled duplication to a second node (`exclude_node` stops a
-node grading its own homework), background comparison so it never delays the
-deliverable, `rank()` giving better nodes *first refusal* rather than exclusion,
-and routing weight on the dashboard node cards. Verified in a real browser.
-
-## What to do next, best first
-
-1. **Rejoin Jett's node** (command above). Nothing is measuring now, so this is
-   safe and his live network currently shows 0 nodes.
-2. **Grow the eval prompt set** if anyone wants to tune prompts again. Nothing
-   else makes prompt work measurable.
-3. Optional: `clock` and `particles` are only at n=4. The clock is the prettier
-   artifact if the chart ever feels too static; ~6 more runs would settle it.
-
-## Do NOT build
-
-**Org multi-tenancy.** Enterprise plumbing for a system with zero external users,
-in neither MASTER_PLAN's roadmap nor its parking lot, and an org can already get
-a private pool by running its own instance. Confirmed with Jett Aug 10.
-
-## How this project works (earned the hard way)
-
-- **`evals/compare.py` decides promote-or-delete — never eyeball two summary
-  files.** A 4–6 prompt category can *never* reach p<0.05 on its own.
-- **Verify negative results by running the artifact.** Done repeatedly this
-  session: a clock that failed the animation check was genuinely broken (proved
-  by a full-pixel canvas diff plus a screenshot), and a `0/7` demo result was
-  **Ollama being down**, not a regression — the 0-minute runtimes gave it away.
-- **Only running the real thing finds real bugs.** The WebSocket 404, the
-  `signal.SIGKILL`-does-not-exist-on-Windows crash, and the leaked server that
-  corrupted a later run were all invisible to the test suite.
-- **A deploy that did nothing looks exactly like one that worked.** Verify.
-- **Never run tests/servers/browsers/inference while a measurement is going.**
-  8 GB, CPU-only — it starves Ollama.
-- **Windows specifics:** write UTF-8 explicitly; `SystemRoot` must survive into
-  subprocess envs; there is no `SIGKILL` — use `Popen.kill()`.
+---
 
 ## Secrets
 
@@ -208,25 +209,65 @@ work returns to it plus 216 ms each way. Stop `node.py` first if you try it.
 
 ---
 
+## What to do next, best first
+
+1. **Merge #46**, then the two Jett actions above.
+2. **Grow the eval prompt set** if anyone wants to tune prompts again. Nothing
+   else makes prompt work measurable.
+3. Optional: `clock` and `particles` showcases are only at n=4. The clock is the
+   prettier artifact if the chart ever feels too static; ~6 more runs settle it.
+
+## Do NOT build
+
+**Org multi-tenancy.** Enterprise plumbing for a system with zero external users;
+an org can already get a private pool by running its own instance. Confirmed with
+Jett Aug 10, and recorded in ROADMAP §7.
+
+Anything else in `ROADMAP.md`. It is reference. Every item is gated on a trigger
+and none of them have fired.
+
+## How this project works (earned the hard way)
+
+- **Only running the real thing finds real bugs.** Three code bugs in one
+  rehearsal, after the suite, the eval harness and careful reading all missed
+  them. The WebSocket 404, the Windows `SIGKILL`, and the soak's `/proc` probe
+  were the same shape.
+- **A test pinned to the wrong contract is worse than no test.** The chaos test
+  asserted the leaky 500 handler's response shape and passed for months.
+- **`evals/compare.py` decides promote-or-delete — never eyeball two summary
+  files.** A 4–6 prompt category can *never* reach p<0.05 on its own.
+- **Verify negative results by running the artifact.** A grep once "proved" a
+  working game had no game logic; a 0/7 demo result was Ollama being down.
+- **A deploy that did nothing looks exactly like one that worked.** Now checkable:
+  `scripts/verify_deploy.py`.
+- **Never run tests/servers/browsers/inference while a measurement is going.**
+  8 GB, CPU-only — it starves Ollama.
+- **Windows specifics:** write UTF-8 explicitly; `python` hits the Microsoft
+  Store alias — use `py`; `SystemRoot` must survive into subprocess envs; there
+  is no `SIGKILL` — use `Popen.kill()`.
+
+---
+
 ## Paste this into a new session
 
 > I'm continuing work on Mycelium (github.com/Jwrightsman/distributed-orchestrator).
 > Read `HANDOFF.md` first, then `MASTER_PLAN.md` and `SPRINT_PHASE2.md` — the
 > sprint file's Session Log is the real history and carries every measured
-> number. Then `CLAUDE.md` for house rules.
+> number. Then `CLAUDE.md` for house rules. `ROADMAP.md` is reference only —
+> don't pull work from it.
 >
-> master is current, all merged, CI green — don't destabilise it. The big finding
-> last session: the eval set is mostly noise (18 of 28 prompts flip between two
-> identical runs), so the published quality number is now ~57% with a wide
-> interval, and prompt tuning at n=28 is not measurable. The live orchestrator's
-> WebSocket bug is fixed and deployed.
+> State: master has #27–#45 merged. PR #46 is open and CI-green — merge it
+> unless you find a reason not to. It carries the ROADMAP integration, the first
+> real dress rehearsal of the demo script, and three bugs that rehearsal found:
+> nodes being evicted mid-build because streamed tokens weren't a heartbeat,
+> 500s echoing their exception text, and the advertised one-line join never
+> reaching its consent prompt.
 >
-> The queue: (1) score the `--demo` reliability run in `scripts/demo_results/` if
-> it finished, and update `docs/demo-script.md`; (2) rejoin my laptop as a node
-> once nothing is measuring; (3) if anyone wants to tune prompts again, the eval
-> set has to grow first — nothing else makes it measurable; (4) leave org
-> multi-tenancy alone, that's decided.
+> Two things need me and I'd like them queued up: redeploying the live
+> orchestrator (#46 adds `scripts/verify_deploy.py` to prove it landed), and
+> restarting my laptop node from current code so it earns credits again.
 >
-> Work on branches, use `evals/compare.py` for any prompt comparison, and append
-> to SPRINT_PHASE2.md's Session Log as you go. I have no programming experience —
-> make the technical calls yourself and tell me only what I need to act on.
+> Standing rules: use `evals/compare.py` for any prompt comparison, don't write
+> a v6 at n=28, org multi-tenancy stays dead, verify negative results by running
+> the artifact. Work on branches. I have no programming experience — make the
+> technical calls yourself and tell me only what I need to act on.

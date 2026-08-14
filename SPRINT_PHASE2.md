@@ -274,6 +274,144 @@ _Append one entry per session: date, items completed, what's next, warnings for 
 
 <!-- sessions append below -->
 
+### Session 5 — August 14, 2026 · ROADMAP integrated · demo script rehearsed · three bugs
+
+Branch `claude/mycelium-roadmap-rehearsal-e3d93e`, PR #46. Jett's machine, real Ollama.
+PR #45 was already merged when this session started.
+
+#### The dress rehearsal was the most productive thing done in weeks
+
+`docs/demo-script.md` had never been executed by anyone. Following it literally found
+**three bugs in the code** and about eight divergences in the script. The general lesson is
+the one this project keeps re-learning in a new costume: the test suite, the eval harness
+and careful reading all passed over these. Running the thing found them in an hour.
+
+**1. A node streaming tokens did not count as alive.** `last_seen` was refreshed only by
+`/tasks/next` and `/tasks/{id}/result`, so a node was "alive" only *between* tasks. Any
+builder subtask longer than `_NODE_TIMEOUT` (90 s) looked silent — while the node posted a
+token batch to `/tasks/{id}/stream` every 0.3 s.
+
+Observed on a real pitch of "Build a CSV deduplication script":
+
+    task_reclaimed  build_4  Laptop-1     <- reclaimed out from under a working node
+    nodes_online 0, tasks_in_queue 1      <- re-queued where nothing could take it
+    node terminal: DONE (329s) +0 credits <- paid nothing for work it completed
+
+The interaction with #45 is worth understanding: the reclaim invalidates the attempt, so
+#45's settlement check *correctly* refuses to pay. Attempt binding working as designed on
+top of a broken liveness signal is exactly the combination that would have produced "my
+laptop stopped earning credits and nobody can say why".
+
+Fixed by calling `touch_node` in the stream endpoint. **Verified by re-running the same
+work after the fix:** five subtasks at 87 / 138 / 282 / 236 / 269 s — four of them past the
+old cutoff — `nodes_online` never below 1, zero reclaims, all five paid. 25 credits. Two
+tests, both confirmed to fail with the fix removed.
+
+**2. Every 500 echoed its exception text.** `server.py` registered two
+`@app.exception_handler(Exception)` handlers. Starlette keys handlers by exception class, so
+the second registration silently replaced the first: the hardened generic handler was dead
+code and every 500 served `{"detail": str(exc)}`. Proved by driving a real request through
+the app — the response carried a filesystem path. Live on the public orchestrator.
+
+The chaos test that should have caught it, `test_unexpected_error_is_json_not_a_traceback`,
+was asserting `resp.json()["error"] == "Internal server error"` — the *leaky* handler's
+response shape. It passed happily throughout. A test pinned to the wrong contract is worse
+than no test, because it reads as coverage.
+
+**3. The advertised one-line join could never finish.** `curl ... | bash -s -- URL` gives
+bash the downloaded script as stdin, so `install.sh`'s closing `exec join.py` inherited a
+pipe. join.py refuses without a terminal — correctly; that gate is the consent rule — so the
+installer checked Python, installed Ollama, cloned the repo, installed the deps, and stopped
+on *"Not running in a terminal, so nobody can consent."* Reproduced by piping into bash
+before touching anything.
+
+This is the command in the README, on the landing page, in the launch post and in Shot 7.
+Fixed by handing over on `/dev/tty`, which is the controlling terminal whatever stdin was
+redirected to, so a human still types "yes". **Deliberately not fixed with `--yes`** — that
+consents on the machine owner's behalf, which is the whole point of the gate. A test blocks
+that shortcut.
+
+Why it survived: the launch checklist said to test the join flow with
+`python join.py <address>`, which passes. The piped one-liner is a different code path. The
+checklist now demands the literal `curl ... | bash` string.
+
+#### What the script got wrong about reality
+
+- **"15-minute prep"** against a real ~2 hours (step 3 alone is ~22 minutes of generation).
+  Now a table, with the short path (~35 min) called out.
+- **The Ollama restart command was cmd.exe syntax in a bash fence.** `%LOCALAPPDATA%` does
+  not expand in PowerShell and `start ""` maps to `Start-Process` with an empty FilePath.
+  Confirmed by running it.
+- **Two prerequisites missing entirely:** nothing started a worker node — Shots 2 and 3 are
+  blank without one — and nothing cleared `events.db`, so Live Activity opens showing
+  entries from days earlier, at `12:42 AM`, above the fresh ones.
+- **Shot 3 said "dashboard, full frame"** and listed the plan, node cards and credits. After
+  the rebuild those live in Overview, Nodes and Guild. The node card carries credits, so
+  beats 2 and 3 are one shot in Nodes.
+- **With one machine, nothing is parallel.** Five subtasks queued at once went strictly
+  sequentially through one node. Shot 3's parallel claim needs a second machine or a
+  different caption.
+- **Shot 1's dashboard is dead.** `cli.py` runs the pipeline in-process and never loads the
+  server's event module — checked at runtime, not by grep.
+- **Shot 7's landing page renders the join command from the URL you browsed**, so prep step
+  6's `127.0.0.1` puts `join.py http://127.0.0.1:8000` on camera as the CTA.
+
+#### Measured incidentally, worth keeping
+
+The same pitch decomposed into **5, 1 and 4 subtasks** across three runs, with planner
+latency of **181 s, 82 s and 97 s**. Non-determinism at the planner is as large as anything
+the eval measures downstream, which is one more reason the n=28 instrument cannot resolve
+prompt changes.
+
+#### Deploy verification that a successful `git pull` cannot fake
+
+The standing complaint — a deploy that did nothing looks exactly like one that worked — now
+has a direct answer instead of a proxy. The WebSocket check only proves the image is newer
+than Aug 12; it cannot tell #42 from #45. Version strings do not work because nobody bumps
+them, and git does not work because `.git` is not in the image, while asking the *host* only
+proves the checkout moved — the half of the failure that already succeeded.
+
+So `/status.json` now carries a `build` field: a hash of the server's own source, computed
+inside the running process. `scripts/verify_deploy.py <url>` compares it with the checkout
+you are standing in and prints MATCH or STALE. Verified against a genuinely stale server —
+the one running from before the commit — which it correctly called STALE. Line endings are
+normalised so a Windows checkout and the Linux image agree.
+
+#### ROADMAP.md integrated, and five places it disagreed with the repo
+
+Added to the root and wired into MASTER_PLAN §8 (now a pointer, not a second parking lot),
+HANDOFF's read-first list (marked REFERENCE, NOT A WORK QUEUE), README and CONTRIBUTING.
+Corrections: #45 shipped the first half of §5's *second* item, not its first; four of §5's
+adversarial scenarios now have tests; the 500 leak was open and is now fixed; live config
+reload is partly done; `SECURITY.md` and `THREAT_MODEL.md` do not exist.
+
+Integrating it also exposed two stale README claims — the MCP interface and verification
+were still listed as *planned* when both had shipped, and the suite was advertised at 114
+tests when it is 390.
+
+#### Fresh-eyes pass: the main CTA had nowhere to land
+
+README and the landing page both say "open an issue" to ask for the orchestrator address.
+That link went to a chooser offering Bug report, Feature or idea, and Node won't connect —
+so someone who had just watched the video and wanted to contribute a machine had to file a
+bug report to say hello. Added a **join the network** template and pointed both at it.
+
+Two more: the README told Windows users to run `python`, which on stock Windows hits the
+Microsoft Store alias and fails even with Python installed (reproduced on Jett's machine),
+and its first dashboard command bound `--host 0.0.0.0` with auth off by default and no
+warning, on the page a newcomer follows first.
+
+**The ~57% number reads as honest, not defensive.** It leads the Show HN draft, the noise
+finding is the headline rather than a footnote, and every channel draws from one table. No
+change needed. `docs/DEPLOY.md` needed nothing either.
+
+#### For Jett
+
+Two things need him: redeploying the live orchestrator, and restarting his laptop node from
+current code so it earns again. Commands and the check that proves the deploy landed are in
+HANDOFF.md.
+
+
 ### Session 4 — August 10, 2026 · v5 resolved · §1.3 showcase alternatives · verification wired
 
 Branch `claude/mycelium-v5-eval-7bc393`. Jett's machine, real Ollama, prompt set v3 throughout.
