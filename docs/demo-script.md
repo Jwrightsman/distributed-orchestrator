@@ -174,9 +174,20 @@ the left, the dashboard on the right.**
 1. Type into Claude: *"Pitch this to the swarm: build a CSV deduplication
    script."*
 2. Claude calls `pitch_task`. **The dashboard reacts immediately** — the pitch
-   appears in Live Activity.
-3. Node cards light up and pulse as builders take subtasks.
+   appears in Live Activity on **Overview**. Verified: MCP posts to the same
+   `/pitch/async` route the dashboard's own Pitch button uses, and a rehearsal
+   pitch showed `PITCH` → `PLANNER Decomposed into 5 subtasks: …` in the feed.
+3. Node cards light up as builders take subtasks — **that is the Nodes view**,
+   not Overview. Decide before you roll whether the right-hand window sits on
+   Overview (the feed narrates itself, better for this shot) or Nodes (the
+   machine, better for Shot 3). Trying to show both means switching views on
+   camera while Claude is talking. Overview is the better choice here.
 4. Claude polls `get_job_status` and narrates progress in chat.
+
+> **Expect a wait between step 2 and step 3.** The planner runs first, on the
+> orchestrator, and it took **82, 97 and 181 seconds** across the three rehearsal runs before the
+> first subtask was even queued. Nothing appears on the node in that window.
+> Cut it in the edit; do not re-take thinking it hung.
 
 **Say / caption:** *"It's an MCP server. Any AI app can hand work to the swarm."*
 
@@ -345,3 +356,38 @@ End card: repo URL.
   is normal. A builder call is minutes of CPU inference. Check the node's
   terminal for the elapsed counter rather than guessing from the dashboard.
 - Game opens on "GAME OVER" → click restart, then start the shot (see prep #3).
+
+---
+
+## Rehearsal notes — what has actually been executed
+
+This script was run start to finish for the first time on **Aug 14, 2026**, on
+Jett's machine with real inference, and the fixes above came out of it. What was
+executed, so the next person knows what is verified and what is still on trust:
+
+**Executed and verified:** the Ollama check (prep 2), the server start (prep 6),
+the node join (prep 7), a real pitch through the dashboard driving Live Activity,
+node cards, and credits, the Nodes and Guild views, and the landing page in
+Shot 7. Three end-to-end pipeline runs.
+
+**Found by running it, and fixed in the code rather than the script:**
+
+- A node was **evicted mid-build** and its subtask reclaimed, because streamed
+  tokens did not count as a heartbeat. On a 329-second build the node was paid
+  **+0 credits** for work it completed, and the dashboard showed 0 nodes while
+  the node's terminal showed it building. After the fix, a 138-second build kept
+  the node online and paid it. This would have happened on camera.
+- The **one-line join could never finish** — `curl … | bash` left join.py with a
+  pipe for stdin, so its consent prompt refused. That is Shot 7's payoff.
+
+**Not executed, and still on trust:** Shot 1's live chart generation (~22 min),
+Shot 2's Claude Desktop MCP take (needs Claude Desktop configured), Shot 4's
+`--demo` memory run (~35 min), and Shot 6's Snake generation. Their *mechanics*
+are verified — the MCP route is the same one the rehearsal drove — but the
+takes themselves have not been filmed.
+
+**The planner is not deterministic.** The same pitch, "Build a CSV deduplication
+script", decomposed into **5 subtasks on one run and 1 on the next** (a third pitch
+gave 4). Planner latency varied just as much: 82 s, 97 s, 181 s. Shot 3
+wants a run with several subtasks; if you get a one-subtask plan, re-pitch
+rather than trying to film it.
