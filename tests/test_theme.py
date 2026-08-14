@@ -80,3 +80,32 @@ def test_missing_marker_degrades_visibly_not_silently(tmp_path, monkeypatch):
     (tmp_path / "index.html").write_text("<head></head><body>hi</body>", encoding="utf-8")
     out = dashboard._page("index.html")
     assert "WARNING: theme marker missing" in out
+
+
+# ── Public status endpoint ───────────────────────────────────────────
+
+def test_status_json_is_public_and_safe_to_share(client):
+    """The landing page's proof panel and any curious agent both read this.
+
+    It must need no auth (an invite-gated network still has to be checkable)
+    and must leak nothing: no task text, no hostnames, no keys.
+    """
+    r = client.get("/status.json")
+    assert r.status_code == 200, "status.json must not require auth"
+    d = r.json()
+    for field in ("service", "status", "nodes_online", "pitches_completed",
+                  "uptime_seconds", "model", "orchestrator_online"):
+        assert field in d, f"missing {field}"
+    blob = r.text.lower()
+    for leak in ("secret", "pitch_key", "node_secret", "password", "token"):
+        assert leak not in blob, f"status.json leaks {leak}"
+
+
+def test_status_json_reports_orchestrator_up_even_with_no_nodes(client):
+    """An empty swarm is not a broken one — the landing page depends on this
+    distinction to render its zero state honestly."""
+    import server_state as state
+    state.nodes.clear()
+    d = client.get("/status.json").json()
+    assert d["nodes_online"] == 0
+    assert d["orchestrator_online"] is True

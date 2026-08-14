@@ -99,6 +99,125 @@
     letter-spacing: 1px;
   }
 
+  /* ── App shell ───────────────────────────────────────────────────
+     Persistent left nav + top bar, the layout every tool of this kind
+     converges on: navigation stays put, the top bar holds actions that apply
+     everywhere, and the content area does exactly one job at a time. The
+     previous version stacked every job onto one scrolling page, which is why
+     browsing history meant scrolling past a live pitch box. */
+  .app { display: flex; min-height: 100vh; }
+
+  .nav {
+    width: 232px; flex-shrink: 0;
+    display: flex; flex-direction: column;
+    border-right: 1px solid var(--border-subtle);
+    background: var(--bg-elevated);
+    position: sticky; top: 0; height: 100vh;
+    transition: width .16s ease;
+  }
+  .app.nav-collapsed .nav { width: 60px; }
+  .app.nav-collapsed .nav-label { display: none; }
+  .app.nav-collapsed .nav-item { justify-content: center; }
+  .app.nav-collapsed .nav-brand { justify-content: center; }
+
+  .nav-brand {
+    display: flex; align-items: center; gap: 10px;
+    padding: 18px 16px 16px; margin-bottom: 4px;
+  }
+  .nav-mark {
+    width: 18px; height: 18px; border-radius: 5px; flex-shrink: 0;
+    background: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-wash);
+  }
+  .nav-brand-name { font-size: 14px; font-weight: 650; color: var(--text); letter-spacing: -0.2px; }
+
+  .nav-items { display: flex; flex-direction: column; gap: 2px; padding: 0 8px; }
+  .nav-item {
+    display: flex; align-items: center; gap: 10px;
+    width: 100%; padding: 8px 10px;
+    background: none; border: none; border-radius: var(--radius-sm);
+    color: var(--text-dim); font-family: var(--sans); font-size: 13.5px; font-weight: 500;
+    cursor: pointer; text-align: left;
+    transition: background .1s ease, color .1s ease;
+  }
+  .nav-item svg { width: 16px; height: 16px; flex-shrink: 0; opacity: .85; }
+  .nav-item:hover { background: var(--surface-hover); color: var(--text); }
+  .nav-item.active { background: var(--accent-wash); color: var(--accent-text); font-weight: 600; }
+  .nav-item.active svg { opacity: 1; }
+  .nav-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .nav-badge {
+    margin-left: auto; font-family: var(--mono); font-size: 11px;
+    color: var(--text-muted); background: var(--surface); border: 1px solid var(--border);
+    border-radius: 20px; padding: 1px 7px; min-width: 22px; text-align: center;
+  }
+
+  .nav-foot {
+    margin-top: auto; padding: 14px 16px;
+    border-top: 1px solid var(--border-subtle);
+    display: flex; flex-direction: column; gap: 5px;
+  }
+  .nav-foot-sub { font-family: var(--mono); font-size: 11px; color: var(--text-muted); }
+
+  .app-body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+
+  .topbar {
+    display: flex; align-items: center; gap: 14px;
+    padding: 0 20px; height: 56px; flex-shrink: 0;
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--bg);
+    position: sticky; top: 0; z-index: 20;
+  }
+  .topbar-title { font-size: 15px; font-weight: 620; color: var(--text); letter-spacing: -0.2px; }
+  .topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+
+  .icon-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 30px; height: 30px; flex-shrink: 0;
+    background: none; border: 1px solid transparent; border-radius: var(--radius-sm);
+    color: var(--text-dim); cursor: pointer;
+  }
+  .icon-btn svg { width: 17px; height: 17px; }
+  .icon-btn:hover { background: var(--surface-hover); color: var(--text); }
+
+  .btn-primary {
+    background: var(--accent); color: var(--bg);
+    border: none; border-radius: var(--radius-sm);
+    padding: 7px 14px; font-family: var(--sans); font-size: 13px; font-weight: 600;
+    cursor: pointer; white-space: nowrap;
+  }
+  .btn-primary:hover { background: var(--accent-dim); }
+  .btn-primary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .content { padding: 24px 28px 56px; max-width: 1180px; width: 100%; }
+
+  /* Plain-language key for the live log. */
+  .flow {
+    display: flex; align-items: stretch; gap: 8px; flex-wrap: wrap;
+    padding: 12px 14px; margin-bottom: 20px;
+    border: 1px solid var(--border-subtle); border-radius: var(--radius);
+    background: var(--surface);
+  }
+  .flow-step { display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; min-width: 0; }
+  .flow-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; align-self: center; }
+  .flow-step b { font-size: 12.5px; font-weight: 650; color: var(--text); white-space: nowrap; }
+  .flow-step i { font-size: 12.5px; font-style: normal; color: var(--text-muted); }
+  .flow-arrow { color: var(--text-muted); font-size: 13px; align-self: center; }
+  @media (max-width: 760px) {
+    .flow { flex-direction: column; gap: 7px; }
+    .flow-arrow { display: none; }
+  }
+
+  .view-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+  .view-head h2 { margin: 0; }
+  .view-sub { font-size: 13px; color: var(--text-muted); }
+
+  @media (max-width: 900px) {
+    .nav { position: fixed; z-index: 40; transform: translateX(-100%); }
+    .app.nav-open .nav { transform: translateX(0); }
+    .content { padding: 18px 16px 48px; }
+    .topbar-actions .credit-chip { display: none; }
+  }
+
   .main {
     display: grid;
     grid-template-columns: 300px 1fr;
@@ -653,18 +772,47 @@
 </head>
 <body>
 
-<div class="header">
-  <div class="header-main">
-    <h1>Mycelium <span>Distributed Orchestrator</span></h1>
-    <div class="header-sub">A task, split across every machine that joined.</div>
-  </div>
-  <button class="theme-toggle" id="theme-toggle" onclick="toggleTheme()"
-          title="Switch between light and dark" aria-label="Switch colour theme">
-    <span id="theme-toggle-icon" aria-hidden="true"></span>
-    <span id="theme-toggle-label"></span>
-  </button>
-</div>
+<div class="app" id="app">
+  <aside class="nav" id="nav">
+    <div class="nav-brand">
+      <span class="nav-mark" aria-hidden="true"></span>
+      <span class="nav-label nav-brand-name">Mycelium</span>
+    </div>
+    <nav class="nav-items" aria-label="Primary">
+      <button class="nav-item active" id="tab-overview" onclick="showTab('overview')" title="Overview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 13h5v8H3zM10 3h5v18h-5zM17 9h4v12h-4z"/></svg><span class="nav-label">Overview</span></button>
+      <button class="nav-item" id="tab-runs" onclick="showTab('runs')" title="Runs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8v4l3 2"/><circle cx="12" cy="12" r="9"/></svg><span class="nav-label">Runs</span></button>
+      <button class="nav-item" id="tab-gallery" onclick="showTab('gallery')" title="Gallery"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span class="nav-label">Gallery</span></button>
+      <button class="nav-item" id="tab-nodes" onclick="showTab('nodes')" title="Nodes"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="18" r="2.2"/><path d="M10.5 6.8 6.5 15.8M13.5 6.8l4 9M7.4 18h9.2"/></svg><span class="nav-label">Nodes</span><span class="nav-badge" id="nav-node-count"></span></button>
+      <button class="nav-item" id="tab-projects" onclick="showTab('projects')" title="Projects"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span class="nav-label">Projects</span></button>
+      <button class="nav-item" id="tab-guild" onclick="showTab('guild')" title="Guild"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l2.6 5.6 6.4.8-4.7 4.3 1.2 6.3L12 17l-5.5 3 1.2-6.3L3 9.4l6.4-.8z"/></svg><span class="nav-label">Guild</span></button>
+    </nav>
+    <div class="nav-foot">
+      <span class="stat-status" id="nav-status"><i></i>checking</span>
+      <span class="nav-label nav-foot-sub" id="nav-model">—</span>
+    </div>
+  </aside>
 
+  <div class="app-body">
+    <header class="topbar">
+      <button class="icon-btn" onclick="toggleNav()" aria-label="Toggle sidebar" title="Toggle sidebar">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+      </button>
+      <h1 class="topbar-title" id="view-title">Overview</h1>
+      <div class="topbar-actions">
+        <span class="credit-chip" id="credit-chip" title="Credits earned by this orchestrator for pitches, local builds and reviews">
+          <span id="credit-host">—</span><span class="credit-sep">·</span><span id="credit-value">0</span> credits
+        </span>
+        <button class="btn-primary" onclick="focusPitch()">Pitch a task</button>
+        <button class="theme-toggle" id="theme-toggle" onclick="toggleTheme()"
+                title="Switch between light and dark" aria-label="Switch colour theme">
+          <span id="theme-toggle-icon" aria-hidden="true"></span>
+          <span id="theme-toggle-label"></span>
+        </button>
+      </div>
+    </header>
+
+    <main class="content">
+      <div id="view-overview">
 <div class="stats-bar">
   <div class="stat">
     <span class="stat-value" id="stat-nodes">0</span>
@@ -692,40 +840,9 @@
   </div>
 </div>
 
-<div class="main">
-  <div class="sidebar">
-    <h2>Network Nodes</h2>
-    <div id="nodes-list">
-      <div class="empty-state">
-        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="18" r="2.2"/><path d="M10.5 6.8 6.5 15.8M13.5 6.8l4 9M7.4 18h9.2"/></svg></div>
-        <p>No nodes connected yet.<br>Run <code style="color:var(--accent)">python node.py --server http://YOUR_IP:8000</code> on another machine to join.</p>
-      </div>
-    </div>
 
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:24px;margin-bottom:14px;">
-      <h2 style="margin:0;">Projects</h2>
-      <button onclick="promptNewProject()" style="background:var(--accent-wash);border:1px solid var(--accent-wash-mid);border-radius:5px;padding:3px 10px;font-size:12px;font-weight:700;color:var(--accent);cursor:pointer;">+ New</button>
-    </div>
-    <div id="projects-list">
-      <div class="empty-state"><p>No projects yet.</p></div>
-    </div>
-  </div>
+      <div class="view-head" style="margin-top:4px;"><h2>Pitch a task</h2><span class="view-sub">Describe what you want built; the planner splits it up</span></div>
 
-  <div class="content">
-    <div class="tab-nav">
-      <button class="tab-btn active" id="tab-live" onclick="showTab('live')">Live</button>
-      <button class="tab-btn" id="tab-gallery" onclick="showTab('gallery')">Gallery</button>
-      <button class="tab-btn" id="tab-guild" onclick="showTab('guild')">Guild</button>
-    </div>
-
-    <!-- ── LIVE TAB ── -->
-    <div id="view-live">
-      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;">
-        <h2 style="margin-bottom:14px;">Pitch a Task</h2>
-        <span class="credit-chip" id="credit-chip" title="Credits earned by this orchestrator for pitches, local builds and reviews">
-          <span id="credit-host">—</span><span class="credit-sep">·</span><span id="credit-value">0</span> credits
-        </span>
-      </div>
       <!-- Hidden project context — set when "Continue" is clicked -->
       <div id="project-context" style="display:none;margin-bottom:10px;padding:8px 12px;background:var(--accent-wash);border:1px solid var(--accent-wash-mid);border-radius:6px;justify-content:space-between;align-items:center;">
         <span style="font-size:14px;color:var(--accent);">Continuing project: <strong id="project-context-name"></strong></span>
@@ -740,6 +857,24 @@
       <!-- Quick-start templates -->
       <div id="task-templates" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:20px;"></div>
 
+      <!-- The live log is the most convincing thing on this page and the least
+           self-explanatory: PLANNER / BUILDER / REVIEWER mean nothing to a
+           visitor. One line of plain language, above the log, is enough to make
+           the rest readable without turning the page into a tutorial. -->
+      <div class="flow" aria-label="What happens to a task">
+        <div class="flow-step"><span class="flow-dot" style="background:var(--stage-pitch)"></span>
+          <b>You pitch</b><i>a task in plain English</i></div>
+        <span class="flow-arrow" aria-hidden="true">→</span>
+        <div class="flow-step"><span class="flow-dot" style="background:var(--stage-plan)"></span>
+          <b>Planner</b><i>splits it into smaller jobs</i></div>
+        <span class="flow-arrow" aria-hidden="true">→</span>
+        <div class="flow-step"><span class="flow-dot" style="background:var(--stage-build)"></span>
+          <b>Builders</b><i>write the pieces, on separate machines</i></div>
+        <span class="flow-arrow" aria-hidden="true">→</span>
+        <div class="flow-step"><span class="flow-dot" style="background:var(--stage-review)"></span>
+          <b>Reviewer</b><i>assembles and grades the result</i></div>
+      </div>
+
       <h2>Live Activity</h2>
       <div id="event-log" style="margin-bottom:24px;max-height:200px;overflow-y:auto;"></div>
 
@@ -751,6 +886,10 @@
         </div>
       </div>
 
+    </div>
+
+      <div id="view-runs" style="display:none;">
+        <div class="view-head"><h2>Runs</h2><span class="view-sub">Every pipeline this orchestrator has completed</span></div>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-top:24px;margin-bottom:8px;">
         <h2 style="margin:0;">History</h2>
         <input id="history-search" type="text" placeholder="search..." oninput="onHistorySearch()"
@@ -759,7 +898,31 @@
       <div id="history-list">
         <div class="empty-state"><p>No past runs yet.</p></div>
       </div>
+      </div>
+
+      <div id="view-nodes" style="display:none;">
+        <div class="view-head"><h2>Network Nodes</h2><span class="view-sub">Machines contributing compute right now</span></div>
+    <h2>Network Nodes</h2>
+    <div id="nodes-list">
+      <div class="empty-state">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="18" r="2.2"/><path d="M10.5 6.8 6.5 15.8M13.5 6.8l4 9M7.4 18h9.2"/></svg></div>
+        <p>No nodes connected yet.<br>Run <code style="color:var(--accent)">python node.py --server http://YOUR_IP:8000</code> on another machine to join.</p>
+      </div>
     </div>
+
+      </div>
+
+      <div id="view-projects" style="display:none;">
+        <div class="view-head"><h2>Projects</h2><span class="view-sub">Work that remembers what it already built</span></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:24px;margin-bottom:14px;">
+      <h2 style="margin:0;">Projects</h2>
+      <button onclick="promptNewProject()" style="background:var(--accent-wash);border:1px solid var(--accent-wash-mid);border-radius:5px;padding:3px 10px;font-size:12px;font-weight:700;color:var(--accent);cursor:pointer;">+ New</button>
+    </div>
+    <div id="projects-list">
+      <div class="empty-state"><p>No projects yet.</p></div>
+    </div>
+      </div>
+
 
     <!-- ── GALLERY TAB ── -->
     <div id="view-gallery" style="display:none;">
@@ -850,9 +1013,20 @@ async function refresh() {
     document.getElementById('stat-nodes').textContent = nodes.count;
     document.getElementById('stat-tasks').textContent = health.tasks_pending;
     document.getElementById('stat-models').textContent = health.models.length;
-    const st = document.getElementById('stat-status');
-    st.className = 'stat-status ' + (health.ollama === 'connected' ? 'is-ok' : 'is-down');
-    st.innerHTML = '<i></i>' + health.ollama;
+    const ok = health.ollama === 'connected';
+    // Status lives in the shell as well as on Overview: whichever view you are
+    // on, "is the swarm alive" has to be answerable without navigating.
+    [['stat-status', health.ollama], ['nav-status', ok ? 'connected' : health.ollama]]
+      .forEach(([id, text]) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.className = 'stat-status ' + (ok ? 'is-ok' : 'is-down');
+        el.innerHTML = '<i></i>' + text;
+      });
+    const navModel = document.getElementById('nav-model');
+    if (navModel) navModel.textContent = (health.models && health.models[0]) || 'no model';
+    const navCount = document.getElementById('nav-node-count');
+    if (navCount) navCount.textContent = (nodes.nodes || []).length;
     if (met) {
       const latEl = document.getElementById('stat-latency');
       if (latEl) latEl.textContent = met.avg_task_latency_seconds != null ? met.avg_task_latency_seconds + 's' : '-';
@@ -916,9 +1090,10 @@ async function refresh() {
       }).join('');
     }
   } catch(e) {
-    const stOff = document.getElementById('stat-status');
-    stOff.className = 'stat-status is-down';
-    stOff.innerHTML = '<i></i>offline';
+    ['stat-status', 'nav-status'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) { el.className = 'stat-status is-down'; el.innerHTML = '<i></i>offline'; }
+    });
   }
 }
 
@@ -1604,14 +1779,48 @@ function clearProjectContext() {
 }
 
 // ── Tab switching ──
-const TABS = ['live', 'gallery', 'guild'];
+const TABS = ['overview', 'runs', 'gallery', 'nodes', 'projects', 'guild'];
+const TAB_TITLES = {
+  overview: 'Overview', runs: 'Runs', gallery: 'Gallery',
+  nodes: 'Network Nodes', projects: 'Projects', guild: 'Guild Standings',
+};
+
+function toggleNav() {
+  const app = document.getElementById('app');
+  // Below 900px the sidebar is an overlay, so the same control has to mean
+  // "open" there and "collapse to icons" on a wide screen.
+  const cls = window.matchMedia('(max-width: 900px)').matches ? 'nav-open' : 'nav-collapsed';
+  app.classList.toggle(cls);
+  try { localStorage.setItem('mycelium-nav', app.classList.contains('nav-collapsed') ? '1' : '0'); } catch (e) {}
+}
+
+function focusPitch() {
+  showTab('overview');
+  const el = document.getElementById('pitch-input');
+  if (el) { el.focus(); el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+}
+
+try {
+  if (localStorage.getItem('mycelium-nav') === '1') {
+    document.addEventListener('DOMContentLoaded', () =>
+      document.getElementById('app').classList.add('nav-collapsed'));
+  }
+} catch (e) {}
 function showTab(name) {
   TABS.forEach(t => {
     document.getElementById('view-' + t).style.display = t === name ? '' : 'none';
     document.getElementById('tab-' + t).classList.toggle('active', t === name);
   });
+  const title = document.getElementById('view-title');
+  if (title) title.textContent = TAB_TITLES[name] || name;
+  // A deep link should survive a refresh; without this, "Runs" is unshareable.
+  try { history.replaceState(null, '', '#' + name); } catch (e) {}
+  if (window.matchMedia('(max-width: 900px)').matches) {
+    document.getElementById('app').classList.remove('nav-open');
+  }
   if (name === 'gallery') loadGallery();
   if (name === 'guild') loadStandings();
+  if (name === 'runs') loadHistory();
 }
 
 // ── Gallery ──
@@ -1667,7 +1876,7 @@ async function loadGallery() {
 }
 
 function forkTask(task, projectId) {
-  showTab('live');
+  showTab((location.hash || '#overview').slice(1));
   // If this run belongs to a project, continue it so the AI loads the memory context.
   // Otherwise just load the task text for a fresh pitch.
   if (projectId) {

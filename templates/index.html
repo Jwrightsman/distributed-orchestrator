@@ -3,173 +3,322 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Mycelium — Distributed Orchestrator</title>
+<title>Mycelium — one task, split across many computers</title>
+<meta name="description" content="Describe something you want built. Mycelium splits the work across ordinary computers running local AI models, then assembles the finished code. No cloud, no API keys.">
 <!-- THEME -->
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
-  /* Design tokens come from templates/_theme.html — see dashboard.py */
+  /* Design tokens come from templates/_theme.html — see dashboard.py
+
+     Written phone-first. Most visitors arrive from a link in a post, on a
+     phone, knowing nothing, and leave in seconds — so everything above the
+     fold answers "what is this", "is it actually running", "what do I do
+     next", in that order, and everything else is below it. */
 
   body {
     background: var(--bg);
     color: var(--text);
     font-family: var(--sans);
-    min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    padding: 48px 20px;
-    text-align: center;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
   }
-  .logo-tag {
-    font-family: var(--mono);
-    font-size: 13px;
-    color: var(--accent);
-    letter-spacing: 4px;
-    font-weight: 700;
-    margin-bottom: 24px;
+  .wrap { width: 100%; max-width: 760px; margin: 0 auto; padding: 0 20px; }
+
+  /* ── Above the fold ─────────────────────────────────────────────── */
+  .hero { padding: 30px 0 32px; }
+  .eyebrow {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-family: var(--mono); font-size: 12px; font-weight: 600;
+    letter-spacing: 2px; color: var(--accent-text); margin-bottom: 14px;
+  }
+  .eyebrow .mark {
+    width: 14px; height: 14px; border-radius: 4px;
+    background: var(--accent); box-shadow: 0 0 0 3px var(--accent-wash);
   }
   h1 {
-    font-size: clamp(28px, 5vw, 52px);
-    font-weight: 600;
+    font-size: clamp(26px, 6.6vw, 44px);
+    font-weight: 640; letter-spacing: -0.9px; line-height: 1.14;
     color: var(--text);
-    letter-spacing: -1px;
-    line-height: 1.15;
-    max-width: 800px;
   }
-  h1 .accent { color: var(--accent); }
-  .sub {
-    margin-top: 20px;
-    max-width: 640px;
-    font-size: clamp(15px, 2vw, 18px);
-    line-height: 1.65;
-    color: var(--text-dim);
+  .lede {
+    margin-top: 13px; font-size: clamp(15px, 4vw, 19px);
+    color: var(--text-dim); max-width: 34em;
   }
-  .stats-row {
-    margin-top: 40px;
-    display: flex;
-    gap: 40px;
-    justify-content: center;
-    flex-wrap: wrap;
-  }
-  .stat {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-  .stat .num {
-    font-family: var(--mono);
-    font-size: 40px;
-    font-weight: 600;
-    color: var(--text);
-    font-variant-numeric: tabular-nums;
-  }
-  .stat .num.live { color: var(--accent); }
-  .stat .label {
-    font-size: 12px;
-    color: var(--text-muted);
-    letter-spacing: 2px;
-    text-transform: uppercase;
-  }
+  .lede strong { color: var(--text); font-weight: 600; }
 
-  .actions {
-    margin-top: 44px;
-    display: flex;
-    gap: 16px;
-    flex-wrap: wrap;
-    justify-content: center;
+  /* ── Live proof ─────────────────────────────────────────────────── */
+  .proof {
+    margin-top: 20px; border: 1px solid var(--border);
+    border-radius: var(--radius-lg); background: var(--surface); overflow: hidden;
   }
+  .proof-head {
+    display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
+    padding: 11px 15px; border-bottom: 1px solid var(--border-subtle);
+  }
+  .pulse {
+    width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-wash); flex-shrink: 0;
+    animation: pulse 2.4s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .45 } }
+  @media (prefers-reduced-motion: reduce) { .pulse { animation: none } }
+  .proof-head .what { font-size: 13.5px; font-weight: 600; color: var(--text); }
+  .proof-head .when { font-family: var(--mono); font-size: 12px; color: var(--text-muted); margin-left: auto; }
+
+  .figs { display: grid; grid-template-columns: repeat(3, 1fr); }
+  .fig { padding: 12px 15px; border-right: 1px solid var(--border-subtle); }
+  .fig:last-child { border-right: none; }
+  .fig .n {
+    font-family: var(--mono); font-size: 21px; font-weight: 600;
+    color: var(--text); font-variant-numeric: tabular-nums; display: block;
+  }
+  .fig .n.live { color: var(--accent-text); }
+  .fig .k { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: var(--text-muted); }
+
+  .recent { border-top: 1px solid var(--border-subtle); padding: 10px 15px 12px; }
+  .recent-title { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: var(--text-muted); margin-bottom: 8px; }
+  .run { display: flex; gap: 10px; align-items: baseline; padding: 5px 0; font-size: 13.5px; }
+  .run .txt {
+    color: var(--text-dim); overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; flex: 1; min-width: 0;
+  }
+  .run .tag { font-family: var(--mono); font-size: 11px; flex-shrink: 0; }
+  .tag.pass { color: var(--accent-text); }
+  .tag.work { color: var(--warn); }
+
+  /* The zero state is a designed state, not an absence. */
+  .zero {
+    border-top: 1px solid var(--border-subtle);
+    padding: 10px 15px 12px; font-size: 12.5px; color: var(--text-muted);
+  }
+  .zero b { color: var(--text-dim); font-weight: 600; }
+
+  /* ── Action ─────────────────────────────────────────────────────── */
+  .actions { margin-top: 18px; display: flex; gap: 10px; flex-wrap: wrap; }
   .btn {
-    padding: 15px 34px;
-    border-radius: 10px;
-    font-size: 16px;
-    font-weight: 700;
-    text-decoration: none;
-    transition: all 0.15s;
+    display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+    min-height: 46px; padding: 12px 22px; border-radius: var(--radius);
+    font-size: 15px; font-weight: 600; text-decoration: none; cursor: pointer;
+    border: 1px solid transparent; transition: background .13s ease, border-color .13s ease;
   }
-  .btn-primary { background: var(--accent); color: var(--bg); }
+  .btn-primary { background: var(--accent); color: var(--bg); flex: 1 1 auto; }
   .btn-primary:hover { background: var(--accent-dim); }
-  .btn-secondary {
-    background: none;
-    color: var(--accent);
-    border: 1.5px solid var(--accent-border);
+  .btn-ghost { background: none; color: var(--text-dim); border-color: var(--border); }
+  .btn-ghost:hover { border-color: var(--border-strong); color: var(--text); }
+  .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* ── Below the fold ─────────────────────────────────────────────── */
+  section { padding: 34px 0; border-top: 1px solid var(--border-subtle); }
+  h2 {
+    font-size: 12px; letter-spacing: 1.6px; text-transform: uppercase;
+    color: var(--text-muted); font-weight: 600; margin-bottom: 16px;
   }
-  .btn-secondary:hover { background: var(--accent-wash); border-color: var(--accent); }
-  .join-line {
-    margin-top: 40px;
-    font-family: var(--mono);
-    font-size: 14px;
-    background: var(--border-subtle);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 14px 22px;
-    color: var(--text-dim);
-    cursor: pointer;
-    transition: border-color 0.15s;
-    user-select: all;
+  .steps { display: grid; gap: 14px; }
+  .step { display: flex; gap: 13px; }
+  .step .i {
+    font-family: var(--mono); font-size: 12px; font-weight: 600;
+    color: var(--accent-text); background: var(--accent-wash);
+    border: 1px solid var(--accent-wash-mid); border-radius: 6px;
+    width: 26px; height: 26px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
   }
-  .join-line:hover { border-color: var(--accent-line); }
-  .join-line .prompt { color: var(--accent); }
-  .join-hint { margin-top: 10px; font-size: 12px; color: var(--text-muted); }
-  .footer {
-    margin-top: 56px;
-    font-size: 12px;
-    color: var(--text-muted);
+  .step p { font-size: 14.5px; color: var(--text-dim); }
+  .step b { color: var(--text); font-weight: 600; }
+
+  .facts { display: grid; gap: 11px; }
+  .fact { font-size: 14.5px; color: var(--text-dim); }
+  .fact b { color: var(--text); font-weight: 600; font-family: var(--mono); }
+
+  .cmd {
+    margin-top: 12px; font-family: var(--mono); font-size: 13px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 12px 14px; color: var(--text-dim);
+    cursor: pointer; word-break: break-all; min-height: 44px;
+    display: flex; align-items: center; gap: 8px;
   }
-  .footer a { color: var(--text-muted); text-decoration: none; }
-  .footer a:hover { color: var(--accent); }
+  .cmd:hover { border-color: var(--accent-line); }
+  .cmd .p { color: var(--accent-text); flex-shrink: 0; }
+  .note { margin-top: 9px; font-size: 12.5px; color: var(--text-muted); }
+  a.inline { color: var(--accent-text); text-decoration: none; border-bottom: 1px solid var(--accent-border); }
+  a.inline:hover { border-bottom-color: var(--accent); }
+
+  footer { padding: 26px 0 40px; font-size: 12.5px; color: var(--text-muted); }
+  footer a { color: var(--text-muted); text-decoration: none; }
+  footer a:hover { color: var(--accent-text); }
+
+  @media (min-width: 700px) {
+    .hero { padding: 76px 0 48px; }
+    .actions .btn-primary { flex: 0 0 auto; }
+  }
+  @media (max-width: 420px) {
+    .figs { grid-template-columns: repeat(2, 1fr); }
+    #recent-list .run:nth-child(3) { display: none; }
+    .fig:nth-child(2) { border-right: none; }
+    .fig:nth-child(3) { border-top: 1px solid var(--border-subtle); }
+  }
 </style>
 </head>
 <body>
-  <div class="logo-tag">MYCELIUM</div>
-  <h1>One task, split across<br>every machine that <span class="accent">joined</span>.</h1>
-  <p class="sub">
-    Pitch a task. A planner splits it into subtasks, builder agents execute them in
-    parallel across volunteer machines, a reviewer assembles and grades the result —
-    all on local models. No cloud, no API keys, and every contribution earns credits
-    in an open ledger.
-  </p>
 
-  <div class="stats-row">
-    <div class="stat"><span class="num" id="node-count">–</span><span class="label">nodes online</span></div>
-    <div class="stat"><span class="num" id="task-count">–</span><span class="label">tasks completed</span></div>
-  </div>
+<div class="wrap">
+  <header class="hero">
+    <div class="eyebrow"><span class="mark" aria-hidden="true"></span>MYCELIUM</div>
 
-  <div class="actions">
-    <a class="btn btn-primary" href="/dashboard">Open the dashboard</a>
-    <a class="btn btn-secondary" href="https://github.com/Jwrightsman/distributed-orchestrator" target="_blank">GitHub ↗</a>
-  </div>
+    <h1>Describe what you want built.<br>A swarm of ordinary computers builds it.</h1>
 
-  <div class="join-line" id="join-line" title="Click to copy">
-    <span class="prompt">$</span> python join.py <span id="join-host">http://this-server:8000</span>
-  </div>
-  <div class="join-hint" id="join-hint">Join this network as a worker node — any machine with 8GB RAM · click to copy</div>
+    <p class="lede">
+      Each piece is written by an <strong>AI model running on someone's actual
+      laptop</strong>, then checked and assembled into working code. No cloud, no API keys.
+    </p>
 
-  <div class="footer">
-    Phase 0 · <a href="https://github.com/Jwrightsman/distributed-orchestrator" target="_blank">source</a> ·
+    <!-- Live, from /status.json — never hardcoded. If this panel is stale or
+         wrong, a skeptical visitor is right to leave. -->
+    <div class="proof" id="proof">
+      <div class="proof-head">
+        <span class="pulse" id="pulse" aria-hidden="true"></span>
+        <span class="what" id="proof-what">Checking the network…</span>
+        <span class="when" id="proof-when"></span>
+      </div>
+      <div class="figs">
+        <div class="fig"><span class="n" id="f-nodes">–</span><span class="k">machines joined</span></div>
+        <div class="fig"><span class="n" id="f-pitches">–</span><span class="k">tasks built</span></div>
+        <div class="fig"><span class="n" id="f-model">–</span><span class="k">model</span></div>
+      </div>
+      <div class="recent" id="recent" style="display:none;">
+        <div class="recent-title">Recently built by this network</div>
+        <div id="recent-list"></div>
+      </div>
+      <div class="zero" id="zero" style="display:none;">
+        <b>No machines connected right now.</b> The orchestrator is up and built the work
+        above. This network is small on purpose — testers are added a few at a time.
+      </div>
+    </div>
+
+    <div class="actions">
+      <a class="btn btn-primary" href="/dashboard">Watch it work →</a>
+      <a class="btn btn-ghost" href="https://github.com/Jwrightsman/distributed-orchestrator" target="_blank" rel="noopener">Read the code</a>
+    </div>
+  </header>
+
+  <section>
+    <h2>How it works</h2>
+    <div class="steps">
+      <div class="step"><span class="i">1</span><p><b>You pitch a task</b> in plain English — "build a CSV deduplication script".</p></div>
+      <div class="step"><span class="i">2</span><p><b>A planner splits it up</b> into a few smaller jobs that can be worked on at the same time.</p></div>
+      <div class="step"><span class="i">3</span><p><b>Volunteer machines build the pieces</b> in parallel, each running a local AI model.</p></div>
+      <div class="step"><span class="i">4</span><p><b>A reviewer assembles and grades</b> the result, and the code is checked to see whether it actually runs.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>What it can and can't do</h2>
+    <div class="facts">
+      <div class="fact"><b>~57%</b> of 28 varied test tasks come back runnable and on-spec (95% confidence: 44–69%).</div>
+      <div class="fact"><b>10/10</b> — a labelled bar chart, built correctly ten times out of ten.</div>
+      <div class="fact"><b>2/10</b> — a playable Snake game. Tightly-coupled code is where a small model falls over, and that number is published for the same reason as the good one.</div>
+      <div class="fact">Every figure is reproducible from the repo, and the raw logs are committed alongside them.</div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Contributing a machine</h2>
+    <p class="fact">
+      Joining runs an AI model on your computer and uses spare CPU to build pieces of other
+      people's tasks. It asks before it installs anything, and you stop it by closing the window.
+      Joining is currently by invite —
+      <a class="inline" href="https://github.com/Jwrightsman/distributed-orchestrator/issues/new/choose" target="_blank" rel="noopener">open an issue</a>
+      and you'll get the address.
+    </p>
+    <div class="cmd" id="cmd" title="Click to copy"><span class="p">$</span><span id="cmd-text">python join.py &lt;address&gt;</span></div>
+    <p class="note" id="cmd-note">Any machine with 8&nbsp;GB of RAM · tap to copy</p>
+  </section>
+
+  <footer class="wrap" style="padding-left:0;padding-right:0;">
+    Phase 0 ·
+    <a href="https://github.com/Jwrightsman/distributed-orchestrator" target="_blank" rel="noopener">source</a> ·
+    <a href="/status.json">status.json</a> ·
     open protocol → contributor guild → marketplace
-  </div>
+  </footer>
+</div>
 
 <script>
-  // Live stats — same endpoints the dashboard uses
-  async function refresh() {
-    try {
-      const m = await (await fetch('/metrics')).json();
-      const nc = document.getElementById('node-count');
-      nc.textContent = m.nodes_online;
-      nc.classList.toggle('live', m.nodes_online > 0);
-      document.getElementById('task-count').textContent = m.tasks_completed_total;
-    } catch (e) { /* leave placeholders */ }
+  function ago(ts) {
+    // History timestamps are YYYYmmdd_HHMMSS in UTC.
+    const m = /^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})$/.exec(ts || '');
+    if (!m) return '';
+    const d = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
+    const s = Math.max(0, (Date.now() - d) / 1000);
+    if (s < 3600) return Math.floor(s / 60) + 'm ago';
+    if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+    return Math.floor(s / 86400) + 'd ago';
   }
-  refresh();
+
+  function uptime(sec) {
+    if (sec >= 86400) return Math.floor(sec / 86400) + 'd uptime';
+    if (sec >= 3600) return Math.floor(sec / 3600) + 'h uptime';
+    return Math.max(1, Math.floor(sec / 60)) + 'm uptime';
+  }
+
+  async function refresh() {
+    let s;
+    try {
+      s = await (await fetch('/status.json')).json();
+    } catch (e) {
+      // Say so plainly rather than leaving dashes that look like a bug.
+      document.getElementById('proof-what').textContent = 'Could not reach the orchestrator';
+      document.getElementById('pulse').style.background = 'var(--danger)';
+      return;
+    }
+
+    const live = s.nodes_online > 0;
+    document.getElementById('proof-what').textContent =
+      s.inference_available
+        ? (live ? `Live — ${s.nodes_online} machine${s.nodes_online === 1 ? '' : 's'} building`
+                : 'Orchestrator online, ready for work')
+        : 'Orchestrator online, inference offline';
+    document.getElementById('proof-when').textContent = uptime(s.uptime_seconds || 0);
+    document.getElementById('pulse').style.background =
+      s.inference_available ? 'var(--accent)' : 'var(--warn)';
+
+    const nodes = document.getElementById('f-nodes');
+    nodes.textContent = s.nodes_online;
+    nodes.classList.toggle('live', live);
+    document.getElementById('f-pitches').textContent = s.pitches_completed ?? '–';
+    document.getElementById('f-model').textContent = (s.model || 'none').split(':')[0];
+
+    // An empty swarm is honest, not broken — but only if we say why.
+    document.getElementById('zero').style.display = live ? 'none' : '';
+  }
+
+  async function loadRecent() {
+    try {
+      const h = await (await fetch('/history?limit=12')).json();
+      // Skip throwaway pitches ("hello", "test") — this strip is the first
+      // evidence a skeptic sees, and one-word junk undersells real work. Runs
+      // that NEEDED WORK still show: the honest rate is published on this page,
+      // so hiding failures here would contradict it.
+      const runs = (h.runs || h.history || []).filter(r => (r.task || '').trim().length >= 25);
+      if (!runs.length) return;
+      document.getElementById('recent-list').innerHTML = runs.slice(0, 3).map(r => {
+        const pass = (r.rating || '').toUpperCase() === 'PASS';
+        const task = (r.task || '').replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+        return `<div class="run"><span class="txt">${task}</span>` +
+               `<span class="tag ${pass ? 'pass' : 'work'}">${pass ? 'built' : 'needed work'}</span>` +
+               `<span class="tag" style="color:var(--text-muted)">${ago(r.timestamp)}</span></div>`;
+      }).join('');
+      document.getElementById('recent').style.display = '';
+    } catch (e) { /* the panel simply stays hidden */ }
+  }
+
+  refresh(); loadRecent();
   setInterval(refresh, 5000);
 
-  // Fill in this server's real address for the join one-liner
-  document.getElementById('join-host').textContent = location.origin;
-  document.getElementById('join-line').addEventListener('click', () => {
-    navigator.clipboard.writeText(`python join.py ${location.origin}`);
-    document.getElementById('join-hint').textContent = 'Copied — run it on any machine with Python + Ollama';
+  const cmd = document.getElementById('cmd');
+  document.getElementById('cmd-text').textContent = `python join.py ${location.origin}`;
+  cmd.addEventListener('click', () => {
+    navigator.clipboard?.writeText(`python join.py ${location.origin}`);
+    document.getElementById('cmd-note').textContent = 'Copied — it will ask before installing anything';
   });
 </script>
 </body>

@@ -110,6 +110,50 @@ async def standings():
     return {"standings": get_standings()}
 
 
+@router.get("/status.json")
+async def status_json():
+    """Public liveness snapshot — no auth, safe to share, cheap to poll.
+
+    Exists so a curious person (or an agent) can answer "is this network real
+    and running?" without an invite, without a key, and without reading the
+    dashboard. Everything here is already reachable through /health, /nodes and
+    /metrics; this is those three collapsed into one stable shape so it can be
+    linked from the landing page and quoted in a post.
+
+    Deliberately contains no task text, no node hostnames beyond a count, and no
+    credentials — it is designed to be pasted in public.
+    """
+    s = get_standings()
+    online = list(nodes.values())
+    uptime = max(0, int(time.time() - state.STARTED_AT))
+
+    model = None
+    ollama_ok = False
+    try:
+        async with httpx.AsyncClient(timeout=3) as client:
+            resp = await client.get(f"{OLLAMA_URL}/api/tags")
+            tags = resp.json().get("models", [])
+            ollama_ok = True
+            model = tags[0]["name"] if tags else None
+    except Exception:
+        pass
+
+    return {
+        "service": "mycelium",
+        "status": "ok" if ollama_ok else "degraded",
+        "orchestrator_online": True,
+        "inference_available": ollama_ok,
+        "model": model,
+        "nodes_online": len(online),
+        "pitches_completed": len(get_history()),
+        "tasks_completed_total": sum(c["compute_tasks"] for c in s),
+        "contributors": len(s),
+        "uptime_seconds": uptime,
+        "accepting_nodes": "by invite",
+        "repo": "https://github.com/Jwrightsman/distributed-orchestrator",
+    }
+
+
 @router.get("/metrics")
 async def metrics():
     """Operational snapshot — queue depth, latency, node count, job status."""

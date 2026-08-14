@@ -20,6 +20,7 @@ import sys
 
 import httpx
 from rich.console import Console
+from rich.panel import Panel
 from ollama_client import check_ollama, DEFAULT_MODEL
 
 console = Console()
@@ -101,11 +102,70 @@ async def ensure_ollama():
     return True
 
 
+def confirm_consent(server: str, assume_yes: bool) -> bool:
+    """Show what joining actually does, and require a human to agree.
+
+    This gate exists because Mycelium is discussed in agent-native communities,
+    where the plausible failure is an agent reading "join the swarm" and running
+    this unattended on a machine whose owner never asked for it. Joining donates
+    someone's CPU to strangers and writes gigabytes to their disk. That is the
+    machine owner's decision, not an agent's.
+
+    `--yes` is for people deliberately scripting their own machines. AGENTS.md
+    asks agents not to pass it on someone else's behalf.
+    """
+    if assume_yes:
+        console.print("[dim]--yes given: skipping the consent prompt.[/dim]\n")
+        return True
+
+    console.print(Panel(
+        f"You are about to join [cyan]{server}[/cyan] as a worker node.\n\n"
+        "[bold]What this will do to THIS computer:[/bold]\n"
+        f"  - Download the [bold]{DEFAULT_MODEL}[/bold] model (~2.5 GB) if it is not already here\n"
+        "  - Use your CPU at full load, in bursts of minutes, to build parts of\n"
+        "    tasks that [bold]other people[/bold] submit\n"
+        "  - Send the resulting text back to that orchestrator\n"
+        "  - Keep running until you stop it\n\n"
+        "[bold]What it will NOT do:[/bold]\n"
+        "  - Run any code it receives - it returns text, nothing is executed here\n"
+        "  - Open any inbound port - the connection is outbound only\n"
+        "  - Read your files or send telemetry\n\n"
+        "[dim]Stop any time with Ctrl+C or by closing this window. Work you were\n"
+        "holding is reassigned automatically.[/dim]",
+        title="[bold]Before you join[/bold]",
+        border_style="yellow",
+    ))
+
+    if not sys.stdin.isatty():
+        # Nobody is here to agree. Refuse rather than assume - an unattended
+        # join is the exact scenario this gate exists to prevent.
+        console.print(
+            "\n[red bold]Not running in a terminal, so nobody can consent.[/red bold]\n"
+            "[dim]If this is your own machine and you meant to script it, pass --yes.[/dim]"
+        )
+        return False
+
+    try:
+        answer = input("\nType 'yes' to join, or press Enter to cancel: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        console.print("\n[dim]Cancelled.[/dim]")
+        return False
+
+    if answer not in ("y", "yes"):
+        console.print("[dim]Cancelled - nothing was installed or started.[/dim]")
+        return False
+    console.print()
+    return True
+
+
 async def main():
     import argparse
     parser = argparse.ArgumentParser(description="Join the network as a worker node (one-command setup)")
     parser.add_argument("server", nargs="?", default=None, help="Orchestrator URL (e.g. http://192.168.1.50:8000) — omit to auto-discover")
     parser.add_argument("--secret", default="", help="Shared secret if the orchestrator has node_secret set in config.json")
+    parser.add_argument("--yes", "-y", action="store_true",
+                        help="Skip the consent prompt. For scripting your OWN machine; "
+                             "agents should not pass this on someone else's behalf (see AGENTS.md).")
     args = parser.parse_args()
 
     if args.server:
@@ -125,6 +185,9 @@ async def main():
                 "  [dim]python join.py http://ORCHESTRATOR_IP:8000[/dim]"
             )
             sys.exit(1)
+
+    if not confirm_consent(server, args.yes):
+        sys.exit(0)
 
     if not await ensure_ollama():
         sys.exit(1)

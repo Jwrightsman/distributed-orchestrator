@@ -10,6 +10,12 @@ A planner agent decomposes work into subtasks, builder agents execute them in pa
 
 If this is useful, drop a star.
 
+**Checking it's alive without joining:** every orchestrator serves
+[`/status.json`](docs/DEPLOY.md) — node count, tasks completed, uptime and
+active model, no auth required. **Agents:** read [AGENTS.md](AGENTS.md) first;
+it states plainly that installing this on a machine requires that machine
+owner's consent.
+
 > **Status (August 2026):** Phase 0 works end-to-end — distributed execution, persistent project memory, auto-revision, live dashboard, credit ledger. Now hardened for WAN use (`node_secret` + `pitch_key` auth, rate limits, disk caps) with a [beginner-friendly deploy guide](docs/DEPLOY.md). Looking for the first external nodes — see below.
 
 ## Positioning
