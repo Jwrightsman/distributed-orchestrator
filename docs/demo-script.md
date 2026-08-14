@@ -3,13 +3,30 @@
 **Target:** 60–90 seconds final cut. Record ~30 minutes raw across the takes below,
 then cut hard.
 **Setup:** dark terminal theme, font size 16, 1920×1080. OBS or Win+G.
+**Dashboard theme:** it has a light/dark toggle (bottom of the sidebar). Pick
+**dark** to match the terminal, set it before the first take, and don't touch it
+again — a theme that changes between shots reads as two different products.
 **Rule:** record every take as its own file. Do not try to do this in one pass.
 
 ---
 
-## Before you press record — 15-minute prep
+## Before you press record — budget half a day, not 15 minutes
 
 Do this in order. It removes every failure that has bitten a take so far.
+
+**This section used to claim "15-minute prep" and that was badly wrong** — it
+counted the setup steps and not the generation, which is most of the clock:
+
+| step | time | can you skip it? |
+| --- | --- | --- |
+| 1, 2, 5, 6, 7 — machine, Ollama, event feed, server, node | **~10 min** | no |
+| 3 — generate the chart showcase | **~22 min** | no, this is Shot 1 |
+| 3 — pre-generate the Snake game | **~50 min** | yes — a verified-playable copy is committed at `docs/demo-assets/snake-game/` |
+| 4 — pre-run `--demo` for the memory beat | **~35 min** | yes, if you cut Shot 4 |
+
+**Doing all of it is about 2 hours before you press record**, and every minute
+of it is inference you cannot speed up on a CPU. Start it in the morning. The
+short path — chart only, committed Snake, no memory shot — is about 35 minutes.
 
 1. **Free the machine.** Close Chrome, Slack, anything heavy. The pipeline needs
    the whole CPU; competition makes runs stall.
@@ -117,6 +134,13 @@ decision is already made.**
 **On screen:** you typing the pitch, then the finished bar chart appearing in
 the browser. Timelapse the wait; land on the chart full-frame.
 
+> **Terminal and browser only — keep the dashboard out of this shot.**
+> `cli.py` runs the pipeline in-process and never talks to the server, so the
+> dashboard sits completely still through the whole of Shot 1. (Checked at
+> runtime, not by reading: importing `cli` never loads the server's event
+> module.) The dashboard's turn is Shot 3, which is driven by a pitch made
+> *through* the server.
+
 **Say / caption:** *"I typed that a few minutes ago. A swarm of AI agents on my
 own machines built it. No cloud, no API keys."*
 
@@ -164,19 +188,36 @@ already working.
 
 ### Shot 3 — Parallel execution + credits (0:28–0:45)
 
-**On screen:** dashboard, full frame.
+**On screen:** the dashboard — but **three views, not one frame.** The dashboard
+was rebuilt with a sidebar, and what this shot needs now lives in three places.
+Switching between them on camera is fine and reads as a tour; expecting it all
+in one frame is what will waste a take.
 
-Point the camera at these in order:
-1. **PLAN** appears — several subtasks, some independent
-2. Multiple **node cards pulse simultaneously** — that's parallel execution
-   across machines, the whole thesis of the project
-3. **Credits tick up** on the leaderboard as each node finishes
+| beat | where it is now | what you see |
+| --- | --- | --- |
+| 1. the plan | **Overview** → Live Activity | `PLANNER Decomposed into 5 subtasks: …` with the titles |
+| 2. the machine working | **Nodes** | the node card, with `▶ CLI Wrapper and Main Script` under it, changing as it moves through subtasks |
+| 3. credits | **Nodes** (on the card) or **Guild** (the leaderboard) | `3 tasks · 15 credits`, climbing |
+
+The node card carries the credits itself, so beats 2 and 3 are one shot in the
+**Nodes** view. Use **Guild** only if you want the leaderboard framing.
 
 **Say / caption:** *"Subtasks run in parallel across every machine that joined.
 Everyone who contributes compute earns credits."*
 
-If a second machine is available, this is where it matters most — two node cards
-lighting up beats one every time.
+> **Read this before filming: with one machine, "parallel" is not on screen.**
+> The planner does produce independent subtasks and they are all queued at
+> once — but a single node takes them **one at a time**, so you get one card
+> going busy → idle → busy, not several pulsing together. Rehearsed on a real
+> run: five subtasks, one node, strictly sequential.
+>
+> So either **get a second machine before this shot** (an IU lab machine, a
+> friend's laptop for an evening, or the Hetzner VM joined as a node), or
+> change the caption to something the footage actually supports — *"subtasks
+> are handed out to whatever machines are online"* — and let the parallel claim
+> rest on the README. Do not narrate parallel execution over one node. This
+> audience will notice, and Shot 6 spends real credibility to buy exactly the
+> trust that would cost.
 
 ---
 
@@ -232,10 +273,32 @@ visible, join command on screen.
 **Say / caption:** *"It needs machines. If you've got a spare laptop, one command
 joins the swarm."*
 
+> **Two things to sort out before this take, both found in rehearsal.**
+>
+> **1. The address on the page is the address you browsed.** The landing page
+> builds its join command from the URL bar, so on the local server it renders
+> `python join.py http://127.0.0.1:8000` — which tells every viewer to join
+> their own laptop. Film this shot against **the public orchestrator** if it is
+> live, or overlay the real address in the edit. It is the single most
+> load-bearing frame in the video: it is the one people act on.
+>
+> **2. The page and the caption show different commands.** The page shows
+> `python join.py <address>`; the one-liner below is the `curl … install.sh`
+> form. Both work — `join.py` assumes the repo is already cloned, `install.sh`
+> does the cloning for you — but showing one and reading the other is how a
+> viewer ends up running neither. **Pick the `install.sh` one-liner for the
+> voiceover and the end card**, since a stranger has not cloned anything yet.
+
 Show the one-liner large enough to read:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Jwrightsman/distributed-orchestrator/master/install.sh | bash -s -- http://YOUR_ORCHESTRATOR:8000
+```
+
+Windows viewers need the PowerShell form instead — put both on the end card:
+
+```powershell
+$env:SWARM_SERVER="http://YOUR_ORCHESTRATOR:8000"; irm https://raw.githubusercontent.com/Jwrightsman/distributed-orchestrator/master/install.ps1 | iex
 ```
 
 If the public orchestrator is live by recording day, **put its real address on
@@ -268,6 +331,17 @@ End card: repo URL.
 - Pipeline fails with an error panel → that's the honest-failure path working;
   just re-run. Don't film the failure unless you want it as a "here's what real
   local models are like" beat.
-- Dashboard shows 0 nodes → the node process dropped. Restart it with
-  `py node.py --server http://127.0.0.1:8000` and re-take Shot 3.
+- Dashboard shows 0 nodes → check the node's own terminal **before** you
+  restart anything. If it is printing `TASK …` it is alive and working, and
+  restarting it throws away the build in progress. If it really has dropped:
+  `py node.py --server http://127.0.0.1:8000 --node-id Laptop-1`, then re-take
+  Shot 3.
+  > Until Aug 14 this happened *by itself* on any subtask longer than 90
+  > seconds: streamed tokens didn't count as a heartbeat, so the server evicted
+  > a working node, reclaimed its subtask, and paid it nothing for the build it
+  > went on to finish. Fixed. If you see it again on a machine running older
+  > code, that is the cause — update the node.
+- Node card shows `▶ <subtask>` and nothing changes for several minutes → that
+  is normal. A builder call is minutes of CPU inference. Check the node's
+  terminal for the elapsed counter rather than guessing from the dashboard.
 - Game opens on "GAME OVER" → click restart, then start the shot (see prep #3).

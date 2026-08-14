@@ -64,6 +64,12 @@ All agents use local models via [Ollama](https://ollama.com). No data leaves you
 
 **Requirements:** Python 3.12+ (tested on 3.14), [Ollama](https://ollama.com) installed and running
 
+> **On Windows, type `py` instead of `python` everywhere below.** Stock Windows
+> ships an alias that intercepts `python` and answers *"Python was not found; run
+> without arguments to install from the Microsoft Store"* — even when Python is
+> installed and working. `py` is the launcher that actually came with it. This
+> is the first thing a Windows visitor hits, so it is worth the sentence.
+
 ```bash
 git clone https://github.com/Jwrightsman/distributed-orchestrator.git
 cd distributed-orchestrator
@@ -113,8 +119,15 @@ python cli.py "Build a Python script that analyzes a CSV of sales data"
 ### Web dashboard
 
 ```bash
-python -m uvicorn server:app --host 0.0.0.0 --port 8000
+python -m uvicorn server:app --host 127.0.0.1 --port 8000
 ```
+
+> `127.0.0.1` means *this machine only*. Use `--host 0.0.0.0` when you actually
+> want other machines to reach it — but note that node auth and pitch auth are
+> **off by default** (that is what `status.py` reports), so on `0.0.0.0` anyone
+> who can reach the port can submit tasks that run on your hardware. Fine on
+> your own home Wi-Fi, not on campus or café Wi-Fi. Turning both on takes a
+> minute: [docs/DEPLOY.md](docs/DEPLOY.md).
 
 Open **http://localhost:8000/dashboard** — pitch tasks from the UI, watch the pipeline run with live stage progress, view extracted code files, and see the guild standings.
 

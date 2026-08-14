@@ -79,3 +79,51 @@ def test_consent_runs_before_anything_is_installed():
     assert src.index("confirm_consent(server, args.yes)") < src.index("await ensure_ollama()"), (
         "consent must be requested before ensure_ollama() pulls the model"
     )
+
+
+# ── The advertised one-liner has to survive its own delivery mechanism ──
+#
+# `curl … | bash -s -- URL` gives bash the downloaded script as *stdin*, so
+# everything install.sh exec's inherits a pipe. join.py then sees no terminal
+# and — correctly, by the rule above — refuses. The result was an installer
+# that checked Python, installed Ollama, cloned the repo, installed the deps,
+# and stopped dead on "Not running in a terminal, so nobody can consent."
+# Reproduced by piping into bash before the fix.
+#
+# The fix is to hand over on /dev/tty, which is the controlling terminal
+# whatever stdin was redirected to — so a human still types "yes". The wrong
+# fix, which these tests exist to block, is passing --yes from the installer:
+# that consents on the machine owner's behalf, which is the entire thing the
+# gate prevents.
+
+def _install_sh() -> str:
+    from pathlib import Path
+    return (Path(__file__).resolve().parent.parent / "install.sh").read_text(encoding="utf-8")
+
+
+def test_installer_hands_over_on_the_terminal_not_the_pipe():
+    src = _install_sh()
+    assert "join.py \"$@\" < /dev/tty" in src, (
+        "install.sh must reconnect stdin to /dev/tty before exec'ing join.py, "
+        "or the one-line install can never reach a consent prompt"
+    )
+
+
+def test_installer_never_consents_on_the_owners_behalf():
+    # Comments may discuss --yes (one warns against exactly this); code may not.
+    code = [ln for ln in _install_sh().splitlines() if not ln.lstrip().startswith("#")]
+    offenders = [ln for ln in code if "--yes" in ln]
+    assert not offenders, (
+        f"install.sh must not pass --yes: that answers the consent prompt for "
+        f"someone who never saw it. Offending lines: {offenders}"
+    )
+
+
+def test_installer_still_refuses_when_there_is_genuinely_no_terminal():
+    """CI, containers, unattended shells: the fallback must reach plain join.py."""
+    src = _install_sh()
+    tail = src[src.index("# 5. Join the network"):]
+    assert 'exec "$PY" join.py "$@"\n' in tail, (
+        "there must be a non-tty fallback branch, so a genuinely unattended "
+        "install still hits join.py's refusal instead of failing obscurely"
+    )
