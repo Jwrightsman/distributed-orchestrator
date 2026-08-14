@@ -21,6 +21,16 @@ import server
 import server_state
 
 
+def _creds(task: dict) -> dict:
+    """The attempt credentials a real node echoes back when submitting.
+
+    Results are bound to the node the task was issued to, so a submission
+    without these is recorded but never settled for credit.
+    """
+    task = task or {}
+    return {"attempt_id": task.get("attempt_id"), "nonce": task.get("nonce")}
+
+
 @pytest.fixture(autouse=True)
 def clean_server_state():
     for d in (
@@ -141,11 +151,11 @@ def test_bad_results_are_accepted_and_counted_as_failures(client, payload):
     """A bad result must be recorded, not rejected — the caller needs to see it."""
     register(client, "flaky")
     queue_task("t-bad")
-    client.get("/tasks/next", params={"node_id": "flaky"})
+    task = client.get("/tasks/next", params={"node_id": "flaky"}).json()
 
     resp = client.post(
         "/tasks/t-bad/result",
-        json={"node_id": "flaky", "elapsed_seconds": 1.0, **payload},
+        json={"node_id": "flaky", "elapsed_seconds": 1.0, **payload, **_creds(task)},
     )
 
     assert resp.status_code == 200
@@ -163,12 +173,13 @@ def test_refusal_text_still_counts_as_a_completed_task(client):
     """
     register(client, "refuser")
     queue_task("t-refuse")
-    client.get("/tasks/next", params={"node_id": "refuser"})
+    task = client.get("/tasks/next", params={"node_id": "refuser"}).json()
 
     resp = client.post(
         "/tasks/t-refuse/result",
         json={
             "node_id": "refuser",
+            **_creds(task),
             "output": "I'm sorry, but I cannot assist with that request.",
             "error": None,
             "elapsed_seconds": 2.0,
@@ -211,10 +222,11 @@ def test_circuit_breaker_opens_after_repeated_failures(client):
 
     for i in range(server_state._FAILURE_THRESHOLD):
         queue_task(f"t-fail-{i}")
-        client.get("/tasks/next", params={"node_id": "broken"})
+        task = client.get("/tasks/next", params={"node_id": "broken"}).json()
         client.post(
             f"/tasks/t-fail-{i}/result",
-            json={"node_id": "broken", "output": "", "error": "boom", "elapsed_seconds": 0.1},
+            json={"node_id": "broken", "output": "", "error": "boom",
+                  "elapsed_seconds": 0.1, **_creds(task)},
         )
 
     assert "broken" in server.node_blacklist
@@ -244,10 +256,11 @@ def test_one_success_clears_the_failure_streak(client):
     server.node_failure_count["wobbly"] = server_state._FAILURE_THRESHOLD - 1
 
     queue_task("t-good")
-    client.get("/tasks/next", params={"node_id": "wobbly"})
+    task = client.get("/tasks/next", params={"node_id": "wobbly"}).json()
     client.post(
         "/tasks/t-good/result",
-        json={"node_id": "wobbly", "output": "a real answer", "error": None, "elapsed_seconds": 3.0},
+        json={"node_id": "wobbly", "output": "a real answer", "error": None,
+              "elapsed_seconds": 3.0, **_creds(task)},
     )
 
     assert server.node_failure_count["wobbly"] == 0
@@ -288,15 +301,19 @@ def test_duplicate_result_submissions_do_not_double_pay(client):
     """A node that retries its submission must not earn credits twice."""
     register(client, "double")
     queue_task("t-dup")
-    client.get("/tasks/next", params={"node_id": "double"})
+    task = client.get("/tasks/next", params={"node_id": "double"}).json()
 
-    body = {"node_id": "double", "output": "work", "error": None, "elapsed_seconds": 1.0}
+    body = {"node_id": "double", "output": "work", "error": None,
+            "elapsed_seconds": 1.0, **_creds(task)}
     first = client.post("/tasks/t-dup/result", json=body)
     second = client.post("/tasks/t-dup/result", json=body)
 
     assert first.json()["credits_earned"] == 5
-    # The task is no longer in flight, so the retry must not be paid again.
-    assert second.json()["credits_earned"] == 0
+    # Settlement is idempotent: the retry replays the ORIGINAL outcome rather
+    # than reporting zero, because a node that retried after a dropped
+    # connection did earn those credits and should be told so. What must not
+    # happen is a second payment.
+    assert second.json() == first.json()
     assert server.nodes["double"]["credits_earned"] == 5
 
 

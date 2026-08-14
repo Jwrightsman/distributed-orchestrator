@@ -6,6 +6,7 @@ security hardening (sprint 1.4) are provable, not assumed.
 """
 
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -160,10 +161,16 @@ def test_worker_respects_capability_requirements(client, monkeypatch):
 
 def test_submit_result_awards_credits(client):
     _register(client)
-    server.task_inflight["t1"] = {"task_id": "t1", "trace_id": "tr"}
+    # Bound exactly as /tasks/next would issue it: an inflight task always has
+    # an assigned node and attempt credentials.
+    server.task_inflight["t1"] = {
+        "task_id": "t1", "trace_id": "tr", "assigned_to": "test-node",
+        "attempt_id": "a-t1", "nonce": "n-t1", "lease_expires_at": time.time() + 900,
+    }
     resp = client.post(
         "/tasks/t1/result",
-        json={"node_id": "test-node", "output": "the deliverable", "error": None, "elapsed_seconds": 2.0},
+        json={"node_id": "test-node", "output": "the deliverable", "error": None,
+              "elapsed_seconds": 2.0, "attempt_id": "a-t1", "nonce": "n-t1"},
     )
     assert resp.status_code == 200
     assert resp.json()["credits_earned"] == 5
@@ -176,10 +183,15 @@ def test_submit_result_awards_credits(client):
 def test_circuit_breaker_blacklists_after_failures(client):
     _register(client)
     for i in range(server._FAILURE_THRESHOLD):
-        server.task_inflight[f"t{i}"] = {"task_id": f"t{i}"}
+        server.task_inflight[f"t{i}"] = {
+            "task_id": f"t{i}", "assigned_to": "test-node",
+            "attempt_id": f"a-cb-{i}", "nonce": f"n-cb-{i}",
+            "lease_expires_at": time.time() + 900,
+        }
         client.post(
             f"/tasks/t{i}/result",
-            json={"node_id": "test-node", "output": None, "error": "boom"},
+            json={"node_id": "test-node", "output": None, "error": "boom",
+                  "attempt_id": f"a-cb-{i}", "nonce": f"n-cb-{i}"},
         )
     # Node is now blacklisted — next poll gets 429 circuit_open
     resp = client.get("/tasks/next", params={"node_id": "test-node"})

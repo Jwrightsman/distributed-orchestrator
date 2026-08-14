@@ -89,7 +89,9 @@ async def _drain_jobs():
 def _job_id_from(text: str) -> str:
     import re
 
-    m = re.search(r"job_\d+", text)
+    # Job ids are UUID-based, not timestamps. A \d+ pattern silently captured
+    # "job_5" from "job_5a3f..." and then looked up a job that never existed.
+    m = re.search(r"job_[0-9a-f]{8,}", text)
     assert m, f"no job_id in: {text}"
     return m.group(0)
 

@@ -197,6 +197,10 @@ async def poll_and_execute(server: str, node_id: str, session: dict, secret: str
                     "node_id": node_id,
                     "output": result,
                     "elapsed_seconds": elapsed,
+                    # Issued with this task. Without them the server records the
+                    # result but cannot settle it for credit.
+                    "attempt_id": task.get("attempt_id"),
+                    "nonce": task.get("nonce"),
                 },
                 headers=_auth_headers(secret),
             )
@@ -221,6 +225,8 @@ async def poll_and_execute(server: str, node_id: str, session: dict, secret: str
                 f"{server}/tasks/{task_id}/result",
                 json={
                     "node_id": node_id,
+                    "attempt_id": task.get("attempt_id"),
+                    "nonce": task.get("nonce"),
                     "output": None,
                     "error": str(e),
                     "elapsed_seconds": time.time() - start,

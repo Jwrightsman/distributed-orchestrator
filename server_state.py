@@ -56,6 +56,40 @@ pipeline_events: list[dict] = []   # recent events for polling fallback
 # ── In-memory state ──────────────────────────────────────────────────
 nodes: dict[str, dict] = {}          # node_id -> info
 
+# ── Task attempt binding ─────────────────────────────────────────────
+#
+# node_secret is *network admission*, not per-node identity: everyone holding it
+# presents the same credential. Result submission used to trust the node_id in
+# the request body and locate the task by task_id alone, so any admitted node
+# could submit a result attributed to a different node and take its credit.
+#
+# The fix is deliberately small. When a task is handed out the server mints an
+# attempt: an id and a nonce, both unguessable and both distinct from task_id
+# (which is visible in events and logs). A result is only settled if the
+# submitting node is the assigned node, the nonce matches, the lease has not
+# expired, and the attempt has not already been settled.
+#
+# DEFERRED, and this is not equivalent to it: per-node keypairs with signed
+# receipts, revocation and rotation. That is the right long-term answer and is
+# tracked in ROADMAP §5. What is here stops an admitted node stealing another
+# node's credit; it does not stop a node that holds the shared secret from
+# joining under a name of its choosing in the first place.
+ATTEMPT_LEASE_SECONDS = 900
+
+# attempt_id -> the outcome we already recorded, so a retry is idempotent
+# rather than a second payment.
+settled_attempts: dict[str, dict] = {}
+_MAX_SETTLED = 5000
+
+
+def remember_settlement(attempt_id: str, outcome: dict) -> None:
+    """Record an attempt as settled, bounding the memory this can consume."""
+    settled_attempts[attempt_id] = outcome
+    if len(settled_attempts) > _MAX_SETTLED:
+        for stale in list(settled_attempts)[: len(settled_attempts) - _MAX_SETTLED]:
+            settled_attempts.pop(stale, None)
+
+
 # Process start, for the public /status.json uptime figure. A stranger deciding
 # whether this network is real cares that it has been up for days, not seconds.
 STARTED_AT = time.time()
@@ -421,6 +455,10 @@ class TaskResult(BaseModel):
     output: str | None
     error: str | None = None
     elapsed_seconds: float = 0
+    # Issued with the task. Absent means an old node build: the result is still
+    # recorded so work is never lost, but it cannot be settled for credit.
+    attempt_id: str | None = None
+    nonce: str | None = None
 
 
 class TokenBatch(BaseModel):
