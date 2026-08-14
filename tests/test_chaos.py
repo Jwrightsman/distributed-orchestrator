@@ -365,8 +365,13 @@ def test_unexpected_error_is_json_not_a_traceback(monkeypatch):
         resp = c.post("/pitch", json={"task": "build something"})
 
     assert resp.status_code == 500
-    assert resp.json()["error"] == "Internal server error"
     assert "Traceback" not in resp.text
+    # This assertion used to read resp.json()["error"] == "Internal server
+    # error", which was the response shape of a handler that also echoed
+    # str(exc). Pinning that shape is why a real leak survived: the test was
+    # asserting the contract of the wrong handler. Assert the message is gone.
+    assert "something nobody predicted" not in resp.text
+    assert resp.json() == {"detail": "internal server error"}
 
 
 def test_async_job_records_failure_instead_of_hanging(client, monkeypatch):
