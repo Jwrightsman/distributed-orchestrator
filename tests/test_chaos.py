@@ -137,6 +137,48 @@ def test_healthy_node_is_not_reclaimed(client):
     assert "t-keep" in server.task_inflight
 
 
+def test_a_node_streaming_tokens_is_not_evicted_mid_build(client):
+    """A build longer than the staleness cutoff must not lose its own node.
+
+    Found in a dress rehearsal, not by this suite: only /tasks/next and
+    /tasks/{id}/result refreshed last_seen, so a node went "silent" for the
+    whole of a long build even though it was posting a token batch every
+    0.3 s. The janitor evicted it, reclaimed the subtask it was building, and
+    put it back in a queue with no nodes left in it. The dashboard showed
+    0 nodes and the run stalled, while the node's terminal showed it working.
+    """
+    register(client, "builder")
+    queue_task("t-long")
+    client.get("/tasks/next", params={"node_id": "builder"})
+
+    # A build that outlives the cutoff: age the node past it, exactly as a
+    # slow subtask does when nothing else refreshes last_seen.
+    server.nodes["builder"]["last_seen"] = time.time() - (server_state._NODE_TIMEOUT + 10)
+
+    # …but the node is plainly alive: it is streaming tokens for that task.
+    resp = client.post("/tasks/t-long/stream",
+                       json={"node_id": "builder", "tokens": "def dedupe("})
+    assert resp.status_code == 200
+
+    server_state._cleanup_pass()
+
+    assert "builder" in server.nodes, "a node streaming tokens was evicted"
+    assert "t-long" in server.task_inflight, "its in-flight task was reclaimed under it"
+    assert not server.task_queue
+
+
+def test_streaming_for_an_unknown_task_still_counts_as_a_heartbeat(client):
+    """The heartbeat must not depend on the task lookup succeeding."""
+    register(client, "chatty")
+    server.nodes["chatty"]["last_seen"] = time.time() - (server_state._NODE_TIMEOUT + 10)
+
+    client.post("/tasks/does-not-exist/stream",
+                json={"node_id": "chatty", "tokens": "x"})
+    server_state._cleanup_pass()
+
+    assert "chatty" in server.nodes
+
+
 # ── A node returns malformed, empty, or refusing output ─────────────────────
 
 @pytest.mark.parametrize(

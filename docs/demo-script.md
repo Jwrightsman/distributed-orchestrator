@@ -16,13 +16,16 @@ Do this in order. It removes every failure that has bitten a take so far.
 2. **RESTART Ollama, then warm it up.** Not optional — this is measured. Ollama
    gets progressively slower over a long session, and a call that takes 30
    minutes hits the timeout and kills the take.
-   ```bash
-   # Windows: quit Ollama from the system tray, then reopen it. Or:
+   The reliable way is the system tray: **quit Ollama, then reopen it.** If you
+   would rather type it, this is PowerShell — the shell that opens by default.
+   `%LOCALAPPDATA%` does *not* expand in PowerShell, which is why the older
+   version of this step silently did nothing:
+   ```powershell
    taskkill /IM ollama.exe /F
-   start "" "%LOCALAPPDATA%\Programs\Ollama\ollama.exe" serve
+   Start-Process "$env:LOCALAPPDATA\Programs\Ollama\ollama.exe" serve
    py status.py
    ```
-   Confirm it prints `Active: qwen3.5:4b`.
+   Confirm it prints `Active:  qwen3.5:4b` under `Ollama`.
 
    > **The evidence:** across seven back-to-back `--demo` runs, duration climbed
    > 26 → 33 → 40 → 36 → 47 → 67 → 83 minutes (rank correlation with run order
@@ -67,12 +70,40 @@ Do this in order. It removes every failure that has bitten a take so far.
    model-call timeouts, not bad output. Follow prep step 2 and this shot is
    reliable. A failure is loud anyway: red panel, non-zero exit, obvious while
    filming rather than discovered in the edit.
-5. **Start the server and check the dashboard looks right:**
+5. **Clear the old activity feed.** Live Activity is read from `events.db` and
+   is *historical* — it opens showing whatever ran last, which in a rehearsal
+   was five entries from twelve days earlier, timestamped `12:42 AM`, sitting
+   directly above the fresh ones. On camera that reads as a bug. Rename the file
+   before you start; it is recreated empty:
+   ```powershell
+   Rename-Item events.db events.db.bak
+   ```
+   This only clears the dashboard's event feed. Past runs in `output/`, the
+   ledger and the Gallery are separate files and are untouched.
+
+6. **Start the server:**
    ```bash
    py -m uvicorn server:app --host 127.0.0.1 --port 8000
    ```
    > Use `127.0.0.1`, not `0.0.0.0`. That keeps the port off your network while
    > you record. Nothing is exposed to the internet.
+   >
+   > **The trade-off, and it shows on camera:** the landing page prints a join
+   > command built from the address you are browsing, so on `127.0.0.1` Shot 7
+   > will show `python join.py http://127.0.0.1:8000` — an address that means
+   > "your own machine" to every viewer. Either film Shot 7 against the public
+   > orchestrator, or overlay the real address in the edit. Do not "fix" it by
+   > binding `0.0.0.0`; that puts the port on whatever Wi-Fi you are on.
+
+7. **Start a worker node — Shots 2 and 3 are blank without one.** This is the
+   step the script used to be missing entirely. The dashboard's node cards, the
+   credits and the whole parallel-execution beat exist only when a node is
+   connected. In a second terminal:
+   ```bash
+   py node.py --server http://127.0.0.1:8000 --node-id Laptop-1
+   ```
+   Wait for `Connected. Welcome, Laptop-1.` and check the dashboard's **Nodes**
+   view shows the card before you record anything.
 
 ---
 
