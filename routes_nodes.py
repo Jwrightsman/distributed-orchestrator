@@ -298,8 +298,21 @@ async def stream_task_tokens(task_id: str, batch: TokenBatch, request: Request):
 
     The server re-emits them as WebSocket 'token' events so the dashboard
     live-streams output from remote nodes, not just local builds.
+
+    Streaming tokens also counts as a heartbeat, and used not to. `last_seen`
+    was refreshed only by /tasks/next and /tasks/{id}/result, so a node stayed
+    "alive" only between tasks — a build longer than _NODE_TIMEOUT (90 s) went
+    silent by that measure while the node was in fact sending a batch every
+    0.3 s. The janitor then evicted a working node, reclaimed the task it was
+    mid-way through, and re-queued it into an empty registry where nothing
+    could pick it up. Found in a dress rehearsal: on a single-node setup the
+    fourth subtask was reclaimed under the node, the dashboard dropped to
+    0 nodes, and the run stalled — while the node's own terminal showed it
+    building. A node emitting tokens for a task is the strongest liveness
+    signal there is.
     """
     _check_node_auth(request)
+    state.touch_node(batch.node_id)
     task = task_inflight.get(task_id)
     if not task or not batch.tokens:
         return {"ok": False}

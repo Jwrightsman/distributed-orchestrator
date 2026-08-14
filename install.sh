@@ -80,6 +80,25 @@ fi
 echo "  Deps:    httpx, rich"
 
 # 5. Join the network (join.py pulls the model and starts polling)
+#
+# Reconnect stdin to the terminal before handing over. In the advertised
+# `curl ... | bash -s -- URL` form, bash's stdin *is* the downloaded script, so
+# anything exec'd here inherits a pipe rather than a terminal. join.py asks a
+# human to type "yes" before it installs a model and starts using their CPU,
+# and refuses when nobody is there to answer — so the one-liner did all the
+# work and then stopped dead on "Not running in a terminal, so nobody can
+# consent."
+#
+# /dev/tty is the controlling terminal regardless of what stdin was redirected
+# to, which is exactly the distinction the consent gate cares about: a person
+# is present. When there is genuinely no terminal — CI, a container, a remote
+# unattended shell — the redirect fails, we fall through, and join.py refuses
+# just as it should. Do NOT "fix" this by passing --yes here: consenting on the
+# machine owner's behalf is the one thing this gate exists to prevent.
 echo ""
 cd "$DEST"
-exec "$PY" join.py "$@"
+if [ -e /dev/tty ] && (: < /dev/tty) 2>/dev/null; then
+  exec "$PY" join.py "$@" < /dev/tty
+else
+  exec "$PY" join.py "$@"
+fi

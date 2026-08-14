@@ -14,6 +14,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from ledger import get_history, get_standings
 from ollama_client import OLLAMA_URL
 import server_state as state
+from build_info import BUILD
 from server_state import (
     _db_lock,
     jobs,
@@ -151,6 +152,11 @@ async def status_json():
         "uptime_seconds": uptime,
         "accepting_nodes": "by invite",
         "repo": "https://github.com/Jwrightsman/distributed-orchestrator",
+        # Fingerprint of the source this process is running. The point is
+        # deploy verification: a redeploy that silently did nothing looks
+        # identical to one that worked, and that has already cost this project
+        # a day. See build_info.py and scripts/verify_deploy.py.
+        "build": BUILD,
     }
 
 

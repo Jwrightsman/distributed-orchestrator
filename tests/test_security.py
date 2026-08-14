@@ -149,3 +149,45 @@ def test_prune_disabled_when_cap_zero(monkeypatch):
     _fake_run("20260801_010000", 5 * 1024 * 1024)
     assert _prune_output_dir() == []
     assert (Path("output") / "20260801_010000").exists()
+
+
+# ── The 500 handler must not echo the exception ──────────────────────
+#
+# This was hardened once and silently un-hardened: a second
+# @app.exception_handler(Exception) was registered further down server.py, and
+# Starlette keys handlers by exception class, so the last registration wins.
+# The generic handler became dead code and the leaky one served every 500 —
+# on a public orchestrator. The count assertion is the part that matters: it
+# fails the moment someone adds another handler rather than editing this one.
+
+def test_only_one_handler_is_registered_for_unhandled_exceptions():
+    """Two handlers for Exception means the last one wins, silently."""
+    registered = [
+        name for name, obj in vars(server).items()
+        if callable(obj) and getattr(obj, "__doc__", None)
+        and "generic 500" in (obj.__doc__ or "")
+    ]
+    assert len(registered) == 1, f"expected one 500 handler, found {registered}"
+    assert server.app.exception_handlers[Exception].__name__ == registered[0]
+
+
+def test_unhandled_exception_does_not_leak_its_message(monkeypatch):
+    """A 500 must not carry exception text — it routinely holds paths and config."""
+    secret = "C:/Users/someone/.ssh/swarm_orchestrator"
+
+    async def boom():
+        raise RuntimeError(f"connection failed reading {secret}")
+
+    server.app.router.add_api_route("/_test_boom", boom, methods=["GET"])
+    try:
+        client = TestClient(server.app, raise_server_exceptions=False)
+        resp = client.get("/_test_boom")
+        assert resp.status_code == 500
+        assert secret not in resp.text
+        assert "RuntimeError" not in resp.text
+        assert resp.json() == {"detail": "internal server error"}
+    finally:
+        server.app.router.routes = [
+            r for r in server.app.router.routes
+            if getattr(r, "path", None) != "/_test_boom"
+        ]

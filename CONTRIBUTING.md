@@ -68,6 +68,21 @@ Include both numbers in the pull request. See [`evals/README.md`](evals/README.m
 for what is scored and how long a run takes. A change that does not move the
 score does not get merged, however nice it looks.
 
+## Before you propose a feature
+
+Check [`ROADMAP.md`](ROADMAP.md) first. It is the single home for everything not being built
+right now — the long-term direction, the deferred engineering, the findings from an external
+review, and the ideas that predate the code. Two things it will save you:
+
+- **It may already be there, with a reason it isn't built yet.** Every item is gated on a
+  *trigger* — the evidence that would make it worth building. "We should add per-node keypairs"
+  is already written down, along with what has to be true first.
+- **It may be explicitly rejected.** §10 lists things that are not oversights: tokens and
+  blockchain, model-layer sharding as the core abstraction, more agent personas.
+
+ROADMAP.md is reference, not a queue — an item being listed there is not an invitation to build
+it. If you think a trigger has fired, say so in an issue before writing code.
+
 ## What this project will not take
 
 - **Tokens, coins, blockchain, or anything on-chain.** This is a deliberate,

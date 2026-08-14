@@ -30,7 +30,7 @@ The network gets real when strangers connect hardware. Joining takes one command
 python join.py http://ORCHESTRATOR_ADDRESS:8000
 ```
 
-**There is a public orchestrator running 24/7 right now**, and during the tester phase joining it is by invite — the node endpoints require a shared key, so an address on its own would only get you a `401`. If you want a machine on it, **[open an issue](https://github.com/Jwrightsman/distributed-orchestrator/issues/new/choose) saying hi** and you'll get the address and join command back. Testers are being added deliberately, a few at a time, so that problems surface at a scale where they can be fixed.
+**There is a public orchestrator running 24/7 right now**, and during the tester phase joining it is by invite — the node endpoints require a shared key, so an address on its own would only get you a `401`. If you want a machine on it, open the **[I'd like to join a machine to the network](https://github.com/Jwrightsman/distributed-orchestrator/issues/new?template=join-the-network.yml)** issue and you'll get the address and join command back. Testers are being added deliberately, a few at a time, so that problems surface at a scale where they can be fixed.
 
 You don't have to wait for that to try it: `python cli.py "your task"` runs the whole pipeline on one machine, and [docs/DEPLOY.md](docs/DEPLOY.md) has a LAN setup that takes minutes, plus a [Tailscale](docs/DEPLOY.md) path for inviting friends to your own instance.
 
@@ -63,6 +63,12 @@ All agents use local models via [Ollama](https://ollama.com). No data leaves you
 ## Quick start
 
 **Requirements:** Python 3.12+ (tested on 3.14), [Ollama](https://ollama.com) installed and running
+
+> **On Windows, type `py` instead of `python` everywhere below.** Stock Windows
+> ships an alias that intercepts `python` and answers *"Python was not found; run
+> without arguments to install from the Microsoft Store"* — even when Python is
+> installed and working. `py` is the launcher that actually came with it. This
+> is the first thing a Windows visitor hits, so it is worth the sentence.
 
 ```bash
 git clone https://github.com/Jwrightsman/distributed-orchestrator.git
@@ -113,8 +119,15 @@ python cli.py "Build a Python script that analyzes a CSV of sales data"
 ### Web dashboard
 
 ```bash
-python -m uvicorn server:app --host 0.0.0.0 --port 8000
+python -m uvicorn server:app --host 127.0.0.1 --port 8000
 ```
+
+> `127.0.0.1` means *this machine only*. Use `--host 0.0.0.0` when you actually
+> want other machines to reach it — but note that node auth and pitch auth are
+> **off by default** (that is what `status.py` reports), so on `0.0.0.0` anyone
+> who can reach the port can submit tasks that run on your hardware. Fine on
+> your own home Wi-Fi, not on campus or café Wi-Fi. Turning both on takes a
+> minute: [docs/DEPLOY.md](docs/DEPLOY.md).
 
 Open **http://localhost:8000/dashboard** — pitch tasks from the UI, watch the pipeline run with live stage progress, view extracted code files, and see the guild standings.
 
@@ -314,6 +327,11 @@ Stated plainly, because you'll find them anyway:
 - **One orchestrator, no failover.** The planner and reviewer always run on the orchestrator; only builder subtasks are distributed. If the orchestrator goes down, the swarm stops — it restarts cleanly, but there's no second one.
 - **No HTTPS, no accounts, no multi-tenancy.** This is a prototype you run for yourself or a group you know.
 
+None of these are secrets being kept until someone notices. What would fix each one — per-node
+cryptographic identity, a durable scheduler, layered verification, real sandboxing — is written
+down in [ROADMAP.md](ROADMAP.md), along with the trigger that would make it worth building. It is
+a reference, not a promise of dates.
+
 ## What's built
 
 - [x] Planner → builder → reviewer → reviser pipeline
@@ -336,12 +354,13 @@ Stated plainly, because you'll find them anyway:
 - [x] `/metrics` endpoint — queue depth, latency, blacklisted nodes, job status
 - [x] Schema-enforced planner output (Ollama structured outputs, with text-parsing fallback)
 - [x] WAN hardening — `node_secret` + `pitch_key` auth, rate limits, output disk cap
-- [x] Docker + docker-compose deployment; test suite (114) + CI
+- [x] Docker + docker-compose deployment; test suite (376) + CI
+- [x] **MCP server interface** — five tools, so any agent app (Claude Desktop etc.) can delegate a build to the swarm ([docs/MCP.md](docs/MCP.md))
+- [x] Sampled verification with per-node reputation feeding routing weight (`verify_rate`, off by default)
 
-**Planned**
-- [ ] MCP server interface — let any agent app (Claude Desktop etc.) delegate tasks to the swarm
-- [ ] Verification & reputation — redundant execution spot-checks, per-node quality scores
-- [ ] Exo integration for model sharding across devices
+**What comes next is in [ROADMAP.md](ROADMAP.md)** — the long-term vision, the deferred
+engineering, and the findings from an external review in August 2026, each one gated on the
+evidence that would make it worth building. Nothing there is a promise, and that is the point.
 
 ## Hardware
 

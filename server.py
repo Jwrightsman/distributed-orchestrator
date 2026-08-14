@@ -20,7 +20,7 @@ Usage:
 import asyncio
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 import routes_events
@@ -78,19 +78,8 @@ async def unhandled_exception_handler(request, exc):
     """
     import logging
 
-    from fastapi.responses import JSONResponse
-
     logging.getLogger("mycelium").exception("unhandled error on %s", request.url.path)
     return JSONResponse(status_code=500, content={"detail": "internal server error"})
-
-
-# ── Global exception handler — always return JSON, never leak stack traces ──
-@app.exception_handler(Exception)
-async def _unhandled(request: Request, exc: Exception):
-    return JSONResponse(
-        status_code=500,
-        content={"error": "Internal server error", "detail": str(exc)},
-    )
 
 
 app.include_router(dashboard_router)

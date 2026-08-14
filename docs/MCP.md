@@ -20,7 +20,7 @@ Five tools are exposed:
    and the orchestrator running:
 
    ```bash
-   python -m uvicorn server:app --host 0.0.0.0 --port 8000
+   python -m uvicorn server:app --host 127.0.0.1 --port 8000
    ```
 
 2. **Open the Claude Desktop config file:**
@@ -85,7 +85,7 @@ python mcp_server.py --http
 
 | Symptom | Fix |
 |---|---|
-| "Could not reach the orchestrator" | Start it: `python -m uvicorn server:app --host 0.0.0.0 --port 8000` |
+| "Could not reach the orchestrator" | Start it: `python -m uvicorn server:app --host 127.0.0.1 --port 8000` |
 | "requires a pitch key" | Set `PITCH_KEY` in the `env` block to the orchestrator's `pitch_key` |
 | Tools don't appear in Claude Desktop | Check the config file path and JSON syntax; fully quit and reopen the app |
 | Rate limited | 5 pitches/minute per IP — wait a minute |
