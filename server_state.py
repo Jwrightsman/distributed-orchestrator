@@ -55,6 +55,10 @@ pipeline_events: list[dict] = []   # recent events for polling fallback
 
 # ── In-memory state ──────────────────────────────────────────────────
 nodes: dict[str, dict] = {}          # node_id -> info
+
+# Process start, for the public /status.json uptime figure. A stranger deciding
+# whether this network is real cares that it has been up for days, not seconds.
+STARTED_AT = time.time()
 task_queue: list[dict] = []          # pending tasks for workers
 task_results: dict[str, dict] = {}   # task_id -> result
 task_inflight: dict[str, dict] = {}  # task_id -> task (assigned but not yet returned)

@@ -190,6 +190,23 @@
 
   .content { padding: 24px 28px 56px; max-width: 1180px; width: 100%; }
 
+  /* Plain-language key for the live log. */
+  .flow {
+    display: flex; align-items: stretch; gap: 8px; flex-wrap: wrap;
+    padding: 12px 14px; margin-bottom: 20px;
+    border: 1px solid var(--border-subtle); border-radius: var(--radius);
+    background: var(--surface);
+  }
+  .flow-step { display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; min-width: 0; }
+  .flow-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; align-self: center; }
+  .flow-step b { font-size: 12.5px; font-weight: 650; color: var(--text); white-space: nowrap; }
+  .flow-step i { font-size: 12.5px; font-style: normal; color: var(--text-muted); }
+  .flow-arrow { color: var(--text-muted); font-size: 13px; align-self: center; }
+  @media (max-width: 760px) {
+    .flow { flex-direction: column; gap: 7px; }
+    .flow-arrow { display: none; }
+  }
+
   .view-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
   .view-head h2 { margin: 0; }
   .view-sub { font-size: 13px; color: var(--text-muted); }
@@ -839,6 +856,24 @@
       </div>
       <!-- Quick-start templates -->
       <div id="task-templates" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:20px;"></div>
+
+      <!-- The live log is the most convincing thing on this page and the least
+           self-explanatory: PLANNER / BUILDER / REVIEWER mean nothing to a
+           visitor. One line of plain language, above the log, is enough to make
+           the rest readable without turning the page into a tutorial. -->
+      <div class="flow" aria-label="What happens to a task">
+        <div class="flow-step"><span class="flow-dot" style="background:var(--stage-pitch)"></span>
+          <b>You pitch</b><i>a task in plain English</i></div>
+        <span class="flow-arrow" aria-hidden="true">→</span>
+        <div class="flow-step"><span class="flow-dot" style="background:var(--stage-plan)"></span>
+          <b>Planner</b><i>splits it into smaller jobs</i></div>
+        <span class="flow-arrow" aria-hidden="true">→</span>
+        <div class="flow-step"><span class="flow-dot" style="background:var(--stage-build)"></span>
+          <b>Builders</b><i>write the pieces, on separate machines</i></div>
+        <span class="flow-arrow" aria-hidden="true">→</span>
+        <div class="flow-step"><span class="flow-dot" style="background:var(--stage-review)"></span>
+          <b>Reviewer</b><i>assembles and grades the result</i></div>
+      </div>
 
       <h2>Live Activity</h2>
       <div id="event-log" style="margin-bottom:24px;max-height:200px;overflow-y:auto;"></div>
