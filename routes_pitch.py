@@ -128,7 +128,7 @@ async def pitch_async(req: PitchRequest, request: Request, response: Response):
     remaining = _check_rate_limit(request)
     response.headers["X-RateLimit-Limit"] = str(state._rate_limits()[0])
     response.headers["X-RateLimit-Remaining"] = str(remaining)
-    job_id = f"job_{int(time.time() * 1000)}"
+    job_id = f"job_{uuid.uuid4().hex}"
     trace_id = str(uuid.uuid4())
     jobs[job_id] = {
         "job_id": job_id,
@@ -338,7 +338,7 @@ async def public_pitch(req: PitchRequest, request: Request):
     stamps.append(now)
     state._public_pitch_timestamps[ip] = stamps
 
-    job_id = f"job_{int(time.time() * 1000)}"
+    job_id = f"job_{uuid.uuid4().hex}"
     trace_id = str(uuid.uuid4())
     jobs[job_id] = {
         "job_id": job_id,
@@ -448,7 +448,7 @@ async def _dispatch_subtask(
 
     prompt = compose_builder_prompt(st, context, overall_task)
 
-    task_id = f"build_{st['id']}_{int(time.time() * 1000)}"
+    task_id = f"build_{st['id']}_{uuid.uuid4().hex}"
     task_queue.append({
         "task_id": task_id,
         "title": st["title"],

@@ -6,10 +6,12 @@ breaker (consecutive-failure blacklist) also lives on this surface.
 """
 
 import asyncio
+import secrets
 import time
+import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
 from ledger import log_contribution
@@ -159,6 +161,11 @@ async def next_task(node_id: str, request: Request):
                 task = task_queue.pop(idx)
                 task["assigned_to"] = node_id
                 task["assigned_at"] = time.time()
+                # Bind this handout to this node. The nonce is unguessable and
+                # separate from task_id, which appears in events and logs.
+                task["attempt_id"] = uuid.uuid4().hex
+                task["nonce"] = secrets.token_urlsafe(24)
+                task["lease_expires_at"] = task["assigned_at"] + state.ATTEMPT_LEASE_SECONDS
                 if node_id in nodes:
                     nodes[node_id]["current_task"] = task.get("title", task["task_id"])
                 task_inflight[task["task_id"]] = task
@@ -174,10 +181,54 @@ async def next_task(node_id: str, request: Request):
         state.waiting_nodes.pop(node_id, None)
 
 
+def _attempt_rejection(pending: dict, result) -> str | None:
+    """Why this submission must not settle, or None if it may.
+
+    Checks are ordered cheapest-first and each one is a real attack:
+      - wrong node   -> an admitted node claiming another node's credit
+      - bad nonce    -> a guessed or replayed task_id without the handout
+      - expired lease-> work returned long after it was reclaimed and redone
+    """
+    if result.node_id != pending.get("assigned_to"):
+        return "submitting node is not the assigned node"
+    expected = pending.get("nonce")
+    if expected:
+        if not result.nonce:
+            return "missing attempt nonce"
+        if not secrets.compare_digest(str(result.nonce), str(expected)):
+            return "attempt nonce does not match"
+    if result.attempt_id and pending.get("attempt_id") and             result.attempt_id != pending.get("attempt_id"):
+        return "attempt id does not match"
+    expires = pending.get("lease_expires_at")
+    if expires and time.time() > expires:
+        return "lease expired"
+    return None
+
+
 @router.post("/tasks/{task_id}/result")
 async def submit_result(task_id: str, result: TaskResult, request: Request):
     """Worker submits completed task."""
     _check_node_auth(request)
+
+    # Idempotent settlement: a retry after a dropped connection must return the
+    # original outcome, not a second payment.
+    if result.attempt_id and result.attempt_id in state.settled_attempts:
+        return state.settled_attempts[result.attempt_id]
+
+    pending = task_inflight.get(task_id)
+    if pending is not None:
+        reason = _attempt_rejection(pending, result)
+        if reason:
+            # Reject loudly. Silently ignoring this would hide exactly the
+            # behaviour worth knowing about.
+            _emit("result_rejected", {
+                "task_id": task_id,
+                "claimed_by": result.node_id,
+                "assigned_to": pending.get("assigned_to"),
+                "reason": reason,
+            })
+            raise HTTPException(status_code=403, detail=f"result rejected: {reason}")
+
     task = task_inflight.pop(task_id, None)
     trace_id = task.get("trace_id", "") if task else ""
 
@@ -220,7 +271,10 @@ async def submit_result(task_id: str, result: TaskResult, request: Request):
     if was_inflight:
         nodes[result.node_id]["tasks_completed"] += 1
     nodes[result.node_id]["current_task"] = None
-    if success and was_inflight:
+    # Credit requires a verified attempt. An unverifiable result is still
+    # recorded above so late work is never lost — it just is not paid.
+    verified = was_inflight and bool(task and task.get("nonce")) and bool(result.nonce)
+    if success and was_inflight and verified:
         credits_earned = 5
         log_contribution(result.node_id, "compute", credits=credits_earned, task=task_id)
         if result.node_id in nodes:
@@ -232,7 +286,10 @@ async def submit_result(task_id: str, result: TaskResult, request: Request):
         "success": success,
         "trace_id": trace_id,
     })
-    return {"status": "accepted", "credits_earned": credits_earned}
+    outcome = {"status": "accepted", "credits_earned": credits_earned}
+    if task and task.get("attempt_id"):
+        state.remember_settlement(task["attempt_id"], outcome)
+    return outcome
 
 
 @router.post("/tasks/{task_id}/stream")

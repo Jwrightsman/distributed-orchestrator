@@ -28,10 +28,24 @@ work. Switch to: full regression, fresh-clone install check, docs and demo scrip
 final, launch post final. He would rather arrive with a repo that has been stable
 for 72 hours than three more features and an untested merge.
 
-## State: everything is merged and green
+## State
 
-`master` is current and launch-ready. **326 tests, ruff clean, CI green.**
-PRs #27–#34 all merged. No open PRs, no unmerged work.
+`master` has PRs #27–#44 merged. **Two PRs are open and unmerged:**
+
+- **#45 — result binding** (`claude/roadmap-and-binding`). The August review's
+  top finding, closed. 376 tests, ruff clean.
+- Everything before it is merged; #43 and #44 landed.
+
+**⚠ ROADMAP.md DOES NOT EXIST.** Jett asked for it to be integrated into
+MASTER_PLAN §8, HANDOFF, README and CONTRIBUTING. It is not in the repo:
+verified four ways — never committed on any branch, absent from `origin/master`,
+not on disk in any worktree, not untracked locally. **Item A of that session was
+not done and is still owed.** Nothing was invented in its place: it holds his
+long-term vision and the external review's findings, which only he has. The
+moment the file is added, the four integration points are: MASTER_PLAN §8
+(replace the parking lot with a pointer), this file's read-first list (marked
+reference, not a work queue), README near Positioning/Limitations, and
+CONTRIBUTING.
 
 | what | measured |
 | --- | --- |
@@ -39,24 +53,33 @@ PRs #27–#34 all merged. No open PRs, no unmerged work.
 | Eval noise floor | **18 of 28 prompts flip between two identical runs** |
 | `--demo-showcase chart` | **10/10** — safe to generate live on camera |
 | `--demo-showcase` (Snake) | **2/10** — pre-generate only |
-| `--demo` | **6/6 on a fresh Ollama, 0/2 after 5+ h** (6/8 overall) — restart Ollama before filming |
-| WAN overhead | 216 ms RTT Indiana→Germany; network is ~2% of a pitch |
-| Restart recovery | 17/17 on Linux; 13/17 on Windows **with Ollama running** — the 4 failures are all Ollama-dependent, so 17/17 on Windows is expected but UNVERIFIED |
-| Soak | 60 pitches, +0.9 MB RSS, no leaks |
-| MCP flow (video Shot 2) | **10/10 end to end** with real inference — `scripts/mcp_e2e.py` |
+| `--demo` | **6/6 on a fresh Ollama, 0/2 after 5+ h** — restart Ollama before filming |
+| WAN overhead | 216 ms RTT Indiana→Germany; network ~2% of a pitch |
+| Restart recovery | 17/17 on Linux with Ollama stopped |
+| MCP flow | **10/10** end to end with real inference |
+| Live smoke | **11/11**, `nodes_used=1`, 7 min |
+| Known memory leak | ~1.25 MB/pitch, linear, source not found |
 
 **Nothing is running.** The CPU is free.
 
-**Ollama degrades over a long session, and it is worth knowing before any long
-measurement.** Across 7 back-to-back `--demo` runs, duration climbed
-26→33→40→36→47→67→83 min (rho with run order **0.96**) and the last two died on
-30-minute model-call timeouts. Restarting Ollama and immediately re-running the
-same task: **83 min → 34 min, clean.** No cooldown, so it is Ollama's session
-state, not thermal. Restart Ollama before filming and between long batches.
+## Result binding — what #45 does and does not do
 
-Checked whether this contaminated the noise-floor eval: **it did not.** Both v3
-runs show no duration trend (rho −0.03 and −0.23) and flat per-half success, so
-the 18/28 churn is genuine model stochasticity.
+`node_secret` is network admission, **not per-node identity**. Submission used to
+trust the `node_id` in the body, so any admitted node could take another node's
+credit. Now every handout mints an attempt (id + nonce, distinct from `task_id`),
+and settlement requires: right node, matching nonce, unexpired lease, unsettled
+attempt. Rejections are 403 + a `result_rejected` event. Settlement is idempotent
+— a retry replays the original outcome, never pays twice.
+
+**Not equivalent to per-node keypairs.** It stops an admitted node stealing
+credit; it does not stop a holder of the shared secret joining under a chosen
+name. Signed receipts, revocation and rotation are deferred to ROADMAP §5 and
+noted in `server_state.py`.
+
+**Nodes must run current code to earn credit.** A node on an older build has its
+results *recorded but not settled* — deliberate, so no work is lost. Jett's
+laptop node needs restarting from current master after #45 merges, or it will
+stop earning.
 
 ## The finding that reframes everything: the eval is mostly noise
 

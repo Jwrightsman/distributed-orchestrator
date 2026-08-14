@@ -68,6 +68,22 @@ async def _lifespan(app: FastAPI):
 app = FastAPI(title="Mycelium", version="0.3.0", lifespan=_lifespan)
 
 
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request, exc):
+    """Return a generic 500 rather than the exception text.
+
+    Tracebacks and exception strings routinely carry filesystem paths, config
+    values and query fragments. The detail still reaches the operator through
+    the server log; it just stops reaching the caller.
+    """
+    import logging
+
+    from fastapi.responses import JSONResponse
+
+    logging.getLogger("mycelium").exception("unhandled error on %s", request.url.path)
+    return JSONResponse(status_code=500, content={"detail": "internal server error"})
+
+
 # ── Global exception handler — always return JSON, never leak stack traces ──
 @app.exception_handler(Exception)
 async def _unhandled(request: Request, exc: Exception):
