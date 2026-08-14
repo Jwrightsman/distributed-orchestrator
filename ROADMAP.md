@@ -123,8 +123,9 @@ synthetic data with validators. The chart-vs-Snake gap is the evidence, already 
 
 ## 5. Protocol hardening — before strangers earn anything real
 
-_From external review, August 2026. Ordered by severity. The first item is being addressed now;
-the rest are deferred with intent._
+_From external review, August 2026. Ordered by severity, which is not the order they were built
+in: **the first part of the second item shipped in PR #45** (attempt binding — see below) and the
+first item, per-node identity, is untouched. The rest are deferred with intent._
 
 **Per-node cryptographic identity.** `node_secret` is network admission, not identity. Keypair at
 first setup, challenge-response registration, node-scoped tokens thereafter. Enables the rest.
@@ -133,6 +134,14 @@ first setup, challenge-response registration, node-scoped tokens thereafter. Ena
 `assigned_node_id`, `payload_hash`, nonce, issue and expiry. The node signs a result envelope
 including input and output hashes. Acceptance requires valid signature, matching assignee,
 matching nonce, unexpired lease, unsettled attempt.
+
+> **Partly shipped, PR #45 (Aug 14).** Handing out a task now mints an attempt id and a nonce,
+> both distinct from `task_id`, with a 900 s lease; settlement requires the right node, matching
+> nonce, unexpired lease and an unsettled attempt, and is idempotent on retry. A node on an older
+> build has its result *recorded but not settled*, so no work is lost. **Still deferred:**
+> `payload_hash`, the signed result envelope, and everything that depends on a keypair — which is
+> the item above. Attempt binding stops an admitted node stealing another node's credit; it does
+> not stop a holder of the shared secret joining under a chosen name.
 
 **Durable attempt-based scheduler.** Nodes, queues, in-flight assignments, reputation and
 breaker state are currently process-local; a restart loses the answers to "was this leased or
@@ -200,6 +209,9 @@ duplicate after retry, restart mid-submission, clock skew, duplicate identity re
 oversized or malformed payload, Sybil registration, colluding verifiers, disk-full, crash
 between verification and settlement. Property-based state-machine tests are the right shape.
 
+> The first four exist as of PR #45 (`tests/test_result_binding.py`), as example-based tests
+> rather than property-based ones. The rest are open.
+
 ---
 
 ## 6. Reliability and product shape
@@ -250,11 +262,18 @@ stronger model (the model router already supports this) rather than concluding t
 bigger models everywhere.
 
 **Smaller issues from the August review, worth tickets rather than a project:** apply the same
-verification policy to every distributed route including the direct distributed-pitch path ·
-enforce queue limits atomically at enqueue rather than checking before a wave · persist reputation
-and verifier evidence instead of losing it with the process · stop returning raw internal
-exception text in production 500s · test live config reload or document that a restart is
-required · UUIDv7/ULID identifiers rather than timestamp-derived ones.
+verification policy to every distributed route including the direct distributed-pitch path
+(`/pitch/async` samples for verification; `/pitch/distributed` does not) · enforce queue limits
+atomically at enqueue rather than checking once before a wave · persist reputation and verifier
+evidence instead of losing it with the process · finish live config reload (`verify_rate` already
+re-reads per pitch; nothing else does, and none of it is tested) · UUIDv7/ULID identifiers rather
+than timestamp-derived ones.
+
+> **Done Aug 14:** raw internal exception text in production 500s. Two
+> `@app.exception_handler(Exception)` handlers were registered in `server.py` and Starlette keys
+> them by class, so the later, leaky one silently replaced the hardened one — every 500 returned
+> `str(exc)`. The chaos test that should have caught it was asserting the leaky handler's response
+> shape. Both fixed.
 
 ---
 
@@ -398,7 +417,8 @@ by agents** — see §2.
 
 ## 11. Documentation debt
 
-`THREAT_MODEL.md` and `SECURITY.md` (in progress) · `ARCHITECTURE.md` with sequence diagrams ·
+`THREAT_MODEL.md` and `SECURITY.md` (neither exists yet — the trust model is stated in README
+Limitations and CONTRIBUTING instead) · `ARCHITECTURE.md` with sequence diagrams ·
 `PROTOCOL.md` with normative state transitions and invariants · `PRIVACY.md` ·
 `OPERATIONS.md` (backup, restore, upgrade, incident recovery) · `docs/adr/` for decision records ·
 machine-readable benchmark history · changelog and tagged releases · GitHub milestones and public
@@ -435,6 +455,10 @@ memory or storage growth.
   and the smaller review issues (§6); the guild-vs-DAO rationale and the co-op / pure-protocol /
   startup models that were set aside (§8); the idea-evaluation problem, which is the hardest
   unsolved piece of the marketplace vision (§9).
+- **2026-08-14** — Sanity-checked against the repo. Corrected: which §5 item PR #45 actually
+  shipped (attempt binding, not per-node identity), the four adversarial scenarios that now have
+  tests, the 500-leak item (fixed the same day), the live-config-reload item (partly done), and
+  `SECURITY.md` / `THREAT_MODEL.md` (neither exists).
 - **2026-08-14** — Second completeness pass. Added: the cryptographic verification endgame,
   TEEs then zero-knowledge proofs of inference, which is what a permissionless network would
   eventually require (§5); Merkle hash-chaining as the tamper-evidence step between a JSON file
