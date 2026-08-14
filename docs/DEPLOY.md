@@ -197,18 +197,38 @@ a deploy that silently did nothing looks exactly like a deploy that worked.
 ssh -i ~/.ssh/YOUR_KEY root@YOUR_SERVER_IP "cd /root/distributed-orchestrator && git pull && docker compose up -d --build"
 ```
 
-Then confirm the new code is actually serving:
+Then confirm the new code is actually serving. **Run this from an up-to-date
+checkout of the branch you just deployed** — it compares the code in front of
+you against the code the server is really executing:
 
 ```bash
-# 101 = the WebSocket (live dashboard updates) is working. 404 = old image still running.
+python scripts/verify_deploy.py http://YOUR_SERVER_IP:8000
+```
+
+It prints `MATCH` (and exits 0) or `STALE` (exits 1) with what to check next.
+The server reports a hash of its own source in `/status.json`, computed inside
+the running process, so it cannot be faked by a `git pull` that succeeded while
+the rebuild didn't. That distinction is the whole point: the deploy failure this
+project actually had was a successful-looking pull with no rebuild behind it.
+
+Two older tells, still useful when the script says `STALE` and you want to know
+which half broke:
+
+```bash
+# The container was recreated? Uptime should be seconds, not days.
+docker compose ps
+```
+
+```bash
+# 101 = the WebSocket (live dashboard updates) is working. 404 = image predates Aug 12.
 curl -s -o /dev/null -w "%{http_code}\n" \
   -H "Connection: Upgrade" -H "Upgrade: websocket" \
   -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
   http://YOUR_SERVER_IP:8000/ws/events
 ```
 
-`docker compose ps` is the other quick tell: if the orchestrator's uptime is not
-a few seconds, it was never recreated and your change is not live.
+> The WebSocket check only proves the image is newer than Aug 12 — it cannot
+> tell one recent deploy from another. `verify_deploy.py` can.
 
 ### "not a git repository" — the tarball trap
 
