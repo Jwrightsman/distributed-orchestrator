@@ -30,7 +30,7 @@ The network gets real when strangers connect hardware. Joining takes one command
 python join.py http://ORCHESTRATOR_ADDRESS:8000
 ```
 
-**There is a public orchestrator running 24/7 right now**, and during the tester phase joining it is by invite — the node endpoints require a shared key, so an address on its own would only get you a `401`. If you want a machine on it, **[open an issue](https://github.com/Jwrightsman/distributed-orchestrator/issues/new/choose) saying hi** and you'll get the address and join command back. Testers are being added deliberately, a few at a time, so that problems surface at a scale where they can be fixed.
+**There is a public orchestrator running 24/7 right now**, and during the tester phase joining it is by invite — the node endpoints require a shared key, so an address on its own would only get you a `401`. If you want a machine on it, open the **[I'd like to join a machine to the network](https://github.com/Jwrightsman/distributed-orchestrator/issues/new?template=join-the-network.yml)** issue and you'll get the address and join command back. Testers are being added deliberately, a few at a time, so that problems surface at a scale where they can be fixed.
 
 You don't have to wait for that to try it: `python cli.py "your task"` runs the whole pipeline on one machine, and [docs/DEPLOY.md](docs/DEPLOY.md) has a LAN setup that takes minutes, plus a [Tailscale](docs/DEPLOY.md) path for inviting friends to your own instance.
 

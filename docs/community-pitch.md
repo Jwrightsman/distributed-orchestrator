@@ -42,8 +42,17 @@ Every line must be true **before you post anywhere**. Most take under a minute.
       That proves it is reachable from outside your house.
 - [ ] **The video plays in a private/incognito window**, logged out, so you know
       the link works for strangers.
-- [ ] **The join flow was tested on a clean machine** in the last week:
-      `python join.py <address>` → consent prompt appears → it connects.
+- [ ] **The one-liner you are about to publish was tested on a clean machine**
+      in the last week — **the actual `curl … | bash` command, not `join.py`.**
+      They are not the same test: testing `join.py` on its own passed for
+      months while the piped one-liner died at the consent prompt, because
+      `curl … | bash` leaves join.py reading the download pipe instead of a
+      terminal. Run the exact string from the post, on a machine that has never
+      had this repo, and watch for: consent prompt appears → you type `yes` →
+      the model pulls → it registers. Fixed Aug 14; the point is that only the
+      real command proves it.
+- [ ] **The Windows one-liner too**, if the post mentions Windows — it is a
+      different script (`install.ps1`) and a different shell.
 - [ ] **The live orchestrator is running current `master`.** Redeploy, then
       confirm `/status.json` responds and the dashboard loads.
 - [ ] **The dashboard loads on your phone** without sideways scrolling.
