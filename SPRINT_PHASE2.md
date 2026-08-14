@@ -259,7 +259,7 @@ insurance on the launch and requires no video production.
 ## Not in this phase
 New user-facing features · dashboard redesign · guild/governance code · agent fine-tuning ·
 tokens/blockchain (never) · MCP tools beyond the existing five · mobile · anything in
-MASTER_PLAN.md §8 except the §4 stretch above.
+`ROADMAP.md` (reference, not a queue) except the §4 stretch above.
 
 ## Standing rules
 Test after every change · never leave the repo broken at session end · commit per logical change

@@ -1,6 +1,6 @@
 # MASTER PLAN — Mycelium
 
-_Last updated: August 1, 2026._
+_Last updated: August 14, 2026._
 _This file is the single source of truth for project direction. Any AI assistant working in this repo (Claude Code, etc.) must read this fully before making changes. It overrides older priority lists in CLAUDE.md._
 
 ---
@@ -76,13 +76,20 @@ A collectively-owned AI orchestration layer that runs on consumer hardware. A pl
 6. **`docs/community-pitch.md` refresh:** title leads with the demo result; body mentions persistent memory, parallel waves, auto-revision, credits/guild standings, one-command join; ends with the CTA.
 7. Keep the standing rules: no crypto/tokens/blockchain; no big rewrites of working code; test after every change; warn Jett before anything network-facing.
 
-## 8. After launch (parking lot — do not build yet)
+## 8. After launch — see ROADMAP.md
 
-- **MCP server interface** — expose `pitch_task` / `get_result` as MCP tools so any agent app (Claude Desktop, etc.) can delegate work to the swarm. Flagship Phase 2 feature; huge demo potential.
-- Verification & reputation: redundant execution spot-checks, per-node quality scores feeding routing weight.
-- Exo or llama.cpp RPC integration for layer-sharding large models across nodes (lets the swarm run one big model, not just many small ones).
-- Agent specialization: per-role models on capable nodes; community-contributed agent prompts with royalty credits.
-- Guild charter v0 — written when there are ten real members to govern, not before.
+This section used to hold a parking lot. It now lives in **[`ROADMAP.md`](ROADMAP.md)**, the
+single home for everything not being built right now: the long-term vision, deferred engineering,
+the August 2026 external review's findings, and the speculative ideas that predate the code.
+
+Two lists of future work drift apart, so there is only one. **ROADMAP.md is reference, not a work
+queue** — every item there is gated on a trigger, and nothing moves into a sprint file until its
+trigger fires. The active work is always in `SPRINT_*.md`.
+
+Of the five items this section used to list, two are done: the **MCP server interface shipped**
+(five tools, an end-to-end check at 10/10) and **verification and reputation is wired** (sampled
+duplicate execution, `verify_rate`, per-node routing weight — off by default). Layer sharding,
+agent specialization and the guild charter carried over to ROADMAP §10, §9 and §8 respectively.
 
 ## 9. Success metrics
 

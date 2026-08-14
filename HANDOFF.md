@@ -10,7 +10,14 @@ _Rewritten Aug 12, 2026. Paste the prompt at the bottom into a new session._
 2. `SPRINT_PHASE2.md` — **the active plan and cross-session memory.** Its Session
    Log has the full history with numbers
 3. `CLAUDE.md` — house rules
-4. This file
+4. `ROADMAP.md` — **REFERENCE, NOT A WORK QUEUE.** Everything *not* being built
+   right now: the long-term vision, deferred engineering, the August 2026
+   external review, speculative ideas. Every item is gated on a trigger. **Do
+   not pull work from it.** Read it to know why something isn't built, to avoid
+   proposing something already rejected, and to avoid rebuilding something the
+   sprint files already shipped. Items move out of it into a sprint file only
+   when Jett says so.
+5. This file
 
 ## Jett context — read before planning anything
 
@@ -36,16 +43,9 @@ for 72 hours than three more features and an untested merge.
   top finding, closed. 376 tests, ruff clean.
 - Everything before it is merged; #43 and #44 landed.
 
-**⚠ ROADMAP.md DOES NOT EXIST.** Jett asked for it to be integrated into
-MASTER_PLAN §8, HANDOFF, README and CONTRIBUTING. It is not in the repo:
-verified four ways — never committed on any branch, absent from `origin/master`,
-not on disk in any worktree, not untracked locally. **Item A of that session was
-not done and is still owed.** Nothing was invented in its place: it holds his
-long-term vision and the external review's findings, which only he has. The
-moment the file is added, the four integration points are: MASTER_PLAN §8
-(replace the parking lot with a pointer), this file's read-first list (marked
-reference, not a work queue), README near Positioning/Limitations, and
-CONTRIBUTING.
+**ROADMAP.md now exists** (added Aug 14) and its four integration points are
+done: MASTER_PLAN §8 is a pointer to it instead of a second parking lot, it is
+item 4 of the read-first list above, and README and CONTRIBUTING link it.
 
 | what | measured |
 | --- | --- |

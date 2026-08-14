@@ -314,6 +314,11 @@ Stated plainly, because you'll find them anyway:
 - **One orchestrator, no failover.** The planner and reviewer always run on the orchestrator; only builder subtasks are distributed. If the orchestrator goes down, the swarm stops — it restarts cleanly, but there's no second one.
 - **No HTTPS, no accounts, no multi-tenancy.** This is a prototype you run for yourself or a group you know.
 
+None of these are secrets being kept until someone notices. What would fix each one — per-node
+cryptographic identity, a durable scheduler, layered verification, real sandboxing — is written
+down in [ROADMAP.md](ROADMAP.md), along with the trigger that would make it worth building. It is
+a reference, not a promise of dates.
+
 ## What's built
 
 - [x] Planner → builder → reviewer → reviser pipeline
@@ -336,12 +341,13 @@ Stated plainly, because you'll find them anyway:
 - [x] `/metrics` endpoint — queue depth, latency, blacklisted nodes, job status
 - [x] Schema-enforced planner output (Ollama structured outputs, with text-parsing fallback)
 - [x] WAN hardening — `node_secret` + `pitch_key` auth, rate limits, output disk cap
-- [x] Docker + docker-compose deployment; test suite (114) + CI
+- [x] Docker + docker-compose deployment; test suite (376) + CI
+- [x] **MCP server interface** — five tools, so any agent app (Claude Desktop etc.) can delegate a build to the swarm ([docs/MCP.md](docs/MCP.md))
+- [x] Sampled verification with per-node reputation feeding routing weight (`verify_rate`, off by default)
 
-**Planned**
-- [ ] MCP server interface — let any agent app (Claude Desktop etc.) delegate tasks to the swarm
-- [ ] Verification & reputation — redundant execution spot-checks, per-node quality scores
-- [ ] Exo integration for model sharding across devices
+**What comes next is in [ROADMAP.md](ROADMAP.md)** — the long-term vision, the deferred
+engineering, and the findings from an external review in August 2026, each one gated on the
+evidence that would make it worth building. Nothing there is a promise, and that is the point.
 
 ## Hardware
 
