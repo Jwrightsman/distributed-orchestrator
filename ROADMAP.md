@@ -432,8 +432,7 @@ by agents** — see §2.
 
 ## 11. Documentation debt
 
-`THREAT_MODEL.md` and `SECURITY.md` (neither exists yet — the trust model is stated in README
-Limitations and CONTRIBUTING instead) · `ARCHITECTURE.md` with sequence diagrams ·
+~~`THREAT_MODEL.md` and `SECURITY.md`~~ **both written, Aug 15** · `ARCHITECTURE.md` with sequence diagrams ·
 `PROTOCOL.md` with normative state transitions and invariants · `PRIVACY.md` ·
 `OPERATIONS.md` (backup, restore, upgrade, incident recovery) · `docs/adr/` for decision records ·
 machine-readable benchmark history · changelog and tagged releases · GitHub milestones and public
@@ -479,7 +478,7 @@ memory or storage growth.
 - **2026-08-14** — Sanity-checked against the repo. Corrected: which §5 item PR #45 actually
   shipped (attempt binding, not per-node identity), the four adversarial scenarios that now have
   tests, the 500-leak item (fixed the same day), the live-config-reload item (partly done), and
-  `SECURITY.md` / `THREAT_MODEL.md` (neither exists).
+  `SECURITY.md` / `THREAT_MODEL.md` (neither existed; both written Aug 15).
 - **2026-08-14** — Second completeness pass. Added: the cryptographic verification endgame,
   TEEs then zero-knowledge proofs of inference, which is what a permissionless network would
   eventually require (§5); Merkle hash-chaining as the tamper-evidence step between a JSON file
