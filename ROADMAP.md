@@ -97,6 +97,11 @@ bet worth making: the swarm is most compelling not as a website but as a *tool o
 reach for*. "My assistant delegated this build to four volunteers' laptops" is the 2026-native
 version of this project. Consider making MCP the headline interface rather than a feature.
 
+**Ensemble execution — BUILT AND MEASURED, Aug 15; result inconclusive, see
+[docs/ensemble-vs-decomposition.md](docs/ensemble-vs-decomposition.md).** 12/22 single-shot against
+decomposition's 2/10, p = 0.073. Settling it needs ~19 runs per arm, almost all of the cost on the
+decomposition side. Not promoted. The original entry follows.
+
 **Ensemble execution.** The sharpest finding from external review, and it comes from our own
 data: chart 10/10 vs Snake 2/10 isn't only model weakness. The architecture is good at
 independent, cheaply-checkable subtasks and bad at tightly coupled artifacts where blind agents

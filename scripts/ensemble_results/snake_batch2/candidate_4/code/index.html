@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Neon Snake</title>
+<style>
+    body {
+        background-color: #050505;
+        color: #fff;
+        font-family: 'Courier New', monospace;
+        text-align: center;
+        margin: 0;
+        padding: 20px;
+        overflow: hidden;
+    }
+    #game-container {
+        position: relative;
+        margin: 0 auto;
+        box-shadow: 0 0 30px rgba(0, 255, 0, 0.5);
+        border: 2px solid #333;
+    }
+    canvas {
+        display: block;
+        background-color: #000;
+        box-shadow: inset 0 0 20px #000;
+    }
+    #ui-layer {
+        width: 400px;
+        height: 400px;
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+    }
+    #score-display {
+        color: #00ff00;
+        text-shadow: 0 0 10px #00ff00;
+        font-size: 18px;
+        margin-bottom: 5px;
+    }
+    #game-over-overlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(0, 0, 0, 0.9);
+        display: none;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        z-index: 10;
+    }
+    #game-over-overlay.active {
+        display: flex;
+    }
+    h1 {
+        color: #ff0055;
+        text-shadow: 0 0 20px #ff0055;
+        font-size: 40px;
+        margin: 0 0 20px 0;
+    }
+    button {
+        background: none;
+        border: 2px solid #00ff00;
+        color: #00ff00;
+        padding: 10px 20px;
+        font-family: inherit;
+        font-size: 18px;
+        cursor: pointer;
+        box-shadow: 0 0 10px #00ff00;
+        transition: all 0.2s;
+    }
+    button:hover {
+        background: #00ff00;
+        color: #000;
+        box-shadow: 0 0 20px #00ff00;
+    }
+</style>
+</head>
+<body>
+<div id="game-container">
+    <canvas id="gameCanvas" width="400" height="400"></canvas>
+    <div id="ui-layer">
+        <div id="score-display">Score: 0</div>
+        <div id="game-over-overlay">
+            <h1>GAME OVER</h1>
+            <button id="restart-btn">Restart Game</button>
+        </div>
+    </div>
+</div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const scoreElement = document.getElementById('score-display');
+const overlay = document.getElementById('game-over-overlay');
+const restartBtn = document.getElementById('restart-btn');
+
+const TILE_SIZE = 20;
+const TILE_COUNT = canvas.width / TILE_SIZE;
+
+let snake = [];
+let food = { x: 0, y: 0 };
+let dx = 0;
+let dy = 0;
+let nextDx = 0;
+let nextDy = 0;
+let score = 0;
+let speed = 100;
+let gameOver = false;
+
+// Initialization
+function init() {
+    snake = [{ x: 10, y: 10 }, { x: 9, y: 10 }, { x: 8, y: 10 }];
+    dx = 1;
+    dy = 0;
+    nextDx = 1;
+    nextDy = 0;
+    score = 0;
+    speed = 100;
+    gameOver = false;
+    placeFood();
+    updateScoreUI();
+    overlay.classList.remove('active');
+    requestAnimationFrame(gameLoop);
+}
+
+// Game Loop
+function gameLoop() {
+    if (gameOver) return;
+    
+    setTimeout(function() {
+        moveSnake();
+        checkCollisions();
+        draw();
+        requestAnimationFrame(gameLoop);
+    }, speed);
+}
+
+// Move Logic
+function moveSnake() {
+    dx = nextDx;
+    dy = nextDy;
+
+    const head = { x: snake[0].x + dx, y: snake[0].y + dy };
+    snake.unshift(head);
+    
+    let hasEaten = false;
+    
+    if (head.x === food.x && head.y === food.y) {
+        hasEaten = true;
+        score += 10;
+        updateScoreUI();
+        placeFood();
+        // Speed increase every 50 points
+        if (score % 50 === 0) {
+            speed = Math.max(50, speed - 5);
+        }
+    } else {
+        snake.pop();
+    }
+}
+
+// Collision Detection
+function checkCollisions() {
+    const head = snake[0];
+    
+    // Wall Collision
+    if (head.x < 0 || head.x >= TILE_COUNT || head.y < 0 || head.y >= TILE_COUNT) {
+        endGame();
+        return;
+    }
+    
+    // Self Collision
+    for (let i = 1; i < snake.length; i++) {
+        if (head.x === snake[i].x && head.y === snake[i].y) {
+            endGame();
+            return;
+        }
+    }
+}
+
+// Food Placement
+function placeFood() {
+    do {
+        food.x = Math.floor(Math.random() * TILE_COUNT);
+        food.y = Math.floor(Math.random() * TILE_COUNT);
+    } while (snake.some(segment => segment.x === food.x && segment.y === food.y));
+}
+
+// UI Update
+function updateScoreUI() {
+    scoreElement.textContent = 'Score: ' + score;
+}
+
+// Game Over
+function endGame() {
+    gameOver = true;
+    overlay.classList.add('active');
+}
+
+// Restart
+restartBtn.addEventListener('click', init);
+
+// Keyboard Input
+document.addEventListener('keydown', function(e) {
+    // Prevent scrolling with arrow keys
+    if(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"].indexOf(e.code) > -1) {
+        e.preventDefault();
+    }
+
+    switch(e.key) {
+        case 'ArrowUp':
+            if (dy !== 1) { nextDx = 0; nextDy = -1; }
+            break;
+        case 'ArrowDown':
+            if (dy !== -1) { nextDx = 0; nextDy = 1; }
+            break;
+        case 'ArrowLeft':
+            if (dx !== 1) { nextDx = -1; nextDy = 0; }
+            break;
+        case 'ArrowRight':
+            if (dx !== -1) { nextDx = 1; nextDy = 0; }
+            break;
+    }
+});
+
+// Rendering
+function draw() {
+    // Clear Screen
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    
+    // Glow Effects
+    ctx.shadowBlur = 10;
+    
+    // Draw Snake
+    ctx.fillStyle = '#00ff00';
+    ctx.shadowColor = '#00ff00';
+    for (let i = 0; i < snake.length; i++) {
+        ctx.fillRect(snake[i].x * TILE_SIZE, snake[i].y * TILE_SIZE, TILE_SIZE - 2, TILE_SIZE - 2);
+    }
+    
+    // Draw Food
+    ctx.fillStyle = '#ff0055';
+    ctx.shadowColor = '#ff0055';
+    ctx.shadowBlur = 15;
+    ctx.fillRect(food.x * TILE_SIZE, food.y * TILE_SIZE, TILE_SIZE - 2, TILE_SIZE - 2);
+    
+    // Reset Shadow
+    ctx.shadowBlur = 0;
+}
+
+// Start
+init();
+</script>
+</body>
+</html>
