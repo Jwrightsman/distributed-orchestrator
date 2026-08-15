@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neon Snake</title>
+    <style>
+        body {
+            background-color: #000000;
+            color: #ffffff;
+            font-family: 'Courier New', Courier, monospace;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            overflow: hidden;
+        }
+
+        #game-container {
+            position: relative;
+            border: 4px solid #333;
+            box-shadow: 0 0 20px #0ff;
+        }
+
+        canvas {
+            display: block;
+            background-color: #111;
+        }
+
+        #score-board {
+            width: 400px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+            font-size: 1.2rem;
+            font-weight: bold;
+        }
+
+        .score-text {
+            color: #0ff;
+            text-shadow: 0 0 5px #0ff;
+        }
+
+        #game-over-overlay {
+            position: absolute;
+            top: 50px;
+            left: 50px;
+            right: 50px;
+            bottom: 100px;
+            background: rgba(0, 0, 0, 0.9);
+            border: 2px solid #f00;
+            display: none; /* Hidden by default */
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            box-shadow: 0 0 30px #f00;
+            z-index: 10;
+        }
+
+        #game-over-overlay h1 {
+            color: #f00;
+            font-size: 3rem;
+            margin: 0 0 20px 0;
+            text-shadow: 0 0 10px #f00;
+            text-transform: uppercase;
+            letter-spacing: 5px;
+        }
+
+        #restart-btn {
+            background-color: transparent;
+            color: #0ff;
+            border: 2px solid #0ff;
+            padding: 15px 30px;
+            font-size: 1.2rem;
+            font-family: inherit;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-transform: uppercase;
+            box-shadow: 0 0 10px #0ff;
+        }
+
+        #restart-btn:hover {
+            background-color: #0ff;
+            color: #000;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="score-board">
+        <span>SCORE: <span id="score">0</span></span>
+        <span>HIGH SCORE: <span id="high-score">0</span></span>
+    </div>
+
+    <div id="game-container">
+        <canvas id="gameCanvas" width="400" height="400"></canvas>
+        <div id="game-over-overlay">
+            <h1>GAME OVER</h1>
+            <button id="restart-btn">Press Start</button>
+        </div>
+    </div>
+
+    <script>
+        // Configuration
+        const CANVAS_BORDER_COLOR = '#333';
+        const CANVAS_BACKGROUND_COLOR = '#111';
+        const SNAKE_COLOR = '#0ff';
+        const SNAKE_BORDER_COLOR = '#000';
+        const FOOD_COLOR = '#f0f';
+        const GAME_SPEED = 100; // ms
+
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+        const scoreElement = document.getElementById("score");
+        const highScoreElement = document.getElementById("high-score");
+        const gameOverOverlay = document.getElementById("game-over-overlay");
+        const restartBtn = document.getElementById("restart-btn");
+
+        const GRID = 16;
+        const TILE_COUNT = canvas.width / GRID;
+
+        // Game State
+        let score = 0;
+        let highScore = localStorage.getItem('snakeHighScore') || 0;
+        let changingDirection = false;
+        let gameInterval;
+        let snake = [];
+        let foodX;
+        let foodY;
+        let dx = GRID; // Horizontal velocity
+        let dy = 0;   // Vertical velocity
+
+        // Initialize High Score UI
+        highScoreElement.innerText = highScore;
+
+        function initGame() {
+            // Hide overlay on restart
+            gameOverOverlay.style.display = 'none';
+            
+            // Reset Score
+            score = 0;
+            scoreElement.innerText = score;
+            
+            // Initial Position (Center)
+            snake = [
+                {x: 200, y: 200},
+                {x: 184, y: 200},
+                {x: 168, y: 200},
+                {x: 152, y: 200}
+            ];
+
+            // Initial Velocity (Moving Right) - Meets requirement "moving the moment the page opens"
+            dx = GRID;
+            dy = 0;
+
+            createFood();
+            main();
+        }
+
+        function main() {
+            if (didGameEnd()) {
+                showGameOver();
+                return;
+            }
+
+            changingDirection = false;
+
+            setTimeout(function onTick() {
+                            clearCanvas();
+                            advanceSnake();
+                            drawFood();
+                            drawSnake();
+                            gameInterval = setInterval(main, GAME_SPEED);
+                        }, 0);
+        }
+
+        function clearCanvas() {
+            ctx.fillStyle = CANVAS_BACKGROUND_COLOR;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+
+        function drawSnake() {
+            snake.forEach(drawSnakePart);
+        }
+
+        function drawSnakePart(snakePart) {
+            ctx.fillStyle = SNAKE_COLOR;
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = SNAKE_COLOR;
+            ctx.fillRect(snakePart.x, snakePart.y, GRID, GRID);
+
+            ctx.shadowBlur = 0; // Reset shadow for border
+            
+            ctx.strokeStyle = SNAKE_BORDER_COLOR;
+            ctx.strokeRect(snakePart.x, snakePart.y, GRID, GRID);
+        }
+
+        function advanceSnake() {
+            const head = {x: snake[0].x + dx, y: snake[0].y + dy};
+            snake.unshift(head);
+
+            const didEatFood = snake[0].x === foodX && snake[0].y === foodY;
+            if (didEatFood) {
+                score += 10;
+                scoreElement.innerText = score;
+                createFood();
+            } else {
+                snake.pop();
+            }
+        }
+
+        function drawFood() {
+            ctx.fillStyle = FOOD_COLOR;
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = FOOD_COLOR;
+            ctx.fillRect(foodX, foodY, GRID, GRID);
+            ctx.shadowBlur = 0;
+        }
+
+        function createFood() {
+            foodX = Math.floor(Math.random() * TILE_COUNT) * GRID;
+            foodY = Math.floor(Math.random() * TILE_COUNT) * GRID;
+
+            if (snake.some(part => part.x === foodX && part.y === foodY)) {
+                createFood();
+            }
+        }
+
+        function didGameEnd() {
+            for (let i = 4; i < snake.length; i++) {
+                const didCollide = snake[i].x === snake[0].x && snake[i].y === snake[0].y;
+                if (didCollide) return true;
+            }
+
+            const hitLeftWall = snake[0].x < 0;
+            const hitRightWall = snake[0].x >= canvas.width;
+            const hitTopWall = snake[0].y < 0;
+            const hitBottomWall = snake[0].y >= canvas.height;
+
+            return hitLeftWall || hitRightWall || hitTopWall || hitBottomWall;
+        }
+
+        function showGameOver() {
+            clearInterval(gameInterval);
+            
+            // Ensure the overlay is shown only once per run if hidden, 
+            // but since we restart immediately, we rely on the button to handle the next start.
+            gameOverOverlay.style.display = "flex";
+        }
+
+        function startGameAction() {
+            // Called when button is clicked
+            initGame();
+        }
+
+        document.addEventListener("keydown", changeDirection);
+        restartBtn.addEventListener("click", startGameAction);
+
+        // Prevent reversing directly
+        function changeDirection(event) {
+            const LEFT_KEY = 37;
+            const RIGHT_KEY = 39;
+            const UP_KEY = 38;
+            const DOWN_KEY = 40;
+
+            const keyPressed = event.keyCode;
+            const goingUp = dy === -GRID;
+            const goingDown = dy === GRID;
+            const goingRight = dx === GRID;
+            const goingLeft = dx === -GRID;
+
+            // Stop game on any other key press
+            if (keyPressed < 36 || keyPressed > 40) {
+                return;
+            }
+
+            // Stop game if changingDirection flag is true (prevent rapid double key clicks)
+            if (changingDirection) {
+                return;
+            }
+
+            changingDirection = true;
+
+            const goingRight = dx === GRID;
+            const goingLeft = dx === -GRID;
+            const goingUp = dy === -GRID;
+            const goingDown = dy === GRID;
+
+            if (keyPressed === LEFT_KEY && !goingRight) {
+                dx = -GRID;
+                dy = 0;
+            }
+
+            if (keyPressed === UP_KEY && !goingDown) {
+                dx = 0;
+                dy = -GRID;
+            }
+
+            if (keyPressed === RIGHT_KEY && !goingLeft) {
+                dx = GRID;
+                dy = 0;
+            }
+
+            if (keyPressed === DOWN_KEY && !goingUp) {
+                dx = 0;
+                dy = GRID;
+            }
+        }
+
+        // Start the game immediately upon loading
+        initGame();
+
+    </script>
+</body>
+</html>

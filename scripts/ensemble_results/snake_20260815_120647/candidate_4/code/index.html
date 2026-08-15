@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neon Snake</title>
+    <style>
+        body {
+            background-color: #050505;
+            color: #fff;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            font-family: 'Courier New', Courier, monospace;
+        }
+        
+        #game-container {
+            position: relative;
+            box-shadow: 0 0 20px rgba(0, 255, 255, 0.2);
+            border: 2px solid #333;
+            background-color: #000;
+        }
+        
+        canvas {
+            display: block;
+            border: 1px solid #000;
+        }
+        
+        #score-display {
+            margin-bottom: 10px;
+            font-size: 24px;
+            color: #0ff;
+            text-shadow: 0 0 10px #0ff;
+        }
+        
+        #game-over {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.85);
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+        }
+        
+        #game-over h2 {
+            font-size: 48px;
+            color: #ff0055;
+            text-shadow: 0 0 20px #ff0055;
+            margin: 0 0 20px 0;
+        }
+        
+        #restart-btn {
+            background-color: transparent;
+            border: 2px solid #0ff;
+            color: #0ff;
+            font-size: 18px;
+            padding: 10px 20px;
+            cursor: pointer;
+            box-shadow: 0 0 10px #0ff;
+            transition: all 0.3s ease;
+            font-family: inherit;
+        }
+        
+        #restart-btn:hover {
+            background-color: #0ff;
+            color: #000;
+            box-shadow: 0 0 20px #0ff;
+        }
+    </style>
+</head>
+<body>
+    <div id="score-display">Score: 0</div>
+    <div id="game-container">
+        <canvas id="gameCanvas" width="400" height="400"></canvas>
+        <div id="game-over">
+            <h2>GAME OVER</h2>
+            <button id="restart-btn">Restart</button>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreDisplay = document.getElementById('score-display');
+        const gameOverOverlay = document.getElementById('game-over');
+        const restartBtn = document.getElementById('restart-btn');
+
+        const box = 20; // Size of one grid square
+        let canvasWidth = canvas.width / box;
+        let canvasHeight = canvas.height / box;
+
+        let score = 0;
+        let game;
+        let gameOver = false;
+
+        let snake = [];
+        snake.length = 4;
+        snake[0] = { x: 15 * box, y: 10 * box };
+        snake[1] = { x: 14 * box, y: 10 * box };
+        snake[2] = { x: 13 * box, y: 10 * box };
+        snake[3] = { x: 12 * box, y: 10 * box };
+
+        let food = {
+            x: Math.floor(Math.random() * canvasWidth) * box,
+            y: Math.floor(Math.random() * canvasHeight) * box
+        };
+
+        let d;
+
+        document.addEventListener('keydown', direction);
+        restartBtn.addEventListener('click', resetGame);
+
+        function direction(event) {
+            if(event.keyCode == 37) {
+                if(d == "RIGHT") return;
+                d = "LEFT";
+            } else if(event.keyCode == 38) {
+                if(d == "DOWN") return;
+                d = "UP";
+            } else if(event.keyCode == 39) {
+                if(d == "LEFT") return;
+                d = "RIGHT";
+            } else if(event.keyCode == 40) {
+                if(d == "UP") return;
+                d = "DOWN";
+            }
+        }
+
+        function draw() {
+            ctx.fillStyle = "#000";
+            ctx.fillRect(0, 0, canvasWidth * box, canvasHeight * box);
+
+            // Draw Food
+            ctx.fillStyle = "#0ff";
+            ctx.shadowColor = "#0ff";
+            ctx.shadowBlur = 10;
+            ctx.fillRect(food.x, food.y, box, box);
+
+            // Draw Snake
+            for(let i = 0; i < snake.length; i++) {
+                ctx.fillStyle = (i == 0) ? "#0f0" : "#000";
+                ctx.shadowColor = "#0f0";
+                ctx.shadowBlur = (i == 0) ? 15 : 0;
+                
+                ctx.fillRect(snake[i].x, snake[i].y, box, box);
+                
+                ctx.strokeStyle = "#000";
+                ctx.strokeRect(snake[i].x, snake[i].y, box, box);
+            }
+
+            // Snake Position
+            let snakeX = snake[0].x;
+            let snakeY = snake[0].y;
+
+            // Move Snake
+            if(d == "LEFT") snakeX -= box;
+            if(d == "UP") snakeY -= box;
+            if(d == "RIGHT") snakeX += box;
+            if(d == "DOWN") snakeY += box;
+
+            // Food Collision
+            if(snakeX == food.x && snakeY == food.y) {
+                score++;
+                scoreDisplay.innerText = "Score: " + score;
+                food.x = Math.floor(Math.random() * canvasWidth) * box;
+                food.y = Math.floor(Math.random() * canvasHeight) * box;
+                // Don't pop the tail (snake grows)
+            } else {
+                // Remove the tail
+                snake.pop();
+            }
+
+            // Check Game Over Conditions
+            if(snakeX < 0 || snakeX >= canvasWidth * box || 
+                snakeY < 0 || snakeY >= canvasHeight * box || 
+                collision(snakeX, snakeY, snake)) {
+                
+                gameOver = true;
+                clearInterval(game);
+                gameOverOverlay.style.display = "flex";
+            }
+
+            // Draw new head
+            ctx.fillStyle = "#0f0";
+            ctx.shadowColor = "#0f0";
+            ctx.shadowBlur = 15;
+            ctx.fillRect(snakeX, snakeY, box, box);
+            ctx.strokeStyle = "#000";
+            ctx.strokeRect(snakeX, snakeY, box, box);
+
+            // Draw old tail (ghost effect)
+            // Note: In the collision check above, we check against the current snake array.
+            // If collision happens, we stop. If not, we continue.
+            // The tail pop happens here if food is not eaten.
+            if(snakeX == food.x && snakeY == food.y) {
+                // Food eaten, don't pop
+            } else {
+                // Not food, pop tail
+                // Note: The snake array was already updated at the start of loop,
+                // so we need to ensure logic order is correct.
+            }
+        }
+
+        function collision(x, y, array) {
+            for(let i = 1; i < array.length; i++) {
+                if(x == array[i].x && y == array[i].y) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        let count = 0;
+        let gameLoop = setInterval(draw, 100);
+
+        function resetGame() {
+            clearInterval(gameLoop);
+            score = 0;
+            scoreDisplay.innerText = "Score: " + score;
+            gameOver = false;
+            gameOverOverlay.style.display = "none";
+            
+            snake.length = 0;
+            snake.length = 4;
+            snake[0] = { x: 15 * box, y: 10 * box };
+            snake[1] = { x: 14 * box, y: 10 * box };
+            snake[2] = { x: 13 * box, y: 10 * box };
+            snake[3] = { x: 12 * box, y: 10 * box };
+            
+            d = null; // Clear direction
+            
+            // Start moving immediately with UP
+            d = "DOWN"; 
+            
+            food.x = Math.floor(Math.random() * canvasWidth) * box;
+            food.y = Math.floor(Math.random() * canvasHeight) * box;
+            
+            gameLoop = setInterval(draw, 100);
+        }
+
+        // Initial Start
+        d = "DOWN";
+        gameLoop = setInterval(draw, 100);
+        
+        // Ensure the loop is active immediately
+        // We use setInterval for the game loop, which starts immediately.
+        
+    </script>
+</body>
+</html>

@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Neon Snake</title>
+    <style>
+        body {
+            background-color: #111;
+            color: #fff;
+            font-family: 'Courier New', Courier, monospace;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            overflow: hidden;
+        }
+        h1 {
+            margin: 0 0 10px 0;
+            text-shadow: 0 0 10px #0ff;
+            font-size: 24px;
+            letter-spacing: 2px;
+        }
+        #score-board {
+            font-size: 20px;
+            margin-bottom: 15px;
+            color: #f0f;
+            text-shadow: 0 0 5px #f0f;
+        }
+        canvas {
+            border: 2px solid #0ff;
+            box-shadow: 0 0 20px #0ff, inset 0 0 20px rgba(0, 255, 255, 0.2);
+            background-color: #000;
+        }
+        #overlay {
+            display: none;
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.9);
+            color: #ff0055;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 10;
+        }
+        #overlay h2 {
+            font-size: 48px;
+            margin: 0 0 20px 0;
+            text-shadow: 0 0 20px #ff0055;
+        }
+        button {
+            padding: 10px 30px;
+            font-size: 18px;
+            background-color: transparent;
+            color: #0ff;
+            border: 2px solid #0ff;
+            border-radius: 5px;
+            cursor: pointer;
+            box-shadow: 0 0 10px #0ff;
+            transition: all 0.2s;
+            font-family: inherit;
+            font-weight: bold;
+        }
+        button:hover {
+            background-color: #0ff;
+            color: #000;
+            box-shadow: 0 0 20px #0ff;
+        }
+    </style>
+</head>
+<body>
+    <h1>NEON SNAKE</h1>
+    <div id="score-board">Score: 0</div>
+    <canvas id="gameCanvas" width="400" height="400"></canvas>
+    
+    <div id="overlay">
+        <h2>GAME OVER</h2>
+        <button id="restartBtn">RESTART</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreEl = document.getElementById('score-board');
+        const overlay = document.getElementById('overlay');
+        const restartBtn = document.getElementById('restartBtn');
+
+        const gridSize = 20;
+        const tileCount = canvas.width / gridSize;
+
+        let snake = [];
+        let food = { x: 0, y: 0 };
+        let dx = 0;
+        let dy = 0;
+        let score = 0;
+        let speed = 7; // Moves per second
+        let gameInterval;
+        let isGameOver = false;
+        let isRunning = false;
+
+        // Initialize Snake
+        function initSnake() {
+            snake = [
+                { x: 10, y: 10 },
+                { x: 9, y: 10 },
+                { x: 8, y: 10 }
+            ];
+            dx = 1;
+            dy = 0;
+            score = 0;
+            isGameOver = false;
+            scoreEl.innerText = 'Score: ' + score;
+            overlay.style.display = 'none';
+            placeFood();
+        }
+
+        function placeFood() {
+            food.x = Math.floor(Math.random() * tileCount);
+            food.y = Math.floor(Math.random() * tileCount);
+
+            // Ensure food doesn't spawn on snake
+            for (let part of snake) {
+                if (part.x === food.x && part.y === food.y) {
+                    placeFood();
+                }
+            }
+        }
+
+        function drawRect(x, y, color) {
+            ctx.fillStyle = color;
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = color;
+            ctx.fillRect(x * gridSize, y * gridSize, gridSize - 2, gridSize - 2);
+            ctx.shadowBlur = 0;
+        }
+
+        function update() {
+            if (isGameOver) return;
+
+            dx = dx * speed; // Apply speed multiplier to velocity? No, simpler to just move speed ticks
+            // Actually, let's stick to a simpler tick based loop for classic feel, 
+            // or just a loop that runs at the calculated speed.
+            // Let's do a continuous loop for smooth gameplay feel, but control the snake's position.
+            
+            let head = { x: snake[0].x + dx, y: snake[0].y + dy };
+
+            // Wall Collision
+            if (head.x < 0 || head.x >= tileCount || head.y < 0 || head.y >= tileCount) {
+                gameOver();
+                return;
+            }
+
+            // Self Collision
+            for (let i = 0; i < snake.length; i++) {
+                if (head.x === snake[i].x && head.y === snake[i].y) {
+                    gameOver();
+                    return;
+                }
+            }
+
+            snake.unshift(head);
+
+            // Food Collision
+            if (head.x === food.x && head.y === food.y) {
+                score += 10;
+                scoreEl.innerText = 'Score: ' + score;
+                placeFood();
+                // Grow handled by not popping the tail here
+            } else {
+                snake.pop();
+            }
+        }
+
+        function draw() {
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            drawRect(food.x, food.y, '#ff0055');
+            for (let i = 0; i < snake.length; i++) {
+                drawRect(snake[i].x, snake[i].y, '#0ff');
+            }
+        }
+
+        function gameOver() {
+            isGameOver = true;
+            isRunning = false;
+            overlay.style.display = 'flex';
+        }
+
+        function loop() {
+            if (isRunning) {
+                update();
+            }
+            draw();
+        }
+
+        // Input Handling
+        document.addEventListener('keydown', (e) => {
+            switch(e.key) {
+                case 'ArrowUp':
+                    if (dy !== 1) { dx = 0; dy = -1; }
+                    break;
+                case 'ArrowDown':
+                    if (dy !== -1) { dx = 0; dy = 1; }
+                    break;
+                case 'ArrowLeft':
+                    if (dx !== 1) { dx = -1; dy = 0; }
+                    break;
+                case 'ArrowRight':
+                    if (dx !== -1) { dx = 1; dy = 0; }
+                    break;
+            }
+        });
+
+        restartBtn.addEventListener('click', () => {
+            initSnake();
+            isRunning = true;
+            loop();
+        });
+
+        // Start the game immediately on load
+        initSnake();
+        isRunning = true;
+        loop();
+
+    </script>
+</body>
+</html>

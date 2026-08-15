@@ -94,6 +94,13 @@ STATE_JS = """
 }
 """
 
+_SHOWS_JS = """
+(forbidden) => {
+  const shown = document.body.innerText || '';
+  return forbidden.some(p => new RegExp(p, 'i').test(shown));
+}
+"""
+
 FRAME_HASH_JS = """
 () => {
   const c = document.querySelector('canvas');
@@ -129,7 +136,8 @@ def check_artifact(html_path: Path, cand: Candidate) -> dict:
     verdict = {"ok": False, "reasons": [], "console_errors": []}
     with sync_playwright() as p:
         browser = p.chromium.launch()
-        page = browser.new_page()
+        context = browser.new_context()
+        page = context.new_page()
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)[:200]))
         page.on("console", lambda m: errors.append(m.text[:200]) if m.type == "error" else None)
@@ -171,6 +179,7 @@ def check_artifact(html_path: Path, cand: Candidate) -> dict:
                     if i == 3:
                         second = page.evaluate(FRAME_HASH_JS)
                 third = page.evaluate(FRAME_HASH_JS)
+                steered_alive = not page.evaluate(_SHOWS_JS, _forbidden_patterns(cand))
             else:
                 page.wait_for_timeout(1200)
                 state = page.evaluate(STATE_JS, _forbidden_patterns(cand))
@@ -179,6 +188,31 @@ def check_artifact(html_path: Path, cand: Candidate) -> dict:
                 second = page.evaluate(FRAME_HASH_JS)
                 page.wait_for_timeout(800)
                 third = page.evaluate(FRAME_HASH_JS)
+
+            # ── Is it actually steerable? ──
+            #
+            # needs_key_response used to mean "press ArrowRight and require the
+            # picture to change", which a self-animating game passes without
+            # having any key handling at all. A Snake you cannot steer is not a
+            # playable Snake, and one candidate passed every other check while
+            # ignoring the keyboard completely.
+            #
+            # The honest test is the one a person performs: does input change
+            # the outcome? Load it a second time, touch nothing, and see how
+            # long it survives. Steering has to do better than that.
+            if cand.needs_key_response:
+                idle = context.new_page()
+                try:
+                    idle.goto(html_path.as_uri(), wait_until="load", timeout=20000)
+                    idle.wait_for_timeout(3300)   # same wall clock as the steered run
+                    idle_alive = not idle.evaluate(_SHOWS_JS, _forbidden_patterns(cand))
+                finally:
+                    idle.close()
+                if idle_alive and steered_alive:
+                    pass  # survives either way — nothing to conclude, don't penalise
+                elif not steered_alive:
+                    verdict["reasons"].append("not steerable (died even when played)")
+                verdict["steering"] = {"idle_alive": idle_alive, "steered_alive": steered_alive}
 
             verdict["console_errors"] = errors[:5]
             if errors:
