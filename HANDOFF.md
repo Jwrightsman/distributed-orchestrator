@@ -64,7 +64,8 @@ something rather than reading it.
 | Builder subtask length | 41–329 s observed on qwen3.5:4b, CPU |
 | Known memory leak | ~1.25 MB/pitch, linear, source not found |
 | MCP flow, re-verified Aug 14 | **10/10** after fixing the checker that had silently stopped working |
-| Demo shots executed | **all 7**; chart PASS, memory PASS, snake FAIL (the documented 8-in-10) |
+| Demo shots executed | **all 7**; chart PASS, memory PASS, MCP 10/10, snake PASS |
+| Snake showcase | **2/10 — unchanged**, but re-scored Aug 15 after three bugs were found in the checker |
 | Cost of running two pipelines at once | **~3x wall clock on both** — chart 81 min vs ~22, `--demo` 76 vs ~35 |
 
 **Nothing is running.** The CPU is free.
