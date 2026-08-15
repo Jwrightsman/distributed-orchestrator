@@ -143,11 +143,11 @@ async def main() -> int:
     out_root.mkdir(parents=True, exist_ok=True)
     jsonl = out_root / "trials.jsonl"
 
-    print(f"ENSEMBLE EXPERIMENT — {cand.id} ({cand.title})")
-    print(f"  {args.trials} independent complete-artifact candidates, one model call each")
-    print("  scored by the same browser checks that produced the published baseline")
+    print(f"ENSEMBLE EXPERIMENT — {cand.id} ({cand.title})", flush=True)
+    print(f"  {args.trials} independent complete-artifact candidates, one model call each", flush=True)
+    print("  scored by the same browser checks that produced the published baseline", flush=True)
     print(f"  baseline (decomposition): {BASELINE.get(cand.id, ('?', '?'))}")
-    print(f"  writing to {out_root}\n")
+    print(f"  writing to {out_root}\n", flush=True)
 
     outcomes: list[bool] = []
     started = time.time()
@@ -176,7 +176,7 @@ async def main() -> int:
             fh.write(json.dumps(row) + "\n")
         mark = "PASS" if row["ok"] else "fail"
         print(f"  trial {res.index:>2}: {mark}  {int(res.elapsed_seconds):>4}s  "
-              f"{str(row['reasons'])[:64]}")
+              f"{str(row['reasons'])[:64]}", flush=True)
 
     await ensemble.run_ensemble(cand.pitch, args.trials, out_root, on_candidate=record)
 
@@ -186,40 +186,40 @@ async def main() -> int:
     p_value = fisher_exact_greater(k, n - k, b_k, b_n - b_k)
     elapsed = time.time() - started
 
-    print(f"\n{'=' * 64}")
+    print(f"\n{'=' * 64}", flush=True)
     print(f"SINGLE-SHOT (ensemble architecture): {k}/{n} = {k/n:.0%}"
-          f"   95% CI {lo:.0%}-{hi:.0%}")
-    print(f"DECOMPOSITION baseline             : {b_k}/{b_n} = {b_k/b_n:.0%}")
-    print(f"Fisher exact, one-sided            : p = {p_value:.4f}")
-    print(f"Mean seconds per candidate         : {elapsed/max(n,1):.0f}s")
+          f"   95% CI {lo:.0%}-{hi:.0%}", flush=True)
+    print(f"DECOMPOSITION baseline             : {b_k}/{b_n} = {b_k/b_n:.0%}", flush=True)
+    print(f"Fisher exact, one-sided            : p = {p_value:.4f}", flush=True)
+    print(f"Mean seconds per candidate         : {elapsed/max(n,1):.0f}s", flush=True)
 
     if p_value < 0.05:
-        print("\nVERDICT: ensemble's single-shot rate beats decomposition (p < 0.05).")
+        print("\nVERDICT: ensemble's single-shot rate beats decomposition (p < 0.05).", flush=True)
     else:
         rate = k / n if n else 0
         need = min_trials_for_significance(b_k, b_n, rate)
         print("\nVERDICT: INCONCLUSIVE. This difference is not distinguishable from "
-              "the baseline\n         at this number of trials.")
+              "the baseline\n         at this number of trials.", flush=True)
         if need:
-            print(f"         About {need} trials here would reach p<0.05, baseline unchanged.")
+            print(f"         About {need} trials here would reach p<0.05, baseline unchanged.", flush=True)
         else:
             both = baseline_trials_needed(rate, b_k / b_n)
-            print("         MORE TRIALS HERE CANNOT FIX IT. Fisher is limited by the")
-            print(f"         smaller sample, and the baseline is only {b_n} runs, so an")
-            print("         effect this size stays above p=0.05 however long this runs.")
+            print("         MORE TRIALS HERE CANNOT FIX IT. Fisher is limited by the", flush=True)
+            print(f"         smaller sample, and the baseline is only {b_n} runs, so an", flush=True)
+            print("         effect this size stays above p=0.05 however long this runs.", flush=True)
             if both:
-                print(f"         Both arms would need about {both} runs each. The decomposition")
-                print("         side is ~50 min per run, which is the expensive half.")
-        print("         Do not promote ensemble on this result.")
+                print(f"         Both arms would need about {both} runs each. The decomposition", flush=True)
+                print("         side is ~50 min per run, which is the expensive half.", flush=True)
+        print("         Do not promote ensemble on this result.", flush=True)
 
-    print(f"\nENSEMBLE-OF-N (at least one candidate passes), from p = {k/n:.2f}:")
+    print(f"\nENSEMBLE-OF-N (at least one candidate passes), from p = {k/n:.2f}:", flush=True)
     for grp in sorted({2, 3, args.ensemble_n, 5}):
         closed = 1 - (1 - k / n) ** grp if n else 0
         emp = ensemble_rate_empirical(outcomes, grp)
         print(f"  N={grp}: closed form {closed:.0%}   resampled {emp:.0%}"
-              f"   (cost: {grp} model calls)")
-    print("\nThose rows are arithmetic on the single-shot rate, not separate")
-    print("measurements. If the verdict above is inconclusive, so are they.")
+              f"   (cost: {grp} model calls)", flush=True)
+    print("\nThose rows are arithmetic on the single-shot rate, not separate", flush=True)
+    print("measurements. If the verdict above is inconclusive, so are they.", flush=True)
 
     (out_root / "summary.json").write_text(json.dumps({
         "candidate": cand.id, "trials": n, "passes": k,
@@ -227,7 +227,7 @@ async def main() -> int:
         "baseline": [b_k, b_n], "fisher_p_one_sided": p_value,
         "seconds_total": elapsed, "outcomes": outcomes,
     }, indent=2), encoding="utf-8")
-    print(f"\nwrote {out_root/'summary.json'}")
+    print(f"\nwrote {out_root/'summary.json'}", flush=True)
     return 0
 
 
