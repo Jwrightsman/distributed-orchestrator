@@ -269,7 +269,10 @@ verification policy to every distributed route including the direct distributed-
 atomically at enqueue rather than checking once before a wave · persist reputation and verifier
 evidence instead of losing it with the process · finish live config reload (`verify_rate` already
 re-reads per pitch; nothing else does, and none of it is tested) · UUIDv7/ULID identifiers rather
-than timestamp-derived ones.
+than timestamp-derived ones — **narrower than it reads:** job ids, task ids and attempt ids
+are already `uuid4().hex`. What is still timestamp-derived is the *run directory* name
+(`output/20260815_022131`, from `orchestrator.py`) and the eval/script run stamps, which
+collide only if two runs start in the same second.
 
 > **Done Aug 14:** raw internal exception text in production 500s. Two
 > `@app.exception_handler(Exception)` handlers were registered in `server.py` and Starlette keys

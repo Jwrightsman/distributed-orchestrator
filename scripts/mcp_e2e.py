@@ -121,10 +121,14 @@ async def run(task: str, timeout_min: int) -> int:
 
                 print("\n[3] pitch a task through MCP")
                 pitched = _text(await session.call_tool("pitch_task", {"task": task}))
-                # Must be `job_<digits>`. Matching bare "job_" grabs the literal
-                # label "job_id:" out of "Task accepted. job_id: job_123", and
-                # then every poll requests /jobs/job_id and 404s forever.
-                found = re.search(r"job_\d+", pitched)
+                # Matching bare "job_" grabs the literal label "job_id:" out of
+                # "Task accepted. job_id: job_123", and then every poll requests
+                # /jobs/job_id and 404s forever. But `job_\d+` over-corrected:
+                # job ids are `job_{uuid4().hex}` now, not timestamp digits, so
+                # this matched nothing and step 3 failed on every run — the check
+                # could not verify the MCP flow at all. Hex, with a length floor
+                # so "job_id" (the 'i' is not a hex digit anyway) can never win.
+                found = re.search(r"job_[0-9a-f]{8,}", pitched)
                 job_id = found.group(0) if found else ""
                 if not check("pitch_task returned a job_id", bool(job_id), pitched[:160]):
                     return 1
