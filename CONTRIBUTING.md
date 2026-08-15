@@ -104,7 +104,8 @@ that is deliberate. Keep it.
 ## Reporting a security issue
 
 Do not open a public issue for anything exploitable. Email
-wrightsmanjett@gmail.com instead.
+wrightsmanjett@gmail.com instead — [SECURITY.md](SECURITY.md) has the disclosure
+path and what response to expect.
 
 Note the honest trust model: worker nodes authenticate with a shared secret, so
 a node that authenticates can return whatever it likes. That is a known

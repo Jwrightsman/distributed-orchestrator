@@ -1,0 +1,1 @@
+{"trial": 0, "ok": false, "reasons": ["check crashed: It looks like you are using Playwright Sync API inside the asyncio loop.\nPlease use the Async API instead."], "seconds": 626.1, "bytes": 9092, "extracted": true, "parses": true, "error": null, "html": "scripts\\ensemble_results\\snake_20260815_120647\\candidate_0\\code\\index.html"}
