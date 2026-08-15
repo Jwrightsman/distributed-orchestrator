@@ -41,10 +41,14 @@ for 72 hours than three more features and an untested merge.
 already in when this session started, despite the previous handoff saying
 otherwise.
 
-**PR #46 is open, CI green** (`claude/mycelium-roadmap-rehearsal-e3d93e`):
-ROADMAP integration, the demo-script rehearsal executed in full, **five** bug
-fixes, and deploy verification. 390 tests, ruff clean. Merge it unless you find
-a reason not to.
+**#46 is merged.** **PR #47 is open, CI green**
+(`claude/rehearsal-finished-e3d93e`) — it carries the three commits that landed
+after #46 was merged: the rest of the rehearsal (all seven shots executed), two
+further bugs, and the other two halves of the ROADMAP sanity check. 390 tests,
+ruff clean. Merge it, then do the two things below.
+
+Across both PRs the session fixed **five** bugs, every one found by running
+something rather than reading it.
 
 | what | measured |
 | --- | --- |
