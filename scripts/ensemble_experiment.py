@@ -115,6 +115,47 @@ def min_trials_for_significance(baseline_k: int, baseline_n: int, true_p: float)
     return None
 
 
+def score_artifact(html: Path, cand) -> dict:
+    """Run the browser check off the event loop.
+
+    `check_artifact` uses Playwright's **sync** API, which refuses to run inside
+    a thread that already has a running asyncio loop — and generation is async,
+    so calling it straight from the per-trial callback raised
+    "It looks like you are using Playwright Sync API inside the asyncio loop"
+    on every single trial. A fresh worker thread has no loop of its own, which
+    is all the sync API is asking for.
+
+    Blocking the loop here is deliberate: generation is sequential by design on
+    this hardware, so there is nothing else for the loop to be doing.
+    """
+    import concurrent.futures
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(check_artifact, html, cand).result()
+
+
+def score_saved_run(out_root: Path, cand) -> list[dict]:
+    """Re-score candidates already on disk, without regenerating them.
+
+    Generation is hours and scoring is seconds, so a scoring bug must never
+    cost the generation. Every candidate is written to
+    `<run>/candidate_N/code/`, which makes the expensive half replayable.
+    """
+    rows = []
+    for cdir in sorted(out_root.glob("candidate_*"),
+                       key=lambda p: int(p.name.split("_")[1])):
+        idx = int(cdir.name.split("_")[1])
+        html = next(iter(cdir.glob("code/*.html")), None)
+        if html is None:
+            rows.append({"trial": idx, "ok": False, "reasons": ["no html extracted"],
+                         "html": None})
+            continue
+        verdict = score_artifact(html, cand)
+        rows.append({"trial": idx, "ok": bool(verdict["ok"]),
+                     "reasons": verdict.get("reasons", []), "html": str(html)})
+    return rows
+
+
 def baseline_trials_needed(true_p: float, baseline_p: float, cap: int = 300) -> int | None:
     """How big BOTH samples must be for this effect to clear p<0.05.
 
@@ -128,63 +169,14 @@ def baseline_trials_needed(true_p: float, baseline_p: float, cap: int = 300) -> 
     return None
 
 
-async def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--candidate", default="snake", help="showcase id (default: snake)")
-    ap.add_argument("--trials", type=int, default=12, help="independent candidates to generate")
-    ap.add_argument("--ensemble-n", type=int, default=3, help="group size to report")
-    ap.add_argument("--out", default=None, help="results directory")
-    args = ap.parse_args()
-
-    cand = showcase.get(args.candidate)
-    out_root = Path(args.out or f"scripts/ensemble_results/{args.candidate}_"
-                                f"{time.strftime('%Y%m%d_%H%M%S')}")
-    out_root.mkdir(parents=True, exist_ok=True)
-    jsonl = out_root / "trials.jsonl"
-
-    print(f"ENSEMBLE EXPERIMENT — {cand.id} ({cand.title})", flush=True)
-    print(f"  {args.trials} independent complete-artifact candidates, one model call each", flush=True)
-    print("  scored by the same browser checks that produced the published baseline", flush=True)
-    print(f"  baseline (decomposition): {BASELINE.get(cand.id, ('?', '?'))}")
-    print(f"  writing to {out_root}\n", flush=True)
-
-    outcomes: list[bool] = []
-    started = time.time()
-
-    def record(res: ensemble.CandidateResult):
-        html = next((f for f in res.files if f.endswith(".html")), None)
-        verdict = {"ok": False, "reasons": ["no html extracted"]}
-        if html:
-            try:
-                verdict = check_artifact(Path(html), cand)
-            except Exception as e:
-                verdict = {"ok": False, "reasons": [f"check crashed: {e}"]}
-        outcomes.append(bool(verdict["ok"]))
-        row = {
-            "trial": res.index,
-            "ok": bool(verdict["ok"]),
-            "reasons": verdict.get("reasons", []),
-            "seconds": round(res.elapsed_seconds, 1),
-            "bytes": len(res.raw_output),
-            "extracted": res.extracted,
-            "parses": res.parses,
-            "error": res.error,
-            "html": html,
-        }
-        with jsonl.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row) + "\n")
-        mark = "PASS" if row["ok"] else "fail"
-        print(f"  trial {res.index:>2}: {mark}  {int(res.elapsed_seconds):>4}s  "
-              f"{str(row['reasons'])[:64]}", flush=True)
-
-    await ensemble.run_ensemble(cand.pitch, args.trials, out_root, on_candidate=record)
-
+def report(outcomes: list[bool], cand, elapsed: float, out_root: Path,
+           ensemble_n: int = 3) -> None:
+    """Print the verdict and write summary.json. Shared by both entry paths."""
     k, n = sum(outcomes), len(outcomes)
     lo, hi = wilson(k, n)
     b_k, b_n = BASELINE.get(cand.id, (2, 10))
     p_value = fisher_exact_greater(k, n - k, b_k, b_n - b_k)
-    elapsed = time.time() - started
+    pass
 
     print(f"\n{'=' * 64}", flush=True)
     print(f"SINGLE-SHOT (ensemble architecture): {k}/{n} = {k/n:.0%}"
@@ -213,7 +205,7 @@ async def main() -> int:
         print("         Do not promote ensemble on this result.", flush=True)
 
     print(f"\nENSEMBLE-OF-N (at least one candidate passes), from p = {k/n:.2f}:", flush=True)
-    for grp in sorted({2, 3, args.ensemble_n, 5}):
+    for grp in sorted({2, 3, ensemble_n, 5}):
         closed = 1 - (1 - k / n) ** grp if n else 0
         emp = ensemble_rate_empirical(outcomes, grp)
         print(f"  N={grp}: closed form {closed:.0%}   resampled {emp:.0%}"
@@ -228,6 +220,75 @@ async def main() -> int:
         "seconds_total": elapsed, "outcomes": outcomes,
     }, indent=2), encoding="utf-8")
     print(f"\nwrote {out_root/'summary.json'}", flush=True)
+
+
+async def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--candidate", default="snake", help="showcase id (default: snake)")
+    ap.add_argument("--trials", type=int, default=12, help="independent candidates to generate")
+    ap.add_argument("--ensemble-n", type=int, default=3, help="group size to report")
+    ap.add_argument("--out", default=None, help="results directory")
+    ap.add_argument("--score-only", default=None, metavar="DIR",
+                    help="re-score candidates already generated in DIR; no inference")
+    args = ap.parse_args()
+
+    cand = showcase.get(args.candidate)
+
+    if args.score_only:
+        root = Path(args.score_only)
+        rows = score_saved_run(root, cand)
+        outcomes = [r["ok"] for r in rows]
+        for r in rows:
+            print(f"  trial {r['trial']:>2}: {'PASS' if r['ok'] else 'fail'}  "
+                  f"{str(r['reasons'])[:64]}", flush=True)
+        (root / "rescored.jsonl").write_text(
+            "\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+        report(outcomes, cand, 0.0, root, args.ensemble_n)
+        return 0
+    out_root = Path(args.out or f"scripts/ensemble_results/{args.candidate}_"
+                                f"{time.strftime('%Y%m%d_%H%M%S')}")
+    out_root.mkdir(parents=True, exist_ok=True)
+    jsonl = out_root / "trials.jsonl"
+
+    print(f"ENSEMBLE EXPERIMENT — {cand.id} ({cand.title})", flush=True)
+    print(f"  {args.trials} independent complete-artifact candidates, one model call each", flush=True)
+    print("  scored by the same browser checks that produced the published baseline", flush=True)
+    print(f"  baseline (decomposition): {BASELINE.get(cand.id, ('?', '?'))}")
+    print(f"  writing to {out_root}\n", flush=True)
+
+    outcomes: list[bool] = []
+    started = time.time()
+
+    def record(res: ensemble.CandidateResult):
+        html = next((f for f in res.files if f.endswith(".html")), None)
+        verdict = {"ok": False, "reasons": ["no html extracted"]}
+        if html:
+            try:
+                verdict = score_artifact(Path(html), cand)
+            except Exception as e:
+                verdict = {"ok": False, "reasons": [f"check crashed: {e}"]}
+        outcomes.append(bool(verdict["ok"]))
+        row = {
+            "trial": res.index,
+            "ok": bool(verdict["ok"]),
+            "reasons": verdict.get("reasons", []),
+            "seconds": round(res.elapsed_seconds, 1),
+            "bytes": len(res.raw_output),
+            "extracted": res.extracted,
+            "parses": res.parses,
+            "error": res.error,
+            "html": html,
+        }
+        with jsonl.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row) + "\n")
+        mark = "PASS" if row["ok"] else "fail"
+        print(f"  trial {res.index:>2}: {mark}  {int(res.elapsed_seconds):>4}s  "
+              f"{str(row['reasons'])[:64]}", flush=True)
+
+    await ensemble.run_ensemble(cand.pitch, args.trials, out_root, on_candidate=record)
+
+    report(outcomes, cand, time.time() - started, out_root, args.ensemble_n)
     return 0
 
 
