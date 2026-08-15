@@ -274,6 +274,81 @@ _Append one entry per session: date, items completed, what's next, warnings for 
 
 <!-- sessions append below -->
 
+### Session 6 — August 15, 2026 · ensemble measured · threat model written
+
+Branch `claude/ensemble-strategy-e3d93e`. Jett's machine, real Ollama, prompt set v3.
+
+#### The ensemble experiment: 12/22 vs 2/10, p = 0.073, not promoted
+
+Built the ensemble strategy (`ensemble.py`): every node gets the whole pitch and produces a
+complete artifact alone, and the coordinator keeps whichever candidate passes mechanical
+checks. Same builder prompt as decomposition, so the comparison isolates architecture.
+
+| | passes | rate | 95% CI |
+| --- | --- | --- | --- |
+| Decomposition | 2/10 | 20% | 6–51% |
+| Ensemble, single candidate | **12/22** | **55%** | 35–73% |
+
+**Fisher one-sided p = 0.073 — inconclusive, so ensemble is not promoted.** Full write-up in
+`docs/ensemble-vs-decomposition.md`.
+
+**The instructive part is that 22 trials were run specifically to settle it and it did not.**
+p went 0.14 at n=14 → 0.073 at n=22 and stalled, because Fisher is limited by the *smaller*
+sample and the baseline is ten runs. The ensemble arm can be extended almost indefinitely
+without crossing 0.05 (15/30 → 0.096, 50/100 → 0.067). Settling it needs ~19 runs **per arm**,
+~8 more hours, almost all of it re-measuring decomposition at ~50 min a run.
+
+**What does survive is the equal-compute comparison.** One decomposed attempt costs ~50 min
+for 20%; the same budget buys ~8 single-model attempts at ~6 min each. Taking the *worst* end
+of ensemble's interval against the *best* end of decomposition's — 35% against 51% — five
+candidates still win 88% to 51%. That holds whichever end of the intervals is true, which is
+why it is worth more than the p-value.
+
+**The failure text supports the review's mechanism.** Decomposition fails as *pieces that
+never connected*: six of its eight failures produced a canvas nothing ever drew on. Ensemble
+fails as *one model losing track of its own program*: `head is not defined`, `Identifier
+'goingRight' has already been declared`. Different signatures, exactly as predicted.
+
+#### Three process failures worth more than the result
+
+**1. The checker fixes from Session 5 were never on master.** They were pushed to
+`claude/rehearsal-finished-e3d93e` *after* PR #47 had already been merged, so they stranded on
+the branch — the same thing that happened with #46. The first scoring pass therefore ran the
+old buggy checker and returned **0/14**, which would have been published as "ensemble loses"
+had it not been hand-checked. Cherry-picked onto this branch. **Two PRs in a row have lost
+commits this way; check `git log origin/master..HEAD` before assuming work landed.**
+
+**2. Scoring crashed on every trial and the run continued regardless.** `check_artifact` uses
+Playwright's sync API, which refuses to run inside an asyncio loop. Ten minutes of inference
+per trial, all scored as "check crashed". Fixed by scoring in a worker thread, and
+`--score-only DIR` now re-scores a finished run without regenerating it — generation is hours,
+scoring is seconds, and a scoring bug must never cost the generation.
+
+**3. Fixing the checker introduced a fourth bug.** The Session 5 rewrite dropped the actual
+key-response test, so a self-animating game that ignored the keyboard passed. One ensemble
+candidate did exactly that. The check is now the one a person performs: load it a second time,
+touch nothing, and require that steering outlive not-steering.
+
+**The published 2/10 survived every version of the checker**, including the hardest one. That
+is the reassuring part: the number was right through four instrument bugs.
+
+#### The threat model is written
+
+`docs/THREAT_MODEL.md` and `SECURITY.md`. What is true today, not aspirational: shared-secret
+admission, what a hostile node can and cannot do, that attempt binding is admission and not
+identity, that generated code is not sandboxed, that workers necessarily see task text, and
+that the ledger is contribution points with no monetary value — which is *why* its weak
+integrity is not urgent.
+
+**The finding worth surfacing: `pitch_key` gates submitting work, not reading it.** `/history`,
+`/gallery`, `/share`, `/events`, `/ledger`, `/standings` and `/metrics` take no credential at
+all, so anyone who can reach the port can read every past task's text and output. Verified in
+the routes — `routes_events.py` and `routes_history.py` contain zero auth calls. Now stated in
+its own section rather than being implicit.
+
+The permissionless list is referenced from ROADMAP §5 rather than copied.
+
+
 ### Session 5 — August 14, 2026 · ROADMAP integrated · demo script rehearsed · three bugs
 
 Branch `claude/mycelium-roadmap-rehearsal-e3d93e`, PR #46. Jett's machine, real Ollama.
