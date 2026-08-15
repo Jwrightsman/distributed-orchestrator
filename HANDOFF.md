@@ -41,14 +41,22 @@ for 72 hours than three more features and an untested merge.
 already in when this session started, despite the previous handoff saying
 otherwise.
 
-**#46 is merged.** **PR #47 is open, CI green**
-(`claude/rehearsal-finished-e3d93e`) — it carries the three commits that landed
-after #46 was merged: the rest of the rehearsal (all seven shots executed), two
-further bugs, and the other two halves of the ROADMAP sanity check. 390 tests,
-ruff clean. Merge it, then do the two things below.
+**#46 and #47 are both merged. Nothing is open.** `master` carries the ROADMAP
+integration, the demo script rehearsed in full (all seven shots executed), the
+deploy-verification tool, and seven bug fixes. 390 tests, ruff clean.
 
-Across both PRs the session fixed **five** bugs, every one found by running
-something rather than reading it.
+**Seven bugs, every one found by running something rather than reading it** —
+four in the system, three in the instrument that measures it:
+
+1. Nodes evicted mid-build (streamed tokens were not a heartbeat); a node was
+   paid **+0 credits** for a 329-second build it completed.
+2. 500 responses echoed their exception text, including filesystem paths, on
+   the public orchestrator.
+3. The advertised one-line join could never reach its consent prompt.
+4. `scripts/mcp_e2e.py` had silently stopped being able to verify the MCP flow.
+5-7. Three compounding bugs in `check_artifact()` — see below.
+
+Only two things are outstanding, and both are Jett's.
 
 | what | measured |
 | --- | --- |
@@ -64,8 +72,7 @@ something rather than reading it.
 | Builder subtask length | 41–329 s observed on qwen3.5:4b, CPU |
 | Known memory leak | ~1.25 MB/pitch, linear, source not found |
 | MCP flow, re-verified Aug 14 | **10/10** after fixing the checker that had silently stopped working |
-| Demo shots executed | **all 7**; chart PASS, memory PASS, MCP 10/10, snake PASS |
-| Snake showcase | **2/10 — unchanged**, but re-scored Aug 15 after three bugs were found in the checker |
+| Demo shots executed | **all 7**; chart PASS, memory PASS, snake FAIL (the documented 8-in-10) |
 | Cost of running two pipelines at once | **~3x wall clock on both** — chart 81 min vs ~22, `--demo` 76 vs ~35 |
 
 **Nothing is running.** The CPU is free.
@@ -174,6 +181,37 @@ the new one reports `isatty True` and reaches `Type 'yes' to join`. A human
 still consents — the fix is `/dev/tty`, never `--yes`.
 
 ---
+
+## The showcase checker had three bugs, and the 2/10 survived them
+
+Jett noticed the Snake game *does* start — it runs into a wall and says GAME
+OVER. He was right, and `check_artifact()` could not tell that from a game that
+never started:
+
+1. **A 1200 ms blind spot.** It slept 1200 ms before its first look; an
+   unsteered snake dies in ~1 s (measured: 550/850/1100/1250 ms). It arrived at
+   the death screen and reported "GAME OVER visible" + "frame never changes" —
+   the same two symptoms as a game that never ran.
+2. **Visibility read the element's own computed style**, so `<h2>GAME OVER</h2>`
+   inside a `display:none` overlay reported as visible. Every game that did what
+   the pitch asked was failed for doing it.
+3. **The forbidden-text scan used `textContent`**, which includes hidden
+   descendants, so the visible wrapper around a hidden overlay matched.
+
+**The published 2/10 is unchanged.** All ten original artifacts were still on
+disk; re-scored with the fixed checker they come out 2/10 again, and the two
+that pass are the two independently confirmed playable by steering them in a
+browser (surviving 5.5–6.0 s against 0.85–1.25 s unattended). Instrument and
+hand-verification now agree — before, the number was right by luck.
+
+What *was* wrong is the README's explanation: it said failures "load without
+errors but never start". Really **6 of 10 never draw at all**, one throws a JS
+error, one draws and dies instantly. Fixed.
+
+**Keyboard artifacts are now sampled at 150 ms and then steered**, rather than
+watching an unattended snake expire. If you re-run `showcase_reliability.py`,
+that is why its numbers are comparable to the old ones rather than a
+re-baselining.
 
 ## The demo script is now honest about the rebuilt dashboard
 
@@ -288,12 +326,13 @@ and none of them have fired.
 > number. Then `CLAUDE.md` for house rules. `ROADMAP.md` is reference only —
 > don't pull work from it.
 >
-> State: master has #27–#45 merged. PR #46 is open and CI-green — merge it
-> unless you find a reason not to. It carries the ROADMAP integration, the first
-> real dress rehearsal of the demo script, and three bugs that rehearsal found:
-> nodes being evicted mid-build because streamed tokens weren't a heartbeat,
-> 500s echoing their exception text, and the advertised one-line join never
-> reaching its consent prompt.
+> State: master is current through #47 and nothing is open. Last session
+> integrated ROADMAP.md, executed the demo script end to end for the first time,
+> and fixed seven bugs — four in the system (nodes evicted mid-build and paid
+> nothing, 500s echoing exception text, the one-line join never reaching its
+> consent prompt, the MCP end-to-end check silently broken) and three in the
+> showcase checker, which had been failing correct games. The published 2/10
+> Snake figure survived a full re-score.
 >
 > Two things need me and I'd like them queued up: redeploying the live
 > orchestrator (#46 adds `scripts/verify_deploy.py` to prove it landed), and
