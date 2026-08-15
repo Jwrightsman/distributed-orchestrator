@@ -451,6 +451,55 @@ current code so it earns again. Commands and the check that proves the deploy la
 HANDOFF.md.
 
 
+### Addendum 2 — Jett's hunch about the Snake game was right, and it found three checker bugs
+
+He said: *"when you open it, the game starts, and the snake just goes into the wall, and it says
+GAME OVER."* That is exactly what was happening, and chasing it down found that
+`check_artifact()` — the instrument behind the 2/10 — was broken in three separate ways, each of
+which makes a **correct** game look broken.
+
+**1. A 1200 ms blind spot.** The checker slept 1200 ms before its first look. A correct Snake that
+nobody steers walks into a wall in about a second. Measured unattended deaths across the committed
+artifacts: **550, 850, 1100 and 1250 ms** — all inside the blind spot. So it arrived to find
+"GAME OVER" showing and the frame frozen, which are precisely the two symptoms it reports for a
+game that never started. It could not distinguish a working game from a dead one.
+
+**2. Visibility was tested on the element's own computed style.** `getComputedStyle` reports an
+element's *own* `display`, so an `<h2>GAME OVER</h2>` inside a `display:none` overlay still says
+`block`. Every artifact that did exactly what the pitch demanded — one overlay, `display:none` in
+the HTML, revealed only on death — was flagged for showing GAME OVER on load.
+
+**3. `textContent` instead of `innerText`.** `textContent` includes hidden descendants, so the
+*visible* wrapper containing a *hidden* overlay matched the forbidden pattern. `innerText` is
+rendered text and had been quietly disagreeing the whole time.
+
+**The headline survives.** Re-scored the original ten artifacts (all still on disk) with the fixed
+checker: **2/10 — the same number**, and the two that pass are runs 8 and 10, which are exactly the
+two independently confirmed playable by steering them in a browser. The instrument and the
+hand-verification now agree; before, the number was right by luck.
+
+    old checker, original run : 2/10 (manual assessment; the automated pass count was 0/10)
+    fixed checker, same files : 2/10  <- runs 8 and 10
+    steering probe, same files: runs 8 and 10 survive 5.5-6.0 s vs 0.85-1.25 s unattended
+
+**What did change is the explanation, which was wrong in the README.** It said the failures "load
+without errors but never start". Actually **6 of 10 never draw to the canvas at all**, one throws
+`Cannot read properties of undefined`, and one draws but dies instantly. Fixed.
+
+**And a claim of mine from earlier this session was wrong.** I reported the rehearsal's fresh Snake
+as "FAILED, one of the documented 8-in-10". With the fixed checker it **passes** — it was a
+playable game. So did the committed fallback, which I had also called defective. Both corrected in
+`docs/demo-script.md`.
+
+**The generated game had a real bug too, just a minor one:** two `setInterval(gameLoop, 100)`
+registrations, so it ticked twice per interval and hit the wall in ~500 ms instead of ~1000 ms.
+The wall collision itself (`head.x >= tileCount`, snake starting at x=10 of 20) is correct.
+
+**The lesson, which is the project's own rule pointing at itself:** *verify negative results by
+running the artifact.* A "2/10" that everyone believed was produced by an instrument with three
+bugs in it. It happened to land on the right number. The next one might not.
+
+
 ### Session 4 — August 10, 2026 · v5 resolved · §1.3 showcase alternatives · verification wired
 
 Branch `claude/mycelium-v5-eval-7bc393`. Jett's machine, real Ollama, prompt set v3 throughout.

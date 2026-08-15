@@ -81,9 +81,10 @@ short path — chart only, committed Snake, no memory shot — is about 35 minut
    If a take goes wrong, the committed fallback is
    **`docs/demo-assets/snake-game/code/index.html`** — note the `code/`, the
    folder above it holds the run's transcript and manifest, not a page you can
-   open. **The fallback opens on "GAME OVER" too.** It genuinely animates, so it
-   is playable, but the restart click above is required for it as well; it is
-   not a clean-opening copy. Checked in a real browser Aug 14.
+   open. It **opens clean and playable** (re-verified Aug 15). What it will do,
+   like any correct Snake, is die about a second after load if nobody steers —
+   so start playing, or press restart, before the camera is rolling. That is
+   the game behaving properly, not a defect.
 4. **Pre-run the memory demo** the same way (`py cli.py --demo`) if you want the
    iteration story — it is ~35 minutes on a freshly-restarted Ollama, so you are
    filming the *replay* of its output, not the wait.
@@ -278,9 +279,12 @@ seen a hundred demos that only show the good take. Almost none show the number.
 `docs/demo-assets/snake-game/code/index.html`, with restart clicked first — then
 cut to the measured line.
 
-> The rehearsal generated a fresh one and it **failed**: opened on "GAME OVER",
-> frame hash never changed. That is one of the documented 8-in-10, and it is
-> exactly why this shot uses the committed copy rather than a live run.
+> The rehearsal generated a fresh one and it **passed** — a playable game. It
+> first *looked* like a failure, and chasing that down found three bugs in the
+> checker rather than in the game (see the rehearsal notes). The 2/10 headline
+> still stands: it was re-scored with the fixed checker and came out 2/10 again.
+> Use the committed copy for this shot anyway — at 2/10 a live run is a coin
+> flip you do not need on the day.
 
 **Say / caption:** *"It made this game too. But only 2 times out of 10 — I ran
 it ten times and counted. The chart was 10 out of 10. Tightly-coupled code is
@@ -391,7 +395,7 @@ the artifact checked in real Chromium with the project's own checker
 | 3 — dashboard | yes | Plan, node cards and credits all confirmed live during a real pitch — in three views, see the shot. |
 | 4 — memory | yes | **PASS.** Two iterations, and `memory.md` recorded both: *"Iterations: 2 · Memory: 41 lines / 1.6 KB accumulated."* That is the shot's actual claim. |
 | 5 — self-check | incidental | Reviewer stage observed on every run; a reviser pass was not forced. |
-| 6 — snake | yes | **FAILED, as expected.** Opened on "GAME OVER" and the frame hash never changed — one of the documented 8-in-10. This is what 2/10 looks like. |
+| 6 — snake | yes | **PASSED**, once the checker was fixed. It first read as a failure; the cause was the checker, not the game — see below. |
 | 7 — CTA | yes | Landing page checked; the join command it renders is built from the URL you browsed. |
 
 **The committed fallback game needs the restart click too.** `docs/demo-assets/snake-game/`
