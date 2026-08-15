@@ -76,8 +76,14 @@ short path — chart only, committed Snake, no memory shot — is about 35 minut
    ```
    When it finishes, open the generated HTML and **click restart once so the
    snake is already moving**. Some runs open on a "GAME OVER" start screen;
-   starting it first means the camera never sees that. A verified-playable copy
-   is already committed at `docs/demo-assets/snake-game/` if a take goes wrong.
+   starting it first means the camera never sees that.
+
+   If a take goes wrong, the committed fallback is
+   **`docs/demo-assets/snake-game/code/index.html`** — note the `code/`, the
+   folder above it holds the run's transcript and manifest, not a page you can
+   open. **The fallback opens on "GAME OVER" too.** It genuinely animates, so it
+   is playable, but the restart click above is required for it as well; it is
+   not a clean-opening copy. Checked in a real browser Aug 14.
 4. **Pre-run the memory demo** the same way (`py cli.py --demo`) if you want the
    iteration story — it is ~35 minutes on a freshly-restarted Ollama, so you are
    filming the *replay* of its output, not the wait.
@@ -195,6 +201,13 @@ Cut away while it works; come back for the result landing in Claude's chat.
 Setup instructions are in [MCP.md](MCP.md) — do this take with the config
 already working.
 
+> **Prove the plumbing before you set up the camera:** `py scripts/mcp_e2e.py`
+> drives exactly this path headlessly — real subprocess, real orchestrator, real
+> inference — and prints 10/10 when it is healthy. If that fails, the take will
+> too, and you will find out in five minutes instead of on the day. It was
+> itself broken until Aug 14 (it matched job ids as `job_<digits>` after they
+> became UUID hex), so a green result here is now meaningful again.
+
 ---
 
 ### Shot 3 — Parallel execution + credits (0:28–0:45)
@@ -261,8 +274,13 @@ if it doesn't parse, it goes back for a fix."*
 **This shot buys more credibility than any other one here.** r/LocalLLaMA has
 seen a hundred demos that only show the good take. Almost none show the number.
 
-**On screen:** the Snake game — a working one from `docs/demo-assets/snake-game/`
-— then cut to the measured line.
+**On screen:** the Snake game — a working one from
+`docs/demo-assets/snake-game/code/index.html`, with restart clicked first — then
+cut to the measured line.
+
+> The rehearsal generated a fresh one and it **failed**: opened on "GAME OVER",
+> frame hash never changed. That is one of the documented 8-in-10, and it is
+> exactly why this shot uses the committed copy rather than a live run.
 
 **Say / caption:** *"It made this game too. But only 2 times out of 10 — I ran
 it ten times and counted. The chart was 10 out of 10. Tightly-coupled code is
@@ -361,33 +379,49 @@ End card: repo URL.
 
 ## Rehearsal notes — what has actually been executed
 
-This script was run start to finish for the first time on **Aug 14, 2026**, on
-Jett's machine with real inference, and the fixes above came out of it. What was
-executed, so the next person knows what is verified and what is still on trust:
+This script was run start to finish for the first time on **Aug 14, 2026**, on Jett's
+machine with real inference. Every shot below that produces an artifact was executed and
+the artifact checked in real Chromium with the project's own checker
+(`scripts/showcase_reliability.py: check_artifact`), not by reading the HTML.
 
-**Executed and verified:** the Ollama check (prep 2), the server start (prep 6),
-the node join (prep 7), a real pitch through the dashboard driving Live Activity,
-node cards, and credits, the Nodes and Guild views, and the landing page in
-Shot 7. Three end-to-end pipeline runs.
+| shot | executed | result |
+| --- | --- | --- |
+| 1 — chart | yes | **PASS.** All seven labels and all seven values present, 23 visible elements, no forbidden text. Safe to film live, as documented. |
+| 2 — MCP | mechanism, fully | `scripts/mcp_e2e.py` re-run Aug 14: **10/10** — real stdio subprocess, all five tools advertised, task pitched, polled to `complete`, deliverable fetched back with real code. The Claude Desktop *take* still needs Jett's app configured; the plumbing behind it is proven. |
+| 3 — dashboard | yes | Plan, node cards and credits all confirmed live during a real pitch — in three views, see the shot. |
+| 4 — memory | yes | **PASS.** Two iterations, and `memory.md` recorded both: *"Iterations: 2 · Memory: 41 lines / 1.6 KB accumulated."* That is the shot's actual claim. |
+| 5 — self-check | incidental | Reviewer stage observed on every run; a reviser pass was not forced. |
+| 6 — snake | yes | **FAILED, as expected.** Opened on "GAME OVER" and the frame hash never changed — one of the documented 8-in-10. This is what 2/10 looks like. |
+| 7 — CTA | yes | Landing page checked; the join command it renders is built from the URL you browsed. |
+
+**The committed fallback game needs the restart click too.** `docs/demo-assets/snake-game/`
+is a *folder* — the file to open is **`docs/demo-assets/snake-game/code/index.html`**. It
+animates (the frame hash does change, so it is genuinely playable), but it **also opens
+showing "GAME OVER"**. So prep step 3's "click restart once" applies to the committed copy
+exactly as it does to a fresh one. Do not assume the fallback opens clean.
+
+**Do not trust any timing from this rehearsal.** Two runs were accidentally started
+concurrently on an 8 GB CPU-only machine, so the chart took 81 minutes against its
+documented ~22, and `--demo` 76 against ~35. Those numbers measure the contention, not the
+work — the table in the prep section keeps the clean figures from the original n=10 runs.
+The lesson is worth keeping anyway: **run one thing at a time on this hardware.** Two
+pipelines competing roughly triples the wall clock of both.
 
 **Found by running it, and fixed in the code rather than the script:**
 
-- A node was **evicted mid-build** and its subtask reclaimed, because streamed
-  tokens did not count as a heartbeat. On a 329-second build the node was paid
-  **+0 credits** for work it completed, and the dashboard showed 0 nodes while
-  the node's terminal showed it building. After the fix, a 138-second build kept
-  the node online and paid it. This would have happened on camera.
-- The **one-line join could never finish** — `curl … | bash` left join.py with a
-  pipe for stdin, so its consent prompt refused. That is Shot 7's payoff.
+- A node was **evicted mid-build** and its subtask reclaimed, because streamed tokens did
+  not count as a heartbeat. On a 329-second build the node was paid **+0 credits** for work
+  it completed, and the dashboard showed 0 nodes while the node's terminal showed it
+  building. After the fix, builds of 138/282/236/269 s kept the node online and paid it.
+  This would have happened on camera.
+- The **one-line join could never finish** — `curl … | bash` left join.py with a pipe for
+  stdin, so its consent gate refused. That is Shot 7's payoff. Verified fixed on a clean
+  Debian container with a real terminal: the old installer reports `isatty False` and
+  refuses, the new one reports `isatty True` and reaches "Type 'yes' to join".
+- **500 responses echoed their exception text**, including filesystem paths, on the public
+  orchestrator.
 
-**Not executed, and still on trust:** Shot 1's live chart generation (~22 min),
-Shot 2's Claude Desktop MCP take (needs Claude Desktop configured), Shot 4's
-`--demo` memory run (~35 min), and Shot 6's Snake generation. Their *mechanics*
-are verified — the MCP route is the same one the rehearsal drove — but the
-takes themselves have not been filmed.
-
-**The planner is not deterministic.** The same pitch, "Build a CSV deduplication
-script", decomposed into **5 subtasks on one run and 1 on the next** (a third pitch
-gave 4). Planner latency varied just as much: 82 s, 97 s, 181 s. Shot 3
-wants a run with several subtasks; if you get a one-subtask plan, re-pitch
-rather than trying to film it.
+**The planner is not deterministic.** The same pitch, "Build a CSV deduplication script",
+decomposed into **5 subtasks on one run and 1 on the next** (a third gave 4). Planner
+latency varied just as much: 82 s, 97 s, 181 s. Shot 3 wants a run with several subtasks;
+if you get a one-subtask plan, re-pitch rather than trying to film it.

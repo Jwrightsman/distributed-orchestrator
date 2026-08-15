@@ -405,6 +405,45 @@ warning, on the page a newcomer follows first.
 finding is the headline rather than a footnote, and every channel draws from one table. No
 change needed. `docs/DEPLOY.md` needed nothing either.
 
+#### Addendum — the rehearsal finished: all seven shots executed
+
+The first pass had executed prep and Shots 3, 5 and 7. The rest were run afterwards, and
+every artifact was checked in real Chromium with the project's own `check_artifact()`
+rather than by reading HTML.
+
+| shot | result |
+| --- | --- |
+| 1 — chart | **PASS** — 7/7 labels, 7/7 values, 23 visible elements, no forbidden text |
+| 2 — MCP | **10/10** via `scripts/mcp_e2e.py`, real subprocess and real inference |
+| 4 — memory | **PASS** — 2 iterations, `memory.md` carrying both |
+| 6 — snake | **FAILED** — opened on GAME OVER, frame hash constant: one of the documented 8-in-10 |
+
+**Two more bugs, both found only by running the thing.**
+
+`scripts/mcp_e2e.py` **could no longer verify the MCP flow at all.** It extracted the job id
+with `job_\d+`, but job ids became `job_{uuid4().hex}` at some point, so the regex matched
+nothing and every run failed at step 3. The **10/10 recorded on Aug 12 was true when written
+and had quietly stopped being reproducible** — the check that guards the video's
+differentiator was dead and nothing said so. Now `job_[0-9a-f]{8,}`, which still cannot
+match the literal `job_id:` label the strict pattern was guarding against. 10/10 again.
+
+The **committed fallback game is not the clean copy the script implied.**
+`docs/demo-assets/snake-game/` is a folder of transcripts and manifests; the openable file
+is `code/index.html`. And it **also opens showing GAME OVER** — it animates, so it is
+genuinely playable, but the "click restart once" step applies to it too. Following the
+script literally on recording day meant opening a folder with no page in it.
+
+**A scheduling mistake worth recording, because it cost two hours.** A chain script's log
+redirect failed on a quoting bug; I read that as the script having died, and relaunched it.
+It had not died — it went on to run `--demo` and the Snake showcase *concurrently* with the
+chart run and with the relaunched chain. Three pipelines at once on 8 GB, CPU-only.
+
+Consequences: the chart took **81 minutes against its documented ~22**, and `--demo` **76
+against ~35**. Those numbers measure contention, not the work, so **no timings from this
+rehearsal were written into the docs** — the clean n=10 figures stand. The standing rule
+already said never to run two things at once; the new part is *how much* it costs, roughly
+3x on both runs, and that a failed `echo` is not evidence a script has stopped.
+
 #### For Jett
 
 Two things need him: redeploying the live orchestrator, and restarting his laptop node from

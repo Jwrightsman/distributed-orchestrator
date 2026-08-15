@@ -42,7 +42,10 @@ A collectively-owned AI system powered by consumer hardware. Phase 0 demo: local
 ## Hardware context
 - Jett's machine: 8GB RAM, no GPU (100% CPU inference)
 - gemma4 (9.6GB) times out on CPU. Use gemma3:4b for now.
-- Future: ExoLabs for distributed inference across multiple devices
+- Model-layer sharding across devices (Exo, llama.cpp RPC) is **not** the direction.
+  It needs LAN-class latency because activations cross the wire every token, and the
+  only second machine is 216 ms away. Task-level parallelism is the primitive here.
+  See ROADMAP §10; the decision and its reasoning are in SPRINT_PHASE2 §4.
 
 ## Full project context
 - Strategic doc lives in LIFE OS vault: `01 - PROJECTS/In Progress/Distributed AI Orchestrator/_PROJECT.md`

@@ -238,7 +238,9 @@ OpenTelemetry plus Prometheus-compatible metrics; every job traceable end to end
 contract versions. A distributed node population can't be upgraded at once, so compatibility and
 deprecation rules must exist *before* external operators depend on them.
 
-**Operator experience.** One-command install, key generation, coordinator trust fingerprint,
+**Operator experience.** One-command install (exists — and was broken from the day it was
+advertised until Aug 14; see the consent/`/dev/tty` fix), key generation, coordinator trust
+fingerprint,
 bandwidth and disk limits, privacy warning, auto-update policy, drain mode before shutdown,
 health diagnostics, signed releases and images, SBOM and lockfile. The safer and duller the node
 experience, the longer people leave it running.
@@ -267,7 +269,10 @@ verification policy to every distributed route including the direct distributed-
 atomically at enqueue rather than checking once before a wave · persist reputation and verifier
 evidence instead of losing it with the process · finish live config reload (`verify_rate` already
 re-reads per pitch; nothing else does, and none of it is tested) · UUIDv7/ULID identifiers rather
-than timestamp-derived ones.
+than timestamp-derived ones — **narrower than it reads:** job ids, task ids and attempt ids
+are already `uuid4().hex`. What is still timestamp-derived is the *run directory* name
+(`output/20260815_022131`, from `orchestrator.py`) and the eval/script run stamps, which
+collide only if two runs start in the same second.
 
 > **Done Aug 14:** raw internal exception text in production 500s. Two
 > `@app.exception_handler(Exception)` handlers were registered in `server.py` and Starlette keys
@@ -371,6 +376,16 @@ design should not assume a single evaluator model can carry it.
 **The Dream Queue.** Pitch before bed; the swarm works overnight on the world's largest idle
 compute resource; wake to a progress report and a question it needs answered.
 
+> **One measurement already stands against the naive version, and it is worth knowing before
+> anyone builds this.** Ollama degrades over a long session on one machine: across seven
+> back-to-back `--demo` runs, duration climbed 26 → 33 → 40 → 36 → 47 → 67 → 83 minutes
+> (rank correlation with run order **0.96**), the last two died on 30-minute model-call
+> timeouts, and restarting Ollama took the *same task* from 83 minutes back to 34 — so it is
+> session state, not thermal. `--demo` is **6/6 on a fresh Ollama and 0/2 after 5+ hours.**
+> An unattended overnight queue is exactly the shape that hits this. Whatever this becomes
+> has to cycle the runtime between jobs, or watch per-job duration and restart on drift.
+> Cheap to design in, expensive to discover at 3am.
+
 **Agent specialization marketplace.** Anyone fine-tunes an agent, contributes it, earns royalties
 on use. Agents compete for tasks on track record — evolutionary pressure toward quality.
 
@@ -455,6 +470,12 @@ memory or storage growth.
   and the smaller review issues (§6); the guild-vs-DAO rationale and the co-op / pure-protocol /
   startup models that were set aside (§8); the idea-evaluation problem, which is the hardest
   unsolved piece of the marketplace vision (§9).
+- **2026-08-14** — Checked against MASTER_PLAN, CLAUDE.md and the sprint log's measurements,
+  the other two halves of the sanity check. Two contradictions found and resolved *outside*
+  this file: CLAUDE.md listed ExoLabs sharding as the future direction (§10 rejects it as the
+  core abstraction, and SPRINT §4 has the 216 ms reason), and MASTER_PLAN's 90-day metric
+  still listed the MCP interface as a goal after it shipped. One item annotated here: the
+  Dream Queue (§9) runs straight into the measured Ollama session degradation.
 - **2026-08-14** — Sanity-checked against the repo. Corrected: which §5 item PR #45 actually
   shipped (attempt binding, not per-node identity), the four adversarial scenarios that now have
   tests, the 500-leak item (fixed the same day), the live-config-reload item (partly done), and

@@ -41,9 +41,14 @@ for 72 hours than three more features and an untested merge.
 already in when this session started, despite the previous handoff saying
 otherwise.
 
-**PR #46 is open, CI green** (`claude/mycelium-roadmap-rehearsal-e3d93e`):
-ROADMAP integration, the demo-script rehearsal, three bug fixes, and deploy
-verification. 390 tests, ruff clean. Merge it unless you find a reason not to.
+**#46 is merged.** **PR #47 is open, CI green**
+(`claude/rehearsal-finished-e3d93e`) — it carries the three commits that landed
+after #46 was merged: the rest of the rehearsal (all seven shots executed), two
+further bugs, and the other two halves of the ROADMAP sanity check. 390 tests,
+ruff clean. Merge it, then do the two things below.
+
+Across both PRs the session fixed **five** bugs, every one found by running
+something rather than reading it.
 
 | what | measured |
 | --- | --- |
@@ -58,6 +63,9 @@ verification. 390 tests, ruff clean. Merge it unless you find a reason not to.
 | Planner non-determinism | same pitch → **5, 1 and 4 subtasks**; 181 s, 82 s, 97 s |
 | Builder subtask length | 41–329 s observed on qwen3.5:4b, CPU |
 | Known memory leak | ~1.25 MB/pitch, linear, source not found |
+| MCP flow, re-verified Aug 14 | **10/10** after fixing the checker that had silently stopped working |
+| Demo shots executed | **all 7**; chart PASS, memory PASS, snake FAIL (the documented 8-in-10) |
+| Cost of running two pipelines at once | **~3x wall clock on both** — chart 81 min vs ~22, `--demo` 76 vs ~35 |
 
 **Nothing is running.** The CPU is free.
 
@@ -139,7 +147,18 @@ later, leaky one silently replaced the hardened one. Live on the public
 orchestrator. The chaos test that should have caught it was asserting the
 *leaky* handler's response shape — it passed throughout.
 
-**3. The advertised one-line join could never finish.** `curl … | bash -s -- URL`
+**3. `scripts/mcp_e2e.py` could no longer verify the MCP flow at all.** It
+matched job ids with `job_\d+`, but they became `job_{uuid4().hex}`, so every
+run failed at step 3. **The 10/10 in the sprint log was true when recorded and
+had quietly stopped being reproducible** — the check guarding the video's
+differentiator was dead and nothing said so. Fixed, and 10/10 again.
+
+**4. The committed fallback Snake game is not the clean copy the script
+implied.** `docs/demo-assets/snake-game/` is a folder of transcripts; the
+openable file is `code/index.html`, and it **also opens on GAME OVER**. It
+animates, so it is playable, but the restart click applies to it too.
+
+**5. The advertised one-line join could never finish.** `curl … | bash -s -- URL`
 gives bash the downloaded script as stdin, so `install.sh`'s closing
 `exec join.py` inherited a pipe, and join.py's consent gate correctly refuses
 without a terminal. The installer did all its work and stopped on "Not running
@@ -147,6 +166,11 @@ in a terminal, so nobody can consent." Fixed by handing over on `/dev/tty` —
 **not** with `--yes`, which would consent on the machine owner's behalf. A test
 blocks that shortcut. It survived because the launch checklist tested
 `join.py` directly, which is a different code path from the piped one-liner.
+
+**Verified fixed on a clean Debian container with a real terminal**, which is
+the only way to prove it: the old installer reports `isatty False` and refuses;
+the new one reports `isatty True` and reaches `Type 'yes' to join`. A human
+still consents — the fix is `/dev/tty`, never `--yes`.
 
 ---
 
@@ -241,7 +265,14 @@ and none of them have fired.
 - **A deploy that did nothing looks exactly like one that worked.** Now checkable:
   `scripts/verify_deploy.py`.
 - **Never run tests/servers/browsers/inference while a measurement is going.**
-  8 GB, CPU-only — it starves Ollama.
+  8 GB, CPU-only — it starves Ollama. **Measured Aug 14: two pipelines at once
+  roughly triples the wall clock of both** (chart 81 min against a documented
+  22). Any timing taken while something else ran is worthless — throw it out
+  rather than publishing it.
+- **A failed `echo` is not evidence a script died.** A chain script whose log
+  redirect broke on a quoting bug was assumed dead and relaunched; it was still
+  running, and the two copies then ran three pipelines concurrently. Check for
+  the *process*, not for output.
 - **Windows specifics:** write UTF-8 explicitly; `python` hits the Microsoft
   Store alias — use `py`; `SystemRoot` must survive into subprocess envs; there
   is no `SIGKILL` — use `Popen.kill()`.

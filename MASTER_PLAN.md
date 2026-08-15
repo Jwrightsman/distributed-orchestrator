@@ -94,7 +94,7 @@ agent specialization and the guild charter carried over to ROADMAP §10, §9 and
 ## 9. Success metrics
 
 **30-day:** video public; ≥1 external node connected by a stranger; ≥10 external pitches processed; ≥25 GitHub stars (stretch: 100).
-**90-day:** ≥5 recurring nodes; first community PR merged; MCP interface shipped; a named list of the guild's first ten members.
+**90-day:** ≥5 recurring nodes; first community PR merged; ~~MCP interface shipped~~ — **done Aug 2026, ahead of plan** (five tools, 10/10 end to end with real inference); a named list of the guild's first ten members.
 
 ---
 
