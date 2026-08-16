@@ -11,7 +11,6 @@ what it has earned, rather than hunting for it in a modal on the dashboard.
 """
 
 import json
-import platform
 import time
 from datetime import datetime, timezone
 
@@ -240,12 +239,22 @@ async def node_page(node_id: str, request: Request):
         summary = ("This machine is not currently offering compute. Everything it earned "
                    "is below and stays on the ledger — disconnecting does not undo it.")
 
-    figures = "".join([
+    # A connected machine can report its hardware; a disconnected one cannot,
+    # and two dashes where the figures should be reads as a broken page. Show
+    # what is actually knowable in each case.
+    figures = [
         _fig(builds, "subtasks built", "is-live" if builds else "is-none"),
         _fig(f"{credits:g}", "credits earned", "is-live" if credits else "is-none"),
-        _fig((node or {}).get("model", "—"), "model"),
-        _fig(f'{(node or {}).get("ram_gb", "—")}', "GB RAM"),
-    ])
+    ]
+    if node:
+        figures += [_fig(node.get("model") or "—", "model"),
+                    _fig(node.get("ram_gb") or "—", "GB RAM")]
+    else:
+        stamps = [e.get("timestamp", 0) for e in entries if e.get("timestamp")]
+        fmt = lambda t: datetime.fromtimestamp(t, timezone.utc).strftime("%d %b")  # noqa: E731
+        figures += [_fig(fmt(min(stamps)) if stamps else "—", "first seen"),
+                    _fig(fmt(max(stamps)) if stamps else "—", "last seen")]
+    figures = "".join(figures)
 
     recent = entries[-12:][::-1]
     if recent:
@@ -297,7 +306,7 @@ async def node_page(node_id: str, request: Request):
                              f"and earned {credits:g} credits."),
         LAMP_CLASS=lamp,
         HEADLINE=esc(headline),
-        UPTIME=esc(f"{platform.node()}'s ledger"),
+        UPTIME=esc(f"{builds} entries on the ledger"),
         SUMMARY=esc(summary),
         FIGURES=figures,
         NODES=nodes_html,
