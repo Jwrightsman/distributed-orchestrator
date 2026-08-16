@@ -19,8 +19,13 @@ from fastapi.testclient import TestClient
 from server import app
 
 TEMPLATES = Path(__file__).resolve().parent.parent / "templates"
-PAGES = ("index.html", "dashboard.html", "try.html")
+PAGES = ("index.html", "dashboard.html", "try.html", "run.html", "status.html", "node.html")
 ROUTES = {"/": "index.html", "/dashboard": "dashboard.html", "/try": "try.html"}
+
+# Partials carry most of the dashboard's styling now, so the no-hardcoded-colour
+# rule has to follow the CSS out of the page it came from. Without this, the
+# split would have quietly created a hole in the rule it was meant to preserve.
+STYLED = PAGES + ("_dashboard.css", "_dashboard.js")
 
 # Entities like &#9654; are not colours.
 COLOR = re.compile(r"(?<![&\w])#[0-9A-Fa-f]{6}\b|rgba?\([0-9,. ]+\)")
@@ -39,7 +44,7 @@ def test_every_page_requests_the_shared_theme(page):
     )
 
 
-@pytest.mark.parametrize("page", PAGES)
+@pytest.mark.parametrize("page", STYLED)
 def test_no_page_hardcodes_a_colour(page):
     found = COLOR.findall((TEMPLATES / page).read_text(encoding="utf-8"))
     assert not found, (

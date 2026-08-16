@@ -4,13 +4,21 @@ Live dashboard — watch the orchestrator work in your browser.
 Shows connected nodes, active tasks, and pipeline progress in real-time.
 Serves a web UI at http://localhost:8000/dashboard when the server runs.
 
-Pages live in templates/. Each one carries a `<!-- THEME -->` marker, and this
-module swaps in the shared theme layer (`templates/_theme.html`) as it serves.
+Pages live in templates/ and are assembled here as they are served. Each
+marker in a page is replaced by a partial:
 
-That indirection exists for one reason: the palette used to be written out in
+    <!-- THEME -->          templates/_theme.html   (palette + theme toggle)
+    <!-- DASHBOARD_CSS -->  templates/_dashboard.css
+    <!-- DASHBOARD_JS -->   templates/_dashboard.js
+
+The theme indirection exists because the palette used to be written out in
 full inside every page, so a light theme meant editing three files and the
 landing page would inevitably drift away from the dashboard. One definition,
 every page follows.
+
+The CSS/JS split exists for a plainer reason: dashboard.html was 80 KB of
+markup, styles and script in one file, which is not navigable. There is still
+no build step — the server pastes the parts together.
 """
 
 from pathlib import Path
@@ -25,16 +33,32 @@ _TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 _THEME_MARKER = "<!-- THEME -->"
 
+# marker -> (partial filename, wrapper tag). A partial that is a real .css or
+# .js file gets wrapped as it is injected, so the file on disk stays valid
+# CSS/JS that an editor and a linter can both understand.
+_PARTIALS = {
+    "<!-- DASHBOARD_CSS -->": ("_dashboard.css", "style"),
+    "<!-- DASHBOARD_JS -->": ("_dashboard.js", "script"),
+}
+
+
+def _read(name: str) -> str:
+    return (_TEMPLATES_DIR / name).read_text(encoding="utf-8")
+
 
 def _page(name: str) -> str:
-    """Read a template and inject the shared theme layer."""
-    html = (_TEMPLATES_DIR / name).read_text(encoding="utf-8")
+    """Read a template and inject the shared theme layer and any partials."""
+    html = _read(name)
     if _THEME_MARKER not in html:
         # Better a themeless page than a 500 — but this is a bug, so make it
         # visible in the markup rather than silently shipping an unstyled page.
         return html.replace("<head>", "<head>\n<!-- WARNING: theme marker missing -->", 1)
-    theme = (_TEMPLATES_DIR / "_theme.html").read_text(encoding="utf-8")
-    return html.replace(_THEME_MARKER, theme, 1)
+    html = html.replace(_THEME_MARKER, _read("_theme.html"), 1)
+
+    for marker, (partial, tag) in _PARTIALS.items():
+        if marker in html:
+            html = html.replace(marker, f"<{tag}>\n{_read(partial)}\n</{tag}>", 1)
+    return html
 
 
 @router.get("/", response_class=HTMLResponse)
