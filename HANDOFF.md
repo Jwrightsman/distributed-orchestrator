@@ -41,6 +41,15 @@ for 72 hours than three more features and an untested merge.
 already in when this session started, despite the previous handoff saying
 otherwise.
 
+**⚠ Two PRs in a row silently lost commits.** #46 and #47 were each merged
+while more commits were still being pushed to their branch, so that work
+stranded. Most of Session 5's checker fixes never reached `master` this way,
+and it surfaced only because an experiment produced an obviously wrong number.
+**Before assuming work landed, run `git log origin/master..HEAD`.** Everything
+stranded has been carried forward onto `claude/ensemble-strategy-e3d93e`, which
+also supersedes PR #48 — merge that branch and close #48.
+
+**#46 and #47 are merged.** `master` carries the ROADMAP
 **#46 and #47 are both merged. Nothing is open.** `master` carries the ROADMAP
 integration, the demo script rehearsed in full (all seven shots executed), the
 deploy-verification tool, and seven bug fixes. 390 tests, ruff clean.
@@ -72,7 +81,10 @@ Only two things are outstanding, and both are Jett's.
 | Builder subtask length | 41–329 s observed on qwen3.5:4b, CPU |
 | Known memory leak | ~1.25 MB/pitch, linear, source not found |
 | MCP flow, re-verified Aug 14 | **10/10** after fixing the checker that had silently stopped working |
-| Demo shots executed | **all 7**; chart PASS, memory PASS, snake FAIL (the documented 8-in-10) |
+| Demo shots executed | **all 7**; chart PASS, memory PASS, MCP 10/10, snake PASS |
+| Snake showcase | **2/10 — unchanged**, re-scored under four fixed checker bugs |
+| Ensemble vs decomposition | **12/22 (55%) vs 2/10 (20%), p = 0.073 — inconclusive, NOT promoted** |
+| Ensemble cost per attempt | **~6 min** (median 365 s) against **~50 min** for a decomposed run |
 | Cost of running two pipelines at once | **~3x wall clock on both** — chart 81 min vs ~22, `--demo` 76 vs ~35 |
 
 **Nothing is running.** The CPU is free.

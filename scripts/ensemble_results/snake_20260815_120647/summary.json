@@ -1,19 +1,32 @@
 {
   "candidate": "snake",
-  "trials": 1,
-  "passes": 0,
-  "single_shot_rate": 0.0,
+  "trials": 14,
+  "passes": 8,
+  "single_shot_rate": 0.5714285714285714,
   "ci95": [
-    0.0,
-    0.7934567085261071
+    0.3259026690286936,
+    0.7861949006959948
   ],
   "baseline": [
     2,
     10
   ],
-  "fisher_p_one_sided": 1.0,
+  "fisher_p_one_sided": 0.07962040651500875,
   "seconds_total": 0.0,
   "outcomes": [
-    false
+    true,
+    true,
+    false,
+    false,
+    false,
+    true,
+    false,
+    true,
+    false,
+    false,
+    true,
+    true,
+    true,
+    true
   ]
 }

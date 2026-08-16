@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neon Snake</title>
+    <style>
+        body {
+            background-color: #111;
+            color: #fff;
+            font-family: 'Courier New', Courier, monospace;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            overflow: hidden;
+        }
+
+        h1 {
+            margin-top: 0;
+            text-shadow: 0 0 5px #0ff;
+        }
+
+        canvas {
+            border: 2px solid #333;
+            box-shadow: 0 0 20px rgba(0, 255, 255, 0.1);
+            background-color: #000;
+        }
+
+        #scoreBoard {
+            margin-top: 10px;
+            font-size: 24px;
+            color: #0ff;
+            text-shadow: 0 0 10px #0ff;
+        }
+
+        #gameOverScreen {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.85);
+            border: 1px solid #f00;
+            padding: 40px;
+            text-align: center;
+            display: none;
+            box-shadow: 0 0 30px rgba(255, 0, 0, 0.3);
+            z-index: 10;
+        }
+
+        #gameOverScreen h2 {
+            color: #f00;
+            font-size: 48px;
+            margin: 0 0 20px 0;
+            text-shadow: 0 0 10px #f00;
+        }
+
+        #restartBtn {
+            background: transparent;
+            color: #0ff;
+            border: 2px solid #0ff;
+            padding: 10px 20px;
+            font-size: 18px;
+            font-family: inherit;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-shadow: 0 0 5px #0ff;
+        }
+
+        #restartBtn:hover {
+            background: #0ff;
+            color: #000;
+            box-shadow: 0 0 20px #0ff;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas" width="400" height="400"></canvas>
+    <div id="scoreBoard">Score: 0</div>
+    <div id="gameOverScreen">
+        <h2>GAME OVER</h2>
+        <button id="restartBtn">Restart Game</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreElement = document.getElementById('scoreBoard');
+        const gameOverScreen = document.getElementById('gameOverScreen');
+        const restartBtn = document.getElementById('restartBtn');
+
+        const box = 20;
+        const canvasSize = 400;
+        const totalRows = canvasSize / box;
+        const totalCols = canvasSize / box;
+
+        let score = 0;
+        let snake = [];
+
+        let food = {
+            x: 0,
+            y: 0
+        };
+
+        let d;
+
+        function createFood() {
+            food.x = Math.floor(Math.random() * totalCols) * box;
+            food.y = Math.floor(Math.random() * totalRows) * box;
+            
+            for (let i = 0; i < snake.length; i++) {
+                if (snake[i].x == food.x && snake[i].y == food.y) {
+                    createFood();
+                }
+            }
+        }
+
+        function draw() {
+            // Clear Canvas
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, canvasSize, canvasSize);
+
+            // Draw Snake
+            for (let i = 0; i < snake.length; i++) {
+                ctx.fillStyle = (i == 0) ? '#0ff' : '#0f0'; // Head Cyan, Body Green
+                ctx.shadowBlur = (i == 0) ? 10 : 5;
+                ctx.shadowColor = ctx.fillStyle;
+                ctx.fillRect(snake[i].x, snake[i].y, box, box);
+
+                ctx.strokeStyle = '#000';
+                ctx.strokeRect(snake[i].x, snake[i].y, box, box);
+            }
+
+            // Draw Food
+            ctx.fillStyle = '#f0f';
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = ctx.fillStyle;
+            ctx.fillRect(food.x, food.y, box, box);
+
+            // Logic for movement
+            let snakeX = snake[0].x;
+            let snakeY = snake[0].y;
+
+            if (d == 'LEFT') snakeX -= box;
+            if (d == 'UP') snakeY -= box;
+            if (d == 'RIGHT') snakeX += box;
+            if (d == 'DOWN') snakeY += box;
+
+            // Eating Food
+            if (snakeX == food.x && snakeY == food.y) {
+                score++;
+                scoreElement.innerHTML = 'Score: ' + score;
+                createFood();
+            } else {
+                // Remove tail
+                snake.pop();
+            }
+
+            // Death Detection
+            let newSnakeHead = { x: snakeX, y: snakeY };
+
+            if (snakeX < 0 || snakeX >= canvasSize || snakeY < 0 || snakeY >= canvasSize || collision(newSnakeHead, snake)) {
+                gameOver();
+            }
+
+            snake.unshift(newSnakeHead);
+        }
+
+        function collision(head, array) {
+            for (let i = 0; i < array.length; i++) {
+                if (head.x == array[i].x && head.y == array[i].y) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        function gameOver() {
+            d = null;
+            gameOverScreen.style.display = 'block';
+        }
+
+        function restartGame() {
+            snake = [];
+            snake[0] = { x: 9 * box, y: 10 * box };
+            score = 0;
+            scoreElement.innerHTML = 'Score: ' + score;
+            d = null;
+            createFood();
+            gameOverScreen.style.display = 'none';
+            
+            // Initial movement after restart to satisfy "moving the moment the page opens"
+            d = 'RIGHT';
+        }
+
+        document.addEventListener('keydown', function (event) {
+            if (d == null) {
+                d = 'RIGHT'; // Start moving on load
+            }
+
+            if (event.keyCode == 37 && d != 'RIGHT') {
+                d = 'LEFT';
+            } else if (event.keyCode == 38 && d != 'DOWN') {
+                d = 'UP';
+            } else if (event.keyCode == 39 && d != 'LEFT') {
+                d = 'RIGHT';
+            } else if (event.keyCode == 40 && d != 'UP') {
+                d = 'DOWN';
+            }
+        });
+
+        restartBtn.addEventListener('click', restartGame);
+
+        // Start the game loop immediately
+        createFood();
+        restartGame(); // Sets initial state and starts movement
+        setInterval(draw, 100);
+    </script>
+</body>
+</html>

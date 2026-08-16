@@ -274,6 +274,81 @@ _Append one entry per session: date, items completed, what's next, warnings for 
 
 <!-- sessions append below -->
 
+### Session 6 — August 15, 2026 · ensemble measured · threat model written
+
+Branch `claude/ensemble-strategy-e3d93e`. Jett's machine, real Ollama, prompt set v3.
+
+#### The ensemble experiment: 12/22 vs 2/10, p = 0.073, not promoted
+
+Built the ensemble strategy (`ensemble.py`): every node gets the whole pitch and produces a
+complete artifact alone, and the coordinator keeps whichever candidate passes mechanical
+checks. Same builder prompt as decomposition, so the comparison isolates architecture.
+
+| | passes | rate | 95% CI |
+| --- | --- | --- | --- |
+| Decomposition | 2/10 | 20% | 6–51% |
+| Ensemble, single candidate | **12/22** | **55%** | 35–73% |
+
+**Fisher one-sided p = 0.073 — inconclusive, so ensemble is not promoted.** Full write-up in
+`docs/ensemble-vs-decomposition.md`.
+
+**The instructive part is that 22 trials were run specifically to settle it and it did not.**
+p went 0.14 at n=14 → 0.073 at n=22 and stalled, because Fisher is limited by the *smaller*
+sample and the baseline is ten runs. The ensemble arm can be extended almost indefinitely
+without crossing 0.05 (15/30 → 0.096, 50/100 → 0.067). Settling it needs ~19 runs **per arm**,
+~8 more hours, almost all of it re-measuring decomposition at ~50 min a run.
+
+**What does survive is the equal-compute comparison.** One decomposed attempt costs ~50 min
+for 20%; the same budget buys ~8 single-model attempts at ~6 min each. Taking the *worst* end
+of ensemble's interval against the *best* end of decomposition's — 35% against 51% — five
+candidates still win 88% to 51%. That holds whichever end of the intervals is true, which is
+why it is worth more than the p-value.
+
+**The failure text supports the review's mechanism.** Decomposition fails as *pieces that
+never connected*: six of its eight failures produced a canvas nothing ever drew on. Ensemble
+fails as *one model losing track of its own program*: `head is not defined`, `Identifier
+'goingRight' has already been declared`. Different signatures, exactly as predicted.
+
+#### Three process failures worth more than the result
+
+**1. The checker fixes from Session 5 were never on master.** They were pushed to
+`claude/rehearsal-finished-e3d93e` *after* PR #47 had already been merged, so they stranded on
+the branch — the same thing that happened with #46. The first scoring pass therefore ran the
+old buggy checker and returned **0/14**, which would have been published as "ensemble loses"
+had it not been hand-checked. Cherry-picked onto this branch. **Two PRs in a row have lost
+commits this way; check `git log origin/master..HEAD` before assuming work landed.**
+
+**2. Scoring crashed on every trial and the run continued regardless.** `check_artifact` uses
+Playwright's sync API, which refuses to run inside an asyncio loop. Ten minutes of inference
+per trial, all scored as "check crashed". Fixed by scoring in a worker thread, and
+`--score-only DIR` now re-scores a finished run without regenerating it — generation is hours,
+scoring is seconds, and a scoring bug must never cost the generation.
+
+**3. Fixing the checker introduced a fourth bug.** The Session 5 rewrite dropped the actual
+key-response test, so a self-animating game that ignored the keyboard passed. One ensemble
+candidate did exactly that. The check is now the one a person performs: load it a second time,
+touch nothing, and require that steering outlive not-steering.
+
+**The published 2/10 survived every version of the checker**, including the hardest one. That
+is the reassuring part: the number was right through four instrument bugs.
+
+#### The threat model is written
+
+`docs/THREAT_MODEL.md` and `SECURITY.md`. What is true today, not aspirational: shared-secret
+admission, what a hostile node can and cannot do, that attempt binding is admission and not
+identity, that generated code is not sandboxed, that workers necessarily see task text, and
+that the ledger is contribution points with no monetary value — which is *why* its weak
+integrity is not urgent.
+
+**The finding worth surfacing: `pitch_key` gates submitting work, not reading it.** `/history`,
+`/gallery`, `/share`, `/events`, `/ledger`, `/standings` and `/metrics` take no credential at
+all, so anyone who can reach the port can read every past task's text and output. Verified in
+the routes — `routes_events.py` and `routes_history.py` contain zero auth calls. Now stated in
+its own section rather than being implicit.
+
+The permissionless list is referenced from ROADMAP §5 rather than copied.
+
+
 ### Session 5 — August 14, 2026 · ROADMAP integrated · demo script rehearsed · three bugs
 
 Branch `claude/mycelium-roadmap-rehearsal-e3d93e`, PR #46. Jett's machine, real Ollama.
@@ -449,6 +524,55 @@ already said never to run two things at once; the new part is *how much* it cost
 Two things need him: redeploying the live orchestrator, and restarting his laptop node from
 current code so it earns again. Commands and the check that proves the deploy landed are in
 HANDOFF.md.
+
+
+### Addendum 2 — Jett's hunch about the Snake game was right, and it found three checker bugs
+
+He said: *"when you open it, the game starts, and the snake just goes into the wall, and it says
+GAME OVER."* That is exactly what was happening, and chasing it down found that
+`check_artifact()` — the instrument behind the 2/10 — was broken in three separate ways, each of
+which makes a **correct** game look broken.
+
+**1. A 1200 ms blind spot.** The checker slept 1200 ms before its first look. A correct Snake that
+nobody steers walks into a wall in about a second. Measured unattended deaths across the committed
+artifacts: **550, 850, 1100 and 1250 ms** — all inside the blind spot. So it arrived to find
+"GAME OVER" showing and the frame frozen, which are precisely the two symptoms it reports for a
+game that never started. It could not distinguish a working game from a dead one.
+
+**2. Visibility was tested on the element's own computed style.** `getComputedStyle` reports an
+element's *own* `display`, so an `<h2>GAME OVER</h2>` inside a `display:none` overlay still says
+`block`. Every artifact that did exactly what the pitch demanded — one overlay, `display:none` in
+the HTML, revealed only on death — was flagged for showing GAME OVER on load.
+
+**3. `textContent` instead of `innerText`.** `textContent` includes hidden descendants, so the
+*visible* wrapper containing a *hidden* overlay matched the forbidden pattern. `innerText` is
+rendered text and had been quietly disagreeing the whole time.
+
+**The headline survives.** Re-scored the original ten artifacts (all still on disk) with the fixed
+checker: **2/10 — the same number**, and the two that pass are runs 8 and 10, which are exactly the
+two independently confirmed playable by steering them in a browser. The instrument and the
+hand-verification now agree; before, the number was right by luck.
+
+    old checker, original run : 2/10 (manual assessment; the automated pass count was 0/10)
+    fixed checker, same files : 2/10  <- runs 8 and 10
+    steering probe, same files: runs 8 and 10 survive 5.5-6.0 s vs 0.85-1.25 s unattended
+
+**What did change is the explanation, which was wrong in the README.** It said the failures "load
+without errors but never start". Actually **6 of 10 never draw to the canvas at all**, one throws
+`Cannot read properties of undefined`, and one draws but dies instantly. Fixed.
+
+**And a claim of mine from earlier this session was wrong.** I reported the rehearsal's fresh Snake
+as "FAILED, one of the documented 8-in-10". With the fixed checker it **passes** — it was a
+playable game. So did the committed fallback, which I had also called defective. Both corrected in
+`docs/demo-script.md`.
+
+**The generated game had a real bug too, just a minor one:** two `setInterval(gameLoop, 100)`
+registrations, so it ticked twice per interval and hit the wall in ~500 ms instead of ~1000 ms.
+The wall collision itself (`head.x >= tileCount`, snake starting at x=10 of 20) is correct.
+
+**The lesson, which is the project's own rule pointing at itself:** *verify negative results by
+running the artifact.* A "2/10" that everyone believed was produced by an instrument with three
+bugs in it. It happened to land on the right number. The next one might not.
 
 
 ### Session 4 — August 10, 2026 · v5 resolved · §1.3 showcase alternatives · verification wired

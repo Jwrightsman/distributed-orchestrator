@@ -64,17 +64,40 @@ STATE_JS = """
     const cs = getComputedStyle(el);
     return cs.display !== 'none' && cs.visibility !== 'hidden' && cs.opacity !== '0';
   }).length;
+  // Ancestors count. getComputedStyle reports an element's OWN display, so a
+  // <h2>GAME OVER</h2> inside a display:none overlay still says 'block' and the
+  // old check called it visible. Every artifact that did exactly what the pitch
+  // asked — one overlay, display:none in the HTML, shown only on death — was
+  // therefore flagged for showing GAME OVER on load. getClientRects() is empty
+  // when anything up the tree is hidden, which is the question actually being
+  // asked. (This is also why document.innerText disagreed: it respects
+  // rendering, and it was right.)
   const vis = el => {
+    if (el.getClientRects().length === 0) return false;
     const cs = getComputedStyle(el);
-    return cs.display !== 'none' && cs.visibility !== 'hidden' && cs.opacity !== '0';
+    return cs.visibility !== 'hidden' && cs.opacity !== '0';
   };
+  // Ask the question a viewer would: is this text on the screen? body.innerText
+  // is rendered text — it excludes anything inside a display:none subtree, which
+  // is exactly what a correctly hidden GAME OVER overlay is.
+  //
+  // The old scan walked elements and tested textContent, which returns the text
+  // of hidden descendants too. So the *visible* wrapper holding a *hidden*
+  // overlay matched, and a game that did precisely what the pitch demanded —
+  // one overlay, display:none in the HTML, revealed only on death — was failed
+  // for displaying GAME OVER on load. That is two of the ten re-scored.
+  const shown = document.body.innerText || '';
   for (const pat of forbidden) {
-    const re = new RegExp(pat, 'i');
-    const hit = [...document.querySelectorAll('div,section,p,h1,h2,h3,span,td,li')]
-      .some(el => re.test(el.textContent || '') && vis(el));
-    if (hit) { out.forbiddenHit = pat; break; }
+    if (new RegExp(pat, 'i').test(shown)) { out.forbiddenHit = pat; break; }
   }
   return out;
+}
+"""
+
+_SHOWS_JS = """
+(forbidden) => {
+  const shown = document.body.innerText || '';
+  return forbidden.some(p => new RegExp(p, 'i').test(shown));
 }
 """
 
@@ -113,28 +136,83 @@ def check_artifact(html_path: Path, cand: Candidate) -> dict:
     verdict = {"ok": False, "reasons": [], "console_errors": []}
     with sync_playwright() as p:
         browser = p.chromium.launch()
-        page = browser.new_page()
+        context = browser.new_context()
+        page = context.new_page()
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)[:200]))
         page.on("console", lambda m: errors.append(m.text[:200]) if m.type == "error" else None)
         try:
             page.goto(html_path.as_uri(), wait_until="load", timeout=20000)
-            page.wait_for_timeout(1200)
 
-            state = page.evaluate(STATE_JS, _forbidden_patterns(cand))
-            first = page.evaluate(FRAME_HASH_JS)
-            page.wait_for_timeout(1500)
-            second = page.evaluate(FRAME_HASH_JS)
-
-            # Third sample. For an arrow-key artifact this comes after a key
-            # press, matching how snake has always been measured; otherwise it
-            # is just more time, so every candidate gets the same three samples.
+            # ── The 1200 ms blind spot, and why this is not a flat wait ──
+            #
+            # This used to sleep 1200 ms and then take its first look. For a
+            # *keyboard* artifact that is long enough for the whole game to be
+            # over: a correct Snake that nobody steers walks into a wall in
+            # about a second, so the checker arrived to find "GAME OVER"
+            # showing and the frame frozen — the exact two symptoms it reports
+            # for a game that never started. It could not tell a working game
+            # from a dead one, and it called four working games broken.
+            #
+            # Measured on the committed artifacts: unattended deaths at 550,
+            # 850, 1100 and 1250 ms. So the forbidden-text look happens early,
+            # before any snake could legitimately have died, and the motion
+            # check steers instead of watching an unattended snake expire.
+            #
+            # Note the candidate's own wording: "GAME OVER must never be
+            # visible *before the snake has died*." Game over after a death is
+            # correct behaviour. Only game over on arrival is a defect.
             if cand.needs_key_response:
-                page.keyboard.press("ArrowRight")
-                page.wait_for_timeout(800)
+                page.wait_for_timeout(150)
+                state = page.evaluate(STATE_JS, _forbidden_patterns(cand))
+                first = page.evaluate(FRAME_HASH_JS)
+                # Steer in a square. If the arrow keys are wired to the
+                # direction vector the snake stays off the walls; if they are
+                # not, it dies on schedule and the frames stop changing.
+                second = third = first
+                for i, key in enumerate(
+                    ["ArrowDown", "ArrowLeft", "ArrowUp", "ArrowRight",
+                     "ArrowDown", "ArrowLeft", "ArrowUp", "ArrowRight"]
+                ):
+                    page.keyboard.press(key)
+                    page.wait_for_timeout(350)
+                    if i == 3:
+                        second = page.evaluate(FRAME_HASH_JS)
+                third = page.evaluate(FRAME_HASH_JS)
+                steered_alive = not page.evaluate(_SHOWS_JS, _forbidden_patterns(cand))
             else:
+                page.wait_for_timeout(1200)
+                state = page.evaluate(STATE_JS, _forbidden_patterns(cand))
+                first = page.evaluate(FRAME_HASH_JS)
+                page.wait_for_timeout(1500)
+                second = page.evaluate(FRAME_HASH_JS)
                 page.wait_for_timeout(800)
-            third = page.evaluate(FRAME_HASH_JS)
+                third = page.evaluate(FRAME_HASH_JS)
+
+            # ── Is it actually steerable? ──
+            #
+            # needs_key_response used to mean "press ArrowRight and require the
+            # picture to change", which a self-animating game passes without
+            # having any key handling at all. A Snake you cannot steer is not a
+            # playable Snake, and one candidate passed every other check while
+            # ignoring the keyboard completely.
+            #
+            # The honest test is the one a person performs: does input change
+            # the outcome? Load it a second time, touch nothing, and see how
+            # long it survives. Steering has to do better than that.
+            if cand.needs_key_response:
+                idle = context.new_page()
+                try:
+                    idle.goto(html_path.as_uri(), wait_until="load", timeout=20000)
+                    idle.wait_for_timeout(3300)   # same wall clock as the steered run
+                    idle_alive = not idle.evaluate(_SHOWS_JS, _forbidden_patterns(cand))
+                finally:
+                    idle.close()
+                if idle_alive and steered_alive:
+                    pass  # survives either way — nothing to conclude, don't penalise
+                elif not steered_alive:
+                    verdict["reasons"].append("not steerable (died even when played)")
+                verdict["steering"] = {"idle_alive": idle_alive, "steered_alive": steered_alive}
 
             verdict["console_errors"] = errors[:5]
             if errors:

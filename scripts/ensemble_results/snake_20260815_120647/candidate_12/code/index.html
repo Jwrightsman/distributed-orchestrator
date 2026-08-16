@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Retro Snake</title>
+    <style>
+        body {
+            background-color: #111;
+            color: #eee;
+            font-family: 'Courier New', Courier, monospace;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            overflow: hidden;
+        }
+        canvas {
+            background-color: #000;
+            border: 2px solid #333;
+            box-shadow: 0 0 20px rgba(0, 255, 0, 0.2);
+        }
+        #score-board {
+            font-size: 24px;
+            margin-bottom: 10px;
+            color: #fff;
+            text-shadow: 0 0 5px #fff;
+        }
+        #overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 10;
+        }
+        .game-over-content {
+            text-align: center;
+        }
+        h1 {
+            font-size: 60px;
+            margin: 0 0 20px 0;
+            color: #ff3333;
+            text-shadow: 0 0 20px #ff0000;
+        }
+        button {
+            background: #333;
+            color: #fff;
+            border: 2px solid #fff;
+            padding: 10px 20px;
+            font-size: 18px;
+            cursor: pointer;
+            text-transform: uppercase;
+            font-family: 'Courier New', Courier, monospace;
+        }
+        button:hover {
+            background: #fff;
+            color: #000;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="score-board">Score: <span id="score">0</span></div>
+    <canvas id="gameCanvas" width="400" height="400"></canvas>
+
+    <div id="overlay" style="display:none;">
+        <div class="game-over-content">
+            <h1>GAME OVER</h1>
+            <button onclick="resetGame()">Restart</button>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreEl = document.getElementById('score');
+        const overlay = document.getElementById('overlay');
+
+        // Game Configuration
+        const TILE_SIZE = 20;
+        const TILE_COUNT = canvas.width / TILE_SIZE;
+        const GAME_SPEED = 100; // ms per frame
+
+        // Game State
+        let score = 0;
+        let gameInterval = null;
+        let isGameOver = false;
+        
+        let snake = [];
+        let snakeLength = 3;
+        
+        let velocityX = 1; // Moving right on start
+        let velocityY = 0;
+        
+        let appleX = 5;
+        let appleY = 5;
+
+        // Initialization
+        function initGame() {
+            score = 0;
+            isGameOver = false;
+            snake = [];
+            snakeLength = 3;
+            
+            // Start in the middle
+            snakeLength = 3;
+            snake = [{x: 10, y: 10}, {x: 9, y: 10}, {x: 8, y: 10}];
+            
+            velocityX = 1;
+            velocityY = 0;
+            
+            scoreEl.innerText = score;
+            spawnApple();
+            
+            // Start the game loop immediately
+            if (gameInterval) clearInterval(gameInterval);
+            gameInterval = setInterval(gameLoop, GAME_SPEED);
+        }
+
+        function spawnApple() {
+            appleX = Math.floor(Math.random() * TILE_COUNT);
+            appleY = Math.floor(Math.random() * TILE_COUNT);
+            
+            // Ensure apple doesn't spawn on snake
+            for (let part of snake) {
+                if (part.x === appleX && part.y === appleY) {
+                    spawnApple();
+                }
+            }
+        }
+
+        function resetGame() {
+            overlay.style.display = 'none';
+            overlay.style.opacity = 0;
+            initGame();
+        }
+
+        function gameLoop() {
+            if (isGameOver) return;
+
+            update();
+            draw();
+        }
+
+        function update() {
+            // Calculate new head position
+            const head = { x: snake[0].x + velocityX, y: snake[0].y + velocityY };
+
+            // Wall Collision
+            if (head.x < 0 || head.x >= TILE_COUNT || head.y < 0 || head.y >= TILE_COUNT) {
+                gameOver();
+                return;
+            }
+
+            // Self Collision
+            for (let i = 0; i < snake.length; i++) {
+                if (head.x === snake[i].x && head.y === snake[i].y) {
+                    gameOver();
+                    return;
+                }
+            }
+
+            snake.unshift(head); // Add new head
+
+            // Apple Collision
+            if (head.x === appleX && head.y === appleY) {
+                score += 10;
+                scoreEl.innerText = score;
+                spawnApple();
+            } else {
+                snake.pop(); // Remove tail if no apple eaten
+            }
+        }
+
+        function draw() {
+            // Clear screen
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.8)'; // Slight trail effect (optional), or just clear
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Draw Apple
+            ctx.fillStyle = '#ff3333';
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = '#ff0000';
+            ctx.fillRect(appleX * TILE_SIZE, appleY * TILE_SIZE, TILE_SIZE - 2, TILE_SIZE - 2);
+            
+            // Reset shadow for snake
+            ctx.shadowBlur = 0;
+
+            // Draw Snake
+            ctx.fillStyle = '#00ff00';
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = '#00ffff';
+
+            for (let i = 0; i < snake.length; i++) {
+                // Head is brighter/greenish
+                if (i === 0) {
+                    ctx.fillStyle = '#ccffcc';
+                }
+                ctx.fillRect(snake[i].x * TILE_SIZE, snake[i].y * TILE_SIZE, TILE_SIZE - 2, TILE_SIZE - 2);
+            }
+            
+            ctx.shadowBlur = 0; // Reset
+        }
+
+        function gameOver() {
+            isGameOver = true;
+            clearInterval(gameInterval);
+            overlay.style.display = 'flex';
+            overlay.style.opacity = 1;
+        }
+
+        // Input Handling
+        document.addEventListener('keydown', (e) => {
+            switch(e.key) {
+                case 'ArrowUp':
+                    if (velocityY !== 1) {
+                        velocityX = 0;
+                        velocityY = -1;
+                    }
+                    break;
+                case 'ArrowDown':
+                    if (velocityY !== -1) {
+                        velocityX = 0;
+                        velocityY = 1;
+                    }
+                    break;
+                case 'ArrowLeft':
+                    if (velocityX !== 1) {
+                        velocityX = -1;
+                        velocityY = 0;
+                    }
+                    break;
+                case 'ArrowRight':
+                    if (velocityX !== -1) {
+                        velocityX = 1;
+                        velocityY = 0;
+                    }
+                    break;
+            }
+        });
+
+        // Start
+        initGame();
+
+    </script>
+</body>
+</html>

@@ -1,1 +1,14 @@
-{"trial": 0, "ok": false, "reasons": ["forbidden text visible: game\\s*over", "no animation (frame never changes)"], "html": "scripts\\ensemble_results\\snake_20260815_120647\\candidate_0\\code\\index.html"}
+{"trial": 0, "ok": true, "reasons": [], "html": "scripts\\ensemble_results\\snake_20260815_120647\\candidate_0\\code\\index.html"}
+{"trial": 1, "ok": true, "reasons": [], "html": "scripts\\ensemble_results\\snake_20260815_120647\\candidate_1\\code\\index.html"}
+{"trial": 2, "ok": false, "reasons": ["no animation (frame never changes)"], "html": "scripts\\ensemble_results\\snake_20260815_120647\\candidate_2\\code\\index.html"}
+{"trial": 3, "ok": false, "reasons": ["forbidden text visible: game\\s*over", "no animation (frame never changes)"], "html": "scripts\\ensemble_results\\snake_20260815_120647\\candidate_3\\code\\index.html"}
+{"trial": 4, "ok": false, "reasons": ["js errors: Cannot read properties of undefined (reading 'x')"], "html": "scripts\\ensemble_results\\snake_20260815_120647\\candidate_4\\code\\index.html"}
+{"trial": 5, "ok": true, "reasons": [], "html": "scripts\\ensemble_results\\snake_20260815_120647\\candidate_5\\code\\index.html"}
+{"trial": 6, "ok": false, "reasons": ["js errors: head is not defined", "canvas essentially blank (0 lit px, need 50)", "no animation (frame never changes)"], "html": "scripts\\ensemble_results\\snake_20260815_120647\\candidate_6\\code\\index.html"}
+{"trial": 7, "ok": true, "reasons": [], "html": "scripts\\ensemble_results\\snake_20260815_120647\\candidate_7\\code\\index.html"}
+{"trial": 8, "ok": false, "reasons": ["canvas essentially blank (0 lit px, need 50)", "no animation (frame never changes)"], "html": "scripts\\ensemble_results\\snake_20260815_120647\\candidate_8\\code\\index.html"}
+{"trial": 9, "ok": false, "reasons": ["js errors: Identifier 'goingRight' has already been declared", "canvas essentially blank (0 lit px, need 50)", "no animation (frame never changes)"], "html": "scripts\\ensemble_results\\snake_20260815_120647\\candidate_9\\code\\index.html"}
+{"trial": 10, "ok": true, "reasons": [], "html": "scripts\\ensemble_results\\snake_20260815_120647\\candidate_10\\code\\index.html"}
+{"trial": 11, "ok": true, "reasons": [], "html": "scripts\\ensemble_results\\snake_20260815_120647\\candidate_11\\code\\index.html"}
+{"trial": 12, "ok": true, "reasons": [], "html": "scripts\\ensemble_results\\snake_20260815_120647\\candidate_12\\code\\index.html"}
+{"trial": 13, "ok": true, "reasons": [], "html": "scripts\\ensemble_results\\snake_20260815_120647\\candidate_13\\code\\index.html"}

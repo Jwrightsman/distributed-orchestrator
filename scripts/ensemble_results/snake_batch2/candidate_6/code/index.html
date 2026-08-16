@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neon Snake</title>
+    <style>
+        body {
+            background-color: #111;
+            color: #0f0;
+            font-family: 'Courier New', Courier, monospace;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+        }
+
+        #score-board {
+            font-size: 24px;
+            margin-bottom: 10px;
+            text-align: center;
+            text-shadow: 0 0 10px #0f0;
+        }
+
+        canvas {
+            border: 2px solid #0f0;
+            background-color: #000;
+            box-shadow: 0 0 20px #0f0;
+            display: block;
+        }
+
+        #game-over-screen {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(0, 0, 0, 0.85);
+            border: 1px solid #0f0;
+            padding: 40px;
+            text-align: center;
+            display: none;
+            box-shadow: 0 0 30px #000;
+        }
+
+        #game-over-screen h1 {
+            font-size: 48px;
+            margin: 0 0 20px 0;
+            color: #f00;
+            text-shadow: 0 0 10px #f00;
+        }
+
+        #restart-btn {
+            background-color: #000;
+            color: #0f0;
+            border: 2px solid #0f0;
+            padding: 10px 20px;
+            font-size: 18px;
+            font-family: 'Courier New', Courier, monospace;
+            cursor: pointer;
+            text-shadow: 0 0 5px #0f0;
+            transition: all 0.2s;
+        }
+
+        #restart-btn:hover {
+            background-color: #0f0;
+            color: #000;
+            box-shadow: 0 0 20px #0f0;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="score-board">Score: 0</div>
+    <canvas id="gameCanvas" width="400" height="400"></canvas>
+    
+    <div id="game-over-screen">
+        <h1>GAME OVER</h1>
+        <button id="restart-btn">Restart Game</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const gameOverScreen = document.getElementById('game-over-screen');
+        const restartBtn = document.getElementById('restart-btn');
+        const scoreBoard = document.getElementById('score-board');
+
+        const TILE_SIZE = 20;
+        const TILE_COUNT = canvas.width / TILE_SIZE;
+        
+        let velocityX = 0;
+        let velocityY = 0;
+        
+        let snake = [];
+        let trail = [];
+        let tailLength = 5;
+        
+        let score = 0;
+        let highScore = 0;
+        
+        let foodX = 0;
+        let foodY = 0;
+        
+        let isRunning = true;
+        
+        // Start moving immediately as per requirements
+        velocityX = 1;
+        velocityY = 0;
+        
+        function drawRect(x, y, color) {
+            ctx.fillStyle = color;
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = color;
+            ctx.fillRect(x, y, TILE_SIZE, TILE_SIZE);
+            ctx.shadowBlur = 0;
+        }
+
+        function drawSnake() {
+            drawRect(snake[0].x, snake[0].y, '#0f0'); // Head
+            for (let i = 1; i < snake.length; i++) {
+                drawRect(snake[i].x, snake[i].y, '#005500');
+            }
+        }
+
+        function drawFood() {
+            drawRect(foodX, foodY, '#f0f');
+        }
+
+        function drawScore() {
+            scoreBoard.innerText = 'Score: ' + score;
+        }
+
+        function placeFood() {
+            foodX = Math.floor(Math.random() * TILE_COUNT);
+            foodY = Math.floor(Math.random() * TILE_COUNT);
+            
+            // Ensure food doesn't spawn on snake body
+            for(let part of snake) {
+                if(part.x === foodX && part.y === foodY) {
+                    placeFood();
+                    break;
+                }
+            }
+        }
+
+        function resetGame() {
+            snake = [];
+            trail = [];
+            tailLength = 5;
+            score = 0;
+            velocityX = 1;
+            velocityY = 0;
+            isRunning = true;
+            
+            // Initial position
+            snake[0] = { x: 10, y: 10 };
+            for(let i=1; i<tailLength; i++) {
+                snake[i] = { x: 10 - i, y: 10 };
+                trail.push(snake[i]);
+            }
+            
+            placeFood();
+            drawScore();
+            gameOverScreen.style.display = 'none';
+            
+            gameLoop();
+        }
+
+        function gameLoop() {
+            if(!isRunning) return;
+            
+            // Move snake
+            snake[0] = { x: snake[0].x + velocityX, y: snake[0].y + velocityY };
+            
+            for(let i = snake.length - 1; i > 0; i--) {
+                snake[i] = { x: snake[i-1].x, y: snake[i-1].y };
+            }
+            
+            // Check collisions
+            for(let part of snake) {
+                if(part.x === snake[0].x && part.y === snake[0].y && part.x >= 0 && part.x < TILE_COUNT && part.y >= 0 && part.y < TILE_COUNT) {
+                    // Self collision logic needs refinement for edge cases, but for a simple game, this covers the main "eat self" scenario.
+                    // Note: The condition `part.x === snake[0].x` checks against head.
+                    // We check if the head (index 0) is touching any body part.
+                    for (let i = 1; i < snake.length; i++) {
+                        if (snake[0].x === snake[i].x && snake[0].y === snake[i].y) {
+                            gameOver();
+                            return;
+                        }
+                    }
+                }
+            }
+            
+            if(snake[0].x >= TILE_COUNT || snake[0].x < 0 || snake[0].y >= TILE_COUNT || snake[0].y < 0) {
+                gameOver();
+                return;
+            }
+            
+            // Check food
+            if(snake[0].x === foodX && snake[0].y === foodY) {
+                score += 10;
+                drawScore();
+                tailLength++;
+                placeFood();
+            }
+            
+            // Remove tail to simulate movement
+            if(tailLength > 0) {
+                trail.pop();
+            }
+            
+            drawScore();
+            drawSnake();
+            drawFood();
+            
+            // Keep loop running
+            setTimeout(gameLoop, 1000/10); // 10 FPS
+        }
+
+        function gameOver() {
+            isRunning = false;
+            gameOverScreen.style.display = 'block';
+        }
+
+        document.addEventListener('keydown', (e) => {
+            // Prevent default scrolling for arrow keys
+            if(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"].indexOf(e.code) > -1) {
+                e.preventDefault();
+            }
+            
+            switch(e.key) {
+                case 'ArrowLeft':
+                    if(velocityX === 1) break; // Prevent reversing
+                    velocityX = -1;
+                    velocityY = 0;
+                    break;
+                case 'ArrowRight':
+                    if(velocityX === -1) break;
+                    velocityX = 1;
+                    velocityY = 0;
+                    break;
+                case 'ArrowUp':
+                    if(velocityY === 1) break;
+                    velocityX = 0;
+                    velocityY = -1;
+                    break;
+                case 'ArrowDown':
+                    if(velocityY === -1) break;
+                    velocityX = 0;
+                    velocityY = 1;
+                    break;
+            }
+        });
+
+        restartBtn.addEventListener('click', resetGame);
+
+        // Initialize immediately
+        resetGame();
+
+    </script>
+</body>
+</html>
