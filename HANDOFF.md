@@ -50,6 +50,7 @@ stranded has been carried forward onto `claude/ensemble-strategy-e3d93e`, which
 also supersedes PR #48 — merge that branch and close #48.
 
 **#46 and #47 are merged.** `master` carries the ROADMAP
+**#46 and #47 are both merged. Nothing is open.** `master` carries the ROADMAP
 integration, the demo script rehearsed in full (all seven shots executed), the
 deploy-verification tool, and seven bug fixes. 390 tests, ruff clean.
 
