@@ -80,20 +80,11 @@ def load_run(run_id: str) -> dict:
     output = (run_dir / "output.md")
     log["final_output"] = output.read_text(errors="ignore", encoding="utf-8") if output.exists() else ""
 
-    # Two ratings, and conflating them is a real mistake: review.md holds what
-    # the *reviewer* said, which is the rating *before* any revision pass. When
-    # the reviser fires and clears the issues, the run's final rating is PASS
-    # while review.md still reads NEEDS_WORK. The page shows the final rating
-    # at the top and the reviewer's verdict in the review section.
-    from_review = ""
-    for line in log["review"].splitlines():
-        if line.strip() in ("PASS", "NEEDS_WORK", "FAIL"):
-            from_review = line.strip()
-            break
-
-    revision = log.get("revision") or {}
-    log["reviewer_rating"] = revision.get("rating_before") or from_review or log.get("rating") or "?"
-    log["rating"] = revision.get("rating_after") or log.get("rating") or from_review or "?"
+    # The page shows the final rating at the top and the reviewer's own verdict
+    # in the review section — they are not the same thing when the reviser
+    # fires. See orchestrator.ratings_for.
+    from orchestrator import ratings_for
+    log["rating"], log["reviewer_rating"] = ratings_for(log, log["review"])
 
     log["run_dir_name"] = run_dir.name
     return log
@@ -290,7 +281,7 @@ def _files(log: dict) -> str:
             for p in problems[:8]
         )
         out += (
-            '<p class="lede" style="margin-top:14px">The mechanical check flagged these, '
+            '<p class="lede is-spaced">The mechanical check flagged these, '
             'and they are published rather than hidden:</p>'
             f'<div class="chips">{listed}</div>'
         )

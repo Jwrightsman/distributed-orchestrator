@@ -522,6 +522,29 @@ async def review(task: str, subtasks: list[dict], results: dict[int, str], memor
 _MAX_REVISIONS = 2
 
 
+def ratings_for(log: dict, review_text: str = "") -> tuple[str, str]:
+    """(final rating, the reviewer's own rating) for a saved run.
+
+    These are two different things and the codebase used to treat them as one.
+    review.md holds what the *reviewer* said, which is the rating before any
+    revision pass; the log's `rating` is what the run ended on. When the
+    reviser clears the issues, a run whose review.md still reads FAIL is a
+    PASS — and reading the rating off the file reports it as a failure.
+
+    That is not hypothetical: run 20260814_040809 showed PASS in the history
+    list and FAIL in the detail modal, for the same run, on the same page.
+    """
+    from_review = ""
+    for line in (review_text or log.get("review", "") or "").splitlines():
+        if line.strip() in ("PASS", "NEEDS_WORK", "FAIL"):
+            from_review = line.strip()
+            break
+    revision = log.get("revision") or {}
+    final = revision.get("rating_after") or log.get("rating") or from_review or "?"
+    reviewer = revision.get("rating_before") or from_review or log.get("rating") or "?"
+    return final, reviewer
+
+
 def new_revision_record(rating: str, issues: str, final_output: str) -> dict:
     """The starting state of the reviser's record for a run.
 

@@ -118,7 +118,8 @@ result envelopes, revocation and rotation are the real answer and are deferred
 Anyone who can reach the port, with no credential at all:
 
 - **Read every past task's text and output** — `/history`, `/history/{id}`,
-  `/gallery`, `/share/{id}`, `/history/{id}/download`.
+  `/gallery`, `/run/{id}` (and the `/share/{id}` redirect kept for old links),
+  `/history/{id}/download`.
 - **Read the live event stream** — `/events`, `/ws/events` — including task
   text as it runs.
 - **Read the ledger and standings** — `/ledger`, `/standings`.

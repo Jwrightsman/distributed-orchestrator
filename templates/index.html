@@ -24,6 +24,7 @@
     -webkit-font-smoothing: antialiased;
   }
   .wrap { width: 100%; max-width: 760px; margin: 0 auto; padding: 0 20px; }
+  [hidden] { display: none !important; }
 
   /* ── Above the fold ─────────────────────────────────────────────── */
   .hero { padding: 30px 0 32px; }
@@ -85,6 +86,7 @@
   }
   .run .tag { font-family: var(--mono); font-size: 11px; flex-shrink: 0; }
   .tag.pass { color: var(--accent-text); }
+  .tag.when { color: var(--text-muted); }
   .tag.work { color: var(--warn); }
 
   /* The zero state is a designed state, not an absence. */
@@ -198,11 +200,11 @@
         <div class="fig"><span class="n" id="f-pitches">–</span><span class="k">tasks built</span></div>
         <div class="fig"><span class="n" id="f-model">–</span><span class="k">model</span></div>
       </div>
-      <div class="recent" id="recent" style="display:none;">
+      <div class="recent" id="recent" hidden>
         <div class="recent-title">Recently built by this network</div>
         <div id="recent-list"></div>
       </div>
-      <div class="zero" id="zero" style="display:none;">
+      <div class="zero" id="zero" hidden>
         <b>No machines connected right now.</b> The orchestrator is up and built the work
         above. This network is small on purpose — testers are added a few at a time.
       </div>
@@ -305,7 +307,7 @@
     document.getElementById('f-model').textContent = (s.model || 'none').split(':')[0];
 
     // An empty swarm is honest, not broken — but only if we say why.
-    document.getElementById('zero').style.display = live ? 'none' : '';
+    document.getElementById('zero').hidden = live;
   }
 
   async function loadRecent() {
@@ -322,9 +324,9 @@
         const task = (r.task || '').replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
         return `<div class="run"><span class="txt">${task}</span>` +
                `<span class="tag ${pass ? 'pass' : 'work'}">${pass ? 'built' : 'needed work'}</span>` +
-               `<span class="tag" style="color:var(--text-muted)">${ago(r.timestamp)}</span></div>`;
+               `<span class="tag when">${ago(r.timestamp)}</span></div>`;
       }).join('');
-      document.getElementById('recent').style.display = '';
+      document.getElementById('recent').hidden = false;
     } catch (e) { /* the panel simply stays hidden */ }
   }
 

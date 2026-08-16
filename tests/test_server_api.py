@@ -311,11 +311,17 @@ def test_gallery_cards(client):
     assert body["cards"][0]["preview"].startswith("# The widget")
 
 
-def test_share_page_renders(client):
+def test_share_links_land_on_the_run_page(client):
+    """/share/{id} was a second, worse copy of the run page with its own
+    hardcoded palette. It redirects now, so a link posted before /run existed
+    and a link posted today reach the same place."""
     _write_fake_run("20260801_120000")
-    resp = client.get("/share/20260801_120000")
-    assert resp.status_code == 200
-    assert "Build a widget" in resp.text
+    resp = client.get("/share/20260801_120000", follow_redirects=False)
+    assert resp.status_code == 301
+    assert resp.headers["location"] == "/run/20260801_120000"
+    followed = client.get("/share/20260801_120000")
+    assert followed.status_code == 200
+    assert "Build a widget" in followed.text
 
 
 # ── Standings / metrics / projects ───────────────────────────────────────

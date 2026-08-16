@@ -6,12 +6,10 @@ out of the output/ directory.
 import io
 import json
 import zipfile
-from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import RedirectResponse, StreamingResponse
 
-from config import get as get_config
 from server_state import OUTPUT_DIR
 
 router = APIRouter()
@@ -84,12 +82,11 @@ async def history_detail(timestamp: str):
     output_file = run_dir / "output.md"
     final_output = output_file.read_text(encoding="utf-8") if output_file.exists() else ""
 
-    # Derive rating from review file (most reliable source)
-    rating = "?"
-    for line in review_content.splitlines():
-        if line.strip() in ("PASS", "NEEDS_WORK", "FAIL"):
-            rating = line.strip()
-            break
+    # The final rating, not the reviewer's pre-revision one. Reading it off
+    # review.md alone made this endpoint contradict /history and /gallery for
+    # the same run — see orchestrator.ratings_for.
+    from orchestrator import ratings_for
+    rating, reviewer_rating = ratings_for(log, review_content)
 
     # Build code file list from the code/ subdir
     code_dir = run_dir / "code"
@@ -103,6 +100,7 @@ async def history_detail(timestamp: str):
         "review": review_content,
         "final_output": final_output,
         "rating": rating,
+        "reviewer_rating": reviewer_rating,
         "code_files": code_files,
         "code_problems": log.get("code_problems", []),
         "mode": log.get("mode", "local"),
@@ -218,238 +216,17 @@ async def fork_template(timestamp: str):
 
 
 @router.get("/share/{timestamp}")
-async def share_page(timestamp: str, request: Request):
-    """Shareable standalone HTML page for a past run — designed for Twitter/Discord/Reddit."""
-    run_dir = OUTPUT_DIR / timestamp
-    if not run_dir.exists():
-        raise HTTPException(status_code=404, detail="Run not found")
+async def share_page(timestamp: str):
+    """Old share links keep working — /run/{id} is the page now.
 
-    log_file = run_dir / "full_log.json"
-    if not log_file.exists():
-        raise HTTPException(status_code=404, detail="Log file not found")
-
-    try:
-        log = json.loads(log_file.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=500, detail="Corrupt log file")
-
-    task = log.get("task", "Unknown task")
-    rating = log.get("rating", "?")
-    mode = log.get("mode", "local")
-    subtask_count = len(log.get("plan", []))
-    model = log.get("model", get_config().get("model", "qwen3.5:4b"))
-
-    output_file = run_dir / "output.md"
-    final_output = output_file.read_text(errors="ignore", encoding="utf-8") if output_file.exists() else ""
-
-    # Derive rating from review if not in log
-    if not rating or rating == "?":
-        review_file = run_dir / "review.md"
-        if review_file.exists():
-            for line in review_file.read_text(errors="ignore", encoding="utf-8").splitlines():
-                if line.strip() in ("PASS", "NEEDS_WORK", "FAIL"):
-                    rating = line.strip()
-                    break
-
-    preview_400 = final_output[:400] if final_output else ""
-    og_desc = (final_output[:200] if final_output else "AI-generated with Distributed Orchestrator").replace('"', '&quot;')
-    og_title = task.replace('"', '&quot;')
-
-    origin = str(request.base_url).rstrip("/")
-
-    # Rating colours
-    rating_color_map = {"PASS": "#00FF88", "NEEDS_WORK": "#E8FF47", "FAIL": "#FF5555"}
-    rating_bg_map = {"PASS": "#00FF8818", "NEEDS_WORK": "#E8FF4718", "FAIL": "#FF555518"}
-    rating_color = rating_color_map.get(rating, "#888")
-    rating_bg = rating_bg_map.get(rating, "#88888818")
-
-    # Relative time
-    try:
-        dt = datetime.strptime(timestamp, "%Y%m%d_%H%M%S").replace(tzinfo=timezone.utc)
-        delta = int(datetime.now(timezone.utc).timestamp() - dt.timestamp())
-        if delta < 60:
-            rel_time = "just now"
-        elif delta < 3600:
-            rel_time = f"{delta // 60}m ago"
-        elif delta < 86400:
-            rel_time = f"{delta // 3600}h ago"
-        else:
-            rel_time = f"{delta // 86400}d ago"
-    except Exception:
-        rel_time = timestamp
-
-    dist_badge = '<span style="font-family:\'Consolas\',monospace;font-size:10px;font-weight:700;color:#00FFAA;background:#00FFAA18;border:1px solid #00FFAA30;border-radius:4px;padding:2px 8px;letter-spacing:.5px;">DIST</span>' if mode == "distributed" else ""
-
-    def esc(s: str) -> str:
-        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-    html = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{esc(task)} — Mycelium</title>
-<meta property="og:title" content="{og_title}">
-<meta property="og:description" content="{og_desc}">
-<meta property="og:type" content="website">
-<meta property="og:url" content="{origin}/share/{timestamp}">
-<meta name="twitter:card" content="summary">
-<meta name="twitter:title" content="{og_title}">
-<meta name="twitter:description" content="{og_desc}">
-<style>
-  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-  body {{
-    background: #08090C;
-    color: #D8D8D8;
-    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
-    min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    padding: 40px 16px 60px;
-  }}
-  .card {{
-    width: 100%;
-    max-width: 680px;
-    background: rgba(255,255,255,0.03);
-    border: 1px solid rgba(255,255,255,0.08);
-    border-radius: 16px;
-    padding: 36px 40px;
-    display: flex;
-    flex-direction: column;
-    gap: 20px;
-  }}
-  .logo-tag {{
-    font-family: 'Consolas', monospace;
-    font-size: 10px;
-    color: #00FFAA;
-    letter-spacing: 3px;
-    font-weight: 600;
-    margin-bottom: 4px;
-  }}
-  .task-title {{
-    font-size: 22px;
-    font-weight: 800;
-    color: #F0F0F0;
-    line-height: 1.35;
-    letter-spacing: -0.3px;
-  }}
-  .meta-row {{
-    display: flex;
-    gap: 10px;
-    flex-wrap: wrap;
-    align-items: center;
-  }}
-  .badge {{
-    font-family: 'Consolas', monospace;
-    font-size: 11px;
-    font-weight: 700;
-    border-radius: 5px;
-    padding: 3px 10px;
-    border: 1px solid;
-  }}
-  .preview-box {{
-    background: rgba(0,0,0,0.3);
-    border: 1px solid rgba(255,255,255,0.06);
-    border-radius: 10px;
-    padding: 18px 20px;
-    font-family: 'Consolas', monospace;
-    font-size: 12px;
-    color: #888;
-    line-height: 1.6;
-    white-space: pre-wrap;
-    word-break: break-word;
-    max-height: 200px;
-    overflow: hidden;
-    position: relative;
-  }}
-  .preview-box::after {{
-    content: '';
-    position: absolute;
-    bottom: 0; left: 0; right: 0;
-    height: 36px;
-    background: linear-gradient(transparent, rgba(2,3,5,0.97));
-    border-radius: 0 0 10px 10px;
-  }}
-  .meta-detail {{
-    font-family: 'Consolas', monospace;
-    font-size: 11px;
-    color: #444;
-  }}
-  .actions {{
-    display: flex;
-    gap: 12px;
-    flex-wrap: wrap;
-  }}
-  .btn {{
-    flex: 1;
-    min-width: 160px;
-    padding: 13px 20px;
-    border-radius: 9px;
-    font-size: 13px;
-    font-weight: 700;
-    cursor: pointer;
-    text-align: center;
-    text-decoration: none;
-    transition: all 0.15s;
-    display: block;
-  }}
-  .btn-primary {{
-    background: #00FFAA;
-    color: #08090C;
-    border: none;
-  }}
-  .btn-primary:hover {{ background: #00e899; }}
-  .btn-secondary {{
-    background: none;
-    color: #00FFAA;
-    border: 1.5px solid rgba(0,255,170,0.35);
-  }}
-  .btn-secondary:hover {{ background: rgba(0,255,170,0.08); border-color: #00FFAA; }}
-  .footer {{
-    margin-top: 32px;
-    font-size: 11px;
-    color: #333;
-    text-align: center;
-    line-height: 1.7;
-  }}
-  .footer a {{ color: #444; text-decoration: none; }}
-  .footer a:hover {{ color: #00FFAA; }}
-  @media (max-width: 480px) {{
-    .card {{ padding: 24px 20px; }}
-    .task-title {{ font-size: 18px; }}
-  }}
-</style>
-</head>
-<body>
-<div class="card">
-  <div>
-    <div class="logo-tag">DISTRIBUTED AI ORCHESTRATOR</div>
-    <div class="task-title">{esc(task)}</div>
-  </div>
-  <div class="meta-row">
-    {dist_badge}
-    <span class="badge" style="color:{rating_color};background:{rating_bg};border-color:{rating_color}30;">{esc(rating)}</span>
-    <span class="meta-detail">{subtask_count} subtasks</span>
-    <span class="meta-detail">·</span>
-    <span class="meta-detail">{esc(model)}</span>
-    <span class="meta-detail">·</span>
-    <span class="meta-detail">{rel_time}</span>
-  </div>
-  {f'<div class="preview-box">{esc(preview_400)}</div>' if preview_400 else ''}
-  <div class="actions">
-    <a class="btn btn-primary" href="{origin}/history/{timestamp}/fork-template" download="fork_{timestamp}.zip">Fork this project</a>
-    <a class="btn btn-secondary" href="{origin}/dashboard#run={timestamp}" target="_blank">View full output ↗</a>
-  </div>
-</div>
-<div class="footer">
-  Built with <a href="https://github.com/Jwrightsman/distributed-orchestrator" target="_blank">Mycelium</a>
-  &nbsp;·&nbsp; Run your own on any hardware
-</div>
-</body>
-</html>"""
-
-    return HTMLResponse(content=html)
+    This used to be a standalone page with its own hardcoded palette, written
+    before the theme layer existed. It could not do light mode, it drifted
+    from every other page the first time a colour changed, and it duplicated
+    a worse version of what /run/{id} now shows. One shareable artifact is
+    the point: a link posted six months ago and a link posted today should
+    land on the same page.
+    """
+    return RedirectResponse(url=f"/run/{timestamp}", status_code=301)
 
 
 # ── Gallery ──────────────────────────────────────────────────────────

@@ -177,6 +177,24 @@ def test_a_cleared_rating_is_not_reported_as_the_reviewer_s_verdict(client):
     assert "NEEDS_WORK" in review, "the reviewer's own verdict has been overwritten"
 
 
+def test_every_surface_reports_the_same_rating(client):
+    """The list said PASS and the detail modal said FAIL, for the same run, on
+    the same page — /history and /gallery read the log while /history/{id}
+    read review.md. One rule now, in orchestrator.ratings_for."""
+    _write_run(
+        "20260815_120014",
+        rating="PASS",
+        review="## Quality Rating\nFAIL\n\n## Issues Found\n1. Broken.\n",
+    )
+    listed = next(r for r in client.get("/history").json()["runs"]
+                  if r["timestamp"] == "20260815_120014")
+    detail = client.get("/history/20260815_120014").json()
+    card = next(c for c in client.get("/gallery").json()["cards"]
+                if c["timestamp"] == "20260815_120014")
+    assert listed["rating"] == detail["rating"] == card["rating"] == "PASS"
+    assert detail["reviewer_rating"] == "FAIL", "the reviewer's own verdict is lost"
+
+
 def test_output_code_fences_become_code_blocks(client):
     _write_run("20260815_120010")
     body = client.get("/run/20260815_120010").text

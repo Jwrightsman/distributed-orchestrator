@@ -106,7 +106,7 @@ def _closed_panel(origin: str) -> str:
         <a class="btn btn-ghost" href="{esc(_INVITE_URL)}" target="_blank" rel="noopener">Ask for an invite</a>
       </div>
 
-      <p class="note" style="margin-top:18px">Or skip the queue entirely — run the whole thing on your own machine:</p>
+      <p class="note is-spaced">Or skip the queue entirely — run the whole thing on your own machine:</p>
       <button class="cmd" id="cmd" type="button" title="Click to copy">
         <span class="p" aria-hidden="true">$</span><span id="cmd-text">python join.py {esc(origin)}</span>
       </button>
