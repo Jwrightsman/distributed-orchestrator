@@ -274,6 +274,105 @@ _Append one entry per session: date, items completed, what's next, warnings for 
 
 <!-- sessions append below -->
 
+### Session 7 — August 16, 2026 · UI audit and repair · /run/{id} shipped
+
+Branch `claude/ui-audit-structural-fixes-1073db`. No model needed — this session was structure,
+not output quality. 460 tests, ruff clean.
+
+**Deliberately not a redesign.** The theme token layer in `templates/_theme.html` was good and
+stayed. Nothing about what the dashboard looks like changed on purpose; what changed is that the
+markup is now valid, the design system is actually applied, and there are three new pages.
+
+#### The bug that was invisible because browsers hide it
+
+`dashboard.html` opened `<main class="content">` and never closed it. Error recovery meant nothing
+rendered wrong, which is why it survived — so Gallery, Guild and both modals sat inside `<main>`
+by accident rather than by structure, and a dialog nested in the main landmark is content of the
+current view rather than something covering it. `tests/test_templates.py` now parses the **served**
+page (not the template — partials are pasted in at request time) and reports the first element that
+does not close, with line numbers.
+
+Two more of the same shape, both found by looking rather than reading:
+
+- The light theme declared `--accent-dim` twice, the first as `#15703015` — a malformed 8-digit hex
+  that CSS drops. The same habit was in the JS: badge backgrounds were built as `` `var(--accent)18` ``,
+  which is not a colour, so **every rating badge on the dashboard has had a transparent background**.
+- The output viewer's fence regex was written `` /```(\w*)\n.../ ``, which matches a literal
+  backslash-w. No code block ever matched, so every review rendered as one wall of prose with the
+  fences still in it.
+
+#### The file that hid it
+
+`dashboard.html` was 80 KB of markup, styles and script in one file. Now three: the page, plus
+`templates/_dashboard.css` and `_dashboard.js`, injected by `dashboard.py` exactly the way
+`_theme.html` already was. **No build step, no npm.** Along the way: **105 inline `style=` attributes
+→ 0** (every template is now zero), every inline `onclick` → a listener bound in one place, and
+views/dialogs toggle with the `hidden` attribute rather than `style.display`, which screen readers
+understand and `style.display` does not.
+
+#### /run/{id} — the page this project did not have
+
+A completed run was a card in a gallery grid with **no URL**, so there was nowhere to point when
+someone says "show me something the swarm built". It is built as a primary page: server-rendered
+(an OpenGraph crawler does not run JavaScript), works with JS off, readable at 380px, with title,
+description and OG/Twitter tags. It shows the pitch, the plan, **which machine built each subtask
+and how long it took**, the reviewer's verdict and issues, whether the reviser fired and what it
+changed, the extracted files, and the credits settled. Gallery cards, history rows and the
+completed pipeline card all link to it; `/share/{id}` is now a 301 to it.
+
+Three of those facts were not recorded anywhere, so the pipeline records them now — per-subtask
+executor and duration, what the reviser did, and the credits a run settled. **Credits go in the run
+log, not joined back from `ledger.json`**, which has no run id: matching by timestamp window is
+wrong the moment two pipelines overlap. Both writers (`orchestrator.run_pipeline` and
+`routes_pitch`'s distributed path) write the same shape.
+
+**The 62 runs on disk predate all of it and the page says so**, naming what is missing and why,
+rather than deriving a plausible figure. That is the same discipline as the 2/10 Snake number.
+
+#### Two wrong numbers found while building it
+
+1. **`/status.json` reported `pitches_completed` as `len(get_history())`, and `get_history()` takes
+   a `limit` of 50.** The figure the landing page publishes as proof that the network is real stops
+   growing at 50, forever. Counted from run directories now: 62.
+2. **The same run showed PASS in the history list and FAIL in the detail modal.** `/history` and
+   `/gallery` read the log's rating; `/history/{id}` derived one from `review.md`. Those are
+   different things — `review.md` is what the *reviewer* said, *before* any revision pass, and the
+   log's rating is what the run ended on, so reading `review.md` reports a run the reviser rescued
+   as a failure. One rule now, `orchestrator.ratings_for`, used everywhere; the reviewer's own
+   verdict survives as `reviewer_rating`.
+
+#### Mobile and accessibility
+
+The dashboard's drawer already existed below 900px and could be opened. What it could not do was
+**close** — no scrim, tapping outside did nothing, Escape did nothing — so opening it on a phone
+trapped you until you picked a destination. Driven for real at 768, 480 and 380: opens with a
+backdrop, closes three ways, reports `aria-expanded`, no horizontal overflow at any width.
+
+`try.html` had **zero media queries and zero ARIA** and is the page most likely to be opened from a
+post. Now phone-first, announces every stage through `aria-live` (a run takes minutes; a silent
+update is invisible), labels its field, and fills its textarea with a surface token rather than
+`--border-subtle`, which is a hairline colour by definition.
+
+Floor met on every page: landmarks, skip link, `aria-current`, one consistent focus ring, dialogs
+that take focus and give it back, `prefers-reduced-motion` honoured on the dashboard.
+
+#### Also shipped (the "if time remains" list, all three)
+
+- **`/status`** — what a stranger checks to see whether the network is alive. Uptime, machines,
+  throughput today and this week, current model, recent runs, build fingerprint.
+- **`/try`'s closed state, designed.** `public_pitch` is false by default, so that state is what
+  most visitors see: why the door is shut, the four steps behind it, and two real ways in.
+- **`/node/{id}`** — one machine's own page. A disconnected machine still gets one: its ledger
+  entries are permanent, and "my laptop earned nothing and nobody can say why" is a question this
+  project has had to answer before.
+
+#### For Jett
+
+Nothing here needs him. The only thing worth knowing: **the run page is the thing to link to in
+launch posts** — `http://167.233.239.33:8000/run/<id>`, and every gallery card now carries that
+link. The first run pitched after this lands will be the first with per-subtask timings and credits
+filled in; every run before it says "not recorded" rather than guessing.
+
 ### Session 6 — August 15, 2026 · ensemble measured · threat model written
 
 Branch `claude/ensemble-strategy-e3d93e`. Jett's machine, real Ollama, prompt set v3.

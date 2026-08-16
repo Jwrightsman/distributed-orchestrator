@@ -19,6 +19,7 @@ A collectively-owned AI system powered by consumer hardware. Phase 0 demo: local
 - `py node.py --server http://ORCHESTRATOR_IP:8000` — join as worker node
 - `py join.py http://ORCHESTRATOR_IP:8000` — one-command join (checks deps, pulls model)
 - Dashboard at http://localhost:8000/dashboard when server is running
+- Every completed run has its own page at /run/{id} — that is the link to share
 
 ## Architecture
 1. **Planner** — decomposes task into 3-5 subtasks with dependency graph
@@ -31,7 +32,11 @@ A collectively-owned AI system powered by consumer hardware. Phase 0 demo: local
 - `config.py` / `config.json` — centralized settings (model, timeout, retries)
 - `ledger.py` / `ledger.json` — contribution ledger (guild economics seed)
 - `extract.py` — auto-extracts runnable code from pipeline output
-- `dashboard.py` — web UI with live events, standings, history viewer
+- `dashboard.py` — assembles pages: injects `templates/_theme.html`, `_dashboard.css`,
+  `_dashboard.js` and fills `<!--SLOT:NAME-->` placeholders. No build step, no npm.
+- `templates/` — one file per page. Colours come from `_theme.html` tokens only;
+  `tests/test_theme.py` fails the build on a hardcoded colour and
+  `tests/test_templates.py` parses the served HTML for unclosed tags.
 
 ## Distributed execution
 - `server.py` — orchestrator that accepts pitches and distributes builder tasks to worker nodes
@@ -57,6 +62,9 @@ A collectively-owned AI system powered by consumer hardware. Phase 0 demo: local
 - POST /pitch — run pipeline locally
 - POST /pitch/distributed — distribute to worker nodes
 - GET /dashboard — live web UI
+- GET /run/{id} — permalink for one run (server-rendered, OpenGraph tags)
+- GET /status — human-readable network status
+- GET /node/{id} — one machine's page
 - GET /events?since=N — pipeline event stream
 - GET /history — past pipeline runs
 - GET /history/{timestamp} — full details of a run
