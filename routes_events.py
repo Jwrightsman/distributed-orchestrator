@@ -127,6 +127,10 @@ async def status_json():
     s = get_standings()
     online = list(nodes.values())
     uptime = max(0, int(time.time() - state.STARTED_AT))
+    # Counted from the run directories, not get_history(): that helper takes a
+    # limit (50 by default), so the old count silently stopped growing at 50 —
+    # a number the landing page publishes as proof the network is real.
+    from routes_status import _built_since
 
     model = None
     ollama_ok = False
@@ -146,7 +150,7 @@ async def status_json():
         "inference_available": ollama_ok,
         "model": model,
         "nodes_online": len(online),
-        "pitches_completed": len(get_history()),
+        "pitches_completed": _built_since(),
         "tasks_completed_total": sum(c["compute_tasks"] for c in s),
         "contributors": len(s),
         "uptime_seconds": uptime,

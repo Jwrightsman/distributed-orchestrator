@@ -207,12 +207,16 @@ server.py           # App assembly — routers, lifespan, exception handling
 server_state.py     # Shared state, SQLite persistence, events, auth, rate limits
 routes_pitch.py     # /pitch, /pitch/async, /pitch/distributed, /jobs*
 routes_nodes.py     # Worker protocol: register, poll, results, circuit breaker
-routes_history.py   # /history*, /share, /gallery
+routes_history.py   # /history*, /gallery ( /share/{id} redirects to /run/{id} )
+routes_run.py       # /run/{id} — the shareable permalink for one run
+routes_status.py    # /status and /node/{id} — the read-for-humans pages
+routes_try.py       # /try, in its open and invite-only states
 routes_projects.py  # /projects*
 routes_events.py    # /health, /events, /ws/events, /standings, /metrics
 node.py             # Worker node: polls for tasks, runs inference, reports results
 join.py             # One-command node setup
-dashboard.py        # Serves the dashboard (HTML in templates/dashboard.html)
+dashboard.py        # Assembles pages from templates/ (theme + CSS + JS partials)
+templates/          # _theme.html (tokens) + _dashboard.css/.js + one file per page
 orchestrator.py     # Core pipeline: plan → build → review → revise
 ollama_client.py    # Ollama HTTP client + token streaming + structured outputs
 memory.py           # Persistent project memory across sessions
@@ -245,12 +249,15 @@ See **[docs/DEPLOY.md](docs/DEPLOY.md)** — three copy-paste paths: LAN (no set
 | `/jobs/{id}` | GET | Poll async job status and result |
 | `/jobs` | GET | List recent jobs |
 | `/dashboard` | GET | Live web UI |
+| `/run/{id}` | GET | **Permalink for one run** — plan, machines, timings, review, credits. Shareable, previews in Discord/Reddit |
+| `/status` | GET | Human-readable network status |
+| `/node/{id}` | GET | One machine's own page — what it built and earned |
 | `/ws/events` | WS | Real-time pipeline event stream |
 | `/history` | GET | Past pipeline runs |
 | `/history/{ts}` | GET | Full run detail with output and code files |
 | `/standings` | GET | Contributor rankings by credits |
 | `/metrics` | GET | Queue depth, latency, node count, job status |
-| `/gallery` | GET | Completed tasks as shareable cards |
+| `/gallery` | GET | Completed tasks as cards, each linking to its `/run/{id}` page |
 | `/projects` | GET/POST | List or create persistent projects |
 | `/projects/{id}` | GET | Project metadata, memory, iteration list |
 | `/nodes` | GET | Connected worker nodes |

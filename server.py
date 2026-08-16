@@ -28,6 +28,9 @@ import routes_history
 import routes_nodes
 import routes_pitch
 import routes_projects
+import routes_run
+import routes_status
+import routes_try
 from dashboard import router as dashboard_router
 from server_state import _cleanup_stale_nodes, _db_load_jobs, _init_db
 
@@ -88,3 +91,6 @@ app.include_router(routes_pitch.router)
 app.include_router(routes_nodes.router)
 app.include_router(routes_history.router)
 app.include_router(routes_projects.router)
+app.include_router(routes_run.router)
+app.include_router(routes_status.router)
+app.include_router(routes_try.router)

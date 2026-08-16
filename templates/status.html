@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Status — Mycelium</title>
+<meta name="description" content="<!--SLOT:META_DESCRIPTION-->">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Mycelium">
+<meta property="og:title" content="Mycelium status">
+<meta property="og:description" content="<!--SLOT:META_DESCRIPTION-->">
+<!-- THEME -->
+<style>
+  /* The page a curious stranger checks to see whether this network is alive.
+
+     /status.json has always existed and nothing could read it but a machine.
+     This is the same facts, laid out for a person, refreshed on a timer, and
+     honest about an empty swarm: nobody connected is a true state of a small
+     invite-only network, not an error. Tokens come from _theme.html. */
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  [hidden] { display: none !important; }
+  :where(a, button):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
+  .skip-link {
+    position: absolute; left: 8px; top: -60px; z-index: 60;
+    padding: 9px 14px; border-radius: var(--radius-sm);
+    background: var(--surface); color: var(--text);
+    border: 1px solid var(--border-strong);
+    font-size: 13px; font-weight: 600; text-decoration: none;
+  }
+  .skip-link:focus { top: 8px; }
+
+  .globalbar {
+    display: flex; align-items: center; gap: 4px;
+    padding: 0 16px; height: 52px;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .globalbar .brand { display: inline-flex; align-items: center; gap: 9px; text-decoration: none; margin-right: 8px; }
+  .globalbar .mark { width: 15px; height: 15px; border-radius: 4px; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-wash); }
+  .globalbar .brand-name { font-size: 14px; font-weight: 650; color: var(--text); }
+  .globalbar a.link {
+    padding: 6px 10px; border-radius: var(--radius-sm);
+    color: var(--text-muted); text-decoration: none;
+    font-size: 13px; font-weight: 500; white-space: nowrap;
+    transition: background .12s ease, color .12s ease;
+  }
+  .globalbar a.link:hover { background: var(--surface-hover); color: var(--text); }
+
+  .wrap { width: 100%; max-width: 760px; margin: 0 auto; padding: 32px 20px 56px; }
+
+  /* ── Headline state ─────────────────────────────────────────── */
+  .headline { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .lamp { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; background: var(--text-muted); }
+  .lamp.is-ok { background: var(--accent); box-shadow: 0 0 0 4px var(--accent-wash); animation: pulse 2.4s ease-in-out infinite; }
+  .lamp.is-warn { background: var(--warn); box-shadow: 0 0 0 4px var(--highlight-wash); }
+  .lamp.is-down { background: var(--danger); box-shadow: 0 0 0 4px var(--danger-wash); }
+  @keyframes pulse { 0%, 100% { opacity: 1 } 50% { opacity: .45 } }
+
+  h1 { font-size: clamp(22px, 5vw, 30px); font-weight: 640; letter-spacing: -0.5px; color: var(--text); }
+  .since { font-family: var(--mono); font-size: 12.5px; color: var(--text-muted); margin-left: auto; }
+  .sub { margin-top: 10px; font-size: 15px; color: var(--text-dim); max-width: 46em; }
+
+  /* ── Figures ────────────────────────────────────────────────── */
+  .figs {
+    margin-top: 24px;
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden;
+  }
+  .fig { padding: 14px 16px; border-right: 1px solid var(--border-subtle); border-bottom: 1px solid var(--border-subtle); }
+  .fig .n {
+    display: block;
+    font-family: var(--mono); font-size: 22px; font-weight: 600;
+    color: var(--text); font-variant-numeric: tabular-nums;
+  }
+  .fig .n.is-live { color: var(--accent-text); }
+  .fig .n.is-none { color: var(--text-muted); }
+  .fig .k { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: var(--text-muted); }
+
+  section { padding: 26px 0 0; }
+  h2 { font-size: 12px; letter-spacing: 1.6px; text-transform: uppercase; color: var(--text-muted); font-weight: 600; margin-bottom: 6px; }
+  .lede { font-size: 13.5px; color: var(--text-muted); margin-bottom: 14px; }
+
+  .table-scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th {
+    text-align: left; font-size: 11px; letter-spacing: 1px; text-transform: uppercase;
+    color: var(--text-muted); font-weight: 600;
+    padding: 0 12px 8px 0; border-bottom: 1px solid var(--border-subtle); white-space: nowrap;
+  }
+  td { padding: 9px 12px 9px 0; border-bottom: 1px solid var(--border-subtle); color: var(--text-dim); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  td.num, th.num { text-align: right; padding-right: 0; }
+  .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  td a { color: var(--text); text-decoration: none; }
+  td a:hover { color: var(--accent-text); }
+
+  .empty {
+    padding: 16px 18px; border-radius: var(--radius);
+    background: var(--surface); border: 1px dashed var(--border);
+    font-size: 14px; color: var(--text-muted);
+  }
+  .empty b { color: var(--text-dim); font-weight: 600; }
+
+  .cmd {
+    margin-top: 14px; font-family: var(--mono); font-size: 13px;
+    background: var(--surface-sunken); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 12px 14px; color: var(--text-dim);
+    overflow-wrap: anywhere; display: flex; align-items: center; gap: 8px;
+  }
+  .cmd .p { color: var(--accent-text); flex-shrink: 0; }
+
+  footer { margin-top: 36px; padding-top: 20px; border-top: 1px solid var(--border-subtle); font-size: 12.5px; color: var(--text-muted); }
+  footer a { color: var(--text-muted); text-decoration: none; }
+  footer a:hover { color: var(--accent-text); }
+
+  @media (max-width: 480px) {
+    .globalbar { padding: 0 12px; }
+    .globalbar a.link.is-secondary { display: none; }
+    .wrap { padding: 26px 16px 48px; }
+    .since { margin-left: 0; width: 100%; }
+    .figs { grid-template-columns: repeat(2, 1fr); }
+    th, td { padding-right: 8px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
+  }
+</style>
+</head>
+<body>
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<nav class="globalbar" aria-label="Site">
+  <a class="brand" href="/"><span class="mark" aria-hidden="true"></span><span class="brand-name">Mycelium</span></a>
+  <a class="link" href="/dashboard">Dashboard</a>
+  <a class="link is-secondary" href="/try">Try it</a>
+</nav>
+
+<main id="main" class="wrap" tabindex="-1">
+
+  <div class="headline">
+    <span class="lamp <!--SLOT:LAMP_CLASS-->" aria-hidden="true"></span>
+    <h1><!--SLOT:HEADLINE--></h1>
+    <span class="since"><!--SLOT:UPTIME--></span>
+  </div>
+  <p class="sub"><!--SLOT:SUMMARY--></p>
+
+  <div class="figs"><!--SLOT:FIGURES--></div>
+
+  <section aria-labelledby="h-nodes">
+    <h2 id="h-nodes">Machines</h2>
+    <p class="lede">Every computer currently offering compute to this orchestrator.</p>
+    <!--SLOT:NODES-->
+  </section>
+
+  <section aria-labelledby="h-recent">
+    <h2 id="h-recent">Recent work</h2>
+    <p class="lede">The last things this network built. Failures are listed too — the honest rate is published.</p>
+    <!--SLOT:RECENT-->
+  </section>
+
+  <section aria-labelledby="h-build">
+    <h2 id="h-build">This build</h2>
+    <p class="lede">A fingerprint of the source this process is running, so a deploy that silently did nothing is visible.</p>
+    <!--SLOT:BUILD-->
+  </section>
+
+  <footer>
+    Machine-readable version: <a href="/status.json">/status.json</a> ·
+    <a href="https://github.com/Jwrightsman/distributed-orchestrator" target="_blank" rel="noopener">source</a> ·
+    <a href="/">what this is</a>
+    <br>This page refreshes itself every 15 seconds.
+  </footer>
+
+</main>
+
+<script>
+  // The page is fully rendered by the server — this only keeps it fresh, so a
+  // tab left open on a wall display does not quietly go stale. If it fails,
+  // the page is still correct as of when it loaded.
+  setTimeout(function () { location.reload(); }, 15000);
+</script>
+</body>
+</html>

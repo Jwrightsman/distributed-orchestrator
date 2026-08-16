@@ -228,17 +228,20 @@ def show_history():
             ts = log.get("timestamp", d.name)
             when = _relative_time(ts)
 
-            # Check review file for rating
+            # The run's final rating — the same rule the web surfaces use.
+            # This used to substring-match the whole review file, so a review
+            # whose prose happened to contain "PASS" reported a PASS, and a
+            # run the reviser rescued still reported the reviewer's original
+            # complaint. See orchestrator.ratings_for.
+            from orchestrator import ratings_for
             review_file = d / "review.md"
-            rating = "?"
-            if review_file.exists():
-                review = review_file.read_text(errors="ignore", encoding="utf-8")
-                if "PASS" in review:
-                    rating = "[green]PASS[/green]"
-                elif "NEEDS_WORK" in review:
-                    rating = "[yellow]NEEDS_WORK[/yellow]"
-                elif "FAIL" in review:
-                    rating = "[red]FAIL[/red]"
+            review_text = review_file.read_text(errors="ignore", encoding="utf-8") if review_file.exists() else ""
+            final, _reviewer = ratings_for(log, review_text)
+            rating = {
+                "PASS": "[green]PASS[/green]",
+                "NEEDS_WORK": "[yellow]NEEDS_WORK[/yellow]",
+                "FAIL": "[red]FAIL[/red]",
+            }.get(final, "?")
             table.add_row(when, task, subtask_count, rating)
             count += 1
         except (json.JSONDecodeError, OSError):

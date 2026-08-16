@@ -3,807 +3,57 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Mycelium — Distributed Orchestrator</title>
+<title>Dashboard — Mycelium</title>
+<meta name="description" content="Live view of the Mycelium swarm: connected machines, running pipelines, completed builds and the contribution ledger.">
 <!-- THEME -->
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-
-  /* Design tokens — one restrained accent, neutral structure.
-     A developer audience reads saturated neon as a toy; the credibility comes
-     from typography and spacing, with colour reserved for state that matters. */
-
-
-
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: var(--sans);
-    min-height: 100vh;
-  }
-
-  .header-main { min-width: 0; }
-  .theme-toggle {
-    display: inline-flex; align-items: center; gap: 7px;
-    background: var(--surface); color: var(--text-dim);
-    border: 1px solid var(--border); border-radius: var(--radius-sm);
-    padding: 7px 12px; cursor: pointer;
-    font-family: var(--sans); font-size: 12px; font-weight: 500;
-    transition: background .12s ease, color .12s ease, border-color .12s ease;
-    flex-shrink: 0;
-  }
-  .theme-toggle:hover { background: var(--surface-hover); color: var(--text); border-color: var(--border-strong); }
-  .theme-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-
-  .header {
-    display: flex; align-items: flex-start; justify-content: space-between; gap: 20px;
-    padding: 28px 32px 20px;
-    border-bottom: 1px solid var(--border-subtle);
-  }
-  .header-tag {
-    font-family: var(--mono);
-    font-size:12px;
-    color: var(--accent);
-    letter-spacing: 1.5px;
-    font-weight: 500;
-    margin-bottom: 6px;
-  }
-  .header h1 {
-    font-size: 15px;
-    font-weight: 600;
-    white-space: nowrap;
-    color: var(--text);
-    letter-spacing: -0.5px;
-  }
-  .header h1 span { color: var(--text-muted); font-weight: 400; }
-  .header-sub {
-    color: var(--text-muted);
-    font-size: 13px;
-  }
-
-  .stats-bar {
-    display: flex;
-    gap: 24px;
-    padding: 16px 32px;
-    border-bottom: 1px solid var(--border-subtle);
-    background: var(--border-subtle);
-  }
-  .stat {
-    display: flex;
-    align-items: baseline;
-    gap: 8px;
-  }
-  .stat-status {
-    display: inline-flex; align-items: center; gap: 7px;
-    font-family: var(--mono); font-size: 13px; font-weight: 500;
-    color: var(--text-dim); letter-spacing: -0.1px;
-  }
-  .stat-status i {
-    width: 7px; height: 7px; border-radius: 50%;
-    background: var(--text-muted); flex-shrink: 0;
-  }
-  .stat-status.is-ok    { color: var(--accent-text); }
-  .stat-status.is-ok i  { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-wash); }
-  .stat-status.is-down  { color: var(--danger); }
-  .stat-status.is-down i{ background: var(--danger); box-shadow: 0 0 0 3px var(--danger-wash); }
-
-  .stat-value {
-    font-size: 22px;
-    font-weight: 700;
-    color: var(--text);
-    font-family: var(--mono);
-  }
-  .stat-label {
-    font-size:13px;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 1px;
-  }
-
-  /* ── App shell ───────────────────────────────────────────────────
-     Persistent left nav + top bar, the layout every tool of this kind
-     converges on: navigation stays put, the top bar holds actions that apply
-     everywhere, and the content area does exactly one job at a time. The
-     previous version stacked every job onto one scrolling page, which is why
-     browsing history meant scrolling past a live pitch box. */
-  .app { display: flex; min-height: 100vh; }
-
-  .nav {
-    width: 232px; flex-shrink: 0;
-    display: flex; flex-direction: column;
-    border-right: 1px solid var(--border-subtle);
-    background: var(--bg-elevated);
-    position: sticky; top: 0; height: 100vh;
-    transition: width .16s ease;
-  }
-  .app.nav-collapsed .nav { width: 60px; }
-  .app.nav-collapsed .nav-label { display: none; }
-  .app.nav-collapsed .nav-item { justify-content: center; }
-  .app.nav-collapsed .nav-brand { justify-content: center; }
-
-  .nav-brand {
-    display: flex; align-items: center; gap: 10px;
-    padding: 18px 16px 16px; margin-bottom: 4px;
-  }
-  .nav-mark {
-    width: 18px; height: 18px; border-radius: 5px; flex-shrink: 0;
-    background: var(--accent);
-    box-shadow: 0 0 0 3px var(--accent-wash);
-  }
-  .nav-brand-name { font-size: 14px; font-weight: 650; color: var(--text); letter-spacing: -0.2px; }
-
-  .nav-items { display: flex; flex-direction: column; gap: 2px; padding: 0 8px; }
-  .nav-item {
-    display: flex; align-items: center; gap: 10px;
-    width: 100%; padding: 8px 10px;
-    background: none; border: none; border-radius: var(--radius-sm);
-    color: var(--text-dim); font-family: var(--sans); font-size: 13.5px; font-weight: 500;
-    cursor: pointer; text-align: left;
-    transition: background .1s ease, color .1s ease;
-  }
-  .nav-item svg { width: 16px; height: 16px; flex-shrink: 0; opacity: .85; }
-  .nav-item:hover { background: var(--surface-hover); color: var(--text); }
-  .nav-item.active { background: var(--accent-wash); color: var(--accent-text); font-weight: 600; }
-  .nav-item.active svg { opacity: 1; }
-  .nav-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-  .nav-badge {
-    margin-left: auto; font-family: var(--mono); font-size: 11px;
-    color: var(--text-muted); background: var(--surface); border: 1px solid var(--border);
-    border-radius: 20px; padding: 1px 7px; min-width: 22px; text-align: center;
-  }
-
-  .nav-foot {
-    margin-top: auto; padding: 14px 16px;
-    border-top: 1px solid var(--border-subtle);
-    display: flex; flex-direction: column; gap: 5px;
-  }
-  .nav-foot-sub { font-family: var(--mono); font-size: 11px; color: var(--text-muted); }
-
-  .app-body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-
-  .topbar {
-    display: flex; align-items: center; gap: 14px;
-    padding: 0 20px; height: 56px; flex-shrink: 0;
-    border-bottom: 1px solid var(--border-subtle);
-    background: var(--bg);
-    position: sticky; top: 0; z-index: 20;
-  }
-  .topbar-title { font-size: 15px; font-weight: 620; color: var(--text); letter-spacing: -0.2px; }
-  .topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
-
-  .icon-btn {
-    display: inline-flex; align-items: center; justify-content: center;
-    width: 30px; height: 30px; flex-shrink: 0;
-    background: none; border: 1px solid transparent; border-radius: var(--radius-sm);
-    color: var(--text-dim); cursor: pointer;
-  }
-  .icon-btn svg { width: 17px; height: 17px; }
-  .icon-btn:hover { background: var(--surface-hover); color: var(--text); }
-
-  .btn-primary {
-    background: var(--accent); color: var(--bg);
-    border: none; border-radius: var(--radius-sm);
-    padding: 7px 14px; font-family: var(--sans); font-size: 13px; font-weight: 600;
-    cursor: pointer; white-space: nowrap;
-  }
-  .btn-primary:hover { background: var(--accent-dim); }
-  .btn-primary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-
-  .content { padding: 24px 28px 56px; max-width: 1180px; width: 100%; }
-
-  /* Plain-language key for the live log. */
-  .flow {
-    display: flex; align-items: stretch; gap: 8px; flex-wrap: wrap;
-    padding: 12px 14px; margin-bottom: 20px;
-    border: 1px solid var(--border-subtle); border-radius: var(--radius);
-    background: var(--surface);
-  }
-  .flow-step { display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; min-width: 0; }
-  .flow-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; align-self: center; }
-  .flow-step b { font-size: 12.5px; font-weight: 650; color: var(--text); white-space: nowrap; }
-  .flow-step i { font-size: 12.5px; font-style: normal; color: var(--text-muted); }
-  .flow-arrow { color: var(--text-muted); font-size: 13px; align-self: center; }
-  @media (max-width: 760px) {
-    .flow { flex-direction: column; gap: 7px; }
-    .flow-arrow { display: none; }
-  }
-
-  .view-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
-  .view-head h2 { margin: 0; }
-  .view-sub { font-size: 13px; color: var(--text-muted); }
-
-  @media (max-width: 900px) {
-    .nav { position: fixed; z-index: 40; transform: translateX(-100%); }
-    .app.nav-open .nav { transform: translateX(0); }
-    .content { padding: 18px 16px 48px; }
-    .topbar-actions .credit-chip { display: none; }
-  }
-
-  .main {
-    display: grid;
-    grid-template-columns: 300px 1fr;
-    min-height: calc(100vh - 140px);
-  }
-
-  .sidebar {
-    border-right: 1px solid var(--border-subtle);
-    padding: 20px;
-  }
-  .sidebar h2 {
-    font-size:13px;
-    color: var(--text-dim);
-    letter-spacing: 2px;
-    text-transform: uppercase;
-    margin-bottom: 14px;
-    font-weight: 600;
-  }
-
-  .node-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 12px 14px;
-    margin-bottom: 8px;
-    transition: border-color 0.2s;
-  }
-  .node-card.active { border-color: var(--accent-wash-mid); }
-  /* Camera-visible states: glow-pulse while working, one bright flash on finish */
-  .node-card.working {
-    border-color: var(--accent-glow);
-    animation: cardWorking 1.6s ease-in-out infinite;
-  }
-  @keyframes cardWorking {
-    0%, 100% { box-shadow: 0 0 4px var(--accent-wash-mid); background: var(--accent-wash); }
-    50% { box-shadow: 0 0 22px var(--accent-line); background: var(--accent-wash); }
-  }
-  .node-card.finished {
-    animation: cardFinished 1.2s ease-out;
-  }
-  @keyframes cardFinished {
-    0% { box-shadow: 0 0 34px var(--accent-glow); background: var(--accent-wash-mid); border-color: var(--accent); }
-    100% { box-shadow: none; background: var(--surface); }
-  }
-  .node-name {
-    font-weight: 700;
-    color: var(--text);
-    font-size:14px;
-    margin-bottom: 4px;
-  }
-  .node-meta {
-    font-size:13px;
-    color: var(--text-muted);
-    font-family: var(--mono);
-  }
-  .node-dot {
-    display: inline-block;
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--accent);
-    margin-right: 6px;
-    box-shadow: 0 0 8px var(--accent-border);
-  }
-  .node-dot.busy {
-    background: var(--warn);
-    box-shadow: 0 0 8px var(--highlight-line);
-    animation: dotPulse 1s ease-in-out infinite;
-  }
-  @keyframes dotPulse {
-    0%, 100% { opacity: 1; }
-    50%       { opacity: 0.4; }
-  }
-  .node-tasks {
-    font-size:13px;
-    color: var(--accent);
-    margin-top: 4px;
-  }
-  .node-active-task {
-    font-size:13px;
-    color: var(--warn);
-    margin-top: 3px;
-    font-family: var(--mono);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .node-breaker-badge {
-    display: inline-block;
-    font-family: var(--mono);
-    font-size:11px;
-    font-weight: 700;
-    letter-spacing: 1px;
-    padding: 2px 7px;
-    border-radius: 3px;
-    margin-top: 4px;
-    color: var(--danger);
-    background: var(--danger-wash);
-    border: 1px solid var(--danger-line);
-  }
-  .credit-flash {
-    position: absolute;
-    right: 14px;
-    top: 50%;
-    transform: translateY(-50%);
-    font-family: var(--mono);
-    font-size:14px;
-    font-weight: 700;
-    color: var(--warn);
-    pointer-events: none;
-    animation: creditPop 1.8s ease-out forwards;
-  }
-  @keyframes creditPop {
-    0%   { opacity: 0; transform: translateY(-50%) scale(0.8); }
-    20%  { opacity: 1; transform: translateY(-50%) scale(1.1); }
-    70%  { opacity: 1; transform: translateY(-60%); }
-    100% { opacity: 0; transform: translateY(-80%); }
-  }
-
-  .content {
-    padding: 20px 28px;
-    overflow-y: auto;
-  }
-  .content h2 {
-    font-size:13px;
-    color: var(--text-dim);
-    letter-spacing: 2px;
-    text-transform: uppercase;
-    margin-bottom: 14px;
-    font-weight: 600;
-  }
-
-  .pipeline-card {
-    background: var(--border-subtle);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 18px 20px;
-    margin-bottom: 12px;
-  }
-  .pipeline-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 12px;
-  }
-  .pipeline-task {
-    font-weight: 700;
-    color: var(--text);
-    font-size:15px;
-  }
-  .pipeline-status {
-    font-family: var(--mono);
-    font-size:12px;
-    letter-spacing: 1px;
-    padding: 3px 10px;
-    border-radius: 4px;
-    font-weight: 600;
-  }
-  .status-running {
-    color: var(--warn);
-    background: var(--highlight-wash);
-    border: 1px solid var(--highlight-wash);
-  }
-  .status-complete {
-    color: var(--accent);
-    background: var(--accent-wash);
-    border: 1px solid var(--accent-wash-mid);
-  }
-  .status-pending {
-    color: var(--text-muted);
-    background: var(--surface);
-    border: 1px solid var(--border);
-  }
-
-  .subtask-list { margin-top: 10px; }
-  .subtask {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 8px 0;
-    border-top: 1px solid var(--border-subtle);
-  }
-  .subtask:first-child { border-top: none; }
-  .subtask-id {
-    font-family: var(--mono);
-    font-size:13px;
-    color:var(--text-muted);
-    min-width: 24px;
-  }
-  .subtask-title {
-    font-size:14px;
-    color: var(--text-dim);
-    flex: 1;
-  }
-  .subtask-node {
-    font-family: var(--mono);
-    font-size:12px;
-    color: var(--stage-review);
-  }
-  .subtask-check {
-    color: var(--accent);
-    font-size:15px;
-  }
-  .subtask-spinner {
-    color: var(--warn);
-    font-size:14px;
-    animation: spin 1s linear infinite;
-  }
-  @keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-  }
-
-  .empty-state {
-    text-align: center;
-    padding: 36px 20px;
-    color: var(--text-muted);
-  }
-  .empty-state .icon {
-    width: 28px; height: 28px;
-    margin: 0 auto 12px;
-    color: var(--text-muted);
-    opacity: 0.55;
-  }
-  .empty-state .icon svg { width: 100%; height: 100%; display: block; }
-  .empty-state p { font-size: 14px; line-height: 1.6; }
-
-  .pitch-form {
-    display: flex;
-    gap: 8px;
-    margin-bottom: 24px;
-  }
-  .pitch-input {
-    flex: 1;
-    background: var(--surface-hover);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 10px 14px;
-    color: var(--text);
-    font-size:15px;
-    outline: none;
-    transition: border-color 0.2s;
-  }
-  .pitch-input:focus { border-color: var(--accent-border); }
-  .pitch-input::placeholder { color:var(--text-muted); }
-  .pitch-btn {
-    background: var(--accent-wash);
-    border: 1px solid var(--accent-wash-mid);
-    border-radius: 8px;
-    padding: 10px 20px;
-    color: var(--accent);
-    font-weight: 700;
-    font-size:14px;
-    cursor: pointer;
-    transition: all 0.15s;
-    white-space: nowrap;
-  }
-  .pitch-btn:hover { background: var(--accent-wash-mid); }
-  .pitch-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-
-  .log-entry {
-    font-family: var(--mono);
-    font-size:14px;
-    color: var(--text-dim);
-    padding: 4px 0;
-    border-bottom: 1px solid var(--border-subtle);
-    animation: fadeIn 0.3s ease;
-  }
-  .log-time { color:var(--text-muted); margin-right: 8px; }
-  .log-agent { color: var(--accent); font-weight: 600; }
-  .log-event { color: var(--text-muted); }
-
-  @keyframes fadeIn {
-    from { opacity: 0; transform: translateY(4px); }
-    to   { opacity: 1; transform: translateY(0); }
-  }
-  @keyframes pulseBorder {
-    0%, 100% { border-color: var(--highlight-wash); box-shadow: none; }
-    50%       { border-color: var(--highlight-line); box-shadow: 0 0 16px var(--highlight-wash); }
-  }
-  .pipeline-card { animation: fadeIn 0.25s ease; }
-  .pipeline-card.running { animation: fadeIn 0.25s ease, pulseBorder 2s ease-in-out infinite; }
-
-  /* Stage progress shown while pipeline runs */
-  .stage-bar {
-    display: flex;
-    gap: 6px;
-    margin: 10px 0 4px;
-  }
-  .stage {
-    flex: 1;
-    height: 3px;
-    border-radius: 2px;
-    background: var(--border-subtle);
-    position: relative;
-    overflow: hidden;
-  }
-  .stage.done   { background: var(--accent); }
-  .stage.active { background: var(--highlight-line); }
-  .stage.active::after {
-    content: '';
-    position: absolute;
-    left: -60%;
-    top: 0;
-    width: 60%;
-    height: 100%;
-    background: linear-gradient(90deg, transparent, var(--warn), transparent);
-    animation: shimmer 1.4s ease-in-out infinite;
-  }
-  @keyframes shimmer {
-    from { left: -60%; }
-    to   { left: 160%; }
-  }
-  .stage-labels {
-    display: flex;
-    gap: 6px;
-    margin-bottom: 10px;
-  }
-  .stage-label {
-    flex: 1;
-    font-family: var(--mono);
-    font-size:11px;
-    letter-spacing: 1px;
-    text-transform: uppercase;
-    color:var(--text-muted);
-    text-align: center;
-    transition: color 0.3s;
-  }
-  .stage-label.done   { color: var(--accent); }
-  .stage-label.active { color: var(--warn); }
-
-  /* Code blocks in the output modal */
-  .code-block {
-    margin: 10px 0;
-    border-radius: 6px;
-    overflow: hidden;
-    border: 1px solid var(--border);
-  }
-  .code-block-header {
-    background: var(--border-subtle);
-    padding: 5px 12px;
-    font-family: var(--mono);
-    font-size:12px;
-    color: var(--text-muted);
-    letter-spacing: 1px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-  }
-  .code-block-copy {
-    background: none;
-    border: none;
-    color:var(--text-muted);
-    cursor: pointer;
-    font-size:12px;
-    padding: 0;
-    transition: color 0.2s;
-  }
-  .code-block-copy:hover { color: var(--accent); }
-  .code-block pre {
-    margin: 0;
-    padding: 14px 16px;
-    background: var(--shadow);
-    overflow-x: auto;
-    font-family: var(--mono);
-    font-size: 12.5px;
-    color: var(--accent-text);
-    line-height: 1.55;
-    white-space: pre;
-  }
-  .prose-text {
-    font-size:14px;
-    color: var(--text-dim);
-    line-height: 1.7;
-    white-space: pre-wrap;
-    font-family: var(--sans);
-  }
-
-  /* Tab navigation */
-  .credit-chip {
-    font-family: var(--mono);
-    font-size: 12px;
-    color: var(--text-dim);
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 4px 10px;
-    white-space: nowrap;
-  }
-  .credit-chip #credit-value { color: var(--accent); font-weight: 600; }
-  .credit-sep { color: var(--text-muted); margin: 0 6px; }
-
-  .tab-nav {
-    display: flex;
-    gap: 4px;
-    margin-bottom: 20px;
-    border-bottom: 1px solid var(--border-subtle);
-    padding-bottom: 0;
-  }
-  .tab-btn {
-    background: none;
-    border: none;
-    border-bottom: 2px solid transparent;
-    padding: 8px 16px;
-    font-size:13px;
-    letter-spacing: 2px;
-    text-transform: uppercase;
-    color:var(--text-muted);
-    cursor: pointer;
-    font-weight: 600;
-    margin-bottom: -1px;
-    transition: color 0.2s, border-color 0.2s;
-  }
-  .tab-btn:hover { color: var(--text-dim); }
-  .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
-
-  /* Gallery grid */
-  .gallery-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-    gap: 14px;
-  }
-  .gallery-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 16px 18px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    transition: border-color 0.2s, background 0.2s;
-  }
-  .gallery-card:hover {
-    border-color: var(--accent-wash-mid);
-    background: var(--border-subtle);
-  }
-  .gallery-task {
-    font-size:14px;
-    font-weight: 700;
-    color: var(--text);
-    line-height: 1.4;
-  }
-  .gallery-meta {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-    flex-wrap: wrap;
-  }
-  .gallery-preview {
-    font-family: var(--mono);
-    font-size:13px;
-    color: var(--text-muted);
-    line-height: 1.5;
-    max-height: 120px;
-    overflow: hidden;
-    position: relative;
-  }
-  .gallery-preview::after {
-    content: '';
-    position: absolute;
-    bottom: 0; left: 0; right: 0;
-    height: 24px;
-    background: linear-gradient(transparent, var(--scrim));
-  }
-  .gallery-files {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-  }
-  .gallery-file-chip {
-    background: var(--accent-wash);
-    border: 1px solid var(--accent-wash-mid);
-    border-radius: 4px;
-    padding: 2px 8px;
-    font-family: var(--mono);
-    font-size:12px;
-    color: var(--accent);
-  }
-  .gallery-actions {
-    display: flex;
-    gap: 8px;
-    margin-top: 2px;
-  }
-  .gallery-btn {
-    flex: 1;
-    background: none;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 6px 10px;
-    font-size:13px;
-    color: var(--text-muted);
-    cursor: pointer;
-    transition: all 0.15s;
-    font-weight: 600;
-  }
-  .gallery-btn:hover { border-color: var(--accent-wash-mid); color: var(--accent); }
-  .gallery-btn.fork { border-color: var(--accent-wash-mid); color: var(--accent); }
-  .gallery-btn.fork:hover { background: var(--accent-wash); }
-  .gallery-btn.share { border-color: var(--info-line); color: var(--info); }
-  .gallery-btn.share:hover { background: var(--info-wash); border-color: var(--info-line); }
-
-  /* ── Responsive / Mobile ─────────────────────────────────────── */
-  @media (max-width: 768px) {
-    .header { padding: 18px 16px 14px; }
-    .header h1 { font-size: 20px; }
-    .header-sub { font-size:14px; }
-
-    .stats-bar {
-      flex-wrap: wrap;
-      gap: 12px 20px;
-      padding: 12px 16px;
-    }
-    .stat-value { font-size: 18px; }
-    .stat-label { font-size:12px; }
-
-    /* Stack sidebar below content on narrow screens */
-    .main {
-      grid-template-columns: 1fr;
-      grid-template-rows: auto auto;
-    }
-    .sidebar {
-      border-right: none;
-      border-top: 1px solid var(--border-subtle);
-      padding: 16px;
-      order: 2;          /* appears below content */
-    }
-    .content {
-      padding: 16px;
-      order: 1;
-    }
-
-    /* Prevent iOS from zooming into pitch input */
-    .pitch-input { font-size: 16px; }
-
-    /* Narrower modal */
-    #output-modal > div,
-    #node-modal > div { margin: 16px; padding: 20px; }
-
-    /* Gallery: single column */
-    .gallery-grid { grid-template-columns: 1fr; }
-
-    /* Pipeline cards: wrap status badge below title on very small screens */
-    .pipeline-header { flex-wrap: wrap; gap: 6px; }
-    .pipeline-task { font-size:14px; }
-  }
-
-  @media (max-width: 480px) {
-    .tab-btn { padding: 8px 10px; font-size:12px; letter-spacing: 1px; }
-    .stats-bar { gap: 10px 16px; }
-  }
-</style>
+<!-- DASHBOARD_CSS -->
 </head>
 <body>
 
+<a class="skip-link" href="#main">Skip to content</a>
+
 <div class="app" id="app">
   <aside class="nav" id="nav">
-    <div class="nav-brand">
+    <a class="nav-brand" href="/" title="Mycelium home">
       <span class="nav-mark" aria-hidden="true"></span>
       <span class="nav-label nav-brand-name">Mycelium</span>
-    </div>
-    <nav class="nav-items" aria-label="Primary">
-      <button class="nav-item active" id="tab-overview" onclick="showTab('overview')" title="Overview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 13h5v8H3zM10 3h5v18h-5zM17 9h4v12h-4z"/></svg><span class="nav-label">Overview</span></button>
-      <button class="nav-item" id="tab-runs" onclick="showTab('runs')" title="Runs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8v4l3 2"/><circle cx="12" cy="12" r="9"/></svg><span class="nav-label">Runs</span></button>
-      <button class="nav-item" id="tab-gallery" onclick="showTab('gallery')" title="Gallery"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span class="nav-label">Gallery</span></button>
-      <button class="nav-item" id="tab-nodes" onclick="showTab('nodes')" title="Nodes"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="18" r="2.2"/><path d="M10.5 6.8 6.5 15.8M13.5 6.8l4 9M7.4 18h9.2"/></svg><span class="nav-label">Nodes</span><span class="nav-badge" id="nav-node-count"></span></button>
-      <button class="nav-item" id="tab-projects" onclick="showTab('projects')" title="Projects"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span class="nav-label">Projects</span></button>
-      <button class="nav-item" id="tab-guild" onclick="showTab('guild')" title="Guild"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l2.6 5.6 6.4.8-4.7 4.3 1.2 6.3L12 17l-5.5 3 1.2-6.3L3 9.4l6.4-.8z"/></svg><span class="nav-label">Guild</span></button>
+    </a>
+    <nav class="nav-items" id="nav-items" aria-label="Dashboard sections">
+      <button class="nav-item" id="tab-overview" type="button" data-tab="overview" aria-current="page" title="Overview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 13h5v8H3zM10 3h5v18h-5zM17 9h4v12h-4z"/></svg><span class="nav-label">Overview</span></button>
+      <button class="nav-item" id="tab-runs" type="button" data-tab="runs" title="Runs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8v4l3 2"/><circle cx="12" cy="12" r="9"/></svg><span class="nav-label">Runs</span></button>
+      <button class="nav-item" id="tab-gallery" type="button" data-tab="gallery" title="Gallery"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span class="nav-label">Gallery</span></button>
+      <button class="nav-item" id="tab-nodes" type="button" data-tab="nodes" title="Nodes"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="18" r="2.2"/><path d="M10.5 6.8 6.5 15.8M13.5 6.8l4 9M7.4 18h9.2"/></svg><span class="nav-label">Nodes</span><span class="nav-badge" id="nav-node-count" hidden></span></button>
+      <button class="nav-item" id="tab-projects" type="button" data-tab="projects" title="Projects"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span class="nav-label">Projects</span></button>
+      <button class="nav-item" id="tab-guild" type="button" data-tab="guild" title="Guild"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l2.6 5.6 6.4.8-4.7 4.3 1.2 6.3L12 17l-5.5 3 1.2-6.3L3 9.4l6.4-.8z"/></svg><span class="nav-label">Guild</span></button>
     </nav>
     <div class="nav-foot">
-      <span class="stat-status" id="nav-status"><i></i>checking</span>
+      <span class="stat-status" id="nav-status"><i aria-hidden="true"></i>checking</span>
       <span class="nav-label nav-foot-sub" id="nav-model">—</span>
     </div>
   </aside>
 
   <div class="app-body">
     <header class="topbar">
-      <button class="icon-btn" onclick="toggleNav()" aria-label="Toggle sidebar" title="Toggle sidebar">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+      <button class="icon-btn" id="nav-toggle" type="button" aria-label="Toggle sidebar"
+              aria-controls="nav" aria-expanded="false" title="Toggle sidebar">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
       </button>
       <h1 class="topbar-title" id="view-title">Overview</h1>
+
+      <!-- Global context: where this page sits in the rest of the site. The
+           sidebar handles in-app sections; these two links are the way out. -->
+      <nav class="global-nav" aria-label="Site">
+        <a class="global-link" href="/">Home</a>
+        <a class="global-link is-secondary" href="/try">Try it</a>
+        <a class="global-link is-secondary" href="/status">Status</a>
+      </nav>
+
       <div class="topbar-actions">
         <span class="credit-chip" id="credit-chip" title="Credits earned by this orchestrator for pitches, local builds and reviews">
-          <span id="credit-host">—</span><span class="credit-sep">·</span><span id="credit-value">0</span> credits
+          <span id="credit-host">—</span><span class="credit-sep" aria-hidden="true">·</span><span id="credit-value">0</span> credits
         </span>
-        <button class="btn-primary" onclick="focusPitch()">Pitch a task</button>
-        <button class="theme-toggle" id="theme-toggle" onclick="toggleTheme()"
+        <button class="btn-primary" id="focus-pitch" type="button">Pitch a task</button>
+        <button class="theme-toggle" id="theme-toggle" type="button"
                 title="Switch between light and dark" aria-label="Switch colour theme">
           <span id="theme-toggle-icon" aria-hidden="true"></span>
           <span id="theme-toggle-label"></span>
@@ -811,1171 +61,180 @@
       </div>
     </header>
 
-    <main class="content">
-      <div id="view-overview">
-<div class="stats-bar">
-  <div class="stat">
-    <span class="stat-value" id="stat-nodes">0</span>
-    <span class="stat-label">Nodes Online</span>
-  </div>
-  <div class="stat">
-    <span class="stat-value" id="stat-tasks">0</span>
-    <span class="stat-label">Tasks Pending</span>
-  </div>
-  <div class="stat">
-    <span class="stat-value" id="stat-models">-</span>
-    <span class="stat-label">Models Available</span>
-  </div>
-  <div class="stat">
-    <span class="stat-status" id="stat-status"><i></i>checking</span>
-    <span class="stat-label">Ollama</span>
-  </div>
-  <div class="stat">
-    <span class="stat-value" id="stat-done">-</span>
-    <span class="stat-label">Tasks Done</span>
-  </div>
-  <div class="stat">
-    <span class="stat-value" id="stat-latency">-</span>
-    <span class="stat-label">Avg Latency</span>
-  </div>
-</div>
+    <main class="content" id="main" tabindex="-1">
 
+      <!-- ── OVERVIEW ── -->
+      <section id="view-overview" aria-labelledby="tab-overview">
+        <h2 class="sr-only">Overview</h2>
 
-      <div class="view-head" style="margin-top:4px;"><h2>Pitch a task</h2><span class="view-sub">Describe what you want built; the planner splits it up</span></div>
-
-      <!-- Hidden project context — set when "Continue" is clicked -->
-      <div id="project-context" style="display:none;margin-bottom:10px;padding:8px 12px;background:var(--accent-wash);border:1px solid var(--accent-wash-mid);border-radius:6px;justify-content:space-between;align-items:center;">
-        <span style="font-size:14px;color:var(--accent);">Continuing project: <strong id="project-context-name"></strong></span>
-        <button onclick="clearProjectContext()" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:13px;">✕ clear</button>
-      </div>
-      <input type="hidden" id="active-project-id" value="">
-      <div class="pitch-form">
-        <input type="text" class="pitch-input" id="pitch-input"
-               placeholder="Describe what you want built...">
-        <button class="pitch-btn" id="pitch-btn" onclick="pitchTask()">Pitch</button>
-      </div>
-      <!-- Quick-start templates -->
-      <div id="task-templates" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:20px;"></div>
-
-      <!-- The live log is the most convincing thing on this page and the least
-           self-explanatory: PLANNER / BUILDER / REVIEWER mean nothing to a
-           visitor. One line of plain language, above the log, is enough to make
-           the rest readable without turning the page into a tutorial. -->
-      <div class="flow" aria-label="What happens to a task">
-        <div class="flow-step"><span class="flow-dot" style="background:var(--stage-pitch)"></span>
-          <b>You pitch</b><i>a task in plain English</i></div>
-        <span class="flow-arrow" aria-hidden="true">→</span>
-        <div class="flow-step"><span class="flow-dot" style="background:var(--stage-plan)"></span>
-          <b>Planner</b><i>splits it into smaller jobs</i></div>
-        <span class="flow-arrow" aria-hidden="true">→</span>
-        <div class="flow-step"><span class="flow-dot" style="background:var(--stage-build)"></span>
-          <b>Builders</b><i>write the pieces, on separate machines</i></div>
-        <span class="flow-arrow" aria-hidden="true">→</span>
-        <div class="flow-step"><span class="flow-dot" style="background:var(--stage-review)"></span>
-          <b>Reviewer</b><i>assembles and grades the result</i></div>
-      </div>
-
-      <h2>Live Activity</h2>
-      <div id="event-log" style="margin-bottom:24px;max-height:200px;overflow-y:auto;"></div>
-
-      <h2>Pipeline Runs</h2>
-      <div id="pipeline-log">
-        <div class="empty-state">
-          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l2.5-6 4 12 2.5-6h5"/></svg></div>
-          <p>No active pipelines.<br>Pitch a task above to see agents work.</p>
+        <div class="stats-bar">
+          <div class="stat">
+            <span class="stat-value" id="stat-nodes">0</span>
+            <span class="stat-label">Nodes online</span>
+          </div>
+          <div class="stat">
+            <span class="stat-value" id="stat-tasks">0</span>
+            <span class="stat-label">Tasks pending</span>
+          </div>
+          <div class="stat">
+            <span class="stat-value" id="stat-models">-</span>
+            <span class="stat-label">Models available</span>
+          </div>
+          <div class="stat">
+            <span class="stat-status" id="stat-status"><i aria-hidden="true"></i>checking</span>
+            <span class="stat-label">Ollama</span>
+          </div>
+          <div class="stat">
+            <span class="stat-value" id="stat-done">-</span>
+            <span class="stat-label">Tasks done</span>
+          </div>
+          <div class="stat">
+            <span class="stat-value" id="stat-latency">-</span>
+            <span class="stat-label">Avg latency</span>
+          </div>
         </div>
-      </div>
 
-    </div>
+        <div class="view-head"><h2>Pitch a task</h2><span class="view-sub">Describe what you want built; the planner splits it up</span></div>
 
-      <div id="view-runs" style="display:none;">
+        <!-- Project context — shown when "Continue" is clicked on a project -->
+        <div id="project-context" class="project-context" hidden>
+          <span class="project-context-label">Continuing project: <strong id="project-context-name"></strong></span>
+          <button type="button" class="link-btn" id="clear-project">✕ clear</button>
+        </div>
+        <input type="hidden" id="active-project-id" value="">
+
+        <div class="pitch-form">
+          <label class="sr-only" for="pitch-input">Describe what you want built</label>
+          <input type="text" class="pitch-input" id="pitch-input"
+                 placeholder="Describe what you want built...">
+          <button class="pitch-btn" id="pitch-btn" type="button">Pitch</button>
+        </div>
+
+        <div id="task-templates" class="template-row"></div>
+
+        <!-- The live log is the most convincing thing on this page and the least
+             self-explanatory: PLANNER / BUILDER / REVIEWER mean nothing to a
+             visitor. One line of plain language, above the log, is enough to make
+             the rest readable without turning the page into a tutorial. -->
+        <div class="flow" aria-label="What happens to a task">
+          <div class="flow-step"><span class="flow-dot is-pitch" aria-hidden="true"></span>
+            <b>You pitch</b><i>a task in plain English</i></div>
+          <span class="flow-arrow" aria-hidden="true">→</span>
+          <div class="flow-step"><span class="flow-dot is-plan" aria-hidden="true"></span>
+            <b>Planner</b><i>splits it into smaller jobs</i></div>
+          <span class="flow-arrow" aria-hidden="true">→</span>
+          <div class="flow-step"><span class="flow-dot is-build" aria-hidden="true"></span>
+            <b>Builders</b><i>write the pieces, on separate machines</i></div>
+          <span class="flow-arrow" aria-hidden="true">→</span>
+          <div class="flow-step"><span class="flow-dot is-review" aria-hidden="true"></span>
+            <b>Reviewer</b><i>assembles and grades the result</i></div>
+        </div>
+
+        <h2 id="activity-heading">Live activity</h2>
+        <div id="event-log" class="event-log" role="log" aria-live="polite"
+             aria-relevant="additions" aria-labelledby="activity-heading"></div>
+
+        <h2 id="pipeline-heading">Pipeline runs</h2>
+        <div id="pipeline-log" aria-live="polite" aria-labelledby="pipeline-heading">
+          <div class="empty-state">
+            <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l2.5-6 4 12 2.5-6h5"/></svg></div>
+            <p>No active pipelines.<br>Pitch a task above to see agents work.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── RUNS ── -->
+      <section id="view-runs" aria-labelledby="tab-runs" hidden>
         <div class="view-head"><h2>Runs</h2><span class="view-sub">Every pipeline this orchestrator has completed</span></div>
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:24px;margin-bottom:8px;">
-        <h2 style="margin:0;">History</h2>
-        <input id="history-search" type="text" placeholder="search..." oninput="onHistorySearch()"
-          style="background:var(--border-subtle);border:1px solid var(--border);border-radius:5px;padding:3px 8px;font-size:13px;color:var(--text-dim);outline:none;width:100px;">
-      </div>
-      <div id="history-list">
-        <div class="empty-state"><p>No past runs yet.</p></div>
-      </div>
-      </div>
-
-      <div id="view-nodes" style="display:none;">
-        <div class="view-head"><h2>Network Nodes</h2><span class="view-sub">Machines contributing compute right now</span></div>
-    <h2>Network Nodes</h2>
-    <div id="nodes-list">
-      <div class="empty-state">
-        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="18" r="2.2"/><path d="M10.5 6.8 6.5 15.8M13.5 6.8l4 9M7.4 18h9.2"/></svg></div>
-        <p>No nodes connected yet.<br>Run <code style="color:var(--accent)">python node.py --server http://YOUR_IP:8000</code> on another machine to join.</p>
-      </div>
-    </div>
-
-      </div>
-
-      <div id="view-projects" style="display:none;">
-        <div class="view-head"><h2>Projects</h2><span class="view-sub">Work that remembers what it already built</span></div>
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:24px;margin-bottom:14px;">
-      <h2 style="margin:0;">Projects</h2>
-      <button onclick="promptNewProject()" style="background:var(--accent-wash);border:1px solid var(--accent-wash-mid);border-radius:5px;padding:3px 10px;font-size:12px;font-weight:700;color:var(--accent);cursor:pointer;">+ New</button>
-    </div>
-    <div id="projects-list">
-      <div class="empty-state"><p>No projects yet.</p></div>
-    </div>
-      </div>
-
-
-    <!-- ── GALLERY TAB ── -->
-    <div id="view-gallery" style="display:none;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-        <h2 style="margin-bottom:0;">Swarm Gallery</h2>
-        <span style="font-size:13px;color:var(--text-muted);">Tasks completed by the network</span>
-      </div>
-      <div id="gallery-grid" class="gallery-grid">
-        <div class="empty-state" style="grid-column:1/-1;"><p>No completed tasks yet.</p></div>
-      </div>
-    </div>
-
-    <!-- ── GUILD TAB ── -->
-    <div id="view-guild" style="display:none;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-        <h2 style="margin-bottom:0;">Guild Standings</h2>
-        <span style="font-size:13px;color:var(--text-muted);">Credits earned for compute, pitches and reviews</span>
-      </div>
-      <div id="standings-list">
-        <div class="empty-state"><p>No contributions yet.</p></div>
-      </div>
-    </div>
-
-    <!-- Node detail modal -->
-    <div id="node-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:var(--overlay);z-index:100;overflow-y:auto;" onclick="if(event.target===this)closeNodeModal()">
-      <div style="max-width:560px;margin:60px auto;padding:28px;background:var(--surface);border:1px solid var(--border);border-radius:12px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
-          <h2 id="node-modal-title" style="font-size:16px;font-weight:700;color:var(--text);margin:0;font-family:Consolas,monospace;"></h2>
-          <button onclick="closeNodeModal()" style="background:none;border:1px solid var(--border);border-radius:6px;padding:6px 14px;color:var(--text-dim);cursor:pointer;font-size:14px;">Close</button>
+        <div class="section-head">
+          <h2 id="history-heading">History</h2>
+          <label class="sr-only" for="history-search">Search past runs</label>
+          <input id="history-search" class="search-input" type="search" placeholder="search…">
         </div>
-        <div id="node-modal-body" style="font-size:14px;color:var(--text-dim);"></div>
-      </div>
-    </div>
-
-    <!-- Output viewer modal -->
-    <div id="output-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:var(--overlay);z-index:100;overflow-y:auto;">
-      <div style="max-width:800px;margin:40px auto;padding:28px;background:var(--surface);border:1px solid var(--border);border-radius:12px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
-          <h2 id="modal-title" style="font-size:18px;font-weight:700;color:var(--text);margin:0;"></h2>
-          <div style="display:flex;gap:8px;align-items:center;">
-            <button id="modal-download-btn" onclick="downloadOutput()" style="background:var(--accent-wash);border:1px solid var(--accent-wash-mid);border-radius:6px;padding:6px 14px;color:var(--accent);cursor:pointer;font-size:13px;font-weight:600;">Download</button>
-            <button id="modal-share-btn" onclick="copyShareLink()" style="background:none;border:1px solid var(--border);border-radius:6px;padding:6px 14px;color:var(--text-dim);cursor:pointer;font-size:13px;font-weight:600;">Copy link</button>
-            <button onclick="closeModal()" style="background:none;border:1px solid var(--border);border-radius:6px;padding:6px 14px;color:var(--text-dim);cursor:pointer;font-size:14px;">Close</button>
+        <div id="history-list" aria-labelledby="history-heading">
+          <div class="empty-state">
+            <p>No past runs yet.<br>A completed pitch lands here with a permanent link you can share.</p>
           </div>
         </div>
-        <div id="modal-plan" style="margin-bottom:20px;"></div>
-        <div id="modal-files" style="margin-bottom:16px;display:none;"></div>
-        <div id="modal-review" style="max-height:520px;overflow-y:auto;"></div>
-      </div>
-    </div>
+      </section>
+
+      <!-- ── GALLERY ── -->
+      <section id="view-gallery" aria-labelledby="tab-gallery" hidden>
+        <div class="view-head"><h2>Swarm gallery</h2><span class="view-sub">Tasks completed by the network — every card has its own page</span></div>
+        <div id="gallery-grid" class="gallery-grid">
+          <div class="empty-state is-grid"><p>No completed tasks yet.</p></div>
+        </div>
+      </section>
+
+      <!-- ── NODES ── -->
+      <section id="view-nodes" aria-labelledby="tab-nodes" hidden>
+        <div class="view-head"><h2>Network nodes</h2><span class="view-sub">Machines contributing compute right now</span></div>
+        <div id="nodes-list">
+          <div class="empty-state">
+            <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="18" r="2.2"/><path d="M10.5 6.8 6.5 15.8M13.5 6.8l4 9M7.4 18h9.2"/></svg></div>
+            <p>No nodes connected yet.<br>Run <code class="code-inline">python join.py http://YOUR_IP:8000</code> on another machine to join.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── PROJECTS ── -->
+      <section id="view-projects" aria-labelledby="tab-projects" hidden>
+        <div class="view-head"><h2>Projects</h2><span class="view-sub">Work that remembers what it already built</span></div>
+        <div class="section-head">
+          <h2 id="projects-heading">All projects</h2>
+          <button type="button" class="btn-accent is-sm" id="new-project">+ New</button>
+        </div>
+        <div id="projects-list" aria-labelledby="projects-heading">
+          <div class="empty-state">
+            <p>No projects yet.<br>A project carries memory from one pitch to the next.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── GUILD ── -->
+      <section id="view-guild" aria-labelledby="tab-guild" hidden>
+        <div class="view-head"><h2>Guild standings</h2><span class="view-sub">Credits earned for compute, pitches and reviews</span></div>
+        <div id="standings-list">
+          <div class="empty-state"><p>No contributions yet.</p></div>
+        </div>
+      </section>
+
+    </main>
   </div>
 </div>
 
-<script>
-function applyTheme(theme) {
-  document.documentElement.setAttribute('data-theme', theme);
-  const icon = document.getElementById('theme-toggle-icon');
-  const label = document.getElementById('theme-toggle-label');
-  // Label the destination, not the current state — "Light" on a dark page
-  // reads as "click for light", which is what people expect from a toggle.
-  if (icon) icon.textContent = theme === 'dark' ? '☀' : '☾';
-  if (label) label.textContent = theme === 'dark' ? 'Light' : 'Dark';
-}
-function toggleTheme() {
-  const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
-  try { localStorage.setItem('mycelium-theme', next); } catch (e) { /* private mode */ }
-  applyTheme(next);
-}
-applyTheme(document.documentElement.getAttribute('data-theme') || 'dark');
-
-// Follow the OS only while the user has not chosen for themselves.
-try {
-  window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', (e) => {
-    try { if (localStorage.getItem('mycelium-theme')) return; } catch (_) {}
-    applyTheme(e.matches ? 'light' : 'dark');
-  });
-} catch (e) { /* older browsers */ }
-
-// Poll health + nodes + metrics every 3 seconds
-async function refresh() {
-  try {
-    const [health, nodes, met] = await Promise.all([
-      fetch('/health').then(r => r.json()),
-      fetch('/nodes').then(r => r.json()),
-      fetch('/metrics').then(r => r.json()).catch(() => null),
-    ]);
-
-    document.getElementById('stat-nodes').textContent = nodes.count;
-    document.getElementById('stat-tasks').textContent = health.tasks_pending;
-    document.getElementById('stat-models').textContent = health.models.length;
-    const ok = health.ollama === 'connected';
-    // Status lives in the shell as well as on Overview: whichever view you are
-    // on, "is the swarm alive" has to be answerable without navigating.
-    [['stat-status', health.ollama], ['nav-status', ok ? 'connected' : health.ollama]]
-      .forEach(([id, text]) => {
-        const el = document.getElementById(id);
-        if (!el) return;
-        el.className = 'stat-status ' + (ok ? 'is-ok' : 'is-down');
-        el.innerHTML = '<i></i>' + text;
-      });
-    const navModel = document.getElementById('nav-model');
-    if (navModel) navModel.textContent = (health.models && health.models[0]) || 'no model';
-    const navCount = document.getElementById('nav-node-count');
-    if (navCount) navCount.textContent = (nodes.nodes || []).length;
-    if (met) {
-      const latEl = document.getElementById('stat-latency');
-      if (latEl) latEl.textContent = met.avg_task_latency_seconds != null ? met.avg_task_latency_seconds + 's' : '-';
-      const doneEl = document.getElementById('stat-done');
-      if (doneEl) doneEl.textContent = met.tasks_completed_total;
-      // Name whose balance this is — anyone can open this dashboard
-      const hostEl = document.getElementById('credit-host');
-      if (hostEl && met.orchestrator_id) hostEl.textContent = met.orchestrator_id;
-      const credEl = document.getElementById('credit-value');
-      if (credEl) credEl.textContent = met.orchestrator_credits ?? 0;
-    }
-
-    const nodesList = document.getElementById('nodes-list');
-    if (nodes.count === 0) {
-      nodesList.innerHTML = `
-        <div class="empty-state">
-          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="18" r="2.2"/><path d="M10.5 6.8 6.5 15.8M13.5 6.8l4 9M7.4 18h9.2"/></svg></div>
-          <p>No nodes connected yet.<br>Run <code style="color:var(--accent)">python join.py http://YOUR_IP:8000</code> on another machine to join.</p>
-        </div>`;
-    } else {
-      nodesList.innerHTML = nodes.nodes.map(n => {
-        const busy = n.current_task;
-        const dotClass = busy ? 'node-dot busy' : 'node-dot';
-        const activeHtml = busy
-          ? `<div class="node-active-task">&#9654; ${escHtml(n.current_task)}</div>`
-          : '';
-        const hwParts = [];
-        if (n.cpu_count) hwParts.push(`${n.cpu_count} CPU`);
-        if (n.ram_gb)    hwParts.push(`${n.ram_gb}GB RAM`);
-        if (n.gpu)       hwParts.push(escHtml(n.gpu));
-        const hwHtml = hwParts.length
-          ? `<div class="node-meta" style="color:var(--text-muted);">${hwParts.join(' &middot; ')}</div>`
-          : '';
-        // Filter auto-added model: tags from the visible chips — model is shown explicitly
-        const visibleCaps = (n.capabilities || []).filter(c => !c.startsWith('model:'));
-        const capsHtml = visibleCaps.length
-          ? visibleCaps.map(c => `<span style="background:var(--accent-wash);border:1px solid var(--accent-wash-mid);border-radius:3px;padding:1px 5px;font-size:11px;color:var(--accent);margin-right:3px;">${escHtml(c)}</span>`).join('')
-          : '';
-        const capsRow = capsHtml ? `<div class="node-meta" style="margin-top:3px;">${capsHtml}</div>` : '';
-        // Verification record. Hidden entirely until this node has actually been
-        // spot-checked, so a server with verify_rate=0 looks exactly as before.
-        const samples = n.verified_samples || 0;
-        const weight = (n.routing_weight != null) ? n.routing_weight : 1;
-        const repHtml = samples > 0
-          ? `<div class="node-meta" style="margin-top:3px;" title="Sampled tasks are run on two nodes and the answers compared. Routing weight decides who is offered work first; it never excludes a node.">
-               <span style="color:${weight >= 0.9 ? 'var(--accent)' : 'var(--warn)'};">&#9670; ${weight.toFixed(2)} routing weight</span>
-               <span style="color:var(--text-muted);"> &middot; ${Math.round((n.agreement_score != null ? n.agreement_score : 1) * 100)}% agreement over ${samples} check${samples === 1 ? '' : 's'}${n.trusted_for_routing ? '' : ' (still sampling)'}</span>
-             </div>`
-          : '';
-        const nodeData = encodeURIComponent(JSON.stringify(n));
-        return `
-          <div class="node-card active" id="nodecard-${escHtml(n.node_id)}" style="position:relative;cursor:pointer;" onclick="openNodeModal(decodeURIComponent('${nodeData}'))">
-            <div class="node-name"><span class="${dotClass}"></span>${escHtml(n.node_id)}</div>
-            <div class="node-meta">${escHtml(n.platform)} / ${escHtml(n.machine)}</div>
-            <div class="node-meta">${escHtml(n.model)}</div>
-            ${hwHtml}${capsRow}
-            <div class="node-tasks">${n.tasks_completed} tasks &middot; ${n.credits_earned || 0} credits</div>
-            ${repHtml}
-            ${activeHtml}
-          </div>`;
-      }).join('');
-    }
-  } catch(e) {
-    ['stat-status', 'nav-status'].forEach(id => {
-      const el = document.getElementById(id);
-      if (el) { el.className = 'stat-status is-down'; el.innerHTML = '<i></i>offline'; }
-    });
-  }
-}
-
-// Stage bar helpers
-function stageBarHtml(planDone, buildDone, reviewDone, buildLabel) {
-  const planClass   = planDone   ? 'done' : (!planDone && !buildDone && !reviewDone ? 'active' : '');
-  const buildClass  = planDone && !buildDone ? 'active' : (buildDone ? 'done' : '');
-  const reviewClass = buildDone && !reviewDone ? 'active' : (reviewDone ? 'done' : '');
-  const planLbl   = planClass   === 'active' ? 'active' : (planDone   ? 'done' : '');
-  const buildLbl  = buildClass  === 'active' ? 'active' : (buildDone  ? 'done' : '');
-  const reviewLbl = reviewClass === 'active' ? 'active' : (reviewDone ? 'done' : '');
-  return `
-    <div class="stage-bar">
-      <div class="stage ${planClass}"></div>
-      <div class="stage ${buildClass}"></div>
-      <div class="stage ${reviewClass}"></div>
+<!-- Dialogs live outside the app shell: they cover it, they are not part of
+     it. Nested inside the main landmark they were content of the current view. -->
+<div id="node-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="node-modal-title" hidden>
+  <div class="modal-panel is-narrow">
+    <div class="modal-head">
+      <h2 id="node-modal-title" class="modal-title is-mono"></h2>
+      <div class="modal-actions">
+        <a class="btn-quiet" id="node-modal-permalink" href="#">Open page ↗</a>
+        <button type="button" class="btn-quiet" data-close-modal="node-modal">Close</button>
+      </div>
     </div>
-    <div class="stage-labels">
-      <div class="stage-label ${planLbl}">Plan</div>
-      <div class="stage-label ${buildLbl}">${buildLabel || 'Build'}</div>
-      <div class="stage-label ${reviewLbl}">Review</div>
-    </div>`;
-}
+    <div id="node-modal-body" class="modal-body"></div>
+  </div>
+</div>
 
-async function pitchTask() {
-  const input = document.getElementById('pitch-input');
-  const btn = document.getElementById('pitch-btn');
-  const task = input.value.trim();
-  if (!task) return;
-  const activeProjectId = document.getElementById('active-project-id').value || null;
-
-  btn.disabled = true;
-  btn.textContent = 'Pitching...';
-
-  const pipelineLog = document.getElementById('pipeline-log');
-  const pipelineId = Date.now();
-  const startCursor = eventCursor;
-
-  const _cardStart = Date.now();
-
-  // Show running card with stage bar in PLAN phase
-  const runningCard = `
-    <div class="pipeline-card running" id="pipeline-${pipelineId}">
-      <div class="pipeline-header">
-        <div class="pipeline-task">${escHtml(task)}</div>
-        <div style="display:flex;align-items:center;gap:10px;flex-shrink:0;">
-          <span id="pelapsed-${pipelineId}" style="font-family:Consolas,monospace;font-size:12px;color:var(--text-muted);">0s</span>
-          <div class="pipeline-status status-running" id="pstatus-${pipelineId}">PLANNING</div>
-        </div>
+<div id="output-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" hidden>
+  <div class="modal-panel">
+    <div class="modal-head">
+      <h2 id="modal-title" class="modal-title"></h2>
+      <div class="modal-actions">
+        <a class="btn-accent" id="modal-permalink" href="#">Open run page ↗</a>
+        <button type="button" class="btn-quiet" id="modal-download-btn">Download</button>
+        <button type="button" class="btn-quiet" id="modal-share-btn">Copy link</button>
+        <button type="button" class="btn-quiet" data-close-modal="output-modal">Close</button>
       </div>
-      <div id="pstages-${pipelineId}">${stageBarHtml(false, false, false)}</div>
-      <pre id="token-stream-${pipelineId}"
-           style="margin-top:8px;padding:8px 10px;background:var(--accent-wash);
-                  border:1px solid var(--accent-wash);border-radius:4px;
-                  font-size:13px;color:var(--text-dim);max-height:120px;overflow-y:auto;
-                  white-space:pre-wrap;word-break:break-word;display:none;"></pre>
-    </div>`;
-
-  // Tick the elapsed time every second
-  const elapsedTicker = setInterval(() => {
-    const el = document.getElementById(`pelapsed-${pipelineId}`);
-    if (!el) { clearInterval(elapsedTicker); return; }
-    const secs = Math.round((Date.now() - _cardStart) / 1000);
-    el.textContent = secs >= 60 ? `${Math.floor(secs/60)}m ${secs%60}s` : `${secs}s`;
-  }, 1000);
-
-  // Remove empty state if present
-  const empty = pipelineLog.querySelector('.empty-state');
-  if (empty) pipelineLog.innerHTML = '';
-  pipelineLog.insertAdjacentHTML('afterbegin', runningCard);
-
-  // Watch events to update the stage bar while the request is in flight.
-  // Uses its own cursor so it doesn't conflict with the WebSocket log.
-  let planDone = false, buildDone = false, buildCount = 0, totalSubtasks = 0;
-  let stageCursor = eventCursor;
-  const stageWatcher = setInterval(async () => {
-    try {
-      const r = await fetch(`/events?since=${stageCursor}`);
-      const d = await r.json();
-      d.events.forEach(ev => {
-        if (ev.type === 'plan') {
-          planDone = true;
-          totalSubtasks = ev.subtasks ? ev.subtasks.length : 0;
-        }
-        if (ev.type === 'build') buildCount++;
-        if (ev.type === 'review_start') buildDone = true;
-        if (ev.id && ev.id > stageCursor) stageCursor = ev.id;
-      });
-
-      const statusEl = document.getElementById(`pstatus-${pipelineId}`);
-      const stagesEl = document.getElementById(`pstages-${pipelineId}`);
-      if (!statusEl) return;
-
-      const buildLabel = totalSubtasks > 0
-        ? `Build ${Math.min(buildCount, totalSubtasks)}/${totalSubtasks}`
-        : 'Build';
-
-      if (!planDone) {
-        statusEl.textContent = 'PLANNING';
-        stagesEl.innerHTML = stageBarHtml(false, false, false, buildLabel);
-      } else if (!buildDone) {
-        statusEl.textContent = buildLabel.toUpperCase();
-        stagesEl.innerHTML = stageBarHtml(true, false, false, buildLabel);
-      } else {
-        statusEl.textContent = 'REVIEWING';
-        stagesEl.innerHTML = stageBarHtml(true, true, false, buildLabel);
-      }
-    } catch(e) {}
-  }, 1000);
-
-  try {
-    // Always use async endpoint — returns job_id immediately, live updates via WebSocket.
-    // /pitch/async falls back to /pitch/distributed internally when nodes are connected.
-    const endpoint = '/pitch/async';
-    const body = {task};
-    if (activeProjectId) body.project_id = activeProjectId;
-    const resp = await fetch(endpoint, {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(body),
-    });
-    const data = await resp.json();
-
-    // Re-key the token stream element so _appendToken can find it by server job_id
-    if (data.job_id) {
-      const tsEl = document.getElementById(`token-stream-${pipelineId}`);
-      if (tsEl) tsEl.id = `token-stream-${data.job_id}`;
-    }
-
-    // /pitch/async always returns {job_id, status:"queued"} — poll until done
-    if (!data.job_id) throw new Error('Unexpected response: ' + JSON.stringify(data));
-    btn.textContent = 'Running...';
-    await _pollJobCompletion(data.job_id, pipelineId, task, stageWatcher, elapsedTicker);
-  } catch(e) {
-    clearInterval(stageWatcher);
-    clearInterval(elapsedTicker);
-    const card = document.getElementById(`pipeline-${pipelineId}`);
-    if (card) {
-      card.classList.remove('running');
-      const s = document.getElementById(`pstatus-${pipelineId}`);
-      if (s) { s.className = 'pipeline-status status-pending'; s.textContent = 'FAILED'; }
-    }
-  }
-
-  btn.disabled = false;
-  btn.textContent = 'Pitch';
-  input.value = '';
-}
-
-async function _pollJobCompletion(jobId, pipelineId, task, stageWatcher, elapsedTicker) {
-  // Poll /jobs/{id} until done; WebSocket keeps the stage bar + event log live
-  while (true) {
-    await new Promise(r => setTimeout(r, 3000));
-    try {
-      const r = await fetch(`/jobs/${jobId}`);
-      const job = await r.json();
-      if (job.status === 'complete' || job.status === 'failed') {
-        clearInterval(stageWatcher);
-        clearInterval(elapsedTicker);
-        _showCompletedCard(pipelineId, task, {
-          plan: job.plan || [],
-          project_dir: job.project_dir || '',
-          rating: job.rating,
-          status: job.status,
-          error: job.error || null,
-        });
-        loadHistory();
-        loadProjects();
-        return;
-      }
-    } catch(_) {}
-  }
-}
-
-function _showCompletedCard(pipelineId, task, result) {
-  const card = document.getElementById(`pipeline-${pipelineId}`);
-  if (!card) return;
-  card.classList.remove('running');
-
-  const failed = result.status === 'failed';
-  const statusClass = failed ? 'status-pending' : 'status-complete';
-  const statusText = failed ? 'FAILED' : (result.mode === 'distributed' ? 'DISTRIBUTED' : 'COMPLETE');
-
-  const ratingColors = {PASS: 'var(--accent)', NEEDS_WORK: 'var(--warn)', FAIL: 'var(--danger)'};
-  const ratingBadge = result.rating && !failed
-    ? ` <span style="font-family:Consolas,monospace;font-size:12px;font-weight:700;color:${ratingColors[result.rating]||'var(--text-dim)'};background:${ratingColors[result.rating]||'var(--text-dim)'}18;border:1px solid ${ratingColors[result.rating]||'var(--text-dim)'}30;border-radius:4px;padding:2px 7px;">${escHtml(result.rating)}</span>`
-    : '';
-
-  let subtasksHtml = '<div class="subtask-list">';
-  (result.plan || []).forEach(st => {
-    subtasksHtml += `
-      <div class="subtask">
-        <span class="subtask-id">${escHtml(String(st.id))}</span>
-        <span class="subtask-title">${escHtml(st.title)}</span>
-        <span class="subtask-check" style="color:var(--accent);">&#10003;</span>
-      </div>`;
-  });
-  subtasksHtml += '</div>';
-
-  card.innerHTML = `
-    <div class="pipeline-header">
-      <div class="pipeline-task">${escHtml(task)}</div>
-      <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">${ratingBadge}<div class="pipeline-status ${statusClass}">${statusText}</div></div>
     </div>
-    ${stageBarHtml(true, true, true)}
-    ${subtasksHtml}
-    ${result.project_dir ? `<div class="log-entry" style="margin-top:8px;cursor:pointer;" onclick="viewRun('${escHtml(result.project_dir.split(/[\\/]/).pop())}')">
-      <span class="log-time">${new Date().toLocaleTimeString()}</span>
-      <span class="log-event" style="color:var(--accent);">View output &#8594;</span>
-    </div>` : ''}
-    ${result.error ? `<div style="margin-top:8px;padding:8px 10px;background:var(--danger-wash);border:1px solid var(--danger-line);border-radius:4px;font-family:Consolas,monospace;font-size:13px;color:var(--danger);">${escHtml(result.error)}</div>` : ''}
-  `;
-}
-
-function escHtml(str) {
-  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-
-function relativeTime(ts) {
-  // ts format: 20240101_120000
-  try {
-    const s = ts.replace('_', 'T') + 'Z';
-    const d = new Date(
-      s.slice(0,4)+'-'+s.slice(4,6)+'-'+s.slice(6,8)+'T'+
-      s.slice(9,11)+':'+s.slice(11,13)+':'+s.slice(13,15)+'Z'
-    );
-    const delta = Math.floor((Date.now() - d.getTime()) / 1000);
-    if (delta < 60)    return 'just now';
-    if (delta < 3600)  return `${Math.floor(delta/60)}m ago`;
-    if (delta < 86400) return `${Math.floor(delta/3600)}h ago`;
-    return `${Math.floor(delta/86400)}d ago`;
-  } catch(_) { return ts; }
-}
-
-// Enter or Cmd/Ctrl+Enter to pitch
-document.getElementById('pitch-input').addEventListener('keydown', e => {
-  if (e.key === 'Enter' && !e.shiftKey) pitchTask();
-});
-
-// ── Output viewer modal ──
-function renderOutput(text) {
-  if (!text) return '<div class="prose-text">No review output.</div>';
-
-  const parts = [];
-  const codeRe = /```(\\w*)\\n([\\s\\S]*?)```/g;
-  let last = 0, m;
-
-  while ((m = codeRe.exec(text)) !== null) {
-    if (m.index > last) {
-      parts.push(`<div class="prose-text">${escHtml(text.slice(last, m.index))}</div>`);
-    }
-    const lang = m[1] || 'text';
-    const code = escHtml(m[2]);
-    parts.push(`
-      <div class="code-block">
-        <div class="code-block-header">
-          <span>${lang}</span>
-          <button class="code-block-copy" onclick="copyCode(this)">copy</button>
-        </div>
-        <pre>${code}</pre>
-      </div>`);
-    last = m.index + m[0].length;
-  }
-
-  if (last < text.length) {
-    parts.push(`<div class="prose-text">${escHtml(text.slice(last))}</div>`);
-  }
-
-  return parts.join('') || `<div class="prose-text">${escHtml(text)}</div>`;
-}
-
-function copyCode(btn) {
-  const code = btn.closest('.code-block').querySelector('pre').textContent;
-  navigator.clipboard.writeText(code).then(() => {
-    btn.textContent = 'copied!';
-    setTimeout(() => btn.textContent = 'copy', 1500);
-  });
-}
-
-async function viewRun(timestamp) {
-  try {
-    _currentModalTimestamp = timestamp;
-    const resp = await fetch(`/history/${timestamp}`);
-    const data = await resp.json();
-
-    document.getElementById('modal-title').textContent = data.task;
-
-    let planHtml = '<div style="margin-bottom:16px;">';
-    data.plan.forEach(st => {
-      planHtml += `<div style="display:flex;gap:8px;padding:5px 0;border-bottom:1px solid var(--border-subtle);">
-        <span style="font-family:Consolas,monospace;font-size:13px;color:var(--text-muted);min-width:20px;">${escHtml(String(st.id))}</span>
-        <span style="font-size:14px;color:var(--accent);font-weight:600;">${escHtml(st.title)}</span>
-      </div>`;
-    });
-    planHtml += '</div>';
-    document.getElementById('modal-plan').innerHTML = planHtml;
-
-    // Rating badge + mode badge in title area
-    const ratingColors = {PASS: 'var(--accent)', NEEDS_WORK: 'var(--warn)', FAIL: 'var(--danger)'};
-    const ratingEl = document.getElementById('modal-title');
-    const ratingBadge = data.rating && data.rating !== '?'
-      ? ` <span style="font-size:13px;font-family:Consolas,monospace;color:${ratingColors[data.rating]||'var(--text-dim)'};font-weight:600;">${escHtml(data.rating)}</span>`
-      : '';
-    const modalModeBadge = data.mode === 'distributed'
-      ? ` <span style="font-size:11px;font-family:Consolas,monospace;color:var(--accent);background:var(--accent)18;border:1px solid var(--accent)30;border-radius:3px;padding:1px 5px;letter-spacing:.5px;">DIST</span>`
-      : '';
-    ratingEl.innerHTML = escHtml(data.task) + ratingBadge + modalModeBadge;
-
-    // Code files section
-    const filesEl = document.getElementById('modal-files');
-    if (data.code_files && data.code_files.length > 0) {
-      filesEl.style.display = 'block';
-      filesEl.innerHTML = `
-        <div style="font-size:12px;color:var(--text-muted);letter-spacing:2px;text-transform:uppercase;margin-bottom:8px;font-family:Consolas,monospace;">Extracted Files</div>
-        <div style="display:flex;flex-wrap:wrap;gap:6px;">
-          ${data.code_files.map(f => `
-            <span style="background:var(--accent-wash);border:1px solid var(--accent-wash-mid);border-radius:4px;padding:3px 10px;font-family:Consolas,monospace;font-size:13px;color:var(--accent);">${escHtml(f)}</span>
-          `).join('')}
-        </div>`;
-    } else {
-      filesEl.style.display = 'none';
-    }
-
-    // Prefer the clean final output over the full review blob
-    const outputContent = (data.final_output && data.final_output.trim())
-      ? data.final_output
-      : data.review;
-    document.getElementById('modal-review').innerHTML = renderOutput(outputContent);
-    document.getElementById('output-modal').style.display = 'block';
-  } catch(e) {
-    console.error('Failed to load run:', e);
-  }
-}
-
-function closeModal() {
-  document.getElementById('output-modal').style.display = 'none';
-}
-
-// ── Node detail modal ──
-function openNodeModal(nodeJson) {
-  const n = typeof nodeJson === 'string' ? JSON.parse(nodeJson) : nodeJson;
-  document.getElementById('node-modal-title').textContent = n.node_id;
-
-  const rows = [];
-  rows.push(`<div style="display:grid;grid-template-columns:120px 1fr;gap:8px 16px;line-height:1.7;">`);
-  const row = (label, val) => val
-    ? `<span style="color:var(--text-muted);font-size:14px;">${label}</span><span style="color:var(--text-dim);">${escHtml(String(val))}</span>`
-    : '';
-
-  rows.push(row('Model', n.model));
-  rows.push(row('Platform', `${n.platform} / ${n.machine}`));
-  rows.push(row('Hostname', n.hostname));
-  rows.push(row('CPU', n.cpu_count ? `${n.cpu_count} cores` : null));
-  rows.push(row('RAM', n.ram_gb ? `${n.ram_gb} GB` : null));
-  rows.push(row('GPU', n.gpu));
-  rows.push(row('Joined', n.registered_at ? n.registered_at.slice(0,19).replace('T',' ') + ' UTC' : null));
-  rows.push(row('Tasks done', n.tasks_completed));
-  rows.push(row('Credits', n.credits_earned || 0));
-
-  const visibleCaps = (n.capabilities || []).filter(c => !c.startsWith('model:'));
-  if (visibleCaps.length) {
-    const chips = visibleCaps.map(c =>
-      `<span style="background:var(--accent-wash);border:1px solid var(--accent-wash-mid);border-radius:3px;padding:1px 6px;font-size:12px;color:var(--accent);margin-right:4px;">${escHtml(c)}</span>`
-    ).join('');
-    rows.push(`<span style="color:var(--text-muted);font-size:14px;">Capabilities</span><span>${chips}</span>`);
-  }
-
-  rows.push('</div>');
-
-  if (n.current_task) {
-    rows.push(`<div style="margin-top:16px;padding:10px 14px;background:var(--accent-wash);border:1px solid var(--accent-wash);border-radius:6px;font-size:14px;color:var(--accent);">&#9654; ${escHtml(n.current_task)}</div>`);
-  }
-
-  document.getElementById('node-modal-body').innerHTML = rows.filter(Boolean).join('');
-  document.getElementById('node-modal').style.display = 'block';
-}
-
-function closeNodeModal() {
-  document.getElementById('node-modal').style.display = 'none';
-}
-
-document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') { closeModal(); closeNodeModal(); }
-});
-
-// ── Event log — WebSocket with polling fallback ──
-// eventCursor tracks the last SQLite rowid seen, not a count.
-// Events from /events now carry an "id" field (rowid). We set cursor = max(id seen).
-let eventCursor = 0;
-let wsConnected = false;
-
-// One hue per stage so the log is scannable at a glance. Muted on purpose:
-// these repeat on every line, and saturated colour at that density is noise.
-const EVENT_LABELS = {
-  pitch:        {agent: 'PITCH',    color: 'var(--stage-pitch)'},
-  plan:         {agent: 'PLANNER',  color: 'var(--stage-plan)'},
-  build:        {agent: 'BUILDER',  color: 'var(--stage-build)'},
-  review_start: {agent: 'REVIEWER', color: 'var(--stage-review)'},
-  complete:     {agent: 'DONE',     color: 'var(--accent)'},
-  error:        {agent: 'ERROR',    color: 'var(--danger)'},
-};
-
-function _appendToken(ev) {
-  const el = document.getElementById(`token-stream-${ev.job_id}`);
-  if (!el) return;
-  if (el.style.display === 'none') el.style.display = 'block';
-  el.textContent += ev.token;
-  el.scrollTop = el.scrollHeight;
-}
-
-function appendEvent(ev) {
-  // Token events — route to the live stream display, never to the log
-  if (ev.type === 'token') {
-    _appendToken(ev);
-    return;
-  }
-  // Handle node activity events — update node cards directly, skip log entry
-  if (ev.type === 'node_busy') {
-    _setNodeBusy(ev.node_id, ev.task_title);
-    return;
-  }
-  if (ev.type === 'node_idle') {
-    _setNodeIdle(ev.node_id, ev.credits_earned);
-    if (ev.credits_earned > 0) loadStandings();
-    return;
-  }
-  if (ev.type === 'node_blacklisted') {
-    _setNodeBlacklisted(ev.node_id, ev.blacklist_seconds);
-    return;
-  }
-
-  const label = EVENT_LABELS[ev.type] || {agent: ev.type.toUpperCase(), color: 'var(--text-dim)'};
-  const t = new Date(ev.time).toLocaleTimeString();
-  let msg = '';
-  if (ev.type === 'pitch') msg = `Task pitched: "${escHtml(ev.task)}"`;
-  else if (ev.type === 'plan') msg = `Decomposed into ${ev.subtasks.length} subtasks: ${ev.subtasks.map(escHtml).join(', ')}`;
-  else if (ev.type === 'build') msg = `Subtask ${ev.subtask_id} complete: ${escHtml(ev.subtask)}`;
-  else if (ev.type === 'review_start') msg = 'Reviewing combined output...';
-  else if (ev.type === 'complete') msg = `Pipeline complete \u2192 ${escHtml(ev.project_dir)}`;
-  else if (ev.type === 'error') msg = `Error: ${escHtml(ev.message || '')}`;
-  else return; // skip unknown events
-
-  const log = document.getElementById('event-log');
-  log.insertAdjacentHTML('beforeend', `<div class="log-entry">
-    <span class="log-time">${t}</span>
-    <span class="log-agent" style="color:${label.color}">${label.agent}</span>
-    <span class="log-event"> ${msg}</span>
-  </div>`);
-  log.scrollTop = log.scrollHeight;
-}
-
-function _setNodeBusy(nodeId, taskTitle) {
-  const card = document.getElementById(`nodecard-${nodeId}`);
-  if (!card) return;
-  card.classList.remove('finished');
-  card.classList.add('working');
-  const dot = card.querySelector('.node-dot');
-  if (dot) { dot.className = 'node-dot busy'; }
-  let active = card.querySelector('.node-active-task');
-  if (!active) {
-    active = document.createElement('div');
-    active.className = 'node-active-task';
-    card.appendChild(active);
-  }
-  active.textContent = '\u25b6 ' + taskTitle;
-}
-
-function _setNodeIdle(nodeId, creditsEarned) {
-  const card = document.getElementById(`nodecard-${nodeId}`);
-  if (!card) return;
-  card.classList.remove('working');
-  card.classList.add('finished');
-  card.addEventListener('animationend', () => card.classList.remove('finished'), {once: true});
-  const dot = card.querySelector('.node-dot');
-  if (dot) { dot.className = 'node-dot'; }
-  const active = card.querySelector('.node-active-task');
-  if (active) active.remove();
-
-  // Flash credit earned
-  if (creditsEarned > 0) {
-    const flash = document.createElement('div');
-    flash.className = 'credit-flash';
-    flash.textContent = `+${creditsEarned}`;
-    card.appendChild(flash);
-    setTimeout(() => flash.remove(), 2000);
-  }
-}
-
-function _setNodeBlacklisted(nodeId, seconds) {
-  const card = document.getElementById(`nodecard-${nodeId}`);
-  if (!card) return;
-  const dot = card.querySelector('.node-dot');
-  if (dot) { dot.className = 'node-dot'; dot.style.background = 'var(--danger)'; dot.style.boxShadow = '0 0 8px var(--danger-line)'; }
-  // Show or update circuit breaker badge
-  let badge = card.querySelector('.node-breaker-badge');
-  if (!badge) {
-    badge = document.createElement('div');
-    badge.className = 'node-breaker-badge';
-    card.appendChild(badge);
-  }
-  badge.textContent = `CIRCUIT OPEN — ${seconds}s`;
-  // Auto-remove badge after the blacklist expires
-  setTimeout(() => {
-    badge.remove();
-    if (dot) { dot.style.background = ''; dot.style.boxShadow = ''; }
-  }, seconds * 1000);
-}
-
-function connectWebSocket() {
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const ws = new WebSocket(`${proto}://${location.host}/ws/events`);
-
-  ws.onopen = () => {
-    wsConnected = true;
-  };
-
-  ws.onmessage = (e) => {
-    try {
-      const ev = JSON.parse(e.data);
-      appendEvent(ev);
-      // Track highest rowid seen so polling fallback has a correct cursor
-      if (ev.id && ev.id > eventCursor) eventCursor = ev.id;
-    } catch(_) {}
-  };
-
-  ws.onclose = () => {
-    wsConnected = false;
-    // Reconnect after 3s
-    setTimeout(connectWebSocket, 3000);
-  };
-
-  ws.onerror = () => {
-    ws.close();
-  };
-}
-
-// Polling fallback — only used if WebSocket never connects
-async function pollEvents() {
-  if (wsConnected) return;
-  try {
-    const resp = await fetch(`/events?since=${eventCursor}`);
-    const data = await resp.json();
-    data.events.forEach(ev => {
-      appendEvent(ev);
-      if (ev.id && ev.id > eventCursor) eventCursor = ev.id;
-    });
-  } catch(e) {}
-}
-
-connectWebSocket();
-
-// ── History ──
-let _historySearchTimer = null;
-function onHistorySearch() {
-  clearTimeout(_historySearchTimer);
-  _historySearchTimer = setTimeout(loadHistory, 250);
-}
-
-async function loadHistory() {
-  const q = (document.getElementById('history-search')?.value || '').trim();
-  const url = q ? `/history?search=${encodeURIComponent(q)}` : '/history';
-  try {
-    const resp = await fetch(url);
-    const data = await resp.json();
-    const el = document.getElementById('history-list');
-
-    if (data.count === 0) {
-      el.innerHTML = '<div class="empty-state"><p>No past runs yet.</p></div>';
-      return;
-    }
-
-    const ratingColor = {PASS: 'var(--accent)', NEEDS_WORK: 'var(--warn)', FAIL: 'var(--danger)'};
-    el.innerHTML = data.runs.map(r => {
-      const color = ratingColor[r.rating] || 'var(--text-muted)';
-      const modeBadge = r.mode === 'distributed'
-        ? `<span style="font-family:Consolas,monospace;font-size:11px;font-weight:700;color:var(--accent);background:var(--accent)18;border:1px solid var(--accent)30;border-radius:3px;padding:1px 5px;letter-spacing:.5px;">DIST</span>`
-        : '';
-      return `
-        <div class="pipeline-card" style="padding:12px 16px;margin-bottom:6px;cursor:pointer;" onclick="viewRun('${escHtml(r.timestamp)}')">
-          <div style="display:flex;justify-content:space-between;align-items:center;">
-            <div style="font-size:14px;color:var(--text-dim);flex:1;padding-right:12px;">${escHtml(r.task)}</div>
-            <div style="display:flex;gap:10px;align-items:center;flex-shrink:0;">
-              ${modeBadge}
-              <span style="font-family:Consolas,monospace;font-size:12px;color:${color};">${escHtml(r.rating || '?')}</span>
-              <span style="font-family:Consolas,monospace;font-size:13px;color:var(--text-muted);">${r.subtask_count} tasks</span>
-              <span style="font-family:Consolas,monospace;font-size:13px;color:var(--text-muted);">${relativeTime(r.timestamp)}</span>
-              <span style="font-size:13px;color:var(--accent);">view</span>
-            </div>
-          </div>
-        </div>`;
-    }).join('');
-  } catch(e) {}
-}
-
-// ── Standings ──
-async function loadStandings() {
-  try {
-    const resp = await fetch('/standings');
-    const data = await resp.json();
-    const el = document.getElementById('standings-list');
-
-    if (!data.standings.length) {
-      el.innerHTML = '<div class="empty-state"><p>No contributions yet.</p></div>';
-      return;
-    }
-
-    el.innerHTML = data.standings.map((s, i) => `
-      <div class="node-card" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-        <div>
-          <div class="node-name" style="font-size:14px;">
-            <span style="color:${i===0?'var(--warn)':i===1?'var(--accent)':'var(--text-dim)'};margin-right:6px;">#${i+1}</span>
-            ${s.contributor}
-          </div>
-          <div class="node-meta">${s.compute_tasks} tasks / ${s.pitches} pitches</div>
-        </div>
-        <div style="font-family:Consolas,monospace;font-size:16px;font-weight:700;color:var(--warn);">
-          ${s.total_credits.toFixed(0)}
-        </div>
-      </div>
-    `).join('');
-  } catch(e) {}
-}
-
-// ── Projects ──
-async function loadProjects() {
-  try {
-    const resp = await fetch('/projects');
-    const data = await resp.json();
-    const el = document.getElementById('projects-list');
-
-    if (!data.projects || data.projects.length === 0) {
-      el.innerHTML = '<div class="empty-state"><p>No projects yet.</p></div>';
-      return;
-    }
-
-    el.innerHTML = data.projects.map(p => `
-      <div class="node-card" style="margin-bottom:6px;cursor:pointer;padding:10px 12px;">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;">
-          <div style="flex:1;min-width:0;">
-            <div class="node-name" style="font-size:14px;margin-bottom:2px;">${escHtml(p.name)}</div>
-            <div class="node-meta" style="font-size:12px;">${escHtml(p.project_id)}</div>
-            <div class="node-meta" style="margin-top:3px;">${p.iteration_count} iteration${p.iteration_count !== 1 ? 's' : ''}</div>
-          </div>
-          <button onclick="continueProject('${escHtml(p.project_id)}','${escHtml(p.name)}')"
-            style="background:var(--accent-wash);border:1px solid var(--accent-wash-mid);border-radius:5px;padding:4px 10px;color:var(--accent);font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;margin-left:8px;flex-shrink:0;">
-            Continue
-          </button>
-        </div>
-      </div>
-    `).join('');
-  } catch(e) {}
-}
-
-async function promptNewProject() {
-  const name = prompt('Project name:');
-  if (!name || !name.trim()) return;
-  try {
-    const resp = await fetch('/projects', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({name: name.trim(), initial_task: ''}),
-    });
-    const data = await resp.json();
-    if (data.project_id) {
-      await loadProjects();
-      continueProject(data.project_id, data.name);
-    }
-  } catch(e) { console.error('Failed to create project', e); }
-}
-
-function continueProject(projectId, projectName) {
-  document.getElementById('active-project-id').value = projectId;
-  document.getElementById('project-context-name').textContent = projectName;
-  document.getElementById('project-context').style.display = 'flex';
-  document.getElementById('pitch-input').placeholder = `What's next for ${projectName}?`;
-  document.getElementById('pitch-input').focus();
-}
-
-function clearProjectContext() {
-  document.getElementById('active-project-id').value = '';
-  document.getElementById('project-context').style.display = 'none';
-  document.getElementById('pitch-input').placeholder = 'Describe what you want built...';
-}
-
-// ── Tab switching ──
-const TABS = ['overview', 'runs', 'gallery', 'nodes', 'projects', 'guild'];
-const TAB_TITLES = {
-  overview: 'Overview', runs: 'Runs', gallery: 'Gallery',
-  nodes: 'Network Nodes', projects: 'Projects', guild: 'Guild Standings',
-};
-
-function toggleNav() {
-  const app = document.getElementById('app');
-  // Below 900px the sidebar is an overlay, so the same control has to mean
-  // "open" there and "collapse to icons" on a wide screen.
-  const cls = window.matchMedia('(max-width: 900px)').matches ? 'nav-open' : 'nav-collapsed';
-  app.classList.toggle(cls);
-  try { localStorage.setItem('mycelium-nav', app.classList.contains('nav-collapsed') ? '1' : '0'); } catch (e) {}
-}
-
-function focusPitch() {
-  showTab('overview');
-  const el = document.getElementById('pitch-input');
-  if (el) { el.focus(); el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
-}
-
-try {
-  if (localStorage.getItem('mycelium-nav') === '1') {
-    document.addEventListener('DOMContentLoaded', () =>
-      document.getElementById('app').classList.add('nav-collapsed'));
-  }
-} catch (e) {}
-function showTab(name) {
-  TABS.forEach(t => {
-    document.getElementById('view-' + t).style.display = t === name ? '' : 'none';
-    document.getElementById('tab-' + t).classList.toggle('active', t === name);
-  });
-  const title = document.getElementById('view-title');
-  if (title) title.textContent = TAB_TITLES[name] || name;
-  // A deep link should survive a refresh; without this, "Runs" is unshareable.
-  try { history.replaceState(null, '', '#' + name); } catch (e) {}
-  if (window.matchMedia('(max-width: 900px)').matches) {
-    document.getElementById('app').classList.remove('nav-open');
-  }
-  if (name === 'gallery') loadGallery();
-  if (name === 'guild') loadStandings();
-  if (name === 'runs') loadHistory();
-}
-
-// ── Gallery ──
-async function loadGallery() {
-  try {
-    const resp = await fetch('/gallery');
-    const data = await resp.json();
-    const el = document.getElementById('gallery-grid');
-
-    if (!data.cards || data.cards.length === 0) {
-      el.innerHTML = '<div class="empty-state" style="grid-column:1/-1;"><p>No completed tasks yet.<br>Pitch one from the Live tab to populate the gallery.</p></div>';
-      return;
-    }
-
-    const ratingColor = {PASS: 'var(--accent)', NEEDS_WORK: 'var(--warn)', FAIL: 'var(--danger)'};
-
-    el.innerHTML = data.cards.map(c => {
-      const color = ratingColor[c.rating] || 'var(--text-muted)';
-      const ratingHtml = c.rating && c.rating !== '?'
-        ? `<span style="font-family:Consolas,monospace;font-size:12px;font-weight:700;color:${color};background:${color}18;border:1px solid ${color}30;border-radius:4px;padding:2px 8px;">${escHtml(c.rating)}</span>`
-        : '';
-      const modeBadgeHtml = c.mode === 'distributed'
-        ? `<span style="font-family:Consolas,monospace;font-size:11px;font-weight:700;color:var(--accent);background:var(--accent)18;border:1px solid var(--accent)30;border-radius:3px;padding:1px 5px;letter-spacing:.5px;">DIST</span>`
-        : '';
-      const subtasksHtml = `<span style="font-family:Consolas,monospace;font-size:12px;color:var(--text-muted);">${c.subtask_count} tasks</span>`;
-      const timeHtml = `<span style="font-family:Consolas,monospace;font-size:12px;color:var(--text-muted);">${relativeTime(c.timestamp)}</span>`;
-      const nodesHtml = c.nodes_used > 0
-        ? `<span style="font-family:Consolas,monospace;font-size:12px;color:var(--info);">${c.nodes_used} node${c.nodes_used > 1 ? 's' : ''}</span>`
-        : '';
-      const previewHtml = c.preview
-        ? `<div class="gallery-preview">${escHtml(c.preview)}</div>`
-        : '';
-      const filesHtml = c.code_files && c.code_files.length > 0
-        ? `<div class="gallery-files">${c.code_files.map(f => `<span class="gallery-file-chip">${escHtml(f)}</span>`).join('')}</div>`
-        : '';
-      const ts = escHtml(c.timestamp);
-      const taskEsc = escHtml(c.task.replace(/'/g, "\\'"));
-      const projEsc = escHtml((c.project_id||'').replace(/'/g,"\\'"));
-      return `
-        <div class="gallery-card">
-          <div class="gallery-task">${escHtml(c.task)}</div>
-          <div class="gallery-meta">${modeBadgeHtml}${ratingHtml}${subtasksHtml}${nodesHtml}${timeHtml}</div>
-          ${previewHtml}
-          ${filesHtml}
-          <div class="gallery-actions">
-            <button class="gallery-btn" onclick="viewRun('${ts}')">View Output</button>
-            <button class="gallery-btn fork" onclick="forkTask('${taskEsc}','${projEsc}')">Fork &amp; continue</button>
-            <button class="gallery-btn share" onclick="shareRun('${ts}')" title="Copy share link">Share &#x2197;</button>
-          </div>
-        </div>`;
-    }).join('');
-  } catch(e) {}
-}
-
-function forkTask(task, projectId) {
-  showTab((location.hash || '#overview').slice(1));
-  // If this run belongs to a project, continue it so the AI loads the memory context.
-  // Otherwise just load the task text for a fresh pitch.
-  if (projectId) {
-    continueProject(projectId, task);
-  } else {
-    const input = document.getElementById('pitch-input');
-    input.value = task;
-    input.focus();
-    input.select();
-  }
-}
-
-function shareRun(timestamp) {
-  const url = `${location.origin}/share/${timestamp}`;
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(url).then(() => {
-      showToast('Share link copied!');
-    }).catch(() => {
-      prompt('Copy this share link:', url);
-    });
-  } else {
-    prompt('Copy this share link:', url);
-  }
-}
-
-function showToast(msg) {
-  const t = document.createElement('div');
-  t.textContent = msg;
-  t.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--accent);color:var(--bg);padding:8px 20px;border-radius:8px;font-size:14px;font-weight:700;z-index:9999;pointer-events:none;transition:opacity 0.4s;';
-  document.body.appendChild(t);
-  setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 400); }, 2000);
-}
-
-// ── Task templates ──
-const _TEMPLATES = [
-  'Build a REST API with FastAPI and SQLite',
-  'Write a Python web scraper with BeautifulSoup',
-  'Create a CLI tool in Python with argparse',
-  'Write a data analysis script for a CSV file',
-  'Build a React component library starter',
-];
-(function renderTemplates() {
-  const el = document.getElementById('task-templates');
-  if (!el) return;
-  const label = document.createElement('span');
-  label.textContent = 'Try:';
-  label.style.cssText = 'font-size:12px;color:var(--text-muted);letter-spacing:1px;text-transform:uppercase;align-self:center;margin-right:4px;white-space:nowrap;';
-  el.appendChild(label);
-  _TEMPLATES.forEach(t => {
-    const btn = document.createElement('button');
-    btn.textContent = t;
-    btn.style.cssText = 'background:var(--border-subtle);border: 1px solid var(--border);border-radius:5px;padding:4px 10px;font-size:13px;color:var(--text-muted);cursor:pointer;transition:all 0.15s;';
-    btn.onmouseover = () => { btn.style.borderColor='var(--accent-wash-mid)'; btn.style.color='var(--accent)'; };
-    btn.onmouseout  = () => { btn.style.borderColor='var(--border)'; btn.style.color='var(--text-muted)'; };
-    btn.onclick = () => { document.getElementById('pitch-input').value = t; document.getElementById('pitch-input').focus(); };
-    el.appendChild(btn);
-  });
-})();
-
-// ── Output download ──
-let _currentModalTimestamp = null;
-
-function downloadOutput() {
-  if (!_currentModalTimestamp) return;
-  const a = document.createElement('a');
-  a.href = `/history/${_currentModalTimestamp}/download`;
-  a.download = `output_${_currentModalTimestamp}.zip`;
-  a.click();
-}
-
-function copyShareLink() {
-  if (!_currentModalTimestamp) return;
-  const url = `${location.origin}/dashboard#run=${_currentModalTimestamp}`;
-  navigator.clipboard.writeText(url).then(() => {
-    const btn = document.getElementById('modal-share-btn');
-    if (btn) { btn.textContent = 'Copied!'; setTimeout(() => btn.textContent = 'Copy link', 1500); }
-  }).catch(() => {
-    // Fallback for non-HTTPS contexts
-    prompt('Copy this link:', `${location.origin}/dashboard#run=${_currentModalTimestamp}`);
-  });
-}
-
-// Start
-refresh();
-loadHistory();
-loadStandings();
-loadProjects();
-setInterval(refresh, 3000);
-setInterval(pollEvents, 3000);   // fallback only — no-ops when WS is connected
-setInterval(loadHistory, 15000);
-setInterval(loadStandings, 10000);
-setInterval(loadProjects, 20000);
-
-// Handle #run=<timestamp> links — auto-open the run modal on page load
-(function() {
-  const hash = location.hash;
-  const m = hash.match(/#run=([^&]+)/);
-  if (m) viewRun(decodeURIComponent(m[1]));
-})();
-</script>
+    <div id="modal-plan" class="modal-section"></div>
+    <div id="modal-files" class="modal-section" hidden></div>
+    <div id="modal-review" class="modal-scroll"></div>
+  </div>
+</div>
+
+<!-- DASHBOARD_JS -->
 </body>
 </html>

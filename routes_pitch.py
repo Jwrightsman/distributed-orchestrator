@@ -23,6 +23,7 @@ from orchestrator import (
     compose_builder_prompt,
     extract_and_repair,
     make_run_dir,
+    new_revision_record,
     plan,
     review,
     revise,
@@ -431,12 +432,30 @@ async def _dispatch_subtask(
     results: dict[int, str],
     nodes_used: set[str],
     overall_task: str = "",
+    stats: dict | None = None,
 ) -> tuple[int, str]:
     """Push one subtask to the worker queue and wait for its result.
 
     Falls back to local Ollama inference on timeout or worker error.
     Returns (subtask_id, output_text).
+
+    `stats`, when given, receives {subtask_id: {executor, seconds, ...}} —
+    which machine actually did this piece and how long it took. The run page
+    shows it, and there is nowhere else to get it: the ledger records credits
+    without a run id, so joining it back to a run means guessing by timestamp.
     """
+    _t0 = time.time()
+
+    def _record(executor: str, output: str, fell_back: bool = False):
+        if stats is not None:
+            stats[st["id"]] = {
+                "seconds": round(time.time() - _t0, 1),
+                "executor": executor,
+                "chars": len(output or ""),
+                "credits": 5,
+                "fell_back_to_local": fell_back,
+            }
+
     # Build context from resolved dependencies
     context_parts = []
     for dep_id in st.get("depends_on", []):
@@ -461,6 +480,7 @@ async def _dispatch_subtask(
         if time.time() > deadline:
             output = await generate(prompt, system=orchestrator.BUILDER_SYSTEM)
             nodes_used.add("local")
+            _record("local", output, fell_back=True)
             return st["id"], output
         await asyncio.sleep(1)
 
@@ -468,9 +488,12 @@ async def _dispatch_subtask(
     if tr.get("error") or not tr.get("output"):
         output = await generate(prompt, system=orchestrator.BUILDER_SYSTEM)
         nodes_used.add("local")
+        _record("local", output, fell_back=True)
     else:
         output = tr["output"]
-        nodes_used.add(tr.get("node_id", "unknown"))
+        node = tr.get("node_id", "unknown")
+        nodes_used.add(node)
+        _record(node, output)
     return st["id"], output
 
 
@@ -523,6 +546,9 @@ async def pitch_distributed(req: PitchRequest, request: Request):
 
     results: dict[int, str] = {}
     nodes_used: set[str] = set()
+    subtask_stats: dict[int, dict] = {}
+    credits: list[dict] = []
+    _started = time.time()
     remaining = {st["id"]: st for st in subtasks}
 
     while remaining:
@@ -531,32 +557,51 @@ async def pitch_distributed(req: PitchRequest, request: Request):
         if not ready:
             break
         wave_results = await asyncio.gather(*[
-            _dispatch_subtask(st, subtasks, results, nodes_used, req.task) for st in ready
+            _dispatch_subtask(st, subtasks, results, nodes_used, req.task, subtask_stats)
+            for st in ready
         ])
         for subtask_id, output in wave_results:
             results[subtask_id] = output
             remaining.pop(subtask_id, None)
             _emit("build", {"task": req.task, "subtask_id": subtask_id, "trace_id": trace_id})
 
+    for _sid, _meta in subtask_stats.items():
+        _title = next((s["title"] for s in subtasks if s["id"] == _sid), f"subtask {_sid}")
+        credits.append({"contributor": _meta["executor"], "type": "compute",
+                        "credits": _meta["credits"], "for": "building " + _title})
+
     # 4. Review
     _emit("review_start", {"task": req.task, "trace_id": trace_id})
+    _review_t0 = time.time()
     review_output = await review(req.task, subtasks, results, memory_context=memory_context)
+    _review_seconds = round(time.time() - _review_t0, 1)
 
     # 5. Reviser pass (up to 2 rounds, same as local pipeline)
     rating = _extract_rating(review_output)
     final_output = _extract_final_output(review_output)
     issues = _extract_issues(review_output)
+    revision = new_revision_record(rating, issues, final_output)
     for _ in range(2):
         if rating != "NEEDS_WORK" or not issues or not final_output:
             break
         revised = await revise(req.task, issues, final_output)
         if len(revised.strip()) <= len(final_output) // 2:
+            revision["stopped_because"] = "the revision came back mostly empty"
             break
+        revision["fired"] = True
+        revision["passes"] += 1
+        revision["chars_after"] = len(revised)
         final_output = revised
         issues = _extract_issues(revised)
         if not issues:
             rating = "PASS"
+            revision["cleared_the_rating"] = True
+            revision["stopped_because"] = "the reviewer's issues were gone"
             break
+    else:
+        if revision["fired"]:
+            revision["stopped_because"] = "it hit the 2-pass limit"
+    revision["rating_after"] = rating
 
     # 6. Save output files
     timestamp, project_dir = make_run_dir()
@@ -592,6 +637,16 @@ async def pitch_distributed(req: PitchRequest, request: Request):
         "mode": "distributed",
         "nodes_used": list(nodes_used),
         "project_id": req.project_id or "",
+        # Same record the local pipeline writes — see orchestrator.run_pipeline.
+        # /run/{id} reads one shape regardless of how the work was executed.
+        "started_at": datetime.fromtimestamp(_started, timezone.utc).isoformat(),
+        "duration_seconds": round(time.time() - _started, 1),
+        "model": get_config().get("model", ""),
+        "prompt_set": orchestrator._ACTIVE_PROMPT_SET.name,
+        "subtask_stats": {str(k): v for k, v in subtask_stats.items()},
+        "review_seconds": _review_seconds,
+        "revision": revision,
+        "credits": credits,
     }
     (project_dir / "full_log.json").write_text(json.dumps(log, indent=2), encoding="utf-8")
 
