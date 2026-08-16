@@ -126,6 +126,10 @@
 
   .status-msg { font-size: 14px; color: var(--text-dim); min-height: 20px; }
   .status-msg.is-error { color: var(--danger); }
+  .elapsed {
+    font-family: var(--mono); font-size: 12.5px; color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+  }
 
   /* ── Stages ───────────────────────────────────────────────────── */
   .stages { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
@@ -287,6 +291,7 @@
   if (!task) return;   // public pitching is off — the form is not on the page
 
   const go = $('go'), msg = $('msg'), counter = $('count');
+  let stopClock = () => {};
   const MAX = parseInt(task.getAttribute('maxlength'), 10) || 300;
   let jobId = null, subtasksTotal = 0, subtasksDone = 0;
 
@@ -306,6 +311,7 @@
   }
 
   function markAllDone() {
+    stopClock();
     ['plan', 'build', 'review'].forEach(s => {
       $('st-' + s).classList.remove('active');
       $('st-' + s).classList.add('done');
@@ -338,6 +344,18 @@
       jobId = body.job_id;
       say('The swarm is on it — this takes a few minutes on volunteer hardware.');
       $('stages').hidden = false;
+      // Minutes of nothing visible is the whole experience of this page. A
+      // clock is the difference between "working" and "did it break?".
+      const started = Date.now();
+      const clock = $('elapsed');
+      clock.hidden = false;
+      const tick = setInterval(() => {
+        const secs = Math.round((Date.now() - started) / 1000);
+        clock.textContent = secs >= 60
+          ? `${Math.floor(secs / 60)}m ${secs % 60}s elapsed`
+          : `${secs}s elapsed`;
+      }, 1000);
+      stopClock = () => clearInterval(tick);
       setStage('plan');
       listen();
       poll();

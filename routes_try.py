@@ -55,6 +55,7 @@ def _open_panel() -> str:
     <!-- The one thing a screen reader must not miss: a run takes minutes, so
          every status change has to be spoken rather than only drawn. -->
     <p class="status-msg" id="msg" role="status" aria-live="polite"></p>
+    <p class="elapsed" id="elapsed" hidden></p>
 
     <div class="stages" id="stages" role="status" aria-live="polite" hidden>
       <div class="stage" id="st-plan"><span class="dot" aria-hidden="true"></span>

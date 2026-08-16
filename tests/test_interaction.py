@@ -155,3 +155,77 @@ def test_a_run_can_be_previewed_without_leaving_the_dashboard():
     assert "data-preview" in JS
     assert "function openRun(" in JS
     assert '/run/${encodeURIComponent(r.timestamp)}' in JS, "no permalink on a history row"
+
+
+# ── 4. Keyboard ──────────────────────────────────────────────────────
+
+def test_the_command_palette_exists_and_is_a_dialog(client):
+    body = client.get("/dashboard").text
+    assert 'id="palette"' in body
+    assert 'role="combobox"' in body, "the palette input is not announced as one"
+    assert 'role="listbox"' in body and 'aria-controls="palette-list"' in body
+
+
+def test_the_palette_is_built_from_the_same_actions_the_mouse_uses():
+    """Two lists of what the app can do drift apart; one does not."""
+    assert "function baseCommands(" in JS
+    for cmd in ("focusPitch()", "openNewProjectForm()", "toggleTheme()", "copyToClipboard("):
+        assert cmd in JS[JS.index("function baseCommands("):JS.index("let _paletteItems")], (
+            f"the palette does not reuse {cmd}"
+        )
+
+
+def test_recent_runs_are_reachable_from_the_palette():
+    block = JS[JS.index("async function openPalette("):JS.index("function closePalette(")]
+    assert "/history?limit=" in block, "the palette cannot open a recent run"
+    assert "openRun(" in block
+
+
+@pytest.mark.parametrize("key,view", [("o", "overview"), ("r", "runs"), ("g", "gallery"),
+                                      ("n", "nodes"), ("p", "projects"), ("u", "guild")])
+def test_g_then_key_switches_view(key, view):
+    block = JS[JS.index("const GO_KEYS"):JS.index("/** The commands")]
+    assert f"{key}: '{view}'" in block, f"g {key} does not go to {view}"
+
+
+def test_shortcuts_never_fire_while_typing():
+    """`/` inside the pitch box has to be a slash."""
+    assert "function isTyping(" in JS
+    handler = JS[JS.index("document.addEventListener('keydown', (e) => {"):]
+    assert "if (typing) return;" in handler[:2000], "a shortcut can steal a keystroke from a field"
+
+
+def test_the_shortcut_reference_lists_every_shortcut(client):
+    assert 'id="shortcuts"' in client.get("/dashboard").text
+    block = JS[JS.index("const SHORTCUTS = ["):JS.index("const GO_KEYS")]
+    for key in ("⌘K", "/", "?", "Esc", "g"):
+        assert key in block, f"{key} is not documented in the reference"
+
+
+# ── 6. Elapsed time ──────────────────────────────────────────────────
+
+def test_one_elapsed_helper_rather_than_a_copy_per_caller():
+    assert "function startElapsed(" in JS and "function formatElapsed(" in JS
+    # The pipeline card's hand-rolled interval is gone.
+    assert "const elapsedTicker = setInterval" not in JS
+
+
+def test_a_busy_node_shows_how_long_it_has_been_building():
+    """40–330 seconds per subtask on this hardware: a card that says only
+    "building" cannot be told from one that has wedged."""
+    block = JS[JS.index("function _setNodeBusy("):JS.index("function _setNodeIdle(")]
+    assert "startElapsed(" in block
+    assert "node-elapsed" in CSS
+
+
+def test_the_node_clock_stops_when_the_node_goes_idle():
+    """A ticking interval per node, never cleared, is a leak on a page people
+    leave open for hours."""
+    block = JS[JS.index("function _setNodeIdle("):JS.index("function _setNodeBlacklisted(")]
+    assert "_nodeClocks[nodeId]?.()" in block and "delete _nodeClocks[nodeId]" in block
+
+
+def test_the_try_page_shows_elapsed_time():
+    """It is the page with the longest wait and the least to look at."""
+    src = (TEMPLATES / "try.html").read_text(encoding="utf-8")
+    assert "elapsed" in src and "stopClock" in src

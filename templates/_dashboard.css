@@ -609,6 +609,16 @@ button.node-card:hover { border-color: var(--border-strong); background: var(--s
   font-family: var(--mono);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+.node-active-task { display: flex; align-items: baseline; gap: 8px; }
+.node-active-task > span:first-child {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+.node-elapsed {
+  margin-left: auto; flex-shrink: 0;
+  font-family: var(--mono); font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
 .node-rep { margin-top: 3px; }
 .node-rep .is-trusted { color: var(--accent-text); }
 .node-rep .is-sampling { color: var(--warn); }
@@ -974,6 +984,77 @@ a.gallery-task:hover { color: var(--accent-text); }
   flex: 1 0 100%; margin: 0;
   font-size: 13px; color: var(--danger);
 }
+
+/* ── Command palette ─────────────────────────────────────────────
+   Built from the same functions the buttons call, so the keyboard and the
+   mouse cannot drift apart. Sits above the modals: it is the way *into*
+   things, not another thing to be behind. */
+.palette {
+  position: fixed; inset: 0; z-index: 400;
+  background: var(--overlay);
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 12vh 16px 16px;
+}
+.palette-panel {
+  width: 100%; max-width: 560px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 20px 60px var(--shadow);
+  overflow: hidden;
+  animation: paletteIn .12s ease;
+}
+.palette-input {
+  width: 100%; padding: 15px 18px;
+  background: none; border: none; border-bottom: 1px solid var(--border-subtle);
+  color: var(--text); font-family: var(--sans); font-size: 15px;
+}
+.palette-input::placeholder { color: var(--text-muted); }
+.palette-list { list-style: none; margin: 0; padding: 6px; max-height: 46vh; overflow-y: auto; }
+.palette-item {
+  display: flex; align-items: center; gap: 12px;
+  padding: 9px 12px; border-radius: var(--radius-sm);
+  font-size: 14px; color: var(--text-dim); cursor: pointer;
+}
+.palette-item.is-active { background: var(--accent-wash); color: var(--accent-text); }
+.palette-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.palette-hint {
+  font-family: var(--mono); font-size: 11.5px; color: var(--text-muted);
+  flex-shrink: 0;
+}
+.palette-empty { padding: 18px 12px; text-align: center; color: var(--text-muted); font-size: 14px; }
+.palette-foot {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  padding: 9px 16px; border-top: 1px solid var(--border-subtle);
+  background: var(--surface);
+  font-size: 11.5px; color: var(--text-muted);
+}
+.palette-foot .spacer { margin-left: auto; }
+
+@keyframes paletteIn {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+kbd {
+  display: inline-block;
+  font-family: var(--mono); font-size: 11px; line-height: 1.5;
+  padding: 1px 6px; margin-right: 3px;
+  color: var(--text-dim);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.shortcut-list { display: grid; gap: 2px; }
+.shortcut-row {
+  display: flex; align-items: baseline; gap: 14px;
+  padding: 7px 0; border-bottom: 1px solid var(--border-subtle);
+}
+.shortcut-row:last-child { border-bottom: none; }
+.shortcut-row dt { flex: 0 0 130px; }
+.shortcut-row dd { margin: 0; font-size: 14px; color: var(--text-dim); }
+.shortcut-row .then { font-size: 11px; color: var(--text-muted); margin-right: 4px; }
 
 /* ── Screen-reader-only text ─────────────────────────────────── */
 .sr-only {

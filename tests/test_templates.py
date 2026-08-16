@@ -260,7 +260,8 @@ def test_modals_return_focus_to_whatever_opened_them(client):
     assert "_lastFocused = document.activeElement" in js
     assert "_lastFocused.focus()" in js
     body = client.get("/dashboard").text
-    assert body.count('aria-modal="true"') == 2, "dialogs are not announced as modal"
+    # Output viewer, node detail, the command palette and the shortcut sheet.
+    assert body.count('aria-modal="true"') == 4, "a dialog is not announced as modal"
 
 
 REACHES = {

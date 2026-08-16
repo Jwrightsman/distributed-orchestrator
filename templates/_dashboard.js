@@ -264,8 +264,10 @@ function closeModal(id, opts = {}) {
   }
 }
 
+const OVERLAYS = ['output-modal', 'node-modal', 'shortcuts'];
+
 function anyModalOpen() {
-  return ['output-modal', 'node-modal'].some(id => !$(id).hidden);
+  return OVERLAYS.some(id => !$(id).hidden);
 }
 
 // ── Feedback ─────────────────────────────────────────────────────
@@ -505,6 +507,27 @@ function renderNodes(nodes) {
   }).join('');
 }
 
+// ── Elapsed time ─────────────────────────────────────────────────
+// The pipeline card already did this well; anything that takes minutes
+// deserves it. Without a clock, "building" for four minutes and "wedged" for
+// four minutes look exactly the same.
+
+function formatElapsed(seconds) {
+  return seconds >= 60 ? `${Math.floor(seconds / 60)}m ${seconds % 60}s` : `${seconds}s`;
+}
+
+/** Tick an element's text until it leaves the document. Returns a stopper. */
+function startElapsed(el, startedAtMs) {
+  if (!el) return () => {};
+  const tick = () => {
+    if (!el.isConnected) { clearInterval(id); return; }
+    el.textContent = formatElapsed(Math.round((Date.now() - startedAtMs) / 1000));
+  };
+  const id = setInterval(tick, 1000);
+  tick();
+  return () => clearInterval(id);
+}
+
 // ── Stage bar ────────────────────────────────────────────────────
 function stageBarHtml(planDone, buildDone, reviewDone, buildLabel) {
   const planClass = planDone ? 'done' : (!planDone && !buildDone && !reviewDone ? 'active' : '');
@@ -555,16 +578,12 @@ async function pitchTask() {
       <pre class="token-stream" id="token-stream-${pipelineId}" hidden></pre>
     </div>`;
 
-  const elapsedTicker = setInterval(() => {
-    const el = $(`pelapsed-${pipelineId}`);
-    if (!el) { clearInterval(elapsedTicker); return; }
-    const secs = Math.round((Date.now() - _cardStart) / 1000);
-    el.textContent = secs >= 60 ? `${Math.floor(secs / 60)}m ${secs % 60}s` : `${secs}s`;
-  }, 1000);
-
   const empty = pipelineLog.querySelector('.empty-state');
   if (empty) pipelineLog.innerHTML = '';
   pipelineLog.insertAdjacentHTML('afterbegin', runningCard);
+
+  // Same helper the node cards use, rather than a second copy of the maths.
+  const elapsedTicker = {stop: startElapsed($(`pelapsed-${pipelineId}`), _cardStart)};
 
   // Watch events to update the stage bar while the request is in flight.
   // Uses its own cursor so it doesn't conflict with the WebSocket log.
@@ -636,7 +655,7 @@ async function pitchTask() {
     await _pollJobCompletion(data.job_id, pipelineId, task, stageWatcher, elapsedTicker);
   } catch (e) {
     clearInterval(stageWatcher);
-    clearInterval(elapsedTicker);
+    elapsedTicker.stop();
     const card = $(`pipeline-${pipelineId}`);
     if (card) {
       card.classList.remove('running');
@@ -683,7 +702,7 @@ async function _pollJobCompletion(jobId, pipelineId, task, stageWatcher, elapsed
       const job = await (await fetch(`/jobs/${jobId}`)).json();
       if (job.status === 'complete' || job.status === 'failed' || job.status === 'cancelled') {
         clearInterval(stageWatcher);
-        clearInterval(elapsedTicker);
+        elapsedTicker.stop();
         _showCompletedCard(pipelineId, task, {
           plan: job.plan || [],
           project_dir: job.project_dir || '',
@@ -951,6 +970,8 @@ function appendEvent(ev) {
   log.scrollTop = log.scrollHeight;
 }
 
+const _nodeClocks = {};
+
 function _setNodeBusy(nodeId, taskTitle) {
   const card = $(`nodecard-${nodeId}`);
   if (!card) return;
@@ -964,7 +985,12 @@ function _setNodeBusy(nodeId, taskTitle) {
     active.className = 'node-active-task';
     card.appendChild(active);
   }
-  active.textContent = '▶ ' + taskTitle;
+  // A builder subtask runs 40–330 seconds on this hardware, so a card that
+  // says only "building" cannot be told from one that has quietly wedged.
+  active.innerHTML = `<span>▶ ${escHtml(taskTitle)}</span>` +
+                     `<span class="node-elapsed" id="nodeclock-${escHtml(nodeId)}"></span>`;
+  _nodeClocks[nodeId]?.();
+  _nodeClocks[nodeId] = startElapsed($(`nodeclock-${nodeId}`), Date.now());
 }
 
 function _setNodeIdle(nodeId, creditsEarned) {
@@ -977,6 +1003,8 @@ function _setNodeIdle(nodeId, creditsEarned) {
   if (dot) dot.className = 'node-dot';
   const active = card.querySelector('.node-active-task');
   if (active) active.remove();
+  _nodeClocks[nodeId]?.();
+  delete _nodeClocks[nodeId];
 
   if (creditsEarned > 0) {
     const flash = document.createElement('div');
@@ -1406,6 +1434,169 @@ const RETRIES = {
   socket:    () => { _wsAttempts = 0; setConnectionState('reconnecting'); connectWebSocket(); },
 };
 
+// ── Keyboard ─────────────────────────────────────────────────────
+// Two shortcuts existed: Enter to pitch, Escape to close. Everything the
+// mouse can reach is now reachable without it, and the palette is built from
+// the same functions the buttons call, so the two cannot drift apart.
+
+const SHORTCUTS = [
+  {keys: ['⌘K', 'Ctrl K'], what: 'Open the command palette'},
+  {keys: ['/'],            what: 'Focus the pitch box'},
+  {keys: ['g', 'o'],       what: 'Go to Overview'},
+  {keys: ['g', 'r'],       what: 'Go to Runs'},
+  {keys: ['g', 'g'],       what: 'Go to Gallery'},
+  {keys: ['g', 'n'],       what: 'Go to Nodes'},
+  {keys: ['g', 'p'],       what: 'Go to Projects'},
+  {keys: ['g', 'u'],       what: 'Go to Guild'},
+  {keys: ['?'],            what: 'Show this list'},
+  {keys: ['Esc'],          what: 'Close whatever is open'},
+];
+
+const GO_KEYS = {o: 'overview', r: 'runs', g: 'gallery', n: 'nodes', p: 'projects', u: 'guild'};
+
+/** The commands the palette offers. Recent runs are appended at open time. */
+function baseCommands() {
+  return [
+    ...TABS.map(t => ({
+      label: `Go to ${TAB_TITLES[t]}`, hint: `g ${Object.keys(GO_KEYS).find(k => GO_KEYS[k] === t)}`,
+      run: () => go(t),
+    })),
+    {label: 'Pitch a task', hint: '/', run: () => focusPitch()},
+    {label: 'Start a project', run: () => { go('projects'); openNewProjectForm(); }},
+    {label: 'Copy the join command', run: () =>
+      copyToClipboard(`python join.py ${location.origin}`, 'Join command copied')},
+    {label: 'Toggle light / dark', run: () => toggleTheme()},
+    {label: 'Open the network status page', run: () => { location.href = '/status'; }},
+    {label: 'Show keyboard shortcuts', hint: '?', run: () => openShortcuts()},
+  ];
+}
+
+let _paletteItems = [];
+let _paletteIndex = 0;
+let _recentRuns = [];
+
+function isTyping(el) {
+  return el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+}
+
+async function openPalette() {
+  if (!$('palette').hidden) return;
+  _lastFocused = document.activeElement;
+  $('palette').hidden = false;
+  const input = $('palette-input');
+  input.value = '';
+  // Runs are fetched lazily so the palette costs nothing until it is used.
+  try {
+    const data = await (await fetch('/history?limit=8')).json();
+    _recentRuns = (data.runs || []).map(r => ({
+      label: `Open run: ${r.task}`,
+      hint: relativeTime(r.timestamp),
+      run: () => openRun(r.timestamp),
+    }));
+  } catch (e) { _recentRuns = []; }
+  filterPalette('');
+  input.focus();
+}
+
+function closePalette() {
+  const p = $('palette');
+  if (p.hidden) return;
+  p.hidden = true;
+  if (_lastFocused && document.contains(_lastFocused)) _lastFocused.focus();
+}
+
+function filterPalette(query) {
+  const q = query.trim().toLowerCase();
+  const all = baseCommands().concat(_recentRuns);
+  _paletteItems = q
+    ? all.filter(c => c.label.toLowerCase().includes(q))
+    : all;
+  _paletteIndex = 0;
+  renderPalette();
+}
+
+function renderPalette() {
+  const list = $('palette-list');
+  if (!_paletteItems.length) {
+    list.innerHTML = '<li class="palette-empty">Nothing matches that.</li>';
+    return;
+  }
+  list.innerHTML = _paletteItems.map((c, i) => `
+    <li class="palette-item${i === _paletteIndex ? ' is-active' : ''}"
+        role="option" id="palette-opt-${i}" aria-selected="${i === _paletteIndex}"
+        data-palette-index="${i}">
+      <span class="palette-label">${escHtml(c.label)}</span>
+      ${c.hint ? `<span class="palette-hint">${escHtml(c.hint)}</span>` : ''}
+    </li>`).join('');
+  $('palette-input').setAttribute('aria-activedescendant', `palette-opt-${_paletteIndex}`);
+  list.querySelector('.is-active')?.scrollIntoView({block: 'nearest'});
+}
+
+function movePalette(delta) {
+  if (!_paletteItems.length) return;
+  _paletteIndex = (_paletteIndex + delta + _paletteItems.length) % _paletteItems.length;
+  renderPalette();
+}
+
+function runPaletteItem(i = _paletteIndex) {
+  const item = _paletteItems[i];
+  if (!item) return;
+  closePalette();
+  item.run();
+}
+
+function openShortcuts() {
+  $('shortcut-list').innerHTML = SHORTCUTS.map(s => `
+    <div class="shortcut-row">
+      <dt>${s.keys.map(k => `<kbd>${escHtml(k)}</kbd>`).join('<span class="then">then</span>')}</dt>
+      <dd>${escHtml(s.what)}</dd>
+    </div>`).join('');
+  openModal('shortcuts');
+}
+
+// ── The key handler ──────────────────────────────────────────────
+let _goPending = false;
+let _goTimer = null;
+
+document.addEventListener('keydown', (e) => {
+  const typing = isTyping(document.activeElement);
+
+  // ⌘K / Ctrl-K works even while typing — that is the point of it.
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+    e.preventDefault();
+    $('palette').hidden ? openPalette() : closePalette();
+    return;
+  }
+
+  if (!$('palette').hidden) {
+    if (e.key === 'ArrowDown') { e.preventDefault(); movePalette(1); return; }
+    if (e.key === 'ArrowUp') { e.preventDefault(); movePalette(-1); return; }
+    if (e.key === 'Enter') { e.preventDefault(); runPaletteItem(); return; }
+    if (e.key === 'Escape') { e.preventDefault(); closePalette(); return; }
+    return;
+  }
+
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (typing) return;   // never steal a key from a field
+
+  if (e.key === '/') { e.preventDefault(); focusPitch(); return; }
+  if (e.key === '?') { e.preventDefault(); openShortcuts(); return; }
+
+  // g-then-key. A short window, so a stray g does not swallow the next key
+  // for the rest of the session.
+  if (_goPending) {
+    clearTimeout(_goTimer);
+    _goPending = false;
+    const view = GO_KEYS[e.key.toLowerCase()];
+    if (view) { e.preventDefault(); go(view); }
+    return;
+  }
+  if (e.key.toLowerCase() === 'g') {
+    _goPending = true;
+    _goTimer = setTimeout(() => { _goPending = false; }, 1200);
+  }
+});
+
 // ── Wiring ───────────────────────────────────────────────────────
 // One delegated listener rather than an onclick attribute per control. The
 // markup stays declarative and every one of these is keyboard-operable,
@@ -1413,7 +1604,8 @@ const RETRIES = {
 document.addEventListener('click', (e) => {
   const t = e.target.closest('[data-tab], [data-close-modal], [data-node], [data-template], ' +
                              '[data-fork], [data-share], [data-continue-project], [data-preview], ' +
-                             '[data-empty-action], [data-retry], .code-block-copy');
+                             '[data-empty-action], [data-retry], [data-palette-index], ' +
+                             '.code-block-copy');
   if (!t) return;
 
   if (t.dataset.tab) { showTab(t.dataset.tab); return; }
@@ -1433,6 +1625,7 @@ document.addEventListener('click', (e) => {
   if (t.dataset.preview) { openRun(t.dataset.preview); return; }
   if (t.dataset.emptyAction) { EMPTY_ACTIONS[t.dataset.emptyAction]?.(); return; }
   if (t.dataset.retry) { RETRIES[t.dataset.retry]?.(); return; }
+  if (t.dataset.paletteIndex) { runPaletteItem(Number(t.dataset.paletteIndex)); return; }
   if (t.dataset.continueProject) {
     continueProject(t.dataset.continueProject, t.dataset.projectName);
     return;
@@ -1446,9 +1639,12 @@ document.addEventListener('click', (e) => {
 });
 
 // Clicking the backdrop closes a dialog — but only the backdrop itself.
-['output-modal', 'node-modal'].forEach(id => {
+OVERLAYS.forEach(id => {
   $(id).addEventListener('click', (e) => { if (e.target === $(id)) closeModal(id); });
 });
+// Clicking the palette's backdrop closes it, like every other overlay here.
+$('palette').addEventListener('click', (e) => { if (e.target === $('palette')) closePalette(); });
+$('palette-input').addEventListener('input', (e) => filterPalette(e.target.value));
 
 $('nav-toggle').addEventListener('click', toggleNav);
 $('theme-toggle').addEventListener('click', toggleTheme);
@@ -1477,7 +1673,8 @@ $('history-search').addEventListener('input', () => {
 
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
-  if (anyModalOpen()) { closeModal('output-modal'); closeModal('node-modal'); return; }
+  if (!$('palette').hidden) { closePalette(); return; }
+  if (anyModalOpen()) { OVERLAYS.forEach(closeModal); return; }
   if ($('app').classList.contains('nav-open')) closeDrawer();
 });
 

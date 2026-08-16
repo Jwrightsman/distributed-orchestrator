@@ -253,6 +253,41 @@
   </div>
 </div>
 
+<!-- Command palette. Hidden until ⌘K / Ctrl-K, and built from the same
+     actions the mouse uses, so the two cannot drift apart. -->
+<div id="palette" class="palette" role="dialog" aria-modal="true" aria-labelledby="palette-label" hidden>
+  <div class="palette-panel">
+    <label class="sr-only" id="palette-label" for="palette-input">Search commands and runs</label>
+    <input type="text" id="palette-input" class="palette-input" autocomplete="off"
+           placeholder="Jump to a view, open a run, or run a command…"
+           role="combobox" aria-expanded="true" aria-controls="palette-list"
+           aria-autocomplete="list">
+    <ul id="palette-list" class="palette-list" role="listbox" aria-label="Commands"></ul>
+    <div class="palette-foot">
+      <span><kbd>↑</kbd><kbd>↓</kbd> move</span>
+      <span><kbd>↵</kbd> run</span>
+      <span><kbd>esc</kbd> close</span>
+      <span class="spacer"></span>
+      <span><kbd>?</kbd> all shortcuts</span>
+    </div>
+  </div>
+</div>
+
+<!-- Shortcut reference, opened with ? -->
+<div id="shortcuts" class="modal" role="dialog" aria-modal="true" aria-labelledby="shortcuts-title" hidden>
+  <div class="modal-panel is-narrow">
+    <div class="modal-head">
+      <h2 id="shortcuts-title" class="modal-title">Keyboard shortcuts</h2>
+      <div class="modal-actions">
+        <button type="button" class="btn-quiet" data-close-modal="shortcuts">Close</button>
+      </div>
+    </div>
+    <div class="modal-body">
+      <dl class="shortcut-list" id="shortcut-list"></dl>
+    </div>
+  </div>
+</div>
+
 <!-- DASHBOARD_JS -->
 </body>
 </html>
