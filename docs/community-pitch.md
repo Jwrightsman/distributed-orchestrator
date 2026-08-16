@@ -22,6 +22,8 @@ open.
 | Eval noise floor | two identical runs: 17/28 then 15/28, **18 of 28 flipped** | `prompts/v3.py`, `evals/compare.py` |
 | Bar chart, generated live | **10/10** (Fisher p = 0.0004; true rate ≥74% at 95%) | `docs/showcase-ceiling.md` |
 | Snake game | **2/10** | `docs/showcase-ceiling.md` |
+| Ensemble vs decomposition | **12/22 vs 2/10, p = 0.073 — inconclusive** | `docs/ensemble-vs-decomposition.md` |
+| Cost per attempt | ensemble **~6 min** · decomposition **~50 min** | `docs/ensemble-vs-decomposition.md` |
 | WAN overhead | 216 ms RTT Indiana→Germany; network ≈ **2%** of a task | README |
 | Restart recovery | 17/17 checks (Linux, Ollama stopped) | `scripts/restart_recovery.py` |
 | Known memory leak | ~1.25 MB per task, linear, source not yet found | README, "Known issue" |
@@ -279,6 +281,18 @@ minute without thinking. Edit the tone freely; keep the honesty.
 > There is a verification module in the repo that does catch it: occasionally the same subtask goes to two nodes and the results are compared on shape — same artifact kind, both parse, similar size — because two honest small models never produce identical text. Disagreement lowers both nodes' scores, since from the outside you cannot tell which one was wrong, and over many samples the consistently-odd node separates itself. Reputation then decides who gets offered work *first*, never who is excluded — exclusion stays the circuit breaker's job.
 >
 > It is wired in and **off by default** (`verify_rate: 0`), because every duplicate is a whole extra inference. Turning it on is a config change, not a rewrite. Today the honest answer is "trusted network, plus a mechanism that is built and measured but not switched on."
+
+### "Isn't splitting one small artifact across agents the problem?"
+
+> Probably, yes — and I tested it rather than arguing about it.
+>
+> I built the alternative: instead of decomposing a task, N nodes each write the **complete** artifact independently and the coordinator keeps whichever one passes mechanical checks. On the Snake game, the one thing this system is measurably bad at, single-model attempts came back playable **12 times out of 22** against decomposition's 2 out of 10.
+>
+> That looks decisive and it is not: **Fisher exact gives p = 0.073, which is not significant**, and I am not going to promote an architecture on a number I have already deleted two prompt sets for. Worth knowing why it cannot be fixed by running more trials — the test is limited by the *smaller* sample, and the baseline is ten runs, so the new arm could grow forever without crossing 0.05. Settling it needs ~19 runs per arm, most of the cost on the slow side.
+>
+> The part that does hold: **one decomposed attempt costs about 50 minutes, one single-model attempt about 6.** At equal compute you get roughly eight independent tries instead of one, and even taking the worst end of one interval against the best end of the other, that wins comfortably. So the honest summary is "decomposition is probably the wrong shape for tightly-coupled artifacts, on suggestive-but-not-significant evidence, and it is definitely the more expensive shape."
+>
+> Write-up with the raw data: `docs/ensemble-vs-decomposition.md`.
 
 ### "Why not just use the cloud? This is slower and worse."
 

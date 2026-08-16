@@ -225,6 +225,24 @@ between verification and settlement. Property-based state-machine tests are the 
 (complete candidates, select by test), DAG (dependent subtasks, typed handoffs), single (one
 capable node), consensus (duplicate where agreement means something). The planner picks.
 
+> **What building and measuring ensemble taught, Aug 15** — none of the others are built, and
+> this is the note for whoever picks them up (full result:
+> [docs/ensemble-vs-decomposition.md](docs/ensemble-vs-decomposition.md)):
+>
+> - **"Single" is not a separate strategy.** It is ensemble with N=1. Build the parameter,
+>   not five code paths.
+> - **Selection is the hard half, not generation.** Ensemble is only as good as the checks
+>   that pick the winner, and those checks took *four* bug fixes to become trustworthy. A
+>   strategy needing semantic judgement to select — rather than parse/load/draw/respond —
+>   inherits a much harder problem than the one that stopped this experiment being conclusive.
+> - **Cost ratio beats success rate.** Ensemble's practical advantage came from costing ~6
+>   minutes an attempt against decomposition's ~50, not from being better per attempt. Any
+>   strategy comparison that reports quality without cost is measuring the wrong axis.
+> - **Pick the strategy per workload, and measure it.** The same harness scores any showcase
+>   candidate; the uncoupled case (`--candidate chart`) runs in a fifth of the time.
+> - **A ten-run baseline caps what any comparison can prove.** Whatever is compared next,
+>   size *both* arms first — see the write-up on why 22 trials could not clear p<0.05.
+
 **Task contracts instead of prompt strings.** Typed inputs, output schema, required
 capabilities, verification policy, confidentiality, timeout, output cap, network policy. The
 prompt lives *inside* the contract. This is the real protocol abstraction.

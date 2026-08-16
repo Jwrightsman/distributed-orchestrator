@@ -44,6 +44,19 @@ after the checker itself was repaired (see "The instrument" below).
 7/14 and 5/8 — consistent with each other, which is worth as much as the pooled
 figure.
 
+**Why Fisher and not `evals/compare.py`.** `compare.py` is this project's
+instrument for prompt-set comparisons, and it is the right one there: the same
+28 prompts run twice gives *paired* data, so it uses an exact one-sided McNemar
+test over the prompts that flipped. This comparison has no pairing — the two
+arms are different artifacts produced by different architectures, with no
+correspondence between run *i* on one side and run *i* on the other. Fisher's
+exact test on the 2x2 table is the correct test for unpaired proportions, and
+it is implemented in `scripts/ensemble_experiment.py` with a check that it
+reproduces the project's published 10/10-vs-2/10 result of p = 0.0004.
+
+Using `compare.py` here would have meant inventing a pairing that does not
+exist.
+
 ### The verdict is INCONCLUSIVE, and that is the honest headline
 
 A 55% rate against 20% looks like a large win and is not a demonstrated one.
