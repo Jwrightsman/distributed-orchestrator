@@ -42,6 +42,7 @@ A collectively-owned AI system powered by consumer hardware. Phase 0 demo: local
 - `server.py` — orchestrator that accepts pitches and distributes builder tasks to worker nodes
 - `node.py` — worker that connects to orchestrator, polls for tasks, runs them via local Ollama
 - POST /pitch/distributed — runs planner/reviewer locally, distributes builder tasks to nodes
+- POST /jobs/{id}/cancel — stops dispatching; work already on a machine finishes and is paid
 - Falls back to local execution if no nodes are connected
 
 ## Hardware context

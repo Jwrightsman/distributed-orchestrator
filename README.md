@@ -247,6 +247,7 @@ See **[docs/DEPLOY.md](docs/DEPLOY.md)** — three copy-paste paths: LAN (no set
 | `/pitch/async` | POST | Submit job, return `job_id` immediately |
 | `/pitch/distributed` | POST | Distribute builders to worker nodes |
 | `/jobs/{id}` | GET | Poll async job status and result |
+| `/jobs/{id}/cancel` | POST | Stop a running pitch — drops queued subtasks, lets running ones finish and settle |
 | `/jobs` | GET | List recent jobs |
 | `/dashboard` | GET | Live web UI |
 | `/run/{id}` | GET | **Permalink for one run** — plan, machines, timings, review, credits. Shareable, previews in Discord/Reddit |

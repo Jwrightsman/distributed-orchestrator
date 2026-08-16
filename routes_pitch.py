@@ -17,6 +17,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from ollama_client import generate
 import orchestrator
 from orchestrator import (
+    PipelineCancelled,
     _extract_final_output,
     _extract_issues,
     _extract_rating,
@@ -140,6 +141,7 @@ async def pitch_async(req: PitchRequest, request: Request, response: Response):
         "result": None,
         "error": None,
         "trace_id": trace_id,
+        "cancel_requested": False,
     }
     _db_write_job(jobs[job_id])
     asyncio.create_task(_run_job(job_id, req.task, req.project_id, trace_id))
@@ -153,6 +155,9 @@ async def _run_job(job_id: str, task: str, project_id: str | None = None, trace_
     jobs[job_id]["status"] = "running"
     jobs[job_id]["started_at"] = datetime.now(timezone.utc).isoformat()
     _emit("pitch", {"task": task, "job_id": job_id, "trace_id": trace_id})
+
+    def should_cancel() -> bool:
+        return bool(jobs.get(job_id, {}).get("cancel_requested"))
 
     def on_plan(subtasks):
         _emit("plan", {"task": task, "job_id": job_id, "subtasks": [s["title"] for s in subtasks], "trace_id": trace_id})
@@ -192,6 +197,10 @@ async def _run_job(job_id: str, task: str, project_id: str | None = None, trace_
                     requires = [model_tag]
 
             def _enqueue(tid: str, exclude: str | None = None) -> None:
+                # A cancelled job must not put more work on anyone's machine,
+                # even if the pipeline has not yet reached its next wave check.
+                if should_cancel():
+                    return
                 entry = {
                     "task_id": tid,
                     "title": st["title"],
@@ -229,6 +238,9 @@ async def _run_job(job_id: str, task: str, project_id: str | None = None, trace_
                         return t["assigned_to"]
                     await asyncio.sleep(0.2)
                 return None
+
+            if should_cancel():
+                raise PipelineCancelled([], [], "building")
 
             stamp = int(time.time() * 1000)
             primary_id = f"build_{st['id']}_{stamp}"
@@ -279,11 +291,25 @@ async def _run_job(job_id: str, task: str, project_id: str | None = None, trace_
             on_token=on_token if dist_build_fn is None else None,
             project_id=project_id,
             build_fn=dist_build_fn,
+            should_cancel=should_cancel,
         )
         result["results"] = {str(k): v for k, v in result["results"].items()}
         jobs[job_id]["status"] = "complete"
         jobs[job_id]["result"] = result
         _emit("complete", {"task": task, "job_id": job_id, "project_dir": result["project_dir"], "trace_id": trace_id})
+    except PipelineCancelled as c:
+        # Not a failure. Work that was already running finished and was paid
+        # for; the run simply stops here and says what it got through.
+        jobs[job_id]["status"] = "cancelled"
+        jobs[job_id]["cancelled_during"] = c.stage
+        jobs[job_id]["completed_subtasks"] = c.completed
+        jobs[job_id]["credits_settled"] = c.credits
+        jobs[job_id]["error"] = None
+        _emit("cancelled", {
+            "task": task, "job_id": job_id, "trace_id": trace_id,
+            "stage": c.stage, "completed": len(c.completed),
+            "credits": sum(x.get("credits", 0) for x in c.credits),
+        })
     except Exception as e:
         jobs[job_id]["status"] = "failed"
         jobs[job_id]["error"] = str(e)
@@ -291,6 +317,68 @@ async def _run_job(job_id: str, task: str, project_id: str | None = None, trace_
 
     jobs[job_id]["finished_at"] = datetime.now(timezone.utc).isoformat()
     _db_write_job(jobs[job_id])
+
+
+@router.post("/jobs/{job_id}/cancel")
+async def cancel_job(job_id: str, request: Request):
+    """Stop a running pitch.
+
+    On a 4B CPU model a pitch is minutes, and until now there was no way to
+    take one back. What this does and — as importantly — what it does not:
+
+      * Queued subtasks nobody has picked up yet are dropped immediately.
+      * A subtask already running on a machine is **left alone**. Killing it
+        mid-generation would throw away work someone's CPU has already done,
+        and under attempt binding (#45) a reclaimed attempt settles nothing,
+        so the node would be paid zero for real work. It finishes and is paid.
+      * The job is marked `cancelling` while anything is still out, and
+        `cancelled` once the pipeline unwinds.
+      * Nothing already written to the ledger is reversed.
+
+    Returns what is still outstanding so the caller can say "waiting for one
+    machine to finish" rather than pretending it stopped instantly.
+    """
+    _check_pitch_key(request)
+    job = jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="No such job")
+
+    if job["status"] in ("complete", "failed", "cancelled"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"That job already finished ({job['status']}) — nothing to cancel.",
+        )
+
+    job["cancel_requested"] = True
+
+    # Drop this job's unclaimed work. Anything in task_inflight has been handed
+    # to a node and is deliberately left to finish.
+    dropped = [t["task_id"] for t in task_queue if t.get("job_id") == job_id]
+    task_queue[:] = [t for t in task_queue if t.get("job_id") != job_id]
+    still_running = [
+        tid for tid, t in task_inflight.items() if t.get("job_id") == job_id
+    ]
+
+    job["status"] = "cancelling"
+    _db_write_job(job)
+    _emit("cancelling", {
+        "job_id": job_id, "task": job.get("task", ""),
+        "dropped": len(dropped), "still_running": len(still_running),
+        "trace_id": job.get("trace_id", ""),
+    })
+
+    return {
+        "job_id": job_id,
+        "status": "cancelling",
+        "dropped_from_queue": len(dropped),
+        "still_running": len(still_running),
+        "detail": (
+            f"Stopped. {len(still_running)} subtask(s) already on a machine will "
+            "finish and be paid for."
+            if still_running else
+            "Stopped. Nothing was left running."
+        ),
+    }
 
 
 @router.post("/public/pitch")
@@ -402,6 +490,14 @@ async def get_job(job_id: str):
         "project_dir": job["result"]["project_dir"] if job["result"] else None,
         "plan": job["result"]["plan"] if job["result"] else None,
         "rating": job["result"].get("rating") if job["result"] else None,
+        # A cancelled run is not a failed one, and saying what it did get
+        # through is the difference between "stopped" and "wasted".
+        "cancel_requested": bool(job.get("cancel_requested")),
+        "cancelled_during": job.get("cancelled_during"),
+        "completed_subtasks": job.get("completed_subtasks"),
+        "credits_settled": sum(
+            c.get("credits", 0) for c in (job.get("credits_settled") or [])
+        ) or None,
     }
 
 

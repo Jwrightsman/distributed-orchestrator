@@ -548,6 +548,7 @@ async function pitchTask() {
         <div class="pipeline-head-right">
           <span class="pipeline-elapsed" id="pelapsed-${pipelineId}">0s</span>
           <div class="pipeline-status status-running" id="pstatus-${pipelineId}">PLANNING</div>
+          <button type="button" class="btn-quiet is-sm" id="pcancel-${pipelineId}" hidden>Stop</button>
         </div>
       </div>
       <div id="pstages-${pipelineId}">${stageBarHtml(false, false, false)}</div>
@@ -624,6 +625,14 @@ async function pitchTask() {
 
     if (!data.job_id) throw new Error('Unexpected response: ' + JSON.stringify(data));
     btn.textContent = 'Running...';
+
+    // Only offered once there is a job to stop. A pitch is minutes on a 4B
+    // CPU model and there was no way to take one back.
+    const cancelBtn = $(`pcancel-${pipelineId}`);
+    if (cancelBtn) {
+      cancelBtn.hidden = false;
+      cancelBtn.addEventListener('click', () => cancelJob(data.job_id, pipelineId, cancelBtn));
+    }
     await _pollJobCompletion(data.job_id, pipelineId, task, stageWatcher, elapsedTicker);
   } catch (e) {
     clearInterval(stageWatcher);
@@ -641,12 +650,38 @@ async function pitchTask() {
   input.value = '';
 }
 
+/** Ask the server to stop. Honest about what that does and does not do. */
+async function cancelJob(jobId, pipelineId, button) {
+  if (button) { button.disabled = true; button.textContent = 'Stopping…'; }
+  const statusEl = $(`pstatus-${pipelineId}`);
+  try {
+    const resp = await fetch(`/jobs/${encodeURIComponent(jobId)}/cancel`, {method: 'POST'});
+    const body = await resp.json();
+    if (!resp.ok) {
+      notify(body.detail || 'Could not stop that run.', {kind: 'error'});
+      if (button) { button.disabled = false; button.textContent = 'Stop'; }
+      return;
+    }
+    if (statusEl) {
+      statusEl.className = 'pipeline-status status-pending';
+      statusEl.textContent = body.still_running ? 'STOPPING' : 'STOPPED';
+    }
+    // Say plainly that a machine mid-subtask is allowed to finish — otherwise
+    // "stopped" followed by thirty more seconds of activity looks like a bug.
+    notify(body.detail);
+    if (button) button.hidden = true;
+  } catch (e) {
+    notify('Could not reach the server to stop that run.', {kind: 'error'});
+    if (button) { button.disabled = false; button.textContent = 'Stop'; }
+  }
+}
+
 async function _pollJobCompletion(jobId, pipelineId, task, stageWatcher, elapsedTicker) {
   while (true) {
     await new Promise(r => setTimeout(r, 3000));
     try {
       const job = await (await fetch(`/jobs/${jobId}`)).json();
-      if (job.status === 'complete' || job.status === 'failed') {
+      if (job.status === 'complete' || job.status === 'failed' || job.status === 'cancelled') {
         clearInterval(stageWatcher);
         clearInterval(elapsedTicker);
         _showCompletedCard(pipelineId, task, {
@@ -656,6 +691,9 @@ async function _pollJobCompletion(jobId, pipelineId, task, stageWatcher, elapsed
           status: job.status,
           mode: job.mode,
           error: job.error || null,
+          cancelled_during: job.cancelled_during,
+          completed_subtasks: job.completed_subtasks || [],
+          credits_settled: job.credits_settled,
         });
         loadHistory();
         loadProjects();
@@ -671,20 +709,50 @@ function _showCompletedCard(pipelineId, task, result) {
   card.classList.remove('running');
 
   const failed = result.status === 'failed';
-  const statusClass = failed ? 'status-pending' : 'status-complete';
-  const statusText = failed ? 'FAILED' : (result.mode === 'distributed' ? 'DISTRIBUTED' : 'COMPLETE');
-  const badge = failed ? '' : ratingBadge(result.rating);
+  const cancelled = result.status === 'cancelled';
+  const statusClass = (failed || cancelled) ? 'status-pending' : 'status-complete';
+  const statusText = failed ? 'FAILED'
+    : cancelled ? 'STOPPED'
+    : (result.mode === 'distributed' ? 'DISTRIBUTED' : 'COMPLETE');
+  const badge = (failed || cancelled) ? '' : ratingBadge(result.rating);
 
+  // A stopped run lists what it did get through, and what that was paid.
+  // "Cancelled" with nothing beside it reads as work thrown away.
+  const done = result.completed_subtasks || [];
   let subtasksHtml = '<div class="subtask-list">';
-  (result.plan || []).forEach(st => {
-    subtasksHtml += `
-      <div class="subtask">
-        <span class="subtask-id">${escHtml(String(st.id))}</span>
-        <span class="subtask-title">${escHtml(st.title)}</span>
-        <span class="subtask-check" aria-hidden="true">&#10003;</span>
-      </div>`;
-  });
+  if (cancelled) {
+    done.forEach(st => {
+      subtasksHtml += `
+        <div class="subtask">
+          <span class="subtask-id">${escHtml(String(st.id))}</span>
+          <span class="subtask-title">${escHtml(st.title)}</span>
+          ${st.executor ? `<span class="mono-dim">${escHtml(st.executor)}</span>` : ''}
+          <span class="subtask-check" aria-hidden="true">&#10003;</span>
+        </div>`;
+    });
+    if (!done.length) {
+      subtasksHtml += '<div class="subtask"><span class="subtask-title">' +
+        'Stopped before any subtask finished.</span></div>';
+    }
+  } else {
+    (result.plan || []).forEach(st => {
+      subtasksHtml += `
+        <div class="subtask">
+          <span class="subtask-id">${escHtml(String(st.id))}</span>
+          <span class="subtask-title">${escHtml(st.title)}</span>
+          <span class="subtask-check" aria-hidden="true">&#10003;</span>
+        </div>`;
+    });
+  }
   subtasksHtml += '</div>';
+
+  const cancelNote = cancelled
+    ? `<p class="cancel-note">Stopped during ${escHtml(result.cancelled_during || 'the run')}.
+       ${done.length} subtask${done.length === 1 ? '' : 's'} finished and
+       ${result.credits_settled ? `<b>${escHtml(result.credits_settled)} credits</b> were settled`
+                                : 'nothing was settled'}.
+       Work already on a machine was allowed to finish rather than being thrown away.</p>`
+    : '';
 
   const ts = result.project_dir ? result.project_dir.split(/[\\/]/).pop() : '';
 
@@ -693,8 +761,9 @@ function _showCompletedCard(pipelineId, task, result) {
       <div class="pipeline-task">${escHtml(task)}</div>
       <div class="pipeline-head-right">${badge}<div class="pipeline-status ${statusClass}">${statusText}</div></div>
     </div>
-    ${stageBarHtml(true, true, true)}
+    ${cancelled ? '' : stageBarHtml(true, true, true)}
     ${subtasksHtml}
+    ${cancelNote}
     ${ts ? `<a class="run-link" href="/run/${encodeURIComponent(ts)}">Open the run page &#8594;</a>` : ''}
     ${result.error ? `<div class="error-box">${escHtml(result.error)}</div>` : ''}
   `;
@@ -830,6 +899,8 @@ const EVENT_LABELS = {
   build:        {agent: 'BUILDER',  cls: 'is-build'},
   review_start: {agent: 'REVIEWER', cls: 'is-review'},
   complete:     {agent: 'DONE',     cls: 'is-done'},
+  cancelling:   {agent: 'STOPPING', cls: 'is-error'},
+  cancelled:    {agent: 'STOPPED',  cls: 'is-error'},
   error:        {agent: 'ERROR',    cls: 'is-error'},
 };
 
@@ -861,6 +932,14 @@ function appendEvent(ev) {
   else if (ev.type === 'build') msg = `Subtask ${ev.subtask_id} complete: ${escHtml(ev.subtask)}`;
   else if (ev.type === 'review_start') msg = 'Reviewing combined output...';
   else if (ev.type === 'complete') msg = `Pipeline complete → ${escHtml(ev.project_dir)}`;
+  else if (ev.type === 'cancelling') {
+    msg = `Stop requested — dropped ${ev.dropped} queued subtask(s), ` +
+          `${ev.still_running} already running will finish`;
+  }
+  else if (ev.type === 'cancelled') {
+    msg = `Stopped during ${escHtml(ev.stage)} — ${ev.completed} subtask(s) finished, ` +
+          `${ev.credits} credits settled`;
+  }
   else if (ev.type === 'error') msg = `Error: ${escHtml(ev.message || '')}`;
 
   const log = $('event-log');

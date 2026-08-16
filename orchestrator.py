@@ -519,6 +519,29 @@ async def review(task: str, subtasks: list[dict], results: dict[int, str], memor
 # Hard cap on revision passes. The loop also breaks early when the reviewer is
 # satisfied or the reviser returns junk, but this is the bound that guarantees
 # a pitch always terminates — a reviewer that is never happy must not spin.
+class PipelineCancelled(Exception):
+    """Raised when a run is stopped on request.
+
+    Cancellation is cooperative and coarse on purpose. A builder subtask is a
+    single model call that cannot be interrupted without throwing away a
+    partial generation, and on a 4B CPU model that is minutes of someone
+    else's electricity. So a cancelled run stops *dispatching*: work already
+    handed to a machine finishes and is paid for, and nothing new is sent.
+
+    Carries what had been completed when the stop took effect, so the caller
+    can report it rather than reporting a blank failure.
+    """
+
+    def __init__(self, completed: list[dict], credits: list[dict], stage: str):
+        self.completed = completed
+        self.credits = credits
+        self.stage = stage
+        n = len(completed)
+        super().__init__(
+            f"Cancelled during {stage} after {n} subtask{'' if n == 1 else 's'}"
+        )
+
+
 _MAX_REVISIONS = 2
 
 
@@ -601,6 +624,7 @@ async def run_pipeline(
     on_token=None,
     project_id: str | None = None,
     build_fn=None,
+    should_cancel=None,
 ) -> dict:
     """Run the full planner -> builder -> reviewer pipeline.
 
@@ -614,6 +638,12 @@ async def run_pipeline(
       When provided, replaces the default local build() call for every subtask.
       Use this to dispatch builds to remote worker nodes. When build_fn is set,
       on_token is not called (remote nodes don't stream tokens back yet).
+
+    should_cancel() -> bool
+      Checked between waves and before the review. Returning True raises
+      PipelineCancelled, which carries the subtasks that did finish and the
+      credits they settled. It is never checked *during* a wave: a subtask
+      already running on someone's machine is allowed to finish and be paid.
 
     Returns a dict with the plan, individual results, and final review.
     """
@@ -636,7 +666,16 @@ async def run_pipeline(
         except (ImportError, FileNotFoundError):
             pass
 
+    def _stop_if_cancelled(stage: str):
+        if should_cancel and should_cancel():
+            done = [
+                {"id": st["id"], "title": st["title"], **subtask_stats.get(st["id"], {})}
+                for st in subtasks if st["id"] in results
+            ]
+            raise PipelineCancelled(done, list(credits), stage)
+
     # 1. Plan
+    subtasks: list[dict] = []
     subtasks = await plan(task, memory_context=memory_context)
     log_contribution(node_id, "pitch", credits=1, task=task[:100])
     credits.append({"contributor": node_id, "type": "pitch", "credits": 1,
@@ -684,6 +723,9 @@ async def run_pipeline(
 
     remaining = {st["id"]: st for st in subtasks}
     while remaining:
+        # Between waves, not inside one: whatever is already out on a machine
+        # finishes and settles. Only undispatched work is abandoned.
+        _stop_if_cancelled("building")
         # All tasks whose deps are fully resolved can run this wave
         wave = [st for st in remaining.values()
                 if all(dep_id in results for dep_id in st.get("depends_on", []))]
@@ -695,6 +737,9 @@ async def run_pipeline(
             remaining.pop(st_id)
 
     # 3. Review
+    # Reviewing a run somebody just cancelled would spend another model call
+    # on a deliverable nobody is waiting for.
+    _stop_if_cancelled("review")
     if on_review_start:
         on_review_start()
     _review_t0 = time.time()

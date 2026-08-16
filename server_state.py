@@ -562,7 +562,7 @@ def _cleanup_pass():
     stale_jobs = []
     for jid, job in jobs.items():
         finished = job.get("finished_at")
-        if finished and job["status"] in ("complete", "failed"):
+        if finished and job["status"] in ("complete", "failed", "cancelled"):
             try:
                 finished_ts = datetime.fromisoformat(finished).timestamp()
                 if finished_ts < job_cutoff:

@@ -455,6 +455,17 @@ body {
   white-space: pre-wrap; word-break: break-word;
 }
 
+/* What a stopped run says for itself. Deliberately not styled as an error:
+   stopping on purpose is a normal outcome, and the work that finished was
+   real work that got paid. */
+.cancel-note {
+  margin-top: 10px; padding: 10px 12px;
+  background: var(--surface-sunken); border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  font-size: 13px; color: var(--text-dim); line-height: 1.6;
+}
+.cancel-note b { color: var(--text); font-weight: 600; }
+
 .error-box {
   margin-top: 8px; padding: 8px 10px;
   background: var(--danger-wash);
