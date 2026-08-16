@@ -91,7 +91,3 @@ async def landing():
 async def dashboard():
     return _page("dashboard.html")
 
-
-@router.get("/try", response_class=HTMLResponse)
-async def try_page():
-    return _page("try.html")

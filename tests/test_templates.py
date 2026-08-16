@@ -13,6 +13,7 @@ or an unlabelled control is invisible to the person who wrote the page and
 decisive for the person using a screen reader.
 """
 
+import re
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -115,12 +116,35 @@ def test_served_html_is_balanced(client, route):
     assert not errors, f"{route} is malformed:\n  " + "\n  ".join(errors)
 
 
+def _a_run_on_disk(name: str = "20260816_090000") -> str:
+    """Write the minimum a run page needs, so the check never has to skip."""
+    import json
+    d = Path("output") / name
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "full_log.json").write_text(json.dumps({
+        "task": "Build a CSV deduplication script", "timestamp": name,
+        "plan": [{"id": 1, "title": "Read the CSV", "depends_on": []}],
+        "results": {"1": "x"}, "review": "PASS", "rating": "PASS",
+        "code_files": [], "code_problems": [], "mode": "local", "project_id": "",
+    }), encoding="utf-8")
+    return name
+
+
+def test_node_page_is_balanced(client):
+    """/node/{id} renders status.html with a different set of figures, and the
+    branch for a machine that has disconnected is a different shape again."""
+    from ledger import log_contribution
+    log_contribution("some-laptop", "compute", credits=5, task="a subtask")
+    r = client.get("/node/some-laptop")
+    assert r.status_code == 200
+    errors = _check_balance(r.text)
+    assert not errors, "/node/{id} is malformed:\n  " + "\n  ".join(errors)
+    assert "is not connected" in r.text, "an offline machine should say so"
+
+
 def test_run_page_is_balanced(client):
     """The run permalink is generated per run, so it needs its own check."""
-    runs = client.get("/history?limit=1").json()["runs"]
-    if not runs:
-        pytest.skip("no runs on disk to render")
-    r = client.get(f"/run/{runs[0]['timestamp']}")
+    r = client.get(f"/run/{_a_run_on_disk()}")
     assert r.status_code == 200
     errors = _check_balance(r.text)
     assert not errors, "/run/{id} is malformed:\n  " + "\n  ".join(errors)
@@ -186,12 +210,86 @@ def test_pages_honour_reduced_motion():
         )
 
 
+def test_the_sidebar_becomes_a_drawer_on_a_phone(client):
+    """The established rule: below 768px a fixed sidebar eats a third of the
+    screen, so it becomes a slide-over. The dashboard already did that at
+    900px; what it lacked was any way back out of it."""
+    css = (TEMPLATES / "_dashboard.css").read_text(encoding="utf-8")
+    assert ".app.nav-open .nav" in css and "translateX(-100%)" in css, "no drawer"
+    assert ".nav-scrim" in css, "the drawer opens over live content with no backdrop"
+
+    body = client.get("/dashboard").text
+    assert 'aria-expanded="false"' in body, "the toggle does not report its state"
+    assert 'aria-controls="nav"' in body, "the toggle is not tied to what it opens"
+
+    js = (TEMPLATES / "_dashboard.js").read_text(encoding="utf-8")
+    for behaviour, why in [
+        ("closeDrawer", "nothing closes the drawer"),
+        ("_navScrim.addEventListener('click', closeDrawer)", "tapping outside does not close it"),
+        ("if ($('app').classList.contains('nav-open')) closeDrawer()", "Escape does not close it"),
+    ]:
+        assert behaviour in js, why
+
+
+def test_modals_return_focus_to_whatever_opened_them(client):
+    """Closing a dialog that dropped focus on <body> restarts the tab order at
+    the top of the page, which is how keyboard users lose their place."""
+    js = (TEMPLATES / "_dashboard.js").read_text(encoding="utf-8")
+    assert "_lastFocused = document.activeElement" in js
+    assert "_lastFocused.focus()" in js
+    body = client.get("/dashboard").text
+    assert body.count('aria-modal="true"') == 2, "dialogs are not announced as modal"
+
+
+REACHES = {
+    "/":          ('href="/dashboard"', 'href="/try"'),
+    "/dashboard": ('href="/"', 'href="/try"', 'href="/status"'),
+    "/try":       ('href="/"', 'href="/dashboard"'),
+    "/status":    ('href="/"', 'href="/dashboard"', 'href="/try"'),
+}
+
+
+@pytest.mark.parametrize("route,links", REACHES.items())
+def test_every_page_can_reach_the_others(client, route, links):
+    """The three pages were islands: /dashboard had no way back to / or /try.
+
+    Global navigation is the topbar's job; the sidebar keeps in-app sections.
+    """
+    body = client.get(route).text
+    for link in links:
+        assert link in body, f"{route} cannot reach {link}"
+
+
+def test_a_run_page_can_reach_the_rest_of_the_site(client):
+    """It is the page people arrive on from a link, so it is the page that
+    most needs to lead somewhere."""
+    body = client.get(f"/run/{_a_run_on_disk('20260816_090100')}").text
+    for link in ('href="/"', 'href="/dashboard"', 'href="/try"'):
+        assert link in body, f"the run page cannot reach {link}"
+
+
 def test_try_page_is_usable_on_a_phone():
-    """/try is the page most likely to be opened from a link in a post."""
+    """/try is the page most likely to be opened from a link in a post, and it
+    shipped with zero media queries — a 640px form handed to a 380px screen."""
     src = (TEMPLATES / "try.html").read_text(encoding="utf-8")
     assert "@media" in src, "try.html has no media queries at all"
-    assert "aria-live" in src, "run status updates are not announced"
     assert "<main" in src, "no main landmark"
+    assert "font-size: 16px" in src, "a sub-16px field makes iOS zoom the page on focus"
+
+
+def test_try_announces_run_progress(client):
+    """A run takes minutes. Every status change has to be spoken, not only
+    drawn, or a screen reader user is left with a page that never changes."""
+    import config
+    cfg = config.get()
+    was = cfg.get("public_pitch")
+    cfg["public_pitch"] = True
+    try:
+        body = client.get("/try").text
+        assert body.count("aria-live") >= 2, "run status and stage updates are not announced"
+        assert 'for="task"' in body, "the pitch field has no label"
+    finally:
+        cfg["public_pitch"] = was
 
 
 def test_try_textarea_uses_a_surface_token_not_a_border_token():
@@ -199,6 +297,7 @@ def test_try_textarea_uses_a_surface_token_not_a_border_token():
     a hairline colour, so it renders as a barely-there tint and drifts the
     moment borders are retuned."""
     src = (TEMPLATES / "try.html").read_text(encoding="utf-8")
+    src = re.sub(r"/\*.*?\*/", "", src, flags=re.S)   # comments may name the token
     block = src[src.index("textarea {"):src.index("}", src.index("textarea {"))]
     assert "--border-subtle" not in block, "textarea fills its background with a border token"
     assert "--surface" in block, "textarea has no surface token for its fill"

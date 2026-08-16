@@ -19,7 +19,8 @@ from fastapi.testclient import TestClient
 from server import app
 
 TEMPLATES = Path(__file__).resolve().parent.parent / "templates"
-PAGES = ("index.html", "dashboard.html", "try.html", "run.html", "status.html", "node.html")
+PAGES = ("index.html", "dashboard.html", "try.html", "run.html", "status.html")
+# /node/{id} renders status.html — one layout, two sets of figures.
 ROUTES = {"/": "index.html", "/dashboard": "dashboard.html", "/try": "try.html"}
 
 # Partials carry most of the dashboard's styling now, so the no-hardcoded-colour

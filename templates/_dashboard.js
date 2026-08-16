@@ -214,7 +214,13 @@ async function refresh() {
     const navModel = $('nav-model');
     if (navModel) navModel.textContent = (health.models && health.models[0]) || 'no model';
     const navCount = $('nav-node-count');
-    if (navCount) navCount.textContent = (nodes.nodes || []).length;
+    if (navCount) {
+      // An empty pill reads as a rendering bug. Show the badge only once
+      // there is a count to put in it.
+      const n = (nodes.nodes || []).length;
+      navCount.textContent = n;
+      navCount.hidden = n === 0;
+    }
     if (met) {
       const latEl = $('stat-latency');
       if (latEl) latEl.textContent = met.avg_task_latency_seconds != null ? met.avg_task_latency_seconds + 's' : '-';

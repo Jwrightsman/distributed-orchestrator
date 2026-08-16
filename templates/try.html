@@ -3,144 +3,292 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Try it — Mycelium</title>
+<title>Pitch the swarm a task — Mycelium</title>
+<meta name="description" content="Describe a task in plain English. A planner splits it up, builder agents on volunteer machines write the pieces, and a reviewer assembles the result.">
 <!-- THEME -->
 <style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
+  /* Written phone-first, deliberately: this is the page most likely to be
+     opened from a link in a post, on a phone, by someone who has never heard
+     of the project. It had no media queries at all, so a 640px form was being
+     handed to a 380px screen.
 
-  /* Design tokens come from templates/_theme.html — see dashboard.py */
+     Tokens come from _theme.html. */
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
 
   body {
     background: var(--bg);
     color: var(--text);
     font-family: var(--sans);
+    line-height: 1.55;
     min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    padding: 48px 20px;
+    -webkit-font-smoothing: antialiased;
   }
-  .logo-tag {
-    font-family: var(--mono);
-    font-size: 12px;
-    color: var(--accent);
-    letter-spacing: 3px;
-    font-weight: 700;
-    margin-bottom: 18px;
+  [hidden] { display: none !important; }
+
+  :where(a, button, textarea):focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
   }
-  h1 { font-size: clamp(24px, 4vw, 38px); font-weight: 600; color: var(--text); text-align: center; }
-  .sub { margin-top: 10px; color: var(--text-dim); font-size: 15px; text-align: center; max-width: 560px; line-height: 1.6; }
-  .box {
-    margin-top: 34px;
-    width: 100%;
-    max-width: 640px;
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
+  .skip-link {
+    position: absolute; left: 8px; top: -60px; z-index: 60;
+    padding: 9px 14px; border-radius: var(--radius-sm);
+    background: var(--surface); color: var(--text);
+    border: 1px solid var(--border-strong);
+    font-size: 13px; font-weight: 600; text-decoration: none;
   }
+  .skip-link:focus { top: 8px; }
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+
+  /* ── Global bar ───────────────────────────────────────────────── */
+  .globalbar {
+    display: flex; align-items: center; gap: 4px;
+    padding: 0 16px; height: 52px;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .globalbar .brand { display: inline-flex; align-items: center; gap: 9px; text-decoration: none; margin-right: 8px; }
+  .globalbar .mark {
+    width: 15px; height: 15px; border-radius: 4px;
+    background: var(--accent); box-shadow: 0 0 0 3px var(--accent-wash);
+  }
+  .globalbar .brand-name { font-size: 14px; font-weight: 650; color: var(--text); }
+  .globalbar a.link {
+    padding: 6px 10px; border-radius: var(--radius-sm);
+    color: var(--text-muted); text-decoration: none;
+    font-size: 13px; font-weight: 500; white-space: nowrap;
+    transition: background .12s ease, color .12s ease;
+  }
+  .globalbar a.link:hover { background: var(--surface-hover); color: var(--text); }
+
+  .wrap { width: 100%; max-width: 640px; margin: 0 auto; padding: 32px 20px 56px; }
+
+  .eyebrow {
+    font-family: var(--mono); font-size: 11px; font-weight: 600;
+    letter-spacing: 2px; color: var(--accent-text); text-transform: uppercase;
+  }
+  h1 {
+    margin-top: 10px;
+    font-size: clamp(23px, 6vw, 34px);
+    font-weight: 640; letter-spacing: -0.6px; line-height: 1.18; color: var(--text);
+  }
+  .sub { margin-top: 12px; color: var(--text-dim); font-size: 15px; }
+  .sub b { color: var(--text); font-weight: 600; }
+
+  /* ── The form ─────────────────────────────────────────────────── */
+  .box { margin-top: 26px; display: flex; flex-direction: column; gap: 12px; }
   textarea {
     width: 100%;
-    min-height: 90px;
-    background: var(--border-subtle);
-    border: 1px solid var(--border-strong);
-    border-radius: 10px;
+    min-height: 110px;
+    /* A surface token, not --border-subtle. A border colour used as a fill is
+       a hairline tint by definition, and it drifts the moment borders change. */
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
     color: var(--text);
-    font-family: inherit;
+    font-family: var(--sans);
+    /* 16px keeps iOS from zooming the whole page in on focus. */
     font-size: 16px;
+    line-height: 1.5;
     padding: 14px 16px;
     resize: vertical;
+    transition: border-color .12s ease;
   }
-  textarea:focus { outline: none; border-color: var(--accent-line); }
-  .row { display: flex; justify-content: space-between; align-items: center; }
-  .counter { font-family: var(--mono); font-size: 12px; color: var(--text-muted); }
-  button {
+  textarea:focus { outline: none; border-color: var(--accent-border); }
+  textarea::placeholder { color: var(--text-muted); }
+
+  .row { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+  .counter { font-family: var(--mono); font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+  .counter.is-near { color: var(--warn); }
+
+  button.go {
     background: var(--accent);
     color: var(--bg);
     border: none;
-    border-radius: 9px;
-    padding: 13px 30px;
+    border-radius: var(--radius);
+    padding: 13px 28px;
+    font-family: var(--sans);
     font-size: 15px;
     font-weight: 700;
     cursor: pointer;
+    min-height: 46px;
+    transition: background .12s ease;
   }
-  button:hover { background: var(--accent-dim); }
-  button:disabled { background: var(--border-strong); color: var(--text-muted); cursor: default; }
-  .status-msg { font-size: 14px; color: var(--warn); min-height: 20px; }
-  .stages { display: none; flex-direction: column; gap: 10px; margin-top: 8px; }
+  button.go:hover { background: var(--accent-dim); }
+  button.go:disabled { background: var(--surface-hover); color: var(--text-muted); cursor: default; }
+
+  .status-msg { font-size: 14px; color: var(--text-dim); min-height: 20px; }
+  .status-msg.is-error { color: var(--danger); }
+
+  /* ── Stages ───────────────────────────────────────────────────── */
+  .stages { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
   .stage {
     display: flex; align-items: center; gap: 12px;
     font-size: 15px; color: var(--text-muted);
-    padding: 12px 16px;
-    background: var(--border-subtle);
+    padding: 12px 14px;
+    background: var(--surface);
     border: 1px solid var(--border-subtle);
-    border-radius: 9px;
-    transition: all 0.3s;
+    border-radius: var(--radius);
+    transition: color .12s ease, border-color .12s ease;
   }
-  .stage.active { color: var(--text); border-color: var(--accent-line); box-shadow: 0 0 16px var(--accent-wash); }
+  .stage.active { color: var(--text); border-color: var(--accent-border); }
   .stage.done { color: var(--text-muted); }
   .stage .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--text-muted); flex-shrink: 0; }
-  .stage.active .dot { background: var(--accent); box-shadow: 0 0 10px var(--accent-glow); animation: blink 1.2s infinite; }
+  .stage.active .dot { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-wash); animation: blink 1.2s ease-in-out infinite; }
   .stage.done .dot { background: var(--accent); }
+  .stage .detail { color: var(--text-muted); font-family: var(--mono); font-size: 12.5px; margin-left: auto; }
   @keyframes blink { 50% { opacity: 0.35; } }
-  .stage .detail { color: var(--text-muted); font-size: 13px; margin-left: auto; }
+
   .result {
-    display: none;
-    margin-top: 8px;
-    background: var(--shadow);
-    border: 1px solid var(--accent-wash-mid);
-    border-radius: 10px;
-    padding: 20px 22px;
+    margin-top: 4px;
+    background: var(--surface-sunken);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius);
+    padding: 16px 18px;
     font-family: var(--mono);
-    font-size: 13px;
+    font-size: 12.5px;
     line-height: 1.65;
+    color: var(--text-dim);
     white-space: pre-wrap;
-    word-break: break-word;
-    max-height: 480px;
+    overflow-wrap: anywhere;
+    max-height: 460px;
     overflow-y: auto;
   }
-  .error-msg { color: var(--danger); font-size: 14px; }
-  .footer { margin-top: 40px; font-size: 12px; color: var(--text-muted); text-align: center; }
-  .footer a { color: var(--text-muted); text-decoration: none; }
-  .footer a:hover { color: var(--accent); }
+
+  /* ── Closed state ─────────────────────────────────────────────────
+     Public pitching is off by default, so this is what most visitors see.
+     A disabled button explains nothing; this panel says why the door is
+     shut, shows what is behind it, and gives two ways in. */
+  .closed {
+    margin-top: 26px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--surface);
+    overflow: hidden;
+  }
+  .closed-head {
+    display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
+    padding: 13px 18px; border-bottom: 1px solid var(--border-subtle);
+  }
+  .closed-head .badge {
+    font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: .5px;
+    color: var(--warn); background: var(--highlight-wash);
+    border: 1px solid var(--highlight-line); border-radius: 4px; padding: 2px 8px;
+  }
+  .closed-head .what { font-size: 14px; font-weight: 600; color: var(--text); }
+  .closed-body { padding: 16px 18px; }
+  .closed-body p { font-size: 14.5px; color: var(--text-dim); }
+  .closed-body p + p { margin-top: 10px; }
+  .closed-body b { color: var(--text); font-weight: 600; }
+
+  .would { margin-top: 16px; display: flex; flex-direction: column; gap: 8px; }
+  .would-step { display: flex; align-items: baseline; gap: 11px; }
+  .would-step .n {
+    font-family: var(--mono); font-size: 11px; font-weight: 600;
+    color: var(--text-muted); background: var(--surface-sunken);
+    border: 1px solid var(--border-subtle); border-radius: 5px;
+    width: 22px; height: 22px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    align-self: center;
+  }
+  .would-step p { font-size: 14px; color: var(--text-dim); }
+  .would-step b { color: var(--text); font-weight: 600; }
+
+  .ways { display: flex; flex-direction: column; gap: 10px; margin-top: 20px; }
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+    min-height: 46px; padding: 12px 20px; border-radius: var(--radius);
+    font-size: 15px; font-weight: 600; text-decoration: none; cursor: pointer;
+    border: 1px solid transparent; text-align: center;
+    transition: background .12s ease, border-color .12s ease, color .12s ease;
+  }
+  .btn-primary { background: var(--accent); color: var(--bg); }
+  .btn-primary:hover { background: var(--accent-dim); }
+  .btn-ghost { background: none; color: var(--text-dim); border-color: var(--border); }
+  .btn-ghost:hover { border-color: var(--border-strong); color: var(--text); }
+
+  .cmd {
+    margin-top: 16px; font-family: var(--mono); font-size: 13px;
+    background: var(--surface-sunken); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 12px 14px; color: var(--text-dim);
+    cursor: pointer; overflow-wrap: anywhere; min-height: 44px; width: 100%;
+    display: flex; align-items: center; gap: 8px; text-align: left;
+    transition: border-color .12s ease;
+  }
+  .cmd:hover { border-color: var(--accent-border); }
+  .cmd .p { color: var(--accent-text); flex-shrink: 0; }
+  .note { margin-top: 9px; font-size: 12.5px; color: var(--text-muted); }
+
+  footer { margin-top: 40px; font-size: 12.5px; color: var(--text-muted); }
+  footer a { color: var(--text-muted); text-decoration: none; }
+  footer a:hover { color: var(--accent-text); }
+
+  @media (min-width: 560px) {
+    .wrap { padding: 48px 20px 64px; }
+    .ways { flex-direction: row; }
+    .ways .btn { flex: 1; }
+  }
+  @media (max-width: 400px) {
+    .globalbar { padding: 0 12px; }
+    .globalbar a.link.is-secondary { display: none; }
+    .wrap { padding: 26px 16px 48px; }
+    .row { flex-direction: column-reverse; align-items: stretch; gap: 10px; }
+    .row .counter { text-align: right; }
+    button.go { width: 100%; }
+    .stage { font-size: 14px; padding: 11px 12px; gap: 10px; }
+    .stage .detail { font-size: 11.5px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
+  }
 </style>
 </head>
 <body>
-  <div class="logo-tag">MYCELIUM</div>
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<nav class="globalbar" aria-label="Site">
+  <a class="brand" href="/"><span class="mark" aria-hidden="true"></span><span class="brand-name">Mycelium</span></a>
+  <a class="link" href="/dashboard">Dashboard</a>
+  <a class="link is-secondary" href="/status">Status</a>
+</nav>
+
+<main id="main" class="wrap" tabindex="-1">
+  <div class="eyebrow">Try it</div>
   <h1>Pitch the swarm a task</h1>
   <p class="sub">
-    Type a task. A planner decomposes it, builder agents execute the pieces across
-    volunteer machines, a reviewer assembles the result. Local models only —
-    expect minutes, not seconds. Limit: 2 tasks/hour.
+    Describe something you want built. A planner splits it into pieces, builder
+    agents write them on <b>volunteer machines running local AI models</b>, and a
+    reviewer assembles the result. Expect <b>minutes, not seconds</b>.
   </p>
 
-  <div class="box">
-    <textarea id="task" maxlength="300" placeholder="e.g. Write a bash script that renames photos by their EXIF date"></textarea>
-    <div class="row">
-      <span class="counter"><span id="count">0</span>/300</span>
-      <button id="go">Pitch it</button>
-    </div>
-    <div class="status-msg" id="msg"></div>
+  <!--SLOT:PITCH_PANEL-->
 
-    <div class="stages" id="stages">
-      <div class="stage" id="st-plan"><span class="dot"></span> Planning <span class="detail" id="d-plan"></span></div>
-      <div class="stage" id="st-build"><span class="dot"></span> Building <span class="detail" id="d-build"></span></div>
-      <div class="stage" id="st-review"><span class="dot"></span> Reviewing &amp; assembling <span class="detail" id="d-review"></span></div>
-    </div>
-
-    <div class="result" id="result"></div>
-  </div>
-
-  <div class="footer">
-    <a href="/">about</a> · <a href="/dashboard">dashboard</a> ·
-    <a href="https://github.com/Jwrightsman/distributed-orchestrator" target="_blank">run your own swarm</a>
-  </div>
+  <footer>
+    <a href="/">about</a> ·
+    <a href="/dashboard">dashboard</a> ·
+    <a href="https://github.com/Jwrightsman/distributed-orchestrator" target="_blank" rel="noopener">run your own swarm</a>
+  </footer>
+</main>
 
 <script>
+(function () {
   const $ = (id) => document.getElementById(id);
-  const task = $('task'), go = $('go'), msg = $('msg');
+  const task = $('task');
+  if (!task) return;   // public pitching is off — the form is not on the page
+
+  const go = $('go'), msg = $('msg'), counter = $('count');
+  const MAX = parseInt(task.getAttribute('maxlength'), 10) || 300;
   let jobId = null, subtasksTotal = 0, subtasksDone = 0;
 
-  task.addEventListener('input', () => { $('count').textContent = task.value.length; });
+  task.addEventListener('input', () => {
+    counter.textContent = task.value.length;
+    counter.parentElement.classList.toggle('is-near', task.value.length > MAX - 40);
+  });
 
   function setStage(stage) {
     const order = ['plan', 'build', 'review'];
@@ -153,16 +301,23 @@
   }
 
   function markAllDone() {
-    ['plan','build','review'].forEach(s => { $('st-'+s).classList.remove('active'); $('st-'+s).classList.add('done'); });
+    ['plan', 'build', 'review'].forEach(s => {
+      $('st-' + s).classList.remove('active');
+      $('st-' + s).classList.add('done');
+    });
+  }
+
+  function say(text, isError) {
+    msg.textContent = text;
+    msg.classList.toggle('is-error', !!isError);
   }
 
   go.addEventListener('click', async () => {
     const t = task.value.trim();
-    if (!t) return;
+    if (!t) { task.focus(); return; }
     go.disabled = true;
-    msg.textContent = 'Submitting…';
-    msg.className = 'status-msg';
-    $('result').style.display = 'none';
+    say('Submitting…');
+    $('result').hidden = true;
     try {
       const resp = await fetch('/public/pitch', {
         method: 'POST',
@@ -171,20 +326,18 @@
       });
       const body = await resp.json();
       if (!resp.ok) {
-        msg.textContent = body.detail || 'Something went wrong.';
-        msg.className = 'status-msg error-msg';
+        say(body.detail || 'Something went wrong.', true);
         go.disabled = false;
         return;
       }
       jobId = body.job_id;
-      msg.textContent = 'The swarm is on it — this takes a few minutes on volunteer hardware.';
-      $('stages').style.display = 'flex';
+      say('The swarm is on it — this takes a few minutes on volunteer hardware.');
+      $('stages').hidden = false;
       setStage('plan');
       listen();
       poll();
     } catch (e) {
-      msg.textContent = 'Could not reach the server.';
-      msg.className = 'status-msg error-msg';
+      say('Could not reach the server.', true);
       go.disabled = false;
     }
   });
@@ -219,8 +372,7 @@
         const job = await (await fetch(`/jobs/${jobId}`)).json();
         if (job.status === 'complete') { await showResult(job); return; }
         if (job.status === 'failed') {
-          msg.textContent = 'The swarm could not finish this one: ' + (job.error || 'unknown error');
-          msg.className = 'status-msg error-msg';
+          say('The swarm could not finish this one: ' + (job.error || 'unknown error'), true);
           markAllDone();
           go.disabled = false;
           return;
@@ -231,20 +383,28 @@
 
   async function showResult(job) {
     markAllDone();
-    msg.textContent = `Done — rated ${job.rating || '?'} by the reviewer.`;
+    const ts = (job.project_dir || '').split(/[\\/]/).pop();
+    say(`Done — the reviewer rated it ${job.rating || '?'}.`);
+    if (ts) {
+      // Every run has a page of its own; send people to it rather than
+      // leaving the only copy of the result inside this tab.
+      const link = $('run-link');
+      link.href = `/run/${encodeURIComponent(ts)}`;
+      link.hidden = false;
+    }
     let text = '';
     try {
-      const ts = (job.project_dir || '').split(/[\\/]/).pop();
       const run = await (await fetch(`/history/${ts}`)).json();
       text = run.final_output || run.review || '(no output)';
     } catch (e) {
-      text = '(output saved on the server, but could not be loaded here)';
+      text = '(the output is saved on the server, but could not be loaded here)';
     }
     const box = $('result');
     box.textContent = text;
-    box.style.display = 'block';
+    box.hidden = false;
     go.disabled = false;
   }
+})();
 </script>
 </body>
 </html>
