@@ -63,6 +63,10 @@
 
     <main class="content" id="main" tabindex="-1">
 
+      <!-- Shown only when the live feed drops. Silence used to be the only
+           signal, and a quiet network looks identical to a broken one. -->
+      <div class="conn-banner" id="conn-banner" role="status" aria-live="polite" hidden></div>
+
       <!-- ── OVERVIEW ── -->
       <section id="view-overview" aria-labelledby="tab-overview">
         <h2 class="sr-only">Overview</h2>
@@ -182,8 +186,22 @@
         <div class="view-head"><h2>Projects</h2><span class="view-sub">Work that remembers what it already built</span></div>
         <div class="section-head">
           <h2 id="projects-heading">All projects</h2>
-          <button type="button" class="btn-accent is-sm" id="new-project">+ New</button>
+          <button type="button" class="btn-accent is-sm" id="new-project"
+                  aria-expanded="false" aria-controls="new-project-form">+ New</button>
         </div>
+
+        <!-- Inline, not a native prompt(): styleable, cancellable, and able to
+             show an error next to the field that caused it. -->
+        <div class="inline-form" id="new-project-form" hidden>
+          <label class="sr-only" for="new-project-name">Project name</label>
+          <input type="text" class="inline-input" id="new-project-name"
+                 placeholder="Name this project — e.g. expense tracker"
+                 autocomplete="off" aria-describedby="new-project-error">
+          <button type="button" class="btn-primary" id="new-project-submit">Create</button>
+          <button type="button" class="btn-quiet" id="new-project-cancel">Cancel</button>
+          <p class="inline-error" id="new-project-error" role="alert" hidden></p>
+        </div>
+
         <div id="projects-list" aria-labelledby="projects-heading">
           <div class="empty-state">
             <p>No projects yet.<br>A project carries memory from one pitch to the next.</p>

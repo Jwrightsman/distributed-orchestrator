@@ -132,30 +132,102 @@ const TAB_TITLES = {
   nodes: 'Network nodes', projects: 'Projects', guild: 'Guild standings',
 };
 
-function showTab(name, opts) {
-  if (TABS.indexOf(name) === -1) name = 'overview';
-  TABS.forEach(t => {
-    const view = $('view-' + t);
-    const btn = $('tab-' + t);
-    if (view) view.hidden = (t !== name);
-    if (btn) {
-      // aria-current is how a screen reader announces "you are here".
-      if (t === name) btn.setAttribute('aria-current', 'page');
-      else btn.removeAttribute('aria-current');
-    }
-  });
-  const title = $('view-title');
-  if (title) title.textContent = TAB_TITLES[name] || name;
-  // A deep link should survive a refresh; without this, "Runs" is unshareable.
-  if (!opts || opts.pushHash !== false) {
-    try { history.replaceState(null, '', '#' + name); } catch (e) {}
-  }
-  if (isDrawer()) closeDrawer();
+// ── Routing ──────────────────────────────────────────────────────
+// The whole dashboard used to be one URL: showTab() swapped a div and left
+// the address bar alone, so no view could be linked, bookmarked or refreshed
+// into, and the back button did nothing at all.
+//
+// Each view has a real path now — /dashboard/gallery — and an open run is
+// /dashboard/runs/<id>, so back closes the run rather than leaving the page.
+// Real paths rather than hash routes because these get pasted into posts
+// alongside /run/{id}, and "#gallery" reads like an anchor, not a page.
+// The old #hash links still work; they are rewritten on arrival.
 
-  if (name === 'gallery') loadGallery();
-  if (name === 'guild') loadStandings();
-  if (name === 'runs') loadHistory();
+const ROOT = '/dashboard';
+
+function pathFor(view, runId) {
+  let path = view === 'overview' ? ROOT : `${ROOT}/${view}`;
+  if (runId) path += `/${encodeURIComponent(runId)}`;
+  return path;
 }
+
+/** Parse a URL into {view, run}. Unknown views fall back to overview rather
+ *  than showing an empty shell. */
+function parseRoute(url) {
+  const u = new URL(url, location.origin);
+
+  // Back-compat: /dashboard#gallery and /dashboard#run=<id> predate this.
+  const hash = (u.hash || '').replace(/^#/, '');
+  if (hash) {
+    const runMatch = hash.match(/^run=(.+)$/);
+    if (runMatch) return {view: 'runs', run: decodeURIComponent(runMatch[1]), legacy: true};
+    if (TABS.indexOf(hash) !== -1) return {view: hash, run: null, legacy: true};
+  }
+
+  const parts = u.pathname.replace(/\/+$/, '').split('/').filter(Boolean);
+  // ['dashboard'] | ['dashboard', view] | ['dashboard', 'runs', id]
+  const view = TABS.indexOf(parts[1]) !== -1 ? parts[1] : 'overview';
+  const run = parts[2] ? decodeURIComponent(parts[2]) : null;
+  return {view, run};
+}
+
+let _applyingRoute = false;
+
+/** The single place a view becomes visible. `push` controls history. */
+function applyRoute({view, run}, push) {
+  _applyingRoute = true;
+  try {
+    if (TABS.indexOf(view) === -1) view = 'overview';
+    TABS.forEach(t => {
+      const el = $('view-' + t);
+      const btn = $('tab-' + t);
+      if (el) el.hidden = (t !== view);
+      if (btn) {
+        // aria-current is how a screen reader announces "you are here".
+        if (t === view) btn.setAttribute('aria-current', 'page');
+        else btn.removeAttribute('aria-current');
+      }
+    });
+    const title = $('view-title');
+    if (title) title.textContent = TAB_TITLES[view] || view;
+    document.title = `${TAB_TITLES[view] || view} — Mycelium`;
+
+    if (isDrawer()) closeDrawer();
+
+    if (view === 'gallery') loadGallery();
+    if (view === 'guild') loadStandings();
+    if (view === 'runs') loadHistory();
+
+    const target = pathFor(view, run);
+    if (push === 'push' && location.pathname + location.hash !== target) {
+      history.pushState({view, run}, '', target);
+    } else if (push === 'replace') {
+      history.replaceState({view, run}, '', target);
+    }
+
+    // A run in the URL means the panel is open; no run means it is not.
+    if (run) {
+      if (_currentModalTimestamp !== run || $('output-modal').hidden) viewRun(run);
+    } else if (!$('output-modal').hidden) {
+      closeModal('output-modal', {silent: true});
+    }
+  } finally {
+    _applyingRoute = false;
+  }
+}
+
+/** Navigate — the only caller that adds a history entry. */
+function go(view, run) {
+  applyRoute({view, run}, 'push');
+}
+
+/** Kept as the name every caller already uses. */
+function showTab(name) { go(name, null); }
+
+// Back and forward now do what they look like they do.
+window.addEventListener('popstate', (e) => {
+  applyRoute(e.state && e.state.view ? e.state : parseRoute(location.href), null);
+});
 
 function focusPitch() {
   showTab('overview');
@@ -177,16 +249,154 @@ function openModal(id) {
   if (focusable) focusable.focus();
 }
 
-function closeModal(id) {
+function closeModal(id, opts = {}) {
   const m = $(id);
   if (!m || m.hidden) return;
   m.hidden = true;
   if (_lastFocused && document.contains(_lastFocused)) _lastFocused.focus();
   _lastFocused = null;
+  // Closing the run panel is a navigation: the URL said a run was open, so
+  // it has to stop saying that, or Back lands on a page that reopens it.
+  if (id === 'output-modal' && !opts.silent && !_applyingRoute) {
+    _currentModalTimestamp = null;
+    const {view} = parseRoute(location.href);
+    applyRoute({view, run: null}, 'push');
+  }
 }
 
 function anyModalOpen() {
   return ['output-modal', 'node-modal'].some(id => !$(id).hidden);
+}
+
+// ── Feedback ─────────────────────────────────────────────────────
+// One helper, so every action confirms itself the same way. Before this each
+// caller invented its own: some flashed a button label, some did nothing, and
+// the clipboard fallbacks called prompt() — a blocking, unstyleable system
+// dialog sitting directly on the share path, which is the single thing a
+// stranger is most likely to do after watching a run.
+
+let _toastTimer = null;
+
+/**
+ * @param {string} message  what happened
+ * @param {object} [opts]   {kind: 'ok'|'error', field: string, timeout: ms}
+ *   `field` shows the text in a pre-selected read-only input — the fallback
+ *   for when the clipboard is unavailable, which is every page served over
+ *   plain HTTP, i.e. this one.
+ */
+function notify(message, opts = {}) {
+  const {kind = 'ok', field = null, timeout = field ? 0 : 2400} = opts;
+  clearTimeout(_toastTimer);
+  document.querySelectorAll('.toast').forEach(t => t.remove());
+
+  const toast = document.createElement('div');
+  toast.className = `toast is-${kind}` + (field ? ' has-field' : '');
+  // An error has to interrupt; a confirmation must not.
+  toast.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+
+  const line = document.createElement('span');
+  line.className = 'toast-msg';
+  line.textContent = message;
+  toast.appendChild(line);
+
+  if (field) {
+    const input = document.createElement('input');
+    input.className = 'toast-field';
+    input.readOnly = true;
+    input.value = field;
+    input.setAttribute('aria-label', 'Copy this text');
+    toast.appendChild(input);
+
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'toast-close';
+    close.textContent = 'Done';
+    close.addEventListener('click', () => dismissToast(toast));
+    toast.appendChild(close);
+
+    document.body.appendChild(toast);
+    input.focus();
+    input.select();
+    return toast;
+  }
+
+  document.body.appendChild(toast);
+  if (timeout) _toastTimer = setTimeout(() => dismissToast(toast), timeout);
+  return toast;
+}
+
+function dismissToast(toast) {
+  if (!toast || !toast.isConnected) return;
+  toast.classList.add('is-leaving');
+  setTimeout(() => toast.remove(), 200);
+}
+
+/** Copy, confirm visibly, and degrade to something selectable — never to a
+ *  system dialog. Optionally flashes the button that triggered it, matching
+ *  what copyCode() already did well. */
+function copyToClipboard(text, confirmation, button) {
+  const flash = () => {
+    if (!button) return;
+    const was = button.textContent;
+    button.textContent = 'Copied!';
+    setTimeout(() => { button.textContent = was; }, 1500);
+  };
+  const fallback = () => notify('Copy this yourself — the browser blocked the clipboard',
+                                {kind: 'error', field: text});
+
+  if (!navigator.clipboard || !navigator.clipboard.writeText) { fallback(); return; }
+  navigator.clipboard.writeText(text)
+    .then(() => { flash(); notify(confirmation); })
+    .catch(fallback);
+}
+
+// ── Empty, loading, error ────────────────────────────────────────
+// These were one state before: a panel that had not loaded yet and a network
+// with nothing in it rendered identically, so a slow fetch looked like a
+// broken page — and a failed fetch looked like an empty one, silently.
+//
+// Now: a skeleton while data is in flight, an empty state that offers the
+// action which resolves it, and an error that says what failed and offers
+// a retry. Every list goes through these three.
+
+/** Grey bars in the shape of the content that is coming. */
+function skeleton(rows = 3, kind = 'row') {
+  const one = kind === 'card'
+    ? '<div class="skel-card"><div class="skel-line is-title"></div>' +
+      '<div class="skel-line"></div><div class="skel-line is-short"></div></div>'
+    : '<div class="skel-row"><div class="skel-line is-title"></div>' +
+      '<div class="skel-line is-short"></div></div>';
+  return `<div class="skeleton" aria-hidden="true">${one.repeat(rows)}</div>` +
+         '<span class="sr-only" role="status">Loading…</span>';
+}
+
+/**
+ * An empty state that teaches rather than apologises: it says what would be
+ * here, and gives the one control that makes it appear.
+ * @param {object} o {title, body, action: {label, id, href}}
+ */
+function emptyState(o) {
+  const action = o.action
+    ? (o.action.href
+        ? `<a class="btn-accent" href="${escHtml(o.action.href)}">${escHtml(o.action.label)}</a>`
+        : `<button type="button" class="btn-accent" data-empty-action="${escHtml(o.action.id)}">${escHtml(o.action.label)}</button>`)
+    : '';
+  return `<div class="empty-state${o.grid ? ' is-grid' : ''}">
+    ${o.icon || ''}
+    <p><b>${escHtml(o.title)}</b><br>${o.body}</p>
+    ${action ? `<div class="empty-action">${action}</div>` : ''}
+  </div>`;
+}
+
+/** A failed fetch says so, and offers the retry, instead of showing nothing. */
+function errorState(what, retryId) {
+  return `<div class="empty-state is-error">
+    <p><b>Could not load ${escHtml(what)}.</b><br>
+       The orchestrator did not answer. It may be restarting.</p>
+    <div class="empty-action">
+      <button type="button" class="btn-quiet" data-retry="${escHtml(retryId)}">Try again</button>
+    </div>
+  </div>`;
 }
 
 // ── Health / nodes / metrics polling ─────────────────────────────
@@ -246,11 +456,13 @@ function renderNodes(nodes) {
   const nodesList = $('nodes-list');
   if (!nodesList) return;
   if (nodes.count === 0) {
-    nodesList.innerHTML = `
-      <div class="empty-state">
-        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="18" r="2.2"/><path d="M10.5 6.8 6.5 15.8M13.5 6.8l4 9M7.4 18h9.2"/></svg></div>
-        <p>No nodes connected yet.<br>Run <code class="code-inline">python join.py ${escHtml(location.origin)}</code> on another machine to join.</p>
-      </div>`;
+    nodesList.innerHTML = emptyState({
+      icon: '<div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="18" r="2.2"/><path d="M10.5 6.8 6.5 15.8M13.5 6.8l4 9M7.4 18h9.2"/></svg></div>',
+      title: 'No machines connected.',
+      body: 'The orchestrator still runs work on itself. One command joins another machine:' +
+            `<br><code class="code-inline">python join.py ${escHtml(location.origin)}</code>`,
+      action: {label: 'Copy the join command', id: 'copy-join'},
+    });
     return;
   }
   nodesList.innerHTML = nodes.nodes.map(n => {
@@ -526,7 +738,9 @@ let _currentModalTimestamp = null;
 async function viewRun(timestamp) {
   try {
     _currentModalTimestamp = timestamp;
-    const data = await (await fetch(`/history/${encodeURIComponent(timestamp)}`)).json();
+    const resp = await fetch(`/history/${encodeURIComponent(timestamp)}`);
+    if (!resp.ok) throw new Error(`the server returned ${resp.status}`);
+    const data = await resp.json();
 
     $('modal-title').innerHTML =
       escHtml(data.task) + ' ' + ratingBadge(data.rating) + distBadge(data.mode);
@@ -556,8 +770,16 @@ async function viewRun(timestamp) {
     $('modal-review').innerHTML = renderOutput(outputContent);
     openModal('output-modal');
   } catch (e) {
-    console.error('Failed to load run:', e);
+    // Silently doing nothing on a dead link is what made this look broken.
+    _currentModalTimestamp = null;
+    notify(`Could not open that run — ${e.message}`, {kind: 'error'});
   }
+}
+
+/** Open a run as a navigation, so the URL carries it and Back closes it. */
+function openRun(timestamp) {
+  const {view} = parseRoute(location.href);
+  applyRoute({view: view === 'overview' ? 'runs' : view, run: timestamp}, 'push');
 }
 
 // ── Node detail ──────────────────────────────────────────────────
@@ -704,10 +926,43 @@ function _setNodeBlacklisted(nodeId, seconds) {
   }, seconds * 1000);
 }
 
+// A dropped socket used to be entirely silent: the activity log simply
+// stopped moving, which is indistinguishable from a quiet network. Now it
+// says so, and says when it is back.
+let _wsAttempts = 0;
+
+function setConnectionState(state) {
+  const host = $('conn-banner');
+  if (!host) return;
+  if (state === 'live') { host.hidden = true; host.innerHTML = ''; return; }
+
+  const down = state === 'down';
+  host.hidden = false;
+  host.className = 'conn-banner' + (down ? ' is-down' : '');
+  host.innerHTML =
+    '<span class="dot" aria-hidden="true"></span>' +
+    `<span>${down
+      ? 'Lost the live connection to the orchestrator. Runs already started keep going.'
+      : 'Reconnecting to the live feed…'}</span>` +
+    '<span class="spacer"></span>' +
+    (down ? '<button type="button" class="btn-quiet is-sm" data-retry="socket">Reconnect now</button>' : '');
+}
+
 function connectWebSocket() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const ws = new WebSocket(`${proto}://${location.host}/ws/events`);
-  ws.onopen = () => { wsConnected = true; };
+  let ws;
+  try {
+    ws = new WebSocket(`${proto}://${location.host}/ws/events`);
+  } catch (e) {
+    setConnectionState('down');
+    return;
+  }
+  ws.onopen = () => {
+    wsConnected = true;
+    if (_wsAttempts > 0) notify('Live feed reconnected');
+    _wsAttempts = 0;
+    setConnectionState('live');
+  };
   ws.onmessage = (e) => {
     try {
       const ev = JSON.parse(e.data);
@@ -715,7 +970,14 @@ function connectWebSocket() {
       if (ev.id && ev.id > eventCursor) eventCursor = ev.id;
     } catch (_) {}
   };
-  ws.onclose = () => { wsConnected = false; setTimeout(connectWebSocket, 3000); };
+  ws.onclose = () => {
+    wsConnected = false;
+    _wsAttempts++;
+    // One drop is a blip and reconnects in three seconds; a run of them is
+    // worth telling someone about, and polling still covers the gap.
+    setConnectionState(_wsAttempts >= 2 ? 'down' : 'reconnecting');
+    setTimeout(connectWebSocket, Math.min(3000 * _wsAttempts, 15000));
+  };
   ws.onerror = () => ws.close();
 }
 
@@ -734,42 +996,77 @@ async function pollEvents() {
 // ── History ──────────────────────────────────────────────────────
 let _historySearchTimer = null;
 
-async function loadHistory() {
+let _historyLoaded = false;
+
+async function loadHistory(opts = {}) {
+  const el = $('history-list');
+  if (!el) return;
   const q = ($('history-search')?.value || '').trim();
   const url = q ? `/history?search=${encodeURIComponent(q)}` : '/history';
+
+  // Only skeleton the first paint and explicit reloads — the 15s poll must
+  // not make a populated list flicker back to grey bars.
+  if (!_historyLoaded || opts.showLoading) el.innerHTML = skeleton(4);
+
   try {
-    const data = await (await fetch(url)).json();
-    const el = $('history-list');
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(resp.status);
+    const data = await resp.json();
+    _historyLoaded = true;
 
     if (data.count === 0) {
       el.innerHTML = q
-        ? `<div class="empty-state"><p>Nothing matches “${escHtml(q)}”.</p></div>`
-        : '<div class="empty-state"><p>No past runs yet.<br>A completed pitch lands here with a permanent link you can share.</p></div>';
+        ? emptyState({
+            title: `Nothing matches “${escHtml(q)}”.`,
+            body: 'Try a shorter search, or clear it to see everything.',
+            action: {label: 'Clear search', id: 'clear-search'},
+          })
+        : emptyState({
+            title: 'No runs yet.',
+            body: 'Every completed pitch lands here with a page of its own that you can share.',
+            action: {label: 'Pitch the first one', id: 'focus-pitch'},
+          });
       return;
     }
 
+    // The row is not itself a link: the task opens the shareable page, and
+    // Preview opens the run inside the dashboard without losing your place.
+    // A link nested inside a link would be neither.
     el.innerHTML = data.runs.map(r => `
-      <a class="history-card" href="/run/${encodeURIComponent(r.timestamp)}">
-        <span class="history-task">${escHtml(r.task)}</span>
+      <div class="history-card">
+        <a class="history-task" href="/run/${encodeURIComponent(r.timestamp)}">${escHtml(r.task)}</a>
         <span class="history-meta">
           ${distBadge(r.mode)}
           ${ratingBadge(r.rating)}
           <span class="mono-dim">${r.subtask_count} tasks</span>
           <span class="mono-dim">${relativeTime(r.timestamp)}</span>
-          <span class="history-view">view &#8594;</span>
+          <button type="button" class="btn-quiet is-sm" data-preview="${escHtml(r.timestamp)}">Preview</button>
         </span>
-      </a>`).join('');
-  } catch (e) {}
+      </div>`).join('');
+  } catch (e) {
+    if (!_historyLoaded) el.innerHTML = errorState('past runs', 'history');
+  }
 }
 
 // ── Standings ────────────────────────────────────────────────────
-async function loadStandings() {
+let _standingsLoaded = false;
+
+async function loadStandings(opts = {}) {
+  const el = $('standings-list');
+  if (!el) return;
+  if (!_standingsLoaded || opts.showLoading) el.innerHTML = skeleton(3);
   try {
-    const data = await (await fetch('/standings')).json();
-    const el = $('standings-list');
+    const resp = await fetch('/standings');
+    if (!resp.ok) throw new Error(resp.status);
+    const data = await resp.json();
+    _standingsLoaded = true;
 
     if (!data.standings.length) {
-      el.innerHTML = '<div class="empty-state"><p>No contributions yet.<br>Credits are recorded when a machine builds, reviews or pitches.</p></div>';
+      el.innerHTML = emptyState({
+        title: 'Nobody has earned anything yet.',
+        body: 'Credits are recorded when a machine builds a subtask, reviews a result, or pitches a task.',
+        action: {label: 'Pitch a task', id: 'focus-pitch'},
+      });
       return;
     }
 
@@ -786,17 +1083,31 @@ async function loadStandings() {
           <div class="standing-credits">${s.total_credits.toFixed(0)}</div>
         </div>
       </div>`).join('');
-  } catch (e) {}
+  } catch (e) {
+    if (!_standingsLoaded) el.innerHTML = errorState('the standings', 'standings');
+  }
 }
 
 // ── Projects ─────────────────────────────────────────────────────
-async function loadProjects() {
+let _projectsLoaded = false;
+
+async function loadProjects(opts = {}) {
+  const el = $('projects-list');
+  if (!el) return;
+  if (!_projectsLoaded || opts.showLoading) el.innerHTML = skeleton(2);
   try {
-    const data = await (await fetch('/projects')).json();
-    const el = $('projects-list');
+    const resp = await fetch('/projects');
+    if (!resp.ok) throw new Error(resp.status);
+    const data = await resp.json();
+    _projectsLoaded = true;
 
     if (!data.projects || data.projects.length === 0) {
-      el.innerHTML = '<div class="empty-state"><p>No projects yet.<br>A project carries memory from one pitch to the next.</p></div>';
+      el.innerHTML = emptyState({
+        title: 'No projects yet.',
+        body: 'A project carries memory from one pitch to the next, so the second ' +
+              'task knows what the first one built.',
+        action: {label: 'Start a project', id: 'new-project'},
+      });
       return;
     }
 
@@ -812,24 +1123,66 @@ async function loadProjects() {
                   data-project-name="${escHtml(p.name)}">Continue</button>
         </div>
       </div>`).join('');
-  } catch (e) {}
+  } catch (e) {
+    if (!_projectsLoaded) el.innerHTML = errorState('projects', 'projects');
+  }
 }
 
-async function promptNewProject() {
-  const name = prompt('Project name:');
-  if (!name || !name.trim()) return;
+// Naming a project used to be a native prompt() — a blocking grey box with
+// the origin printed above it, which looks like the page has been hijacked
+// rather than like a feature. It is an inline form now: it can be styled,
+// it can be cancelled, it can show an error, and it does not freeze the page
+// while a pipeline is running behind it.
+function openNewProjectForm() {
+  const form = $('new-project-form');
+  form.hidden = false;
+  $('new-project').setAttribute('aria-expanded', 'true');
+  $('new-project-name').value = '';
+  $('new-project-error').hidden = true;
+  $('new-project-name').focus();
+}
+
+function closeNewProjectForm() {
+  $('new-project-form').hidden = true;
+  $('new-project').setAttribute('aria-expanded', 'false');
+  $('new-project').focus();
+}
+
+async function createProject() {
+  const input = $('new-project-name');
+  const submit = $('new-project-submit');
+  const name = input.value.trim();
+  const fail = (msg) => {
+    const err = $('new-project-error');
+    err.textContent = msg;
+    err.hidden = false;
+    input.focus();
+  };
+  if (!name) { fail('Give the project a name first.'); return; }
+
+  submit.disabled = true;
+  submit.textContent = 'Creating…';
   try {
     const resp = await fetch('/projects', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({name: name.trim(), initial_task: ''}),
+      body: JSON.stringify({name, initial_task: ''}),
     });
     const data = await resp.json();
-    if (data.project_id) {
-      await loadProjects();
-      continueProject(data.project_id, data.name);
+    if (!resp.ok || !data.project_id) {
+      fail(data.detail || 'The server would not create that project.');
+      return;
     }
-  } catch (e) { console.error('Failed to create project', e); }
+    closeNewProjectForm();
+    await loadProjects();
+    notify(`Project “${data.name}” created`);
+    continueProject(data.project_id, data.name);
+  } catch (e) {
+    fail('Could not reach the server.');
+  } finally {
+    submit.disabled = false;
+    submit.textContent = 'Create';
+  }
 }
 
 function continueProject(projectId, projectName) {
@@ -848,13 +1201,25 @@ function clearProjectContext() {
 }
 
 // ── Gallery ──────────────────────────────────────────────────────
-async function loadGallery() {
+let _galleryLoaded = false;
+
+async function loadGallery(opts = {}) {
+  const el = $('gallery-grid');
+  if (!el) return;
+  if (!_galleryLoaded || opts.showLoading) el.innerHTML = skeleton(6, 'card');
   try {
-    const data = await (await fetch('/gallery')).json();
-    const el = $('gallery-grid');
+    const resp = await fetch('/gallery');
+    if (!resp.ok) throw new Error(resp.status);
+    const data = await resp.json();
+    _galleryLoaded = true;
 
     if (!data.cards || data.cards.length === 0) {
-      el.innerHTML = '<div class="empty-state is-grid"><p>No completed tasks yet.<br>Pitch one from Overview and it will appear here with its own page.</p></div>';
+      el.innerHTML = emptyState({
+        grid: true,
+        title: 'Nothing built yet.',
+        body: 'Finished work shows up here, each card with a page of its own you can paste anywhere.',
+        action: {label: 'Pitch the first task', id: 'focus-pitch'},
+      });
       return;
     }
 
@@ -877,7 +1242,8 @@ async function loadGallery() {
             ? `<div class="gallery-files">${c.code_files.map(f => `<span class="gallery-file-chip">${escHtml(f)}</span>`).join('')}</div>`
             : ''}
           <div class="gallery-actions">
-            <a class="gallery-btn open" href="/run/${ts}">Open run</a>
+            <button type="button" class="gallery-btn open" data-preview="${escHtml(c.timestamp)}">Preview</button>
+            <a class="gallery-btn" href="/run/${ts}">Open page &#8599;</a>
             <button type="button" class="gallery-btn" data-fork="${escHtml(c.task)}"
                     data-project="${escHtml(c.project_id || '')}">Fork &amp; continue</button>
             <button type="button" class="gallery-btn share" data-share="${escHtml(c.timestamp)}"
@@ -885,7 +1251,9 @@ async function loadGallery() {
           </div>
         </div>`;
     }).join('');
-  } catch (e) {}
+  } catch (e) {
+    if (!_galleryLoaded) el.innerHTML = errorState('the gallery', 'gallery');
+  }
 }
 
 function forkTask(task, projectId) {
@@ -903,22 +1271,7 @@ function forkTask(task, projectId) {
 }
 
 function shareRun(timestamp) {
-  const url = `${location.origin}/run/${encodeURIComponent(timestamp)}`;
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(url).then(() => showToast('Link copied'))
-      .catch(() => prompt('Copy this link:', url));
-  } else {
-    prompt('Copy this link:', url);
-  }
-}
-
-function showToast(msg) {
-  const t = document.createElement('div');
-  t.className = 'toast';
-  t.setAttribute('role', 'status');
-  t.textContent = msg;
-  document.body.appendChild(t);
-  setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 400); }, 2000);
+  copyToClipboard(`${location.origin}/run/${encodeURIComponent(timestamp)}`, 'Link copied');
 }
 
 // ── Task templates ───────────────────────────────────────────────
@@ -949,17 +1302,30 @@ function downloadOutput() {
 
 function copyShareLink() {
   if (!_currentModalTimestamp) return;
-  const url = `${location.origin}/run/${encodeURIComponent(_currentModalTimestamp)}`;
-  const done = () => {
-    const btn = $('modal-share-btn');
-    if (btn) { btn.textContent = 'Copied!'; setTimeout(() => btn.textContent = 'Copy link', 1500); }
-  };
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(url).then(done).catch(() => prompt('Copy this link:', url));
-  } else {
-    prompt('Copy this link:', url);   // non-HTTPS contexts have no clipboard API
-  }
+  copyToClipboard(`${location.origin}/run/${encodeURIComponent(_currentModalTimestamp)}`,
+                  'Link copied', $('modal-share-btn'));
 }
+
+// ── What empty and error states offer ────────────────────────────
+// Every empty state names the one action that resolves it, and every error
+// offers the retry, rather than being a dead end.
+const EMPTY_ACTIONS = {
+  'focus-pitch': () => focusPitch(),
+  'new-project': () => { go('projects'); openNewProjectForm(); },
+  'clear-search': () => {
+    const box = $('history-search');
+    if (box) { box.value = ''; loadHistory({showLoading: true}); box.focus(); }
+  },
+  'copy-join': () => copyToClipboard(`python join.py ${location.origin}`, 'Join command copied'),
+};
+
+const RETRIES = {
+  history:   () => loadHistory({showLoading: true}),
+  standings: () => loadStandings({showLoading: true}),
+  projects:  () => loadProjects({showLoading: true}),
+  gallery:   () => loadGallery({showLoading: true}),
+  socket:    () => { _wsAttempts = 0; setConnectionState('reconnecting'); connectWebSocket(); },
+};
 
 // ── Wiring ───────────────────────────────────────────────────────
 // One delegated listener rather than an onclick attribute per control. The
@@ -967,7 +1333,8 @@ function copyShareLink() {
 // because they are all real <button> and <a> elements now.
 document.addEventListener('click', (e) => {
   const t = e.target.closest('[data-tab], [data-close-modal], [data-node], [data-template], ' +
-                             '[data-fork], [data-share], [data-continue-project], .code-block-copy');
+                             '[data-fork], [data-share], [data-continue-project], [data-preview], ' +
+                             '[data-empty-action], [data-retry], .code-block-copy');
   if (!t) return;
 
   if (t.dataset.tab) { showTab(t.dataset.tab); return; }
@@ -984,16 +1351,18 @@ document.addEventListener('click', (e) => {
     return;
   }
   if (t.dataset.share) { shareRun(t.dataset.share); return; }
+  if (t.dataset.preview) { openRun(t.dataset.preview); return; }
+  if (t.dataset.emptyAction) { EMPTY_ACTIONS[t.dataset.emptyAction]?.(); return; }
+  if (t.dataset.retry) { RETRIES[t.dataset.retry]?.(); return; }
   if (t.dataset.continueProject) {
     continueProject(t.dataset.continueProject, t.dataset.projectName);
     return;
   }
   if (t.classList.contains('code-block-copy')) {
-    const code = t.closest('.code-block').querySelector('pre').textContent;
-    navigator.clipboard?.writeText(code).then(() => {
-      t.textContent = 'copied!';
-      setTimeout(() => t.textContent = 'copy', 1500);
-    });
+    // Through the same helper as every other copy, so a blocked clipboard
+    // degrades to a selectable field here too rather than failing silently.
+    copyToClipboard(t.closest('.code-block').querySelector('pre').textContent,
+                    'Code copied', t);
   }
 });
 
@@ -1007,7 +1376,14 @@ $('theme-toggle').addEventListener('click', toggleTheme);
 $('focus-pitch').addEventListener('click', focusPitch);
 $('pitch-btn').addEventListener('click', pitchTask);
 $('clear-project').addEventListener('click', clearProjectContext);
-$('new-project').addEventListener('click', promptNewProject);
+$('new-project').addEventListener('click', () =>
+  $('new-project-form').hidden ? openNewProjectForm() : closeNewProjectForm());
+$('new-project-submit').addEventListener('click', createProject);
+$('new-project-cancel').addEventListener('click', closeNewProjectForm);
+$('new-project-name').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); createProject(); }
+  if (e.key === 'Escape') { e.preventDefault(); closeNewProjectForm(); }
+});
 $('modal-download-btn').addEventListener('click', downloadOutput);
 $('modal-share-btn').addEventListener('click', copyShareLink);
 
@@ -1017,7 +1393,7 @@ $('pitch-input').addEventListener('keydown', e => {
 
 $('history-search').addEventListener('input', () => {
   clearTimeout(_historySearchTimer);
-  _historySearchTimer = setTimeout(loadHistory, 250);
+  _historySearchTimer = setTimeout(() => loadHistory({showLoading: true}), 250);
 });
 
 document.addEventListener('keydown', e => {
@@ -1037,11 +1413,12 @@ renderTemplates();
 
 // Restore the view from the URL. #run=<ts> opens a run; #gallery selects a
 // view. Before this, reloading on #gallery silently landed on Overview.
-(function restoreFromHash() {
-  const runMatch = (location.hash || '').match(/#run=([^&]+)/);
-  if (runMatch) { viewRun(decodeURIComponent(runMatch[1])); return; }
-  const name = (location.hash || '').slice(1);
-  if (TABS.indexOf(name) !== -1) showTab(name, {pushHash: false});
+// Restore whatever the URL asks for, without adding a history entry for
+// simply arriving. A legacy #hash link is rewritten to its path form here, so
+// old bookmarks keep working and stop propagating the old shape.
+(function restoreRoute() {
+  const route = parseRoute(location.href);
+  applyRoute(route, 'replace');
 })();
 
 connectWebSocket();

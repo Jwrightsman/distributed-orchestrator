@@ -24,7 +24,7 @@ no build step — the server pastes the parts together.
 import re
 from pathlib import Path
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse
 
 router = APIRouter()
@@ -87,7 +87,31 @@ async def landing():
     return _page("index.html")
 
 
+# The dashboard's views have real URLs — /dashboard/gallery, and an open run
+# at /dashboard/runs/<id>. Every one of them serves the same document; the
+# client reads location.pathname and shows the matching view.
+#
+# Why real paths rather than hash routes: these get pasted into posts next to
+# /run/{id}, and "#gallery" reads like an anchor rather than a page. The cost
+# is these two extra routes, and refreshing or deep-linking now works.
+_VIEWS = ("overview", "runs", "gallery", "nodes", "projects", "guild")
+
+
 @router.get("/dashboard", response_class=HTMLResponse)
 async def dashboard():
+    return _page("dashboard.html")
+
+
+@router.get("/dashboard/{view}", response_class=HTMLResponse)
+async def dashboard_view(view: str):
+    if view not in _VIEWS:
+        raise HTTPException(status_code=404, detail="No such view")
+    return _page("dashboard.html")
+
+
+@router.get("/dashboard/{view}/{run_id}", response_class=HTMLResponse)
+async def dashboard_view_run(view: str, run_id: str):
+    if view not in _VIEWS:
+        raise HTTPException(status_code=404, detail="No such view")
     return _page("dashboard.html")
 
