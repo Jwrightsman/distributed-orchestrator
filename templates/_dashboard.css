@@ -245,7 +245,7 @@ body {
   background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius-sm); padding: 5px 9px;
   font-family: var(--sans); font-size: 13px; color: var(--text);
-  outline: none; width: 150px;
+  width: 150px;
   transition: border-color .12s ease;
 }
 .search-input:focus { border-color: var(--accent-border); }
@@ -318,9 +318,13 @@ body {
   color: var(--text);
   font-family: var(--sans);
   font-size: 15px;
-  outline: none;
   transition: border-color .12s ease;
 }
+
+/* `outline: none` on a text field silently cancels the focus ring the
+     page defines for everything else. Keyboard focus has to be visible on the
+     one control the whole page exists for. The border still brightens — that
+     is the resting affordance, not the accessibility one. */
 .pitch-input:focus { border-color: var(--accent-border); }
 .pitch-input::placeholder { color: var(--text-muted); }
 .pitch-btn {

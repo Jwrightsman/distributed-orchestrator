@@ -231,6 +231,28 @@ def test_the_sidebar_becomes_a_drawer_on_a_phone(client):
         assert behaviour in js, why
 
 
+def test_no_text_field_cancels_the_focus_ring():
+    """`outline: none` on an input silently defeats the ring the page defines
+    for everything else, and it out-specifies a `:where(...)` rule — so the
+    field looks styled while being invisible to a keyboard user.
+
+    Found by tabbing through the pages rather than reading them: the pitch
+    input, the history search and /try's textarea all did this.
+    """
+    for name in ("_dashboard.css", "try.html", "run.html", "status.html", "index.html"):
+        src = (TEMPLATES / name).read_text(encoding="utf-8")
+        src = re.sub(r"/\*.*?\*/", "", src, flags=re.S)   # comments explain the rule
+        assert "outline: none" not in src and "outline:none" not in src, (
+            f"{name} cancels a focus ring"
+        )
+
+
+def test_every_page_defines_one_focus_ring():
+    for name in ("_dashboard.css", "try.html", "run.html", "status.html", "index.html"):
+        src = (TEMPLATES / name).read_text(encoding="utf-8")
+        assert ":focus-visible" in src, f"{name} has no visible focus state"
+
+
 def test_modals_return_focus_to_whatever_opened_them(client):
     """Closing a dialog that dropped focus on <body> restarts the tab order at
     the top of the page, which is how keyboard users lose their place."""
