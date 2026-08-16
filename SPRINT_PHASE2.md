@@ -366,12 +366,80 @@ that take focus and give it back, `prefers-reduced-motion` honoured on the dashb
   entries are permanent, and "my laptop earned nothing and nobody can say why" is a question this
   project has had to answer before.
 
+#### Interaction pass, same session — six items, all landed
+
+Same branch. Where the first half of this session was structure, this half was
+behaviour. **527 tests, ruff clean.**
+
+**Native dialogs are gone.** Four `prompt()` calls, one sitting directly on the
+share path. A native prompt blocks the tab — including a pipeline running
+behind it — prints the origin above the message, and cannot be styled. Naming a
+project is an inline form; the clipboard fallbacks go through one helper that
+copies, confirms, and degrades to a **pre-selected read-only field in a toast**.
+That fallback is the *common* path, not the rare one: plain HTTP has no
+clipboard API, which is exactly how this server is served.
+
+**Every view has a real URL.** `/dashboard/gallery`, and an open run is
+`/dashboard/runs/<id>`. The whole dashboard was one URL before — `showTab()`
+swapped a div and never touched the address bar, so nothing could be linked,
+bookmarked or refreshed into and Back left the page. Now Back and Forward work,
+including closing an open run. Old `#gallery` and `#run=` links are rewritten to
+paths on arrival. This also rescued the in-dashboard preview, which had been
+orphaned when gallery cards became links to the standalone page.
+
+**Loading, empty and error are three states.** They were one. A panel mid-fetch
+rendered identically to an empty network, and every loader ended in
+`catch (e) {}` so a dead server looked like an empty one *silently*. Skeletons
+now (held back on the 15s poll so a populated list never flickers), empty states
+that offer the resolving action, errors that name what failed and offer a retry,
+and a banner when the WebSocket drops.
+
+**A pitch can be stopped.** The important half is what it does *not* do. A
+builder subtask is one model call; killing it mid-generation discards CPU a
+volunteer already spent, and under attempt binding a reclaimed attempt settles
+nothing — the node would be paid **zero for real work**, which is precisely the
+failure this project already hit from the other direction (evicted mid-build,
++0 credits for 329 seconds). So a stop stops *dispatch*: queued subtasks are
+dropped, anything already running finishes and is paid, the reviewer is skipped,
+no run directory is written, and nothing on the ledger is reversed.
+
+**Keyboard.** ⌘K/Ctrl-K palette (views, last eight runs, focus pitch, start a
+project, copy join command, toggle theme), `g`-then-key for views, `/` to focus
+the pitch box, `?` for the reference. The palette is built from the same
+functions the buttons call, so the two cannot drift. Nothing fires while a field
+has focus.
+
+**Elapsed time** on the pipeline card, busy node cards and `/try`, from one
+helper. 40–330 seconds per subtask on this hardware means a card reading only
+"building" cannot be told from one that has wedged.
+
+##### The bug only a real run could find
+
+Cancellation was driven for real against `qwen3.5:4b`: pitched, waited to
+**4m 09s** until building started, clicked Stop. Everything behaved — job
+`cancelled`, 1 subtask finished, **6 credits settled**, no run directory, queue
+drained, ledger up by exactly two entries. The log shows the stop requested at
+**6:29:52** and the builder that was mid-generation finishing at **6:33:29** and
+being paid, which is the whole design in one line.
+
+What was wrong was the *sentence*. `still_running` counts dispatched work, which
+only exists on the distributed path — a local run's builder is an in-process
+call and is invisible to that count. So the toast said "Nothing was left
+running" while a subtask was three minutes into generating. **The count was
+correct; the claim built on it was not**, and no mocked test could have caught
+that. Reworded and pinned.
+
 #### For Jett
 
-Nothing here needs him. The only thing worth knowing: **the run page is the thing to link to in
+Nothing here needs him. Two things worth knowing. **The run page is the thing to link to in
 launch posts** — `http://167.233.239.33:8000/run/<id>`, and every gallery card now carries that
 link. The first run pitched after this lands will be the first with per-subtask timings and credits
 filled in; every run before it says "not recorded" rather than guessing.
+
+And **a running pitch can now be stopped** — the Stop button on the pipeline card. It does not kill
+work mid-generation: whatever a machine is already building finishes and gets paid, and only
+undispatched work is dropped. That is deliberate, and it is why stopping can take another minute or
+two to take effect.
 
 ### Session 6 — August 15, 2026 · ensemble measured · threat model written
 

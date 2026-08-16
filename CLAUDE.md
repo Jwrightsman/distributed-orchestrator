@@ -19,6 +19,7 @@ A collectively-owned AI system powered by consumer hardware. Phase 0 demo: local
 - `py node.py --server http://ORCHESTRATOR_IP:8000` — join as worker node
 - `py join.py http://ORCHESTRATOR_IP:8000` — one-command join (checks deps, pulls model)
 - Dashboard at http://localhost:8000/dashboard when server is running
+  (each view has its own URL: /dashboard/gallery, /dashboard/runs/{id}; Ctrl-K opens a command palette)
 - Every completed run has its own page at /run/{id} — that is the link to share
 
 ## Architecture
