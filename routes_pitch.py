@@ -367,17 +367,28 @@ async def cancel_job(job_id: str, request: Request):
         "trace_id": job.get("trace_id", ""),
     })
 
+    # `still_running` counts *dispatched* work, which only exists on the
+    # distributed path. A local run's builder is a plain in-process call and
+    # is invisible here — so "nothing was left running" would be a lie the
+    # moment someone stops a local pitch mid-generation. Observed doing
+    # exactly that on a real run: the message said nothing was running while
+    # a subtask was three minutes into a model call.
+    if still_running:
+        detail = (f"Stopping. {len(still_running)} subtask(s) already on a machine "
+                  "will finish and be paid for.")
+    elif dropped:
+        detail = (f"Stopping. Dropped {len(dropped)} queued subtask(s); anything "
+                  "already generating will finish first.")
+    else:
+        detail = ("Stopping. Whatever is generating right now finishes first — "
+                  "nothing new will be started.")
+
     return {
         "job_id": job_id,
         "status": "cancelling",
         "dropped_from_queue": len(dropped),
         "still_running": len(still_running),
-        "detail": (
-            f"Stopped. {len(still_running)} subtask(s) already on a machine will "
-            "finish and be paid for."
-            if still_running else
-            "Stopped. Nothing was left running."
-        ),
+        "detail": detail,
     }
 
 

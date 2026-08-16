@@ -215,6 +215,18 @@ def test_cancelling_drops_queued_work_but_not_running_work(client):
     assert "will finish and be paid" in body["detail"]
 
 
+def test_the_stop_message_never_claims_nothing_is_running(client):
+    """`still_running` counts dispatched work, which only exists on the
+    distributed path — a local run's builder is an in-process call and is
+    invisible here. Observed on a real run: the message said nothing was
+    running while a subtask was three minutes into a model call."""
+    job_id = _queued_job("job_local")
+    body = client.post(f"/jobs/{job_id}/cancel").json()
+    assert body["still_running"] == 0
+    assert "nothing" not in body["detail"].lower().split("nothing new")[0], body["detail"]
+    assert "finishes first" in body["detail"]
+
+
 def test_the_stop_flag_is_what_the_pipeline_reads(client):
     job_id = _queued_job()
     client.post(f"/jobs/{job_id}/cancel")
