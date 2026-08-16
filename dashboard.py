@@ -21,6 +21,7 @@ markup, styles and script in one file, which is not navigable. There is still
 no build step — the server pastes the parts together.
 """
 
+import re
 from pathlib import Path
 
 from fastapi import APIRouter
@@ -59,6 +60,26 @@ def _page(name: str) -> str:
         if marker in html:
             html = html.replace(marker, f"<{tag}>\n{_read(partial)}\n</{tag}>", 1)
     return html
+
+
+def render(name: str, **slots: str) -> str:
+    """Fill a template's `<!--SLOT:NAME-->` placeholders.
+
+    The data-driven pages (a run, a node, the status page) are rendered on the
+    server rather than fetched by JavaScript, for two reasons that both matter
+    more than convenience: an OpenGraph crawler unrolling a link preview in
+    Discord or Reddit does not run scripts, and a page meant to be linked
+    from a launch post should not go blank when a fetch fails.
+
+    Slot values are HTML and must already be escaped by the caller — see
+    routes_run.py, which escapes at the point every value is turned into
+    markup. Any slot the caller does not supply is emptied rather than left
+    visible, so a forgotten slot degrades to a gap instead of leaking markup.
+    """
+    html = _page(name)
+    for key, value in slots.items():
+        html = html.replace(f"<!--SLOT:{key}-->", value)
+    return re.sub(r"<!--SLOT:[A-Z_]+-->", "", html)
 
 
 @router.get("/", response_class=HTMLResponse)

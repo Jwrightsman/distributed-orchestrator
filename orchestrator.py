@@ -10,6 +10,7 @@ import json
 import os
 import re
 import shutil
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -521,6 +522,31 @@ async def review(task: str, subtasks: list[dict], results: dict[int, str], memor
 _MAX_REVISIONS = 2
 
 
+def new_revision_record(rating: str, issues: str, final_output: str) -> dict:
+    """The starting state of the reviser's record for a run.
+
+    "Did the reviser fire?" is one of the questions the run page answers, and
+    the honest answer has three shapes: it never needed to, it fired and
+    fixed things, or it fired and gave up. A boolean loses the third, which
+    is the interesting one.
+    """
+    return {
+        "fired": False,
+        "passes": 0,
+        "rating_before": rating,
+        "rating_after": rating,
+        "issues_raised": issues or "",
+        "chars_before": len(final_output or ""),
+        "chars_after": len(final_output or ""),
+        "cleared_the_rating": False,
+        "stopped_because": (
+            "the reviewer raised no issues" if not issues
+            else "the reviewer was satisfied" if rating not in ("NEEDS_WORK", "FAIL")
+            else "there was no assembled output to revise"
+        ),
+    }
+
+
 def make_run_dir(output_dir: Path | None = None) -> tuple[str, Path]:
     """Create a fresh output/<timestamp> directory and return (timestamp, path).
 
@@ -569,6 +595,14 @@ async def run_pipeline(
     Returns a dict with the plan, individual results, and final review.
     """
     node_id = platform.node()  # this machine's hostname
+    _started = time.time()
+
+    # Per-subtask facts the run page shows: who executed it, how long it took,
+    # what it settled. Recorded here rather than reconstructed later, because
+    # the alternative is joining the ledger to a run by timestamp window, which
+    # is wrong the moment two pipelines overlap.
+    subtask_stats: dict[int, dict] = {}
+    credits: list[dict] = []
 
     # Load project memory if continuing an existing project
     memory_context = ""
@@ -582,6 +616,8 @@ async def run_pipeline(
     # 1. Plan
     subtasks = await plan(task, memory_context=memory_context)
     log_contribution(node_id, "pitch", credits=1, task=task[:100])
+    credits.append({"contributor": node_id, "type": "pitch", "credits": 1,
+                    "for": "pitching the task"})
     if on_plan:
         on_plan(subtasks)
 
@@ -591,6 +627,7 @@ async def run_pipeline(
     results: dict[int, str] = {}
 
     async def _build_one(st: dict) -> tuple[int, str]:
+        _t0 = time.time()
         context_parts = []
         for dep_id in st.get("depends_on", []):
             if dep_id in results:
@@ -608,6 +645,16 @@ async def run_pipeline(
             output = await build(st, context, on_token=st_on_token, task=task)
 
         log_contribution(node_id, "compute", credits=5, task=st["title"])
+        credits.append({"contributor": node_id, "type": "compute", "credits": 5,
+                        "for": "building " + st["title"]})
+        subtask_stats[st["id"]] = {
+            "seconds": round(time.time() - _t0, 1),
+            # A caller-supplied dispatcher sends the work elsewhere, and only
+            # it knows where — it fills this in. Locally it is this machine.
+            "executor": None if build_fn is not None else node_id,
+            "chars": len(output or ""),
+            "credits": 5,
+        }
         if on_build:
             on_build(st, output)
         return st["id"], output
@@ -627,8 +674,12 @@ async def run_pipeline(
     # 3. Review
     if on_review_start:
         on_review_start()
+    _review_t0 = time.time()
     review_output = await review(task, subtasks, results, memory_context=memory_context)
+    _review_seconds = round(time.time() - _review_t0, 1)
     log_contribution(node_id, "compute", credits=3, task="review", details=task[:100])
+    credits.append({"contributor": node_id, "type": "review", "credits": 3,
+                    "for": "reviewing and assembling the result"})
 
     # 4. Revision passes — up to 2 rounds of targeted fixes for NEEDS_WORK or FAIL.
     #    Each pass feeds the previous output back to the reviser with the outstanding issues.
@@ -637,19 +688,31 @@ async def run_pipeline(
     final_output = _extract_final_output(review_output)
     issues = _extract_issues(review_output)
 
+    revision = new_revision_record(rating, issues, final_output)
+
     for _rev_pass in range(_MAX_REVISIONS):
         if rating not in ("NEEDS_WORK", "FAIL") or not issues or not final_output:
             break
         revised = await revise(task, issues, final_output)
         if len(revised.strip()) <= len(final_output) // 2:
+            revision["stopped_because"] = "the revision came back mostly empty"
             break  # revision came back mostly empty — don't replace
+        revision["fired"] = True
+        revision["passes"] += 1
+        revision["chars_after"] = len(revised)
         final_output = revised
         # Re-extract issues from the revised text in case it introduced new markers
         issues = _extract_issues(revised)
         # A revision pass clears the rating — if issues are gone, we're done
         if not issues:
             rating = "PASS"
+            revision["cleared_the_rating"] = True
+            revision["stopped_because"] = "the reviewer's issues were gone"
             break
+    else:
+        if revision["fired"]:
+            revision["stopped_because"] = f"it hit the {_MAX_REVISIONS}-pass limit"
+    revision["rating_after"] = rating
 
     # 5. Save everything
     timestamp, project_dir = make_run_dir()
@@ -687,6 +750,17 @@ async def run_pipeline(
         "code_problems": code_problems,
         "mode": "local",
         "project_id": project_id or "",
+        # Everything below is what /run/{id} shows. Runs recorded before this
+        # existed simply lack the keys, and the page says so plainly rather
+        # than inventing a number.
+        "started_at": datetime.fromtimestamp(_started, timezone.utc).isoformat(),
+        "duration_seconds": round(time.time() - _started, 1),
+        "model": get_config().get("model", ""),
+        "prompt_set": _ACTIVE_PROMPT_SET.name,
+        "subtask_stats": {str(k): v for k, v in subtask_stats.items()},
+        "review_seconds": _review_seconds,
+        "revision": revision,
+        "credits": credits,
     }
     (project_dir / "full_log.json").write_text(json.dumps(log, indent=2), encoding="utf-8")
 
