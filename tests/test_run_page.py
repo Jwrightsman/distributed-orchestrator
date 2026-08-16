@@ -195,6 +195,19 @@ def test_every_surface_reports_the_same_rating(client):
     assert detail["reviewer_rating"] == "FAIL", "the reviewer's own verdict is lost"
 
 
+def test_the_cli_agrees_with_the_web(client):
+    """`py cli.py --history` used to substring-match the whole review file, so
+    a review whose prose contained "PASS" reported a PASS and a run the
+    reviser rescued still reported the reviewer's original complaint. Four
+    surfaces, four answers."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "cli.py").read_text(encoding="utf-8")
+    history = src[src.index("def show_history"):]
+    history = history[:history.index("\ndef ")]
+    assert "ratings_for" in history, "the CLI derives its own rating"
+    assert '"PASS" in review' not in history, "the CLI still substring-matches the review"
+
+
 def test_output_code_fences_become_code_blocks(client):
     _write_run("20260815_120010")
     body = client.get("/run/20260815_120010").text
