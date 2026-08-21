@@ -9,3 +9,6 @@ websockets>=12.0
 httpx>=0.28.0
 rich>=13.9.0
 mcp>=2.0.0
+# Used directly by execution protocol contracts and JSON Schema validators.
+pydantic>=2.10.0
+jsonschema>=4.23.0

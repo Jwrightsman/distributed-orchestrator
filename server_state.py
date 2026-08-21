@@ -9,6 +9,7 @@ server.py assembles the app.
 
 import asyncio
 import json
+import secrets
 import sqlite3
 import threading
 import time
@@ -16,9 +17,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import HTTPException, Request, WebSocket
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from config import get as get_config
+from execution.contracts import (
+    ConfidentialityV1,
+    ExecutionRequirementsV1,
+    OutputContractV1,
+    PlacementV1,
+    StrategyNameV1,
+    StrategyOptionsV1,
+    VerificationPolicyV1,
+)
 from verification import VerificationPool
 
 # ── Node staleness threshold (seconds) ───────────────────────────────────
@@ -82,9 +92,19 @@ settled_attempts: dict[str, dict] = {}
 _MAX_SETTLED = 5000
 
 
-def remember_settlement(attempt_id: str, outcome: dict) -> None:
+def remember_settlement(
+    attempt_id: str,
+    outcome: dict,
+    *,
+    node_id: str | None = None,
+    task_id: str | None = None,
+) -> None:
     """Record an attempt as settled, bounding the memory this can consume."""
-    settled_attempts[attempt_id] = outcome
+    settled_attempts[attempt_id] = {
+        "response": outcome,
+        "node_id": node_id,
+        "task_id": task_id,
+    }
     if len(settled_attempts) > _MAX_SETTLED:
         for stale in list(settled_attempts)[: len(settled_attempts) - _MAX_SETTLED]:
             settled_attempts.pop(stale, None)
@@ -96,6 +116,26 @@ STARTED_AT = time.time()
 task_queue: list[dict] = []          # pending tasks for workers
 task_results: dict[str, dict] = {}   # task_id -> result
 task_inflight: dict[str, dict] = {}  # task_id -> task (assigned but not yet returned)
+_task_queue_lock = threading.RLock()
+
+
+def enqueue_task(task: dict) -> bool:
+    """Atomically enforce the pending-task cap for every generated unit."""
+    with _task_queue_lock:
+        if len(task_queue) >= _MAX_TASK_QUEUE:
+            return False
+        task_queue.append(task)
+        return True
+
+
+def remove_queued_task(task_id: str) -> bool:
+    """Remove a queued task by id without a check-then-mutate race."""
+    with _task_queue_lock:
+        for index, task in enumerate(task_queue):
+            if task.get("task_id") == task_id:
+                task_queue.pop(index)
+                return True
+    return False
 
 # ── Circuit breaker state ─────────────────────────────────────────────
 node_failure_count: dict[str, int] = {}   # node_id -> consecutive failure count
@@ -394,7 +434,7 @@ def _check_pitch_key(request: Request):
     if not key:
         return  # auth disabled
     provided = request.headers.get("X-Pitch-Key", "")
-    if provided != key:
+    if not secrets.compare_digest(str(provided), str(key)):
         raise HTTPException(status_code=401, detail="Invalid or missing X-Pitch-Key header")
 
 
@@ -409,7 +449,7 @@ def _check_node_auth(request: Request):
     if not secret:
         return  # auth disabled
     provided = request.headers.get("X-Node-Secret", "")
-    if provided != secret:
+    if not secrets.compare_digest(str(provided), str(secret)):
         raise HTTPException(status_code=401, detail="Invalid or missing X-Node-Secret header")
 
 
@@ -417,6 +457,14 @@ def _check_node_auth(request: Request):
 class PitchRequest(BaseModel):
     task: str
     project_id: str | None = None   # optional: continue an existing project
+    strategy: StrategyNameV1 = "auto"
+    strategy_options: StrategyOptionsV1 | None = None
+    candidates: int | None = Field(default=None, ge=1, le=5)
+    placement: PlacementV1 | None = None
+    requirements: ExecutionRequirementsV1 = Field(default_factory=ExecutionRequirementsV1)
+    output_contract: OutputContractV1 | None = None
+    verification: VerificationPolicyV1 = Field(default_factory=VerificationPolicyV1)
+    confidentiality: ConfidentialityV1 = "trusted_guild"
 
     @field_validator("task")
     @classmethod
@@ -447,23 +495,32 @@ class NodeRegistration(BaseModel):
     gpu: str | None = None
     # Optional capability tags — e.g. ["code", "large-context"] or ["gpu", "fast"]
     # Used by the dispatcher to match tasks to capable nodes.
-    capabilities: list[str] = []
+    capabilities: list[str] = Field(default_factory=list)
 
 
 class TaskResult(BaseModel):
-    node_id: str
-    output: str | None
-    error: str | None = None
-    elapsed_seconds: float = 0
+    node_id: str = Field(min_length=1, max_length=128)
+    output: str | None = Field(default=None, max_length=10_485_760)
+    error: str | None = Field(default=None, max_length=500)
+    elapsed_seconds: float = Field(default=0, ge=0, le=7200)
     # Issued with the task. Absent means an old node build: the result is still
     # recorded so work is never lost, but it cannot be settled for credit.
-    attempt_id: str | None = None
-    nonce: str | None = None
+    attempt_id: str | None = Field(default=None, max_length=128)
+    nonce: str | None = Field(default=None, max_length=128)
+    contract_version: str | None = Field(default=None, max_length=16)
+    execution_id: str | None = Field(default=None, max_length=64)
+    execution_unit_id: str | None = Field(default=None, max_length=128)
+    execution_unit_kind: str | None = Field(default=None, max_length=64)
 
 
 class TokenBatch(BaseModel):
-    node_id: str
-    tokens: str  # accumulated token string for this batch
+    node_id: str = Field(min_length=1, max_length=128)
+    tokens: str = Field(min_length=1, max_length=65_536)
+    contract_version: str | None = Field(default=None, max_length=16)
+    attempt_id: str | None = Field(default=None, max_length=128)
+    nonce: str | None = Field(default=None, max_length=128)
+    execution_id: str | None = Field(default=None, max_length=64)
+    execution_unit_id: str | None = Field(default=None, max_length=128)
 
 
 class NewProjectRequest(BaseModel):
@@ -545,7 +602,8 @@ def _cleanup_pass():
             task = task_inflight.pop(tid)
             task.pop("assigned_to", None)
             task.pop("assigned_at", None)
-            task_queue.append(task)
+            with _task_queue_lock:
+                task_queue.append(task)
             _emit("task_reclaimed", {"task_id": tid, "node_id": nid})
 
     # 2. Old task results (only needed long enough for the caller to collect them)

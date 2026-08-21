@@ -25,9 +25,13 @@ Setup guide: docs/MCP.md
 import os
 import sys
 from pathlib import PurePath
+from typing import Annotated, Any, Literal
 
 import httpx
 from mcp.server.mcpserver import MCPServer
+from pydantic import Field
+
+CandidateCount = Annotated[int, Field(ge=1, le=5)]
 
 ORCHESTRATOR_URL = os.environ.get("ORCHESTRATOR_URL", "http://localhost:8000").rstrip("/")
 PITCH_KEY = os.environ.get("PITCH_KEY", "")
@@ -39,7 +43,9 @@ server = MCPServer(
         "on volunteer hardware. pitch_task returns a job_id immediately; the swarm "
         "works in the background (minutes on CPU hardware — poll get_job_status, "
         "don't wait synchronously). Use projects to iterate: work pitched with the "
-        "same project_id remembers what was built before."
+        "same project_id remembers what was built before. Strategy choices are: "
+        "dag for coordinated components, ensemble for complete alternatives, "
+        "direct for one complete attempt, and auto for a conservative recorded choice."
     ),
 )
 
@@ -58,21 +64,51 @@ def _connection_help(exc: Exception) -> str:
 
 
 @server.tool()
-async def pitch_task(task: str, project_id: str | None = None) -> str:
+async def pitch_task(
+    task: str,
+    project_id: str | None = None,
+    strategy: Literal["auto", "dag", "ensemble", "direct"] = "auto",
+    candidates: CandidateCount | None = None,
+    placement: Literal["auto", "local", "distributed"] = "auto",
+    output_contract: dict[str, Any] | None = None,
+    verification_policy: dict[str, Any] | None = None,
+    confidentiality: Literal["local_only", "trusted_guild", "approved_nodes", "public"] = "trusted_guild",
+    requirements: dict[str, Any] | None = None,
+) -> str:
     """Submit a task to the swarm. Returns immediately with a job_id.
 
-    The swarm plans the task, fans subtasks out to worker nodes (or runs them
-    locally), reviews and auto-revises the result. Takes minutes on CPU
-    hardware — poll get_job_status(job_id) every 30-60s rather than waiting.
+    DAG builds coordinated components. Ensemble generates complete alternatives.
+    Direct is one complete attempt. Auto is conservative, deterministic, and
+    records its reason. Placement (local, distributed, auto) is independent.
 
     Args:
         task: what to build/write/analyze, in plain language (max 1000 chars)
         project_id: optional — continue an existing project so the swarm
             remembers previous iterations (see list_projects)
+        strategy: auto, dag, ensemble, or direct
+        candidates: ensemble candidate count, from 1 through 5
+        placement: auto, local, or distributed
+        output_contract: optional bounded protocol-v1 output contract object
+        verification_policy: optional validators and unverified-fallback policy
+        confidentiality: local_only, trusted_guild, approved_nodes, or public
+        requirements: optional capabilities, approved node ids, and fallback policy
     """
-    payload: dict = {"task": task}
+    payload: dict = {
+        "task": task,
+        "strategy": strategy,
+        "placement": placement,
+        "confidentiality": confidentiality,
+    }
     if project_id:
         payload["project_id"] = project_id
+    if candidates is not None:
+        payload["candidates"] = candidates
+    if output_contract is not None:
+        payload["output_contract"] = output_contract
+    if verification_policy is not None:
+        payload["verification"] = verification_policy
+    if requirements is not None:
+        payload["requirements"] = requirements
     try:
         async with _client() as client:
             resp = await client.post("/pitch/async", json=payload)
@@ -87,6 +123,7 @@ async def pitch_task(task: str, project_id: str | None = None) -> str:
     job = resp.json()
     return (
         f"Task accepted. job_id: {job['job_id']}\n"
+        f"execution_id: {job.get('execution_id', 'pending')}\n"
         f"The swarm is working — this takes a few minutes. "
         f"Poll get_job_status('{job['job_id']}') to track it, then "
         f"get_result('{job['job_id']}') when complete."
@@ -106,6 +143,13 @@ async def get_job_status(job_id: str) -> str:
     job = resp.json()
     status = job.get("status", "unknown")
     lines = [f"Status: {status}", f"Task: {job.get('task', '?')}"]
+    if job.get("strategy_selected"):
+        lines.append(
+            f"Strategy: {job['strategy_selected']}"
+            + (f" ({job.get('selector_reason')})" if job.get("selector_reason") else "")
+        )
+    if job.get("placement_selected"):
+        lines.append(f"Placement: {job['placement_selected']}")
     if job.get("plan"):
         lines.append("Subtasks: " + "; ".join(st.get("title", "?") for st in job["plan"]))
     if status == "failed":
@@ -133,9 +177,33 @@ async def get_result(job_id: str) -> str:
 
             project_dir = job.get("project_dir") or ""
             timestamp = PurePath(project_dir).name
+            execution_id = job.get("execution_id")
             if not timestamp:
-                return "Job is complete but has no output directory recorded."
+                if not execution_id:
+                    return "Job is complete but has no output reference recorded."
+                canonical = await client.get(f"/v1/executions/{execution_id}")
+                if canonical.status_code != 200:
+                    return "Job is complete but its normalized execution record could not be read."
+                normalized = canonical.json()
+                return (
+                    f"Status: {normalized.get('status', '?')}\n"
+                    f"Strategy: {normalized.get('strategy_selected', '?')}\n"
+                    f"Winner: {normalized.get('winning_candidate') or 'n/a'}\n"
+                    f"Output reference: {normalized.get('output_reference') or 'n/a'}\n\n"
+                    f"{normalized.get('output_preview') or '(no bounded preview recorded)'}"
+                )
             detail = await client.get(f"/history/{timestamp}")
+            if detail.status_code != 200 and execution_id:
+                canonical = await client.get(f"/v1/executions/{execution_id}")
+                if canonical.status_code == 200:
+                    normalized = canonical.json()
+                    return (
+                        f"Status: {normalized.get('status', '?')}\n"
+                        f"Strategy: {normalized.get('strategy_selected', '?')}\n"
+                        f"Winner: {normalized.get('winning_candidate') or 'n/a'}\n"
+                        f"Output reference: {normalized.get('output_reference') or 'n/a'}\n\n"
+                        f"{normalized.get('output_preview') or '(no bounded preview recorded)'}"
+                    )
     except httpx.HTTPError as e:
         return _connection_help(e)
     if detail.status_code != 200:

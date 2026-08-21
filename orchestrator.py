@@ -110,13 +110,14 @@ def _extract_json(text: str) -> list:
     raise ValueError(f"No JSON found in planner output:\n{text[:300]}")
 
 
-def _validate_subtasks(subtasks: list) -> list:
+def _validate_subtasks(subtasks: list, maximum_subtasks: int = 5) -> list:
     """Validate and normalize subtasks from planner. Raises ValueError on bad data."""
     if not isinstance(subtasks, list) or len(subtasks) == 0:
         raise ValueError("Planner returned empty subtask list")
 
-    # Cap at 5
-    subtasks = subtasks[:5]
+    # The protocol bounds this to 1..5; keep this helper defensive for direct callers.
+    maximum_subtasks = max(1, min(5, int(maximum_subtasks)))
+    subtasks = subtasks[:maximum_subtasks]
 
     seen_ids: set[int] = set()
     cleaned = []
@@ -333,7 +334,12 @@ Based on this history, decompose the NEXT task into subtasks. Build on existing 
 """
 
 
-async def plan(task: str, max_retries: int | None = None, memory_context: str = "") -> list[dict]:
+async def plan(
+    task: str,
+    max_retries: int | None = None,
+    memory_context: str = "",
+    maximum_subtasks: int = 5,
+) -> list[dict]:
     """Decompose a task into subtasks using the planner agent."""
     if max_retries is None:
         max_retries = get_config()["planner_retries"]
@@ -347,7 +353,7 @@ async def plan(task: str, max_retries: int | None = None, memory_context: str = 
         raw = await generate(prompt, system=system, role="planner", format=PLANNER_FORMAT)
         try:
             subtasks = _extract_json(raw)
-            return _validate_subtasks(subtasks)
+            return _validate_subtasks(subtasks, maximum_subtasks=maximum_subtasks)
         except (ValueError, json.JSONDecodeError) as e:
             last_err = e
             # On retry, inject the error so the model knows what it got wrong
@@ -450,6 +456,7 @@ async def extract_and_repair(
     review_output: str,
     project_dir: Path,
     builder_outputs: dict[str, str] | None = None,
+    allow_repair: bool = True,
 ) -> tuple[str | None, list[str], list[str]]:
     """Extract code files, verify them mechanically, and repair once if broken.
 
@@ -466,7 +473,7 @@ async def extract_and_repair(
     code_files = extract_code_files(extract_source, project_dir)
     code_problems = check_code_files(code_files)
 
-    if not code_problems or not final_output:
+    if not code_problems or not final_output or not allow_repair:
         return final_output, code_files, code_problems
 
     issue_text = "The extracted code does not run. Fix exactly these defects:\n" + "\n".join(
@@ -601,6 +608,19 @@ async def run_pipeline(
     on_token=None,
     project_id: str | None = None,
     build_fn=None,
+    build_metadata_fn=None,
+    maximum_subtasks: int = 5,
+    review_enabled: bool = True,
+    revision_enabled: bool = True,
+    execution_mode: str = "local",
+    execution_id: str | None = None,
+    strategy_requested: str = "dag",
+    strategy_selected: str = "dag",
+    strategy_version: str = "1",
+    selector_reason: str = "Legacy DAG execution.",
+    selector_version: str = "legacy-v1",
+    placement_fallback: str | None = None,
+    on_revision_start=None,
 ) -> dict:
     """Run the full planner -> builder -> reviewer pipeline.
 
@@ -637,7 +657,11 @@ async def run_pipeline(
             pass
 
     # 1. Plan
-    subtasks = await plan(task, memory_context=memory_context)
+    subtasks = await plan(
+        task,
+        memory_context=memory_context,
+        maximum_subtasks=maximum_subtasks,
+    )
     log_contribution(node_id, "pitch", credits=1, task=task[:100])
     credits.append({"contributor": node_id, "type": "pitch", "credits": 1,
                     "for": "pitching the task"})
@@ -667,16 +691,28 @@ async def run_pipeline(
             st_on_token = (lambda tok: on_token(tok, st)) if on_token else None
             output = await build(st, context, on_token=st_on_token, task=task)
 
-        log_contribution(node_id, "compute", credits=5, task=st["title"])
-        credits.append({"contributor": node_id, "type": "compute", "credits": 5,
+        build_meta = build_metadata_fn(st) if build_metadata_fn else {}
+        if build_fn is None:
+            executor = node_id
+        elif build_metadata_fn:
+            executor = build_meta.get("node_id") or (node_id if build_meta.get("placement") == "local" else None)
+        else:
+            executor = None
+        contribution_executor = executor or node_id
+        # Remote worker settlement is written by the worker result endpoint.
+        # Local work (including a visible local fallback) is settled here.
+        if build_meta.get("placement", "local") == "local":
+            log_contribution(contribution_executor, "compute", credits=5, task=st["title"])
+        credits.append({"contributor": executor, "type": "compute", "credits": 5,
                         "for": "building " + st["title"]})
         subtask_stats[st["id"]] = {
             "seconds": round(time.time() - _t0, 1),
-            # A caller-supplied dispatcher sends the work elsewhere, and only
-            # it knows where — it fills this in. Locally it is this machine.
-            "executor": None if build_fn is not None else node_id,
+            "executor": executor,
             "chars": len(output or ""),
             "credits": 5,
+            "placement": build_meta.get("placement", "local"),
+            "fell_back_to_local": bool(build_meta.get("fallback_reason")),
+            "fallback_reason": build_meta.get("fallback_reason"),
         }
         if on_build:
             on_build(st, output)
@@ -695,14 +731,21 @@ async def run_pipeline(
             remaining.pop(st_id)
 
     # 3. Review
-    if on_review_start:
-        on_review_start()
     _review_t0 = time.time()
-    review_output = await review(task, subtasks, results, memory_context=memory_context)
+    if review_enabled:
+        if on_review_start:
+            on_review_start()
+        review_output = await review(task, subtasks, results, memory_context=memory_context)
+        log_contribution(node_id, "compute", credits=3, task="review", details=task[:100])
+        credits.append({"contributor": node_id, "type": "review", "credits": 3,
+                        "for": "reviewing and assembling the result"})
+    else:
+        assembled = "\n\n".join(results[st["id"]] for st in subtasks)
+        review_output = (
+            "## Quality Rating\nPASS\n\n## Issues Found\nNone\n\n"
+            f"## Final Assembled Output\n{assembled}"
+        )
     _review_seconds = round(time.time() - _review_t0, 1)
-    log_contribution(node_id, "compute", credits=3, task="review", details=task[:100])
-    credits.append({"contributor": node_id, "type": "review", "credits": 3,
-                    "for": "reviewing and assembling the result"})
 
     # 4. Revision passes — up to 2 rounds of targeted fixes for NEEDS_WORK or FAIL.
     #    Each pass feeds the previous output back to the reviser with the outstanding issues.
@@ -713,9 +756,11 @@ async def run_pipeline(
 
     revision = new_revision_record(rating, issues, final_output)
 
-    for _rev_pass in range(_MAX_REVISIONS):
+    for _rev_pass in range(_MAX_REVISIONS if revision_enabled else 0):
         if rating not in ("NEEDS_WORK", "FAIL") or not issues or not final_output:
             break
+        if on_revision_start:
+            on_revision_start(_rev_pass + 1)
         revised = await revise(task, issues, final_output)
         if len(revised.strip()) <= len(final_output) // 2:
             revision["stopped_because"] = "the revision came back mostly empty"
@@ -760,6 +805,7 @@ async def run_pipeline(
         builder_outputs={
             f"builder {st['id']} ({st['title']})": results[st["id"]] for st in subtasks
         },
+        allow_repair=revision_enabled,
     )
 
     log = {
@@ -771,7 +817,7 @@ async def run_pipeline(
         "rating": rating,
         "code_files": [str(f) for f in code_files],
         "code_problems": code_problems,
-        "mode": "local",
+        "mode": execution_mode,
         "project_id": project_id or "",
         # Everything below is what /run/{id} shows. Runs recorded before this
         # existed simply lack the keys, and the page says so plainly rather
@@ -784,6 +830,14 @@ async def run_pipeline(
         "review_seconds": _review_seconds,
         "revision": revision,
         "credits": credits,
+        "execution_id": execution_id,
+        "strategy_requested": strategy_requested,
+        "strategy_selected": strategy_selected,
+        "selector_reason": selector_reason,
+        "selector_version": selector_version,
+        "strategy_version": strategy_version,
+        "placement": execution_mode,
+        "placement_fallback": placement_fallback,
     }
     (project_dir / "full_log.json").write_text(json.dumps(log, indent=2), encoding="utf-8")
 
@@ -797,6 +851,7 @@ async def run_pipeline(
         "code_files": code_files,
         "code_problems": code_problems,
         "project_id": project_id or "",
+        "mode": execution_mode,
     }
 
     # Save iteration to project memory, auto-summarize if it's grown too large

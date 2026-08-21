@@ -19,6 +19,7 @@ docs/demo-assets/snake-game/. Add --no-open to skip launching the browser.
 """
 
 import asyncio
+import argparse
 import sys
 import time
 import json
@@ -42,6 +43,8 @@ from rich.markdown import Markdown
 from rich.table import Table
 
 from orchestrator import run_pipeline, OUTPUT_DIR
+from execution.contracts import EnsembleOptionsV1, ExecutionRequestV1
+from execution.service import get_execution_service
 from ollama_client import check_ollama, auto_detect_model, DEFAULT_MODEL
 from ledger import get_standings
 from memory import create_project, load_project, list_projects, PROJECTS_DIR
@@ -77,7 +80,14 @@ def show_projects():
     console.print("[dim]Continue a project: python cli.py --project <id> \"next task\"[/dim]")
 
 
-async def run_task(task: str, project_id: str | None = None):
+async def run_task(
+    task: str,
+    project_id: str | None = None,
+    *,
+    strategy: str = "auto",
+    candidates: int | None = None,
+    placement: str = "local",
+):
     """Run a single task through the pipeline with live output."""
     # Show project context if continuing
     if project_id:
@@ -134,17 +144,49 @@ async def run_task(task: str, project_id: str | None = None):
     def on_review_start():
         console.print("\n[bold magenta]REVIEWER[/bold magenta] Checking combined output...\n")
 
-    console.print("[bold yellow]PLANNER[/bold yellow] Decomposing task into subtasks...\n")
+    if strategy in ("ensemble", "direct"):
+        console.print("[bold yellow]GENERATOR[/bold yellow] Producing complete candidate(s)...\n")
+    else:
+        console.print("[bold yellow]PLANNER[/bold yellow] Decomposing task into subtasks...\n")
 
     try:
-        result = await run_pipeline(
-            task,
-            on_plan=on_plan,
-            on_build=on_build,
-            on_review_start=on_review_start,
-            on_token=on_token,
+        strategy_options = None
+        if strategy == "direct":
+            strategy_options = EnsembleOptionsV1(candidates=1, concurrency=1)
+        elif candidates is not None:
+            strategy_options = EnsembleOptionsV1(
+                candidates=candidates,
+                concurrency=candidates if placement == "distributed" else 1,
+            )
+        request = ExecutionRequestV1(
+            task=task,
             project_id=project_id,
+            strategy=strategy,
+            strategy_options=strategy_options,
+            placement=placement,
         )
+        execution = await get_execution_service().execute(
+            request,
+            callbacks={
+                "on_plan": on_plan,
+                "on_build": on_build,
+                "on_review_start": on_review_start,
+                "on_token": on_token,
+            },
+            dag_runner=run_pipeline,
+        )
+        if execution.result.status == "failed":
+            message = execution.result.errors[0].message if execution.result.errors else "execution failed"
+            raise ValueError(message)
+        result = dict(execution.legacy_payload)
+        result.update({
+            "execution_id": execution.result.execution_id,
+            "strategy_requested": execution.result.strategy_requested,
+            "strategy_selected": execution.result.strategy_selected,
+            "selector_reason": execution.result.selector_reason,
+            "placement_selected": execution.result.placement_selected,
+            "fallback_reason": execution.result.fallback_reason,
+        })
     except ValueError as e:
         console.print(f"[red bold]Pipeline failed:[/red bold] {e}")
         return None
@@ -282,7 +324,11 @@ def show_standings():
     console.print(table)
 
 
-async def interactive():
+async def interactive(
+    strategy: str = "auto",
+    candidates: int | None = None,
+    placement: str = "local",
+):
     """Interactive mode — keep pitching tasks."""
     console.print(Panel(
         "[bold]Mycelium[/bold]\n"
@@ -311,19 +357,39 @@ async def interactive():
                 continue
             if task.lower() in ("quit", "exit", "q"):
                 break
-            await run_task(task)
+            await run_task(
+                task,
+                strategy=strategy,
+                candidates=candidates,
+                placement=placement,
+            )
             console.print()
         except (KeyboardInterrupt, EOFError):
             console.print("\n[dim]Done.[/dim]")
             break
 
 
-def _flag_value(flag: str) -> str | None:
-    """Return the value after a --flag in sys.argv, or None."""
-    for i, a in enumerate(sys.argv):
-        if a == flag and i + 1 < len(sys.argv):
-            return sys.argv[i + 1]
+def _flag_value(flag: str, argv: list[str] | None = None) -> str | None:
+    """Return the value after a --flag, or None."""
+    values = sys.argv if argv is None else argv
+    for i, a in enumerate(values):
+        if a == flag and i + 1 < len(values):
+            return values[i + 1]
     return None
+
+
+def parse_execution_args(argv: list[str]):
+    """Parse canonical strategy flags while leaving the legacy CLI modes intact."""
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--strategy", choices=("auto", "dag", "ensemble", "direct"), default="auto")
+    parser.add_argument("--candidates", type=int, choices=range(1, 6))
+    parser.add_argument("--placement", choices=("auto", "local", "distributed"), default="local")
+    options, remaining = parser.parse_known_args(argv)
+    if options.strategy == "dag" and options.candidates is not None:
+        parser.error("--candidates cannot be used with --strategy dag")
+    if options.strategy == "direct" and options.candidates not in (None, 1):
+        parser.error("--strategy direct is ensemble with exactly one candidate")
+    return options, remaining
 
 
 # The showcase pitches live in showcase.py so that cli.py and the reliability
@@ -740,22 +806,33 @@ def import_fork(zip_path: str):
 
 
 async def main():
+    execution_options, argv = parse_execution_args(sys.argv[1:])
+
+    async def execute_task(task: str, project_id: str | None = None):
+        return await run_task(
+            task,
+            project_id=project_id,
+            strategy=execution_options.strategy,
+            candidates=execution_options.candidates,
+            placement=execution_options.placement,
+        )
+
     # ── Flags that don't need Ollama ──
     # These read local files only, so they must work with Ollama stopped —
     # checking first would make `--history` fail on a machine that has never
     # installed a model.
-    import_zip = _flag_value("--import")
+    import_zip = _flag_value("--import", argv)
     if import_zip:
         import_fork(import_zip)
         return
 
-    if "--history" in sys.argv:
+    if "--history" in argv:
         show_history()
         return
-    if "--standings" in sys.argv:
+    if "--standings" in argv:
         show_standings()
         return
-    if "--projects" in sys.argv:
+    if "--projects" in argv:
         show_projects()
         return
 
@@ -767,9 +844,9 @@ async def main():
 
     # ── Create a new named project ──
     # Usage: python cli.py --new-project "name" "initial task"
-    if "--new-project" in sys.argv:
-        idx = sys.argv.index("--new-project")
-        remaining = sys.argv[idx + 1:]
+    if "--new-project" in argv:
+        idx = argv.index("--new-project")
+        remaining = argv[idx + 1:]
         if len(remaining) < 2:
             console.print("[red]Usage:[/red] python cli.py --new-project \"project name\" \"initial task\"")
             return
@@ -777,14 +854,14 @@ async def main():
         task = " ".join(remaining[1:])
         project_id = create_project(proj_name, task)
         console.print(f"[green]Project created:[/green] [cyan]{project_id}[/cyan]")
-        await run_task(task, project_id=project_id)
+        await execute_task(task, project_id=project_id)
         return
 
     # ── Continue an existing project ──
     # Usage: python cli.py --project my-app "next task"
-    project_id = _flag_value("--project")
+    project_id = _flag_value("--project", argv)
     if project_id:
-        args = [a for a in sys.argv[1:] if not a.startswith("--") and a != project_id]
+        args = [a for a in argv if not a.startswith("--") and a != project_id]
         if not args:
             # No task given — show project info and prompt
             try:
@@ -793,39 +870,43 @@ async def main():
                 console.print(f"[dim]Goal: {meta['initial_task']}[/dim]\n")
                 task = console.input("[bold cyan]What's next?>[/bold cyan] ").strip()
                 if task:
-                    await run_task(task, project_id=project_id)
+                    await execute_task(task, project_id=project_id)
             except FileNotFoundError:
                 console.print(f"[red]Project '{project_id}' not found.[/red]")
             return
-        await run_task(" ".join(args), project_id=project_id)
+        await execute_task(" ".join(args), project_id=project_id)
         return
 
     # ── Demo mode ──────────────────────────────────────────────────────
-    if "--demo-showcase" in sys.argv:
+    if "--demo-showcase" in argv:
         # Optional candidate id right after the flag: --demo-showcase clock
-        idx = sys.argv.index("--demo-showcase")
-        rest = [a for a in sys.argv[idx + 1:] if not a.startswith("--")]
+        idx = argv.index("--demo-showcase")
+        rest = [a for a in argv[idx + 1:] if not a.startswith("--")]
         await run_demo_showcase(
             rest[0] if rest else showcase.DEFAULT_CANDIDATE,
-            open_browser="--no-open" not in sys.argv,
+            open_browser="--no-open" not in argv,
         )
         return
-    if "--demo-fast" in sys.argv:
+    if "--demo-fast" in argv:
         await run_demo(fast=True)
         return
-    if "--demo-live" in sys.argv:
+    if "--demo-live" in argv:
         await run_demo_live()
         return
-    if "--demo" in sys.argv:
+    if "--demo" in argv:
         await run_demo()
         return
 
     # ── Direct task or interactive mode ──
-    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    args = [a for a in argv if not a.startswith("--")]
     if args:
-        await run_task(" ".join(args))
+        await execute_task(" ".join(args))
     else:
-        await interactive()
+        await interactive(
+            strategy=execution_options.strategy,
+            candidates=execution_options.candidates,
+            placement=execution_options.placement,
+        )
 
 
 if __name__ == "__main__":

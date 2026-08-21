@@ -1,23 +1,24 @@
 # Handoff — Mycelium / distributed-orchestrator
 
-_Rewritten Aug 14, 2026. Paste the prompt at the bottom into a new session._
+_Current handoff updated August 21, 2026. Older operational history remains below._
 
 ---
 
 ## Read these first, in order
 
-1. `MASTER_PLAN.md` — direction and the launch plan
-2. `SPRINT_PHASE2.md` — **the active plan and cross-session memory.** Its Session
-   Log has the full history with numbers
-3. `CLAUDE.md` — house rules
-4. `ROADMAP.md` — **REFERENCE, NOT A WORK QUEUE.** Everything *not* being built
+1. `MASTER_PLAN.md` — direction and launch constraints
+2. `SPRINT_STRATEGY_PROTOCOL.md` — current completed backend sprint and scope
+3. `docs/PROTOCOL.md` and `docs/ARCHITECTURE.md` — normative behavior and system boundaries
+4. `CLAUDE.md` — house rules
+5. `SPRINT_PHASE2.md` — historical Phase 2 plan and session log, not the active queue
+6. `ROADMAP.md` — **REFERENCE, NOT A WORK QUEUE.** Everything *not* being built
    right now: the long-term vision, deferred engineering, the August 2026
    external review, speculative ideas. Every item is gated on a trigger. **Do
    not pull work from it.** Read it to know why something isn't built, to avoid
    proposing something already rejected, and to avoid rebuilding something the
    sprint files already shipped. Items move into a sprint file only when Jett
    says so.
-5. This file
+7. This file
 
 ## Jett context — read before planning anything
 
@@ -30,12 +31,42 @@ than stop to ask.
 travelling, and the video is recorded **after** he arrives. Do not plan around
 campus hardware or a second machine before then.
 
-**Freeze discipline:** when he says he is within ~3 days of leaving, stop feature
-work. Switch to: full regression, fresh-clone install check, docs and demo script
-final, launch post final. He would rather arrive with a repo that has been stable
-for 72 hours than three more features and an untested merge.
+**Freeze discipline:** the explicitly authorized execution-strategy sprint is
+complete. Resume stability work after handoff; do not infer authorization for
+additional strategies or UI work.
 
-## State
+## Current branch handoff — execution protocol v1
+
+Branch: `codex/execution-strategy-protocol-v1`, based directly on
+`origin/master` commit `b2ce65d7cc6f0299431afa8d3f758a45320d461d`. It must
+not be merged automatically.
+
+Delivered backend architecture:
+
+- strict versioned requests/results and typed DAG/ensemble options;
+- deterministic auto selector, registry, and direct normalization;
+- one service shared by REST, legacy pitch adapters, CLI, and MCP;
+- strategy-independent local/distributed/auto dispatch;
+- production DAG adapter and complete-candidate ensemble strategy;
+- validator registry, evidence-based selection, and honest unverified status;
+- idempotent `executions` SQLite migration and restart-visible normalized results;
+- protocol-v1 worker payloads plus lease-bound streams/results and no-credit legacy path;
+- bounded candidate concurrency, queue admission, timeouts, outputs, and fallback records;
+- canonical `POST /v1/executions` and `GET /v1/executions/{execution_id}`;
+- Docker package/fingerprint inclusion and model-free regression coverage.
+
+No templates, dashboard JavaScript, CSS, visual components, homepage structure,
+or public marketing files were changed. Claude Code can add UI controls later by
+posting the documented `ExecutionRequestV1`; the backend does not require them.
+
+Known limitations are intentional and documented: shared node secret, in-memory
+queue/leases, no general sandbox or network enforcement, no per-node public-key
+identity, and no permissionless settlement. Research is design-only in ADR 0002.
+
+The final exact verification results and commit list are recorded in the branch
+handoff report and `SPRINT_STRATEGY_PROTOCOL.md`.
+
+## Historical state (August 14; retained for operational context)
 
 `master` has PRs #27–#45 merged. **#45 (result binding) is merged** — it was
 already in when this session started, despite the previous handoff saying

@@ -1,6 +1,6 @@
 # MASTER PLAN — Mycelium
 
-_Last updated: August 14, 2026._
+_Last updated: August 21, 2026._
 _This file is the single source of truth for project direction. Any AI assistant working in this repo (Claude Code, etc.) must read this fully before making changes. It overrides older priority lists in CLAUDE.md._
 
 ---
@@ -11,7 +11,13 @@ A collectively-owned AI orchestration layer that runs on consumer hardware. A pl
 
 ## 2. Where we actually are (honest status)
 
-**Built and working (~5,600 lines, April 2026):** full planner→builder→reviewer→reviser pipeline; parallel wave-based DAG execution; distributed execution across worker nodes with task reclaim, circuit breaker, and auto-reconnect; persistent project memory with auto-summarization; async job API; WebSocket token streaming; SQLite event persistence; live dashboard; gallery with fork/ZIP export; contribution ledger with standings; LAN auto-discovery for `join.py`; `--demo`, `--demo-fast`, and `--demo-live` recording modes; a two-laptop video setup guide.
+**Built and working:** full planner→builder→reviewer→reviser pipeline; parallel
+wave-based DAG execution; production complete-candidate ensemble execution;
+direct-as-one-candidate and deterministic auto-selection; strategy-independent
+local/distributed placement; normalized durable execution records; distributed
+workers with task reclaim, attempt-bound streams/results, circuit breaker, and
+auto-reconnect; persistent project memory; async APIs; events; live dashboard;
+gallery; contribution ledger; LAN discovery; demo modes; and deployment guides.
 
 **Never happened:** the demo video. The community posts. External users. The repo has 0 stars and has been dormant since early April.
 
@@ -28,7 +34,24 @@ A collectively-owned AI orchestration layer that runs on consumer hardware. A pl
 
 ## 4. The Prime Directive
 
-**No new features until the demo video is public.** All engineering work must serve the launch path defined below. AI assistants: if asked to build something outside Sections 5–7 before the video is posted, flag this directive and confirm before proceeding.
+**No unbounded feature expansion until the demo video is public.** The user
+explicitly authorized the bounded Execution Strategy Protocol v1 sprint on
+August 21; that exception is complete and documented in
+`SPRINT_STRATEGY_PROTOCOL.md`. It superseded the older freeze only for DAG,
+ensemble/direct/auto, placement, validation, persistence, REST/CLI/MCP, and
+adjacent worker-attempt hardening. Normal freeze discipline now resumes. In
+particular, do not implement map, research, debate, consensus, marketplace,
+token, blockchain, or model-sharding features without a new explicit sprint.
+
+### Current backend protocol baseline
+
+- `ExecutionRequestV1` is the one entry contract for REST, CLI, MCP, and legacy adapters.
+- DAG and ensemble are the only registered production strategies; direct normalizes to ensemble.
+- Strategy and placement are orthogonal, with confidentiality and capability filtering.
+- Canonical execution metadata and final normalized results survive SQLite reopening.
+- Protocol-v1 streams and results are bound to active node/task/attempt/nonce/unit leases.
+- The worker scheduler remains in memory and node admission still uses a shared secret.
+- Normative behavior is in `docs/PROTOCOL.md`; diagrams are in `docs/ARCHITECTURE.md`.
 
 ## 5. The 30-day launch plan
 

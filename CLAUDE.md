@@ -1,7 +1,9 @@
 # Mycelium (repo: distributed-orchestrator)
 
 ## What this is
-A collectively-owned AI system powered by consumer hardware. Phase 0 demo: local planner/builder/reviewer pipeline hitting Ollama.
+A collectively-owned AI system powered by consumer hardware. Execution protocol
+v1 supports the existing planner/builder/reviewer DAG and complete-candidate
+ensemble execution over the same local or distributed dispatcher.
 
 ## Tech stack
 - Python 3.14 (3.14.3 verified Aug 2026) + FastAPI + httpx + rich
@@ -22,16 +24,22 @@ A collectively-owned AI system powered by consumer hardware. Phase 0 demo: local
 - Every completed run has its own page at /run/{id} — that is the link to share
 
 ## Architecture
-1. **Planner** — decomposes task into 3-5 subtasks with dependency graph
-2. **Builder** — executes each subtask in dependency order, passing context forward
-3. **Reviewer** — checks combined output, rates quality, assembles final deliverable
-4. **Extractor** — pulls code blocks from review output into runnable files
-5. **Ledger** — tracks contributions (compute, pitches, reviews) with credits
+1. **Execution contract** — strict `ExecutionRequestV1` and normalized durable result
+2. **Selector/registry** — deterministic `auto`; production DAG and ensemble strategies
+3. **Dispatcher** — placement-independent local/distributed execution units
+4. **Validators** — mechanical evidence separated from generation and winner selection
+5. **DAG adapter** — existing planner, builders, reviewer/reviser, extraction, and memory
+6. **Ensemble adapter** — 1–5 complete candidates; direct is exactly one candidate
+7. **Persistence/events** — SQLite execution snapshots plus compatible event stream
+8. **Ledger** — tracks contributions (compute, pitches, reviews) with credits
 
 ## Key files
 - `config.py` / `config.json` — centralized settings (model, timeout, retries)
 - `ledger.py` / `ledger.json` — contribution ledger (guild economics seed)
 - `extract.py` — auto-extracts runnable code from pipeline output
+- `execution/` — contracts, strategy registry, dispatcher, validators, service, SQLite store
+- `routes_executions.py` — canonical `POST/GET /v1/executions`
+- `docs/PROTOCOL.md` / `docs/ARCHITECTURE.md` — normative behavior and diagrams
 - `dashboard.py` — assembles pages: injects `templates/_theme.html`, `_dashboard.css`,
   `_dashboard.js` and fills `<!--SLOT:NAME-->` placeholders. No build step, no npm.
 - `templates/` — one file per page. Colours come from `_theme.html` tokens only;
@@ -41,8 +49,9 @@ A collectively-owned AI system powered by consumer hardware. Phase 0 demo: local
 ## Distributed execution
 - `server.py` — orchestrator that accepts pitches and distributes builder tasks to worker nodes
 - `node.py` — worker that connects to orchestrator, polls for tasks, runs them via local Ollama
-- POST /pitch/distributed — runs planner/reviewer locally, distributes builder tasks to nodes
-- Falls back to local execution if no nodes are connected
+- strategy and placement are orthogonal: DAG/ensemble/direct can be local or distributed
+- protocol-v1 streams and results echo active attempt, nonce, execution, and unit identity
+- documented local fallback applies when allowed and is recorded in the normalized result
 
 ## Hardware context
 - Jett's machine: 8GB RAM, no GPU (100% CPU inference)
@@ -58,6 +67,8 @@ A collectively-owned AI system powered by consumer hardware. Phase 0 demo: local
 - This repo is the Phase 0 demo
 
 ## API endpoints
+- POST /v1/executions — canonical asynchronous versioned execution
+- GET /v1/executions/{id} — durable normalized state and result
 - GET /health — server + Ollama status
 - POST /pitch — run pipeline locally
 - POST /pitch/distributed — distribute to worker nodes
@@ -74,6 +85,7 @@ A collectively-owned AI system powered by consumer hardware. Phase 0 demo: local
 - GET /nodes — connected nodes
 - GET /tasks/next — worker polls for work
 - POST /tasks/{id}/result — worker submits result
+- POST /tasks/{id}/stream — worker submits attempt-bound token batches
 
 ## Instructions for AI assistants working on this codebase
 
@@ -87,15 +99,14 @@ A collectively-owned AI system powered by consumer hardware. Phase 0 demo: local
 - He can't assess security risk himself. Flag it clearly in plain language.
 
 ### What to build next
-Read **MASTER_PLAN.md** (project north star — direction, launch plan, division of labor),
-then **SPRINT_AUG2026.md**'s Session Log for history, then **SPRINT_PHASE2.md** — that is
-the *active* plan and cross-session memory as of Aug 5, 2026. Work its items top to bottom,
-check them off, and append to its Session Log. Those files override any older priority list,
-including anything cached from previous sessions.
+Read **MASTER_PLAN.md** (project north star), then
+**SPRINT_STRATEGY_PROTOCOL.md** and **HANDOFF.md** for current implementation
+state. `SPRINT_PHASE2.md` and `SPRINT_AUG2026.md` are historical session logs.
+`ROADMAP.md` remains reference, not a work queue.
 
-Phase 2's priority is **output quality**, measured — not new features. The eval harness in
-`evals/` is the instrument; see its README. Do not tune a prompt without re-running it, and
-revert changes that don't move the score.
+The bounded execution-strategy sprint is complete. Normal feature-freeze
+discipline resumes: do not expand into map, research, debate, consensus,
+marketplace, token, blockchain, or sharding work without a new explicit sprint.
 
 ### What NOT to do
 - Don't rewrite things that work. The pipeline is tested and passes.
@@ -107,7 +118,7 @@ revert changes that don't move the score.
 
 ### Testing
 After making changes, verify:
-1. `py -m pytest -q` — the suite (330+ tests, no Ollama needed). This is
+1. `py -m pytest -q` — the complete suite (no Ollama needed). This is
    the fastest signal.
 2. `ruff check .` — CI fails on this, so run it before pushing
 3. `py -c "from server import app; print('server imports ok')"` — server starts clean
@@ -126,5 +137,4 @@ Check the actual run on GitHub rather than assuming the badge is current.
 
 ### Git workflow
 - Commit after each logical change with a descriptive message
-- Push to origin/master
-- Co-Author line: `Co-Authored-By: Claude <noreply@anthropic.com>`
+- Work on a feature branch and merge through review; do not push unfinished work directly to `master`

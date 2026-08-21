@@ -29,7 +29,7 @@ from pathlib import Path
 # with it — a file the image has and this list doesn't is a file whose change
 # would not show up in the fingerprint.
 _APP_DIR = Path(__file__).resolve().parent
-_INCLUDED = ("*.py", "templates/*", "prompts/*.py")
+_INCLUDED = ("*.py", "templates/*", "prompts/*.py", "execution/*.py")
 
 
 def _source_files() -> list[Path]:

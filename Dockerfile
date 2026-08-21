@@ -17,6 +17,7 @@ COPY templates/ templates/
 # Package directories need copying explicitly — `COPY *.py` only takes the
 # top level, and a missing prompts/ breaks `import prompts` at startup.
 COPY prompts/ prompts/
+COPY execution/ execution/
 
 # All state files are resolved relative to the working directory
 WORKDIR /data

@@ -53,10 +53,10 @@ def _stub(monkeypatch, review, revised=None):
     monkeypatch.setattr(orchestrator, "generate_stream", fake_stream)
 
 
-def _run(tmp_path, monkeypatch, review, revised=None) -> dict:
+def _run(tmp_path, monkeypatch, review, revised=None, execution_mode="local") -> dict:
     _stub(monkeypatch, review, revised)
     monkeypatch.setattr(orchestrator, "OUTPUT_DIR", tmp_path / "output")
-    result = asyncio.run(orchestrator.run_pipeline("build a thing"))
+    result = asyncio.run(orchestrator.run_pipeline("build a thing", execution_mode=execution_mode))
     log = json.loads((Path(result["project_dir"]) / "full_log.json").read_text(encoding="utf-8"))
     return log
 
@@ -159,12 +159,8 @@ def test_the_run_page_renders_a_freshly_recorded_run(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("field", ["subtask_stats", "revision", "credits",
                                    "duration_seconds", "review_seconds", "model"])
-def test_the_distributed_path_writes_the_same_shape(field):
-    """Two writers, one shape — /run/{id} reads one record regardless of how
-    the work was executed. Checked in the source because exercising the
-    distributed path needs connected nodes."""
-    src = Path(__file__).resolve().parent.parent / "routes_pitch.py"
-    text = src.read_text(encoding="utf-8")
-    log_block = text[text.index('"mode": "distributed",'):]
-    log_block = log_block[:log_block.index("(project_dir /")]
-    assert f'"{field}"' in log_block, f"the distributed run log omits {field}"
+def test_the_distributed_path_writes_the_same_shape(field, tmp_path, monkeypatch):
+    """Placement changes metadata, not the shared DAG run-record writer."""
+    log = _run(tmp_path, monkeypatch, REVIEW_PASS, execution_mode="distributed")
+    assert log["mode"] == "distributed"
+    assert field in log, f"the distributed run log omits {field}"

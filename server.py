@@ -24,6 +24,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 import routes_events
+import routes_executions
 import routes_history
 import routes_nodes
 import routes_pitch
@@ -87,6 +88,7 @@ async def unhandled_exception_handler(request, exc):
 
 app.include_router(dashboard_router)
 app.include_router(routes_events.router)
+app.include_router(routes_executions.router)
 app.include_router(routes_pitch.router)
 app.include_router(routes_nodes.router)
 app.include_router(routes_history.router)
