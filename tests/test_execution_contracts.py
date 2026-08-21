@@ -120,3 +120,15 @@ def test_ambiguous_auto_defaults_to_dag_with_reason():
     assert selection.selected == "dag"
     assert selection.reason
     assert selection.selector_version
+
+
+def test_auto_with_explicit_ensemble_options_selects_ensemble():
+    request = ExecutionRequestV1(
+        task="x",
+        strategy="auto",
+        strategy_options={"candidates": 3, "concurrency": 2},
+    )
+    selection = StrategySelector().select(request)
+    assert selection.selected == "ensemble"
+    assert selection.options.candidates == 3
+    assert "explicit ensemble strategy options" in selection.reason

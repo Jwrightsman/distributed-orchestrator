@@ -117,12 +117,12 @@ class StrategySelector:
                 "Normalized direct to ensemble with one complete candidate.",
             )
 
-        if isinstance(options, EnsembleOptionsV1) and options.candidates == 1:
-            return StrategySelection(
-                "ensemble",
-                options,
-                "Selected ensemble with one candidate because candidates=1 is a direct execution request.",
-            )
+        if isinstance(options, EnsembleOptionsV1):
+            if options.candidates == 1:
+                reason = "Selected ensemble with one candidate because candidates=1 is a direct execution request."
+            else:
+                reason = "Selected ensemble because the caller supplied explicit ensemble strategy options."
+            return StrategySelection("ensemble", options, reason)
 
         contract = request.output_contract
         validator_names = {v.name for v in request.verification.validators}

@@ -25,10 +25,13 @@ Setup guide: docs/MCP.md
 import os
 import sys
 from pathlib import PurePath
-from typing import Any
+from typing import Annotated, Any, Literal
 
 import httpx
 from mcp.server.mcpserver import MCPServer
+from pydantic import Field
+
+CandidateCount = Annotated[int, Field(ge=1, le=5)]
 
 ORCHESTRATOR_URL = os.environ.get("ORCHESTRATOR_URL", "http://localhost:8000").rstrip("/")
 PITCH_KEY = os.environ.get("PITCH_KEY", "")
@@ -64,12 +67,12 @@ def _connection_help(exc: Exception) -> str:
 async def pitch_task(
     task: str,
     project_id: str | None = None,
-    strategy: str = "auto",
-    candidates: int | None = None,
-    placement: str = "auto",
+    strategy: Literal["auto", "dag", "ensemble", "direct"] = "auto",
+    candidates: CandidateCount | None = None,
+    placement: Literal["auto", "local", "distributed"] = "auto",
     output_contract: dict[str, Any] | None = None,
     verification_policy: dict[str, Any] | None = None,
-    confidentiality: str = "trusted_guild",
+    confidentiality: Literal["local_only", "trusted_guild", "approved_nodes", "public"] = "trusted_guild",
     requirements: dict[str, Any] | None = None,
 ) -> str:
     """Submit a task to the swarm. Returns immediately with a job_id.

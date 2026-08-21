@@ -389,8 +389,6 @@ def parse_execution_args(argv: list[str]):
         parser.error("--candidates cannot be used with --strategy dag")
     if options.strategy == "direct" and options.candidates not in (None, 1):
         parser.error("--strategy direct is ensemble with exactly one candidate")
-    if options.strategy == "auto" and options.candidates not in (None, 1):
-        parser.error("--candidates 2..5 requires --strategy ensemble")
     return options, remaining
 
 

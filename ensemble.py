@@ -36,7 +36,6 @@ from pathlib import Path
 
 import orchestrator
 from extract import check_code_files, extract_code_files
-from ollama_client import generate
 
 # One model call per candidate. The system prompt is deliberately the *same*
 # builder prompt decomposition uses, so a comparison between the two isolates
@@ -75,19 +74,6 @@ def _system_prompt() -> str:
     # --prompt-set override, so ensemble and decomposition always run the same
     # builder prompt and a comparison isolates the architecture.
     return orchestrator.BUILDER_SYSTEM + ENSEMBLE_SYSTEM_SUFFIX
-
-
-async def generate_candidate(pitch: str, index: int, model: str | None = None) -> CandidateResult:
-    """One node, one complete attempt at the whole artifact."""
-    import time
-
-    start = time.time()
-    try:
-        out = await generate(pitch, system=_system_prompt(), model=model)
-    except Exception as e:  # a dead runner must not kill the whole ensemble
-        return CandidateResult(index=index, raw_output="", error=f"{type(e).__name__}: {e}",
-                               elapsed_seconds=time.time() - start)
-    return CandidateResult(index=index, raw_output=out, elapsed_seconds=time.time() - start)
 
 
 def materialise(result: CandidateResult, output_dir: Path) -> CandidateResult:

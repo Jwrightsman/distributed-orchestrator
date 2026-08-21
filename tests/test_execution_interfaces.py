@@ -15,10 +15,11 @@ import mcp_server
 import routes_executions
 import server_state as state
 from execution.contracts import ExecutionRequestV1
-from execution.dispatch import Dispatcher, ExecutionUnit, PlacementDecision
+from execution.dispatch import DispatchResult, Dispatcher, ExecutionUnit, PlacementDecision
 from execution.persistence import ExecutionStore
 from execution.service import ExecutionService
 from server import app
+from verification import VerificationPool
 
 
 @pytest.fixture(autouse=True)
@@ -106,7 +107,6 @@ def test_cli_execution_argument_parsing(argv, strategy, candidates, placement, r
     [
         ["task", "--strategy", "dag", "--candidates", "2"],
         ["task", "--strategy", "direct", "--candidates", "2"],
-        ["task", "--strategy", "auto", "--candidates", "3"],
         ["task", "--strategy", "ensemble", "--candidates", "6"],
     ],
 )
@@ -236,3 +236,51 @@ def test_queue_limit_is_atomic_for_a_generated_wave(monkeypatch):
         accepted = list(pool.map(lambda index: state.enqueue_task({"task_id": str(index)}), range(20)))
     assert sum(accepted) == 3
     assert len(state.task_queue) == 3
+
+
+@pytest.mark.asyncio
+async def test_distributed_dag_sampled_verification_remains_wired(monkeypatch):
+    emitted = []
+    pool = VerificationPool(verify_rate=1.0)
+    monkeypatch.setattr(state, "verification_pool", pool)
+    monkeypatch.setattr(state, "_refresh_verify_rate", lambda: None)
+    unit = ExecutionUnit("dag-1", "dag_subtask", "Build", "prompt", "system")
+    primary = DispatchResult(
+        unit=unit,
+        status="completed",
+        output="```python\nprint('same shape')\n```",
+        placement="distributed",
+        node_id="primary",
+        attempt_count=1,
+    )
+
+    async def remote(self, duplicate, request, execution_id, strategy, decision):
+        assert decision.qualifying_nodes == ("secondary",)
+        return DispatchResult(
+            unit=duplicate,
+            status="completed",
+            output="```python\nprint('same shape, different text')\n```",
+            placement="distributed",
+            node_id="secondary",
+            attempt_count=1,
+        )
+
+    monkeypatch.setattr(Dispatcher, "_distributed", remote)
+    dispatcher = Dispatcher(emit=lambda name, data: emitted.append((name, data)))
+    dispatcher._maybe_verify_remote(
+        unit,
+        ExecutionRequestV1(task="Build", placement="distributed"),
+        "e" * 32,
+        "dag",
+        PlacementDecision(
+            "distributed",
+            "test",
+            qualifying_nodes=("primary", "secondary"),
+        ),
+        primary,
+    )
+    await asyncio.sleep(0)
+
+    assert pool.reputation("primary").total == 1
+    assert pool.reputation("secondary").total == 1
+    assert any(name == "verification" for name, _ in emitted)
