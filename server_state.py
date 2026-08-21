@@ -9,6 +9,7 @@ server.py assembles the app.
 
 import asyncio
 import json
+import secrets
 import sqlite3
 import threading
 import time
@@ -16,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import HTTPException, Request, WebSocket
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from config import get as get_config
 from verification import VerificationPool
@@ -96,6 +97,26 @@ STARTED_AT = time.time()
 task_queue: list[dict] = []          # pending tasks for workers
 task_results: dict[str, dict] = {}   # task_id -> result
 task_inflight: dict[str, dict] = {}  # task_id -> task (assigned but not yet returned)
+_task_queue_lock = threading.RLock()
+
+
+def enqueue_task(task: dict) -> bool:
+    """Atomically enforce the pending-task cap for every generated unit."""
+    with _task_queue_lock:
+        if len(task_queue) >= _MAX_TASK_QUEUE:
+            return False
+        task_queue.append(task)
+        return True
+
+
+def remove_queued_task(task_id: str) -> bool:
+    """Remove a queued task by id without a check-then-mutate race."""
+    with _task_queue_lock:
+        for index, task in enumerate(task_queue):
+            if task.get("task_id") == task_id:
+                task_queue.pop(index)
+                return True
+    return False
 
 # ── Circuit breaker state ─────────────────────────────────────────────
 node_failure_count: dict[str, int] = {}   # node_id -> consecutive failure count
@@ -394,7 +415,7 @@ def _check_pitch_key(request: Request):
     if not key:
         return  # auth disabled
     provided = request.headers.get("X-Pitch-Key", "")
-    if provided != key:
+    if not secrets.compare_digest(str(provided), str(key)):
         raise HTTPException(status_code=401, detail="Invalid or missing X-Pitch-Key header")
 
 
@@ -409,7 +430,7 @@ def _check_node_auth(request: Request):
     if not secret:
         return  # auth disabled
     provided = request.headers.get("X-Node-Secret", "")
-    if provided != secret:
+    if not secrets.compare_digest(str(provided), str(secret)):
         raise HTTPException(status_code=401, detail="Invalid or missing X-Node-Secret header")
 
 
@@ -447,7 +468,7 @@ class NodeRegistration(BaseModel):
     gpu: str | None = None
     # Optional capability tags — e.g. ["code", "large-context"] or ["gpu", "fast"]
     # Used by the dispatcher to match tasks to capable nodes.
-    capabilities: list[str] = []
+    capabilities: list[str] = Field(default_factory=list)
 
 
 class TaskResult(BaseModel):
@@ -459,11 +480,20 @@ class TaskResult(BaseModel):
     # recorded so work is never lost, but it cannot be settled for credit.
     attempt_id: str | None = None
     nonce: str | None = None
+    contract_version: str | None = None
+    execution_id: str | None = None
+    execution_unit_id: str | None = None
+    execution_unit_kind: str | None = None
 
 
 class TokenBatch(BaseModel):
     node_id: str
     tokens: str  # accumulated token string for this batch
+    contract_version: str | None = None
+    attempt_id: str | None = None
+    nonce: str | None = None
+    execution_id: str | None = None
+    execution_unit_id: str | None = None
 
 
 class NewProjectRequest(BaseModel):
@@ -545,7 +575,8 @@ def _cleanup_pass():
             task = task_inflight.pop(tid)
             task.pop("assigned_to", None)
             task.pop("assigned_at", None)
-            task_queue.append(task)
+            with _task_queue_lock:
+                task_queue.append(task)
             _emit("task_reclaimed", {"task_id": tid, "node_id": nid})
 
     # 2. Old task results (only needed long enough for the caller to collect them)
