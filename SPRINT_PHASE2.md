@@ -1,8 +1,12 @@
 # SPRINT PHASE 2 — August 5–20, 2026
 
+> **Historical/completed plan.** This file is retained for its measured results
+> and session log; it is not the active work queue. The bounded August 21
+> execution-strategy exception is recorded in `SPRINT_STRATEGY_PROTOCOL.md`,
+> after which normal freeze discipline resumes.
+
 _Continues SPRINT_AUG2026.md, which was completed early (Aug 1–4). Read MASTER_PLAN.md first,
-then SPRINT_AUG2026.md's Session Log, then this file. This file is now the active plan and your
-persistent memory across sessions._
+then SPRINT_AUG2026.md's Session Log, then this file for historical context._
 
 > **Phase 2 directive: the infrastructure is built. What decides the launch now is whether the
 > swarm produces genuinely good output, reliably, without breaking on camera. Nothing in this
@@ -228,7 +232,8 @@ model together."
 
 ## 5. FREEZE + LAUNCH PREP (Aug 17–20)
 
-- [ ] **Aug 17 end of day: feature freeze.** After this, bug fixes and documentation only.
+- [x] **Aug 17 feature-freeze milestone is historical.** The August 21 protocol
+      sprint was a separate, explicitly bounded exception; see its sprint record.
 - [x] Full regression: test suite, chaos tests, soak test, `--demo`, `--demo-showcase`, MCP flow,
       fresh-clone install, live-network smoke test
       — **all eight run Aug 12-13.** Suite 341 + ruff green; chaos tests in-suite; soak 60 pitches

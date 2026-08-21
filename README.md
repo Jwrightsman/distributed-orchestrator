@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/Jwrightsman/distributed-orchestrator/actions/workflows/ci.yml/badge.svg)](https://github.com/Jwrightsman/distributed-orchestrator/actions/workflows/ci.yml)
 
-A planner agent decomposes work into subtasks, builder agents execute them in parallel across connected machines, and a reviewer agent assembles and validates the final output — all running on local models via Ollama, no cloud APIs required.
+The execution protocol can decompose work into a planner/builder/reviewer DAG or generate complete ensemble alternatives, with local and distributed placement selected independently. All generation runs through local models via Ollama; no cloud API is required.
 
 > The repository is still named `distributed-orchestrator`; **Mycelium** is the project name. The slug is deliberately left alone so existing clone URLs and links keep working.
 
@@ -16,7 +16,7 @@ active model, no auth required. **Agents:** read [AGENTS.md](AGENTS.md) first;
 it states plainly that installing this on a machine requires that machine
 owner's consent.
 
-> **Status (August 2026):** Phase 0 works end-to-end — distributed execution, persistent project memory, auto-revision, live dashboard, credit ledger. Now hardened for WAN use (`node_secret` + `pitch_key` auth, rate limits, disk caps) with a [beginner-friendly deploy guide](docs/DEPLOY.md). Looking for the first external nodes — see below.
+> **Status (August 2026):** Phase 0 works end-to-end. Execution protocol v1 adds first-class DAG and ensemble strategies, direct-as-one-candidate, deterministic auto-selection, durable normalized records, and attempt-bound worker streams/results. The queue and shared-secret trust model remain alpha limitations; see [the protocol](docs/PROTOCOL.md).
 
 ## Positioning
 
@@ -36,6 +36,12 @@ You don't have to wait for that to try it: `python cli.py "your task"` runs the 
 
 ## How it works
 
+All interfaces now construct one versioned request. Strategy (`dag`,
+`ensemble`, `direct`, `auto`) and placement (`local`, `distributed`, `auto`)
+are separate choices. The diagram below is the default DAG path retained for
+legacy requests; ensemble gives the complete task to each candidate and selects
+from structured validation evidence. See [architecture](docs/ARCHITECTURE.md).
+
 ```
 POST /pitch  (or: python cli.py "your task")
     │
@@ -54,9 +60,10 @@ POST /pitch  (or: python cli.py "your task")
              output/{timestamp}/output.md + extracted code files
 ```
 
-**`/pitch` vs `/pitch/distributed`**
+**Compatibility endpoints**
 - `/pitch` or `cli.py` — all agents run locally on your machine
 - `/pitch/distributed` — planner and reviewer run locally; builder subtasks are distributed to connected worker nodes and execute in parallel across machines
+- `/v1/executions` — canonical asynchronous API for explicit strategy and placement combinations
 
 All agents use local models via [Ollama](https://ollama.com). No data leaves your machine unless you connect worker nodes across a network.
 
@@ -114,7 +121,14 @@ Config
 
 ```bash
 python cli.py "Build a Python script that analyzes a CSV of sales data"
+python cli.py "Build one HTML file" --strategy ensemble --candidates 3 --placement local
+python cli.py "Build coordinated API components" --strategy dag --placement distributed
+python cli.py "Make one complete attempt" --strategy direct --placement local
 ```
+
+`--strategy auto` is conservative and records why it selected a strategy.
+Candidate count is bounded to 1–5. The CLI retains local placement by default
+to preserve its historical behavior.
 
 ### Web dashboard
 
@@ -167,6 +181,13 @@ curl http://localhost:8000/jobs/{job_id}
 curl -X POST http://localhost:8000/pitch/async \
   -H "Content-Type: application/json" \
   -d '{"task": "Add authentication", "project_id": "my-app-abc123"}'
+
+# Canonical protocol-v1 submission — returns execution_id immediately
+curl -X POST http://localhost:8000/v1/executions \
+  -H "Content-Type: application/json" \
+  -d '{"task":"Build one HTML file","strategy":"ensemble","strategy_options":{"kind":"ensemble","candidates":3,"concurrency":2},"placement":"local"}'
+
+curl http://localhost:8000/v1/executions/{execution_id}
 ```
 
 ## Worker nodes
@@ -206,6 +227,7 @@ cli.py              # Terminal interface
 server.py           # App assembly — routers, lifespan, exception handling
 server_state.py     # Shared state, SQLite persistence, events, auth, rate limits
 routes_pitch.py     # /pitch, /pitch/async, /pitch/distributed, /jobs*
+routes_executions.py # Canonical POST/GET /v1/executions API
 routes_nodes.py     # Worker protocol: register, poll, results, circuit breaker
 routes_history.py   # /history*, /gallery ( /share/{id} redirects to /run/{id} )
 routes_run.py       # /run/{id} — the shareable permalink for one run
@@ -218,6 +240,7 @@ join.py             # One-command node setup
 dashboard.py        # Assembles pages from templates/ (theme + CSS + JS partials)
 templates/          # _theme.html (tokens) + _dashboard.css/.js + one file per page
 orchestrator.py     # Core pipeline: plan → build → review → revise
+execution/          # Versioned contracts, registry, strategies, dispatch, validation, persistence
 ollama_client.py    # Ollama HTTP client + token streaming + structured outputs
 memory.py           # Persistent project memory across sessions
 ledger.py           # Contribution ledger (append-only JSON)
@@ -228,6 +251,8 @@ evals/              # Eval harness: prompts, scoring, results (see evals/README.
 scripts/            # restart_recovery.py + soak_test.py — no Ollama needed
 tests/              # pytest suite — run with: pytest -q
 docs/DEPLOY.md      # LAN / Tailscale / cloud deployment for beginners
+docs/PROTOCOL.md    # Normative execution and worker protocol v1
+docs/ARCHITECTURE.md # Strategy/placement/validation/persistence diagrams
 Dockerfile          # + docker-compose.yml: one-command orchestrator + Ollama
 output/             # Saved results, one directory per run
 projects/           # Persistent project memory (one dir per project)
@@ -243,6 +268,8 @@ See **[docs/DEPLOY.md](docs/DEPLOY.md)** — three copy-paste paths: LAN (no set
 | Endpoint | Method | Description |
 |---|---|---|
 | `/health` | GET | Server + Ollama status, connected nodes |
+| `/v1/executions` | POST | Queue a canonical versioned execution |
+| `/v1/executions/{id}` | GET | Read durable normalized execution state/result |
 | `/pitch` | POST | Run pipeline, block until complete |
 | `/pitch/async` | POST | Submit job, return `job_id` immediately |
 | `/pitch/distributed` | POST | Distribute builders to worker nodes |
@@ -264,6 +291,7 @@ See **[docs/DEPLOY.md](docs/DEPLOY.md)** — three copy-paste paths: LAN (no set
 | `/nodes/register` | POST | Worker node registration |
 | `/tasks/next` | GET | Worker polls for next task (long-polls 25s) |
 | `/tasks/{id}/result` | POST | Worker submits completed task |
+| `/tasks/{id}/stream` | POST | Assigned worker streams attempt-bound token batches |
 
 ## Reliability and trust model
 
@@ -274,13 +302,14 @@ This is a **Phase 0 trusted-network prototype**. Here's exactly what's durable a
 | Pipeline output | Yes | Saved to `output/{timestamp}/` on disk after every run |
 | Event history | Yes | SQLite (`events.db`) — survives restarts |
 | Job status | Yes | SQLite (`events.db`) — `/jobs/{id}` works after restart |
+| Normalized execution metadata | Yes | SQLite `executions` table — strategy, placement, candidates, validation, errors |
 | Project memory | Yes | `projects/<id>/memory.md` on disk |
 | Connected nodes | No | Nodes must re-register after server restart |
 | Task queue | No | In-flight tasks are reclaimed automatically if a node goes silent; a server restart drops queued-but-not-started tasks |
 
 **Execution guarantees:** Tasks are at-least-once in the distributed path — if a node goes offline mid-task, the task is re-queued and can run on another node. There's no deduplication guard, so in rare race conditions a task may run twice. The final reviewer sees all outputs and merges them, so this typically doesn't affect the result.
 
-**Trust model:** Worker nodes authenticate with a shared secret (`node_secret`), task submission can be gated with `pitch_key`, pitch endpoints are rate-limited (`pitch_rate_max`, default 5/min/IP), and `output/` disk usage is capped (`output_max_mb`). All auth is off by default for trusted-network mode; **set both keys before any internet exposure** — [docs/DEPLOY.md](docs/DEPLOY.md) walks through it. No HTTPS out of the box: treat pitched tasks and outputs as public on a public deployment.
+**Trust model:** Worker nodes authenticate with a shared secret (`node_secret`), task submission can be gated with `pitch_key`, pitch endpoints are rate-limited (`pitch_rate_max`, default 5/min/IP), and `output/` disk usage is capped (`output_max_mb`). Protocol-v1 streams and results must match the assigned node, task, attempt id, nonce, execution unit, and unexpired lease; legacy unbound work receives no credit. This is structural attempt binding, not per-node cryptographic identity. All auth is off by default for trusted-network mode; **set both keys before any internet exposure** — [docs/DEPLOY.md](docs/DEPLOY.md) walks through it. No HTTPS out of the box: treat pitched tasks and outputs as public on a public deployment.
 
 **Verified, not assumed.** `scripts/restart_recovery.py` hard-kills a running server mid-job and checks what comes back: jobs and event history survive, nodes re-register, the dashboard recovers, and WebSocket clients reconnect — **17/17 checks**. `scripts/soak_test.py` runs 60 consecutive pitches through one server session: **no orphaned tasks, no latency drift** (±1% across halves). Both run in under a minute.
 
