@@ -286,6 +286,8 @@ async def main() -> int:
         print(f"  trial {res.index:>2}: {mark}  {int(res.elapsed_seconds):>4}s  "
               f"{str(row['reasons'])[:64]}", flush=True)
 
+    if args.trials < 1:
+        ap.error("--trials must be at least 1")
     await ensemble.run_ensemble(cand.pitch, args.trials, out_root, on_candidate=record)
 
     report(outcomes, cand, time.time() - started, out_root, args.ensemble_n)

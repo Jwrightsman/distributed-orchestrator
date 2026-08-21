@@ -149,6 +149,7 @@ class ExecutionService:
                 "placement_reason": placement.reason,
                 "fallback_count": len(fallbacks),
                 "participating_node_count": len(nodes),
+                "observed_compute_ms": sum(item.duration_ms for item in context.dispatch_results),
                 "retry_count": max(
                     0,
                     sum(item.attempt_count for item in context.dispatch_results) - len(context.dispatch_results),

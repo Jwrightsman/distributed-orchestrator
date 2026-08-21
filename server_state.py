@@ -499,28 +499,28 @@ class NodeRegistration(BaseModel):
 
 
 class TaskResult(BaseModel):
-    node_id: str
-    output: str | None
-    error: str | None = None
-    elapsed_seconds: float = 0
+    node_id: str = Field(min_length=1, max_length=128)
+    output: str | None = Field(default=None, max_length=10_485_760)
+    error: str | None = Field(default=None, max_length=500)
+    elapsed_seconds: float = Field(default=0, ge=0, le=7200)
     # Issued with the task. Absent means an old node build: the result is still
     # recorded so work is never lost, but it cannot be settled for credit.
-    attempt_id: str | None = None
-    nonce: str | None = None
-    contract_version: str | None = None
-    execution_id: str | None = None
-    execution_unit_id: str | None = None
-    execution_unit_kind: str | None = None
+    attempt_id: str | None = Field(default=None, max_length=128)
+    nonce: str | None = Field(default=None, max_length=128)
+    contract_version: str | None = Field(default=None, max_length=16)
+    execution_id: str | None = Field(default=None, max_length=64)
+    execution_unit_id: str | None = Field(default=None, max_length=128)
+    execution_unit_kind: str | None = Field(default=None, max_length=64)
 
 
 class TokenBatch(BaseModel):
-    node_id: str
-    tokens: str  # accumulated token string for this batch
-    contract_version: str | None = None
-    attempt_id: str | None = None
-    nonce: str | None = None
-    execution_id: str | None = None
-    execution_unit_id: str | None = None
+    node_id: str = Field(min_length=1, max_length=128)
+    tokens: str = Field(min_length=1, max_length=65_536)
+    contract_version: str | None = Field(default=None, max_length=16)
+    attempt_id: str | None = Field(default=None, max_length=128)
+    nonce: str | None = Field(default=None, max_length=128)
+    execution_id: str | None = Field(default=None, max_length=64)
+    execution_unit_id: str | None = Field(default=None, max_length=128)
 
 
 class NewProjectRequest(BaseModel):

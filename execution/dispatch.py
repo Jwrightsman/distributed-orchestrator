@@ -109,6 +109,7 @@ def select_placement(request: ExecutionRequestV1) -> PlacementDecision:
 
 LocalExecutor = Callable[[], Awaitable[str]]
 EventEmitter = Callable[[str, dict[str, Any]], None]
+_verification_tasks: set[asyncio.Task] = set()
 
 
 class Dispatcher:
@@ -127,7 +128,7 @@ class Dispatcher:
         local_executor: LocalExecutor,
     ) -> DispatchResult:
         if decision.selected == "local":
-            result = await self._local(unit, local_executor)
+            result = await self._local(unit, local_executor, request.max_output_bytes)
             result.fallback_reason = decision.fallback_reason
             if decision.fallback_reason:
                 self.emit(
@@ -143,6 +144,8 @@ class Dispatcher:
 
         remote = await self._distributed(unit, request, execution_id, strategy, decision)
         if remote.status == "completed":
+            if unit.kind == "dag_subtask":
+                self._maybe_verify_remote(unit, request, execution_id, strategy, decision, remote)
             return remote
         if not request.requirements.allow_local_fallback:
             return remote
@@ -157,18 +160,92 @@ class Dispatcher:
                 "placement_selected": "local",
             },
         )
-        local = await self._local(unit, local_executor)
+        local = await self._local(unit, local_executor, request.max_output_bytes)
         local.fallback_reason = reason
         local.attempt_count += remote.attempt_count
         return local
 
-    async def _local(self, unit: ExecutionUnit, executor: LocalExecutor) -> DispatchResult:
+    def _maybe_verify_remote(
+        self,
+        unit: ExecutionUnit,
+        request: ExecutionRequestV1,
+        execution_id: str,
+        strategy: str,
+        decision: PlacementDecision,
+        primary: DispatchResult,
+    ) -> None:
+        """Sample a second node without adding its latency to the deliverable."""
+        state._refresh_verify_rate()
+        alternatives = tuple(node for node in decision.qualifying_nodes if node != primary.node_id)
+        pool = state.verification_pool
+        if not alternatives or not pool.should_verify(len(decision.qualifying_nodes)):
+            return
+
+        duplicate = ExecutionUnit(
+            unit_id=f"{unit.unit_id}-verification-{uuid.uuid4().hex[:8]}",
+            kind=unit.kind,
+            title=f"Verification: {unit.title}",
+            prompt=unit.prompt,
+            system=unit.system,
+            depends_on=unit.depends_on,
+            metadata={**unit.metadata, "verification_of": unit.unit_id},
+        )
+        verification_decision = PlacementDecision(
+            selected="distributed",
+            reason="Sampled verification on a node other than the primary worker.",
+            qualifying_nodes=alternatives,
+        )
+
+        async def collect() -> None:
+            secondary = await self._distributed(
+                duplicate,
+                request,
+                execution_id,
+                strategy,
+                verification_decision,
+            )
+            if secondary.status != "completed" or not secondary.node_id:
+                return
+            verdict = pool.record_comparison(
+                primary.node_id or "unknown",
+                primary.output,
+                secondary.node_id,
+                secondary.output,
+            )
+            self.emit(
+                "verification",
+                {
+                    "execution_id": execution_id,
+                    "unit_id": unit.unit_id,
+                    **verdict,
+                },
+            )
+
+        task = asyncio.create_task(collect())
+        _verification_tasks.add(task)
+        task.add_done_callback(_verification_tasks.discard)
+
+    async def _local(
+        self,
+        unit: ExecutionUnit,
+        executor: LocalExecutor,
+        max_output_bytes: int,
+    ) -> DispatchResult:
         started = time.perf_counter()
         self.emit("attempt_started", {"unit_id": unit.unit_id, "placement": "local"})
         try:
             output = await executor()
-            status = "completed" if output else "failed"
-            error = None if output else "local executor returned empty output"
+            output_size = len(output.encode("utf-8")) if output else 0
+            status = "completed" if output and output_size <= max_output_bytes else "failed"
+            error = (
+                None
+                if status == "completed"
+                else f"local output exceeds max_output_bytes={max_output_bytes}"
+                if output_size > max_output_bytes
+                else "local executor returned empty output"
+            )
+            if status == "failed" and output_size > max_output_bytes:
+                output = ""
         except Exception as exc:
             output = ""
             status = "failed"
@@ -213,6 +290,7 @@ class Dispatcher:
             "execution_unit_kind": unit.kind,
             "output_contract": contract_summary,
             "verification_policy": verification_summary,
+            "max_output_bytes": request.max_output_bytes,
             "requires": list(request.requirements.required_capabilities),
             "eligible_nodes": list(decision.qualifying_nodes),
             "lease_seconds": min(7200, max(state.ATTEMPT_LEASE_SECONDS, request.timeout_seconds + 30)),
@@ -254,6 +332,9 @@ class Dispatcher:
         duration = max(0, int((time.perf_counter() - started) * 1000))
         output = raw.get("output") or ""
         error = raw.get("error")
+        if len(output.encode("utf-8")) > request.max_output_bytes:
+            output = ""
+            error = f"worker output exceeds max_output_bytes={request.max_output_bytes}"
         return DispatchResult(
             unit=unit,
             status="completed" if output and not error else "failed",
