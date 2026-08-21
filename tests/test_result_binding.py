@@ -48,6 +48,39 @@ def _claim(client, node_id, task_id="t-1"):
     return client.get("/tasks/next", params={"node_id": node_id}).json()
 
 
+def _claim_v1(client, node_id, task_id="t-v1"):
+    """Claim a canonical execution unit carrying every v1 binding field."""
+    state.task_queue.append({
+        "task_id": task_id,
+        "title": "candidate",
+        "prompt": "complete task",
+        "system": "system",
+        "contract_version": "1",
+        "execution_id": "e" * 32,
+        "strategy": "ensemble",
+        "execution_unit_id": "candidate-1",
+        "execution_unit_kind": "candidate",
+    })
+    return client.get("/tasks/next", params={"node_id": node_id}).json()
+
+
+def _v1_body(task, node_id="worker", **over):
+    body = {
+        "node_id": node_id,
+        "output": "complete work",
+        "error": None,
+        "elapsed_seconds": 1.0,
+        "contract_version": "1",
+        "attempt_id": task.get("attempt_id"),
+        "nonce": task.get("nonce"),
+        "execution_id": task.get("execution_id"),
+        "execution_unit_id": task.get("execution_unit_id"),
+        "execution_unit_kind": task.get("execution_unit_kind"),
+    }
+    body.update(over)
+    return body
+
+
 def _submit(client, task_id, node_id, task=None, **over):
     body = {"node_id": node_id, "output": "work", "error": None, "elapsed_seconds": 1.0}
     if task:
@@ -159,6 +192,86 @@ def test_unverifiable_result_is_recorded_but_not_paid(client):
     assert r.status_code == 200
     assert r.json()["credits_earned"] == 0
     assert state.task_results["t-1"]["output"] == "work"
+
+
+def test_v1_result_requires_attempt_identifier(client):
+    _register(client, "worker")
+    task = _claim_v1(client, "worker")
+    body = _v1_body(task, attempt_id=None)
+    response = client.post("/tasks/t-v1/result", json=body)
+    assert response.status_code == 403
+    assert "missing attempt id" in response.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("nonce", "wrong", "nonce"),
+        ("execution_id", "wrong", "execution id"),
+        ("execution_unit_id", "wrong", "execution unit id"),
+        ("execution_unit_kind", "wrong", "execution unit kind"),
+    ],
+)
+def test_v1_result_must_match_execution_unit_binding(client, field, value, message):
+    _register(client, "worker")
+    task = _claim_v1(client, "worker")
+    response = client.post("/tasks/t-v1/result", json=_v1_body(task, **{field: value}))
+    assert response.status_code == 403
+    assert message in response.json()["detail"]
+
+
+def test_v1_honest_result_is_idempotent_and_paid_once(client):
+    _register(client, "worker")
+    task = _claim_v1(client, "worker")
+    body = _v1_body(task)
+    first = client.post("/tasks/t-v1/result", json=body)
+    replay = client.post("/tasks/t-v1/result", json=body)
+    assert first.status_code == replay.status_code == 200
+    assert first.json() == replay.json() == {"status": "accepted", "credits_earned": 5}
+    assert state.nodes["worker"]["credits_earned"] == 5
+
+
+def test_v1_stream_requires_current_node_attempt_nonce_and_unit(client):
+    _register(client, "worker")
+    _register(client, "thief")
+    task = _claim_v1(client, "worker")
+    base = {
+        "node_id": "worker",
+        "tokens": "partial",
+        "contract_version": "1",
+        "attempt_id": task["attempt_id"],
+        "nonce": task["nonce"],
+        "execution_id": task["execution_id"],
+        "execution_unit_id": task["execution_unit_id"],
+    }
+
+    assert client.post("/tasks/t-v1/stream", json=base).json() == {"ok": True}
+    for field, value in (
+        ("node_id", "thief"),
+        ("attempt_id", "wrong"),
+        ("nonce", "wrong"),
+        ("execution_id", "wrong"),
+        ("execution_unit_id", "wrong"),
+    ):
+        response = client.post("/tasks/t-v1/stream", json={**base, field: value})
+        assert response.status_code == 403
+
+
+def test_v1_stream_rejects_expired_lease(client):
+    _register(client, "worker")
+    task = _claim_v1(client, "worker")
+    state.task_inflight["t-v1"]["lease_expires_at"] = time.time() - 1
+    response = client.post("/tasks/t-v1/stream", json={
+        "node_id": "worker",
+        "tokens": "late",
+        "contract_version": "1",
+        "attempt_id": task["attempt_id"],
+        "nonce": task["nonce"],
+        "execution_id": task["execution_id"],
+        "execution_unit_id": task["execution_unit_id"],
+    })
+    assert response.status_code == 403
+    assert "lease expired" in response.json()["detail"]
 
 
 def test_ids_are_not_guessable_from_a_timestamp(client):

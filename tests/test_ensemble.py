@@ -147,3 +147,28 @@ def test_run_ensemble_is_sequential_by_default():
     import inspect
 
     assert inspect.signature(ensemble.run_ensemble).parameters["concurrent"].default is False
+
+
+@pytest.mark.asyncio
+async def test_experiment_wrapper_uses_bounded_production_executions(tmp_path, monkeypatch):
+    import execution.service as service_module
+    import execution.strategies as strategies
+    from execution.persistence import ExecutionStore
+
+    async def generated(*args, **kwargs):
+        return "```html\n<!doctype html><title>complete</title>\n```"
+
+    monkeypatch.setattr(strategies, "generate", generated)
+    monkeypatch.setattr(strategies.EnsembleStrategy, "artifact_root", tmp_path / "production")
+    service = service_module.ExecutionService(store=ExecutionStore(tmp_path / "executions.db"))
+    service._emit = lambda *args, **kwargs: None
+    monkeypatch.setattr(service_module, "_SERVICE", service)
+
+    output_dir = tmp_path / "experiment"
+    results = await ensemble.run_ensemble("build one HTML file", 6, output_dir)
+
+    assert len(results) == 6
+    assert all((output_dir / f"candidate_{index}" / "candidate.md").is_file() for index in range(1, 7))
+    # Six trials require two protocol-v1 executions because one execution is
+    # intentionally bounded to five candidates.
+    assert len({path.parent.parent.name for path in (tmp_path / "production").glob("*/candidate_*/candidate.md")}) == 2
