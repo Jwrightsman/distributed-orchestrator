@@ -24,6 +24,8 @@ class StrategyContext:
     dispatcher: Dispatcher
     validators: ValidatorRegistry
     emit: Callable[[str, dict[str, Any]], None]
+    selector_reason: str = ""
+    selector_version: str = ""
     callbacks: dict[str, Any] = field(default_factory=dict)
     dag_runner: Callable[..., Any] = orchestrator.run_pipeline
     dispatch_results: list[DispatchResult] = field(default_factory=list)
@@ -99,11 +101,17 @@ class DagStrategy(ExecutionStrategy):
                 "fallback_reason": result.fallback_reason,
             }
 
+        def review_started() -> None:
+            context.emit("review_started", {"strategy": self.identifier})
+            callback = context.callbacks.get("on_review_start")
+            if callback:
+                callback()
+
         result = await context.dag_runner(
             request.task,
             on_plan=context.callbacks.get("on_plan"),
             on_build=context.callbacks.get("on_build"),
-            on_review_start=context.callbacks.get("on_review_start"),
+            on_review_start=review_started,
             project_id=request.project_id,
             build_fn=dispatch_build,
             build_metadata_fn=build_metadata,
@@ -111,6 +119,16 @@ class DagStrategy(ExecutionStrategy):
             review_enabled=options.review_enabled,
             revision_enabled=options.revision_enabled,
             execution_mode=context.placement.selected,
+            execution_id=context.execution_id,
+            strategy_requested=request.strategy,
+            strategy_selected=self.identifier,
+            strategy_version=self.version,
+            selector_reason=context.selector_reason,
+            selector_version=context.selector_version,
+            placement_fallback=context.placement.fallback_reason,
+            on_revision_start=lambda revision_pass: context.emit(
+                "revision_started", {"strategy": self.identifier, "revision_pass": revision_pass}
+            ),
         )
 
         files = [str(path) for path in result.get("code_files", [])]

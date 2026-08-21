@@ -274,4 +274,6 @@ class Dispatcher:
             state.remember_settlement(
                 task["attempt_id"],
                 {"status": "cancelled", "credits_earned": 0},
+                node_id=task.get("assigned_to"),
+                task_id=task_id,
             )

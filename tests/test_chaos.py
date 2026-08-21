@@ -167,8 +167,8 @@ def test_a_node_streaming_tokens_is_not_evicted_mid_build(client):
     assert not server.task_queue
 
 
-def test_streaming_for_an_unknown_task_still_counts_as_a_heartbeat(client):
-    """The heartbeat must not depend on the task lookup succeeding."""
+def test_streaming_for_an_unknown_task_does_not_refresh_a_node(client):
+    """Only the holder of an active lease may refresh via task streaming."""
     register(client, "chatty")
     server.nodes["chatty"]["last_seen"] = time.time() - (server_state._NODE_TIMEOUT + 10)
 
@@ -176,7 +176,7 @@ def test_streaming_for_an_unknown_task_still_counts_as_a_heartbeat(client):
                 json={"node_id": "chatty", "tokens": "x"})
     server_state._cleanup_pass()
 
-    assert "chatty" in server.nodes
+    assert "chatty" not in server.nodes
 
 
 # ── A node returns malformed, empty, or refusing output ─────────────────────

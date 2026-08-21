@@ -613,6 +613,14 @@ async def run_pipeline(
     review_enabled: bool = True,
     revision_enabled: bool = True,
     execution_mode: str = "local",
+    execution_id: str | None = None,
+    strategy_requested: str = "dag",
+    strategy_selected: str = "dag",
+    strategy_version: str = "1",
+    selector_reason: str = "Legacy DAG execution.",
+    selector_version: str = "legacy-v1",
+    placement_fallback: str | None = None,
+    on_revision_start=None,
 ) -> dict:
     """Run the full planner -> builder -> reviewer pipeline.
 
@@ -751,6 +759,8 @@ async def run_pipeline(
     for _rev_pass in range(_MAX_REVISIONS if revision_enabled else 0):
         if rating not in ("NEEDS_WORK", "FAIL") or not issues or not final_output:
             break
+        if on_revision_start:
+            on_revision_start(_rev_pass + 1)
         revised = await revise(task, issues, final_output)
         if len(revised.strip()) <= len(final_output) // 2:
             revision["stopped_because"] = "the revision came back mostly empty"
@@ -820,10 +830,14 @@ async def run_pipeline(
         "review_seconds": _review_seconds,
         "revision": revision,
         "credits": credits,
-        "strategy_requested": "dag",
-        "strategy_selected": "dag",
-        "strategy_version": "1",
+        "execution_id": execution_id,
+        "strategy_requested": strategy_requested,
+        "strategy_selected": strategy_selected,
+        "selector_reason": selector_reason,
+        "selector_version": selector_version,
+        "strategy_version": strategy_version,
         "placement": execution_mode,
+        "placement_fallback": placement_fallback,
     }
     (project_dir / "full_log.json").write_text(json.dumps(log, indent=2), encoding="utf-8")
 

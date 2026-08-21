@@ -114,6 +114,8 @@ class ExecutionService:
                 dispatcher=Dispatcher(emit=emit),
                 validators=self.validators,
                 emit=emit,
+                selector_reason=selection.reason,
+                selector_version=selection.selector_version,
                 callbacks=callbacks or {},
                 dag_runner=dag_runner or orchestrator.run_pipeline,
             )
@@ -171,6 +173,11 @@ class ExecutionService:
         result.completed_at = _now()
         result.duration_ms = max(0, int((time.perf_counter() - started) * 1000))
         result.telemetry = {**result.telemetry, "total_duration_ms": result.duration_ms}
+        # Assignment validation is intentionally disabled on the wire models so
+        # strategy adapters can assemble results efficiently. Re-validate once
+        # at the service boundary so persistence and every caller always see
+        # fully typed protocol objects rather than nested dictionaries.
+        result = ExecutionResultV1.model_validate(dict(result.__dict__))
         self.store.save(request, result)
         self._emit(
             "execution_completed" if result.status in ("completed", "unverified") else "execution_failed",

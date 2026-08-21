@@ -170,7 +170,15 @@ async def poll_and_execute(server: str, node_id: str, session: dict, secret: str
                 try:
                     await client_.post(
                         f"{server}/tasks/{task_id}/stream",
-                        json={"node_id": node_id, "tokens": text},
+                        json={
+                            "node_id": node_id,
+                            "tokens": text,
+                            "contract_version": task.get("contract_version"),
+                            "attempt_id": task.get("attempt_id"),
+                            "nonce": task.get("nonce"),
+                            "execution_id": task.get("execution_id"),
+                            "execution_unit_id": task.get("execution_unit_id"),
+                        },
                         headers=_auth_headers(secret),
                     )
                 except Exception:
@@ -201,6 +209,10 @@ async def poll_and_execute(server: str, node_id: str, session: dict, secret: str
                     # result but cannot settle it for credit.
                     "attempt_id": task.get("attempt_id"),
                     "nonce": task.get("nonce"),
+                    "contract_version": task.get("contract_version"),
+                    "execution_id": task.get("execution_id"),
+                    "execution_unit_id": task.get("execution_unit_id"),
+                    "execution_unit_kind": task.get("execution_unit_kind"),
                 },
                 headers=_auth_headers(secret),
             )
@@ -227,6 +239,10 @@ async def poll_and_execute(server: str, node_id: str, session: dict, secret: str
                     "node_id": node_id,
                     "attempt_id": task.get("attempt_id"),
                     "nonce": task.get("nonce"),
+                    "contract_version": task.get("contract_version"),
+                    "execution_id": task.get("execution_id"),
+                    "execution_unit_id": task.get("execution_unit_id"),
+                    "execution_unit_kind": task.get("execution_unit_kind"),
                     "output": None,
                     "error": str(e),
                     "elapsed_seconds": time.time() - start,

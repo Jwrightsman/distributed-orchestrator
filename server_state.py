@@ -20,6 +20,15 @@ from fastapi import HTTPException, Request, WebSocket
 from pydantic import BaseModel, Field, field_validator
 
 from config import get as get_config
+from execution.contracts import (
+    ConfidentialityV1,
+    ExecutionRequirementsV1,
+    OutputContractV1,
+    PlacementV1,
+    StrategyNameV1,
+    StrategyOptionsV1,
+    VerificationPolicyV1,
+)
 from verification import VerificationPool
 
 # ── Node staleness threshold (seconds) ───────────────────────────────────
@@ -83,9 +92,19 @@ settled_attempts: dict[str, dict] = {}
 _MAX_SETTLED = 5000
 
 
-def remember_settlement(attempt_id: str, outcome: dict) -> None:
+def remember_settlement(
+    attempt_id: str,
+    outcome: dict,
+    *,
+    node_id: str | None = None,
+    task_id: str | None = None,
+) -> None:
     """Record an attempt as settled, bounding the memory this can consume."""
-    settled_attempts[attempt_id] = outcome
+    settled_attempts[attempt_id] = {
+        "response": outcome,
+        "node_id": node_id,
+        "task_id": task_id,
+    }
     if len(settled_attempts) > _MAX_SETTLED:
         for stale in list(settled_attempts)[: len(settled_attempts) - _MAX_SETTLED]:
             settled_attempts.pop(stale, None)
@@ -438,6 +457,14 @@ def _check_node_auth(request: Request):
 class PitchRequest(BaseModel):
     task: str
     project_id: str | None = None   # optional: continue an existing project
+    strategy: StrategyNameV1 = "auto"
+    strategy_options: StrategyOptionsV1 | None = None
+    candidates: int | None = Field(default=None, ge=1, le=5)
+    placement: PlacementV1 | None = None
+    requirements: ExecutionRequirementsV1 = Field(default_factory=ExecutionRequirementsV1)
+    output_contract: OutputContractV1 | None = None
+    verification: VerificationPolicyV1 = Field(default_factory=VerificationPolicyV1)
+    confidentiality: ConfidentialityV1 = "trusted_guild"
 
     @field_validator("task")
     @classmethod
