@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -10,6 +11,7 @@ from typing import Any, Awaitable, Callable
 
 import server_state as state
 from execution.contracts import ExecutionRequestV1, SelectedPlacementV1
+from execution.attempts import ReceiptBindingError
 
 
 class PlacementUnavailable(RuntimeError):
@@ -50,6 +52,8 @@ class DispatchResult:
     error: str | None = None
     duration_ms: int = 0
     attempt_count: int = 0
+    retry_count: int = 0
+    reassignment_count: int = 0
 
 
 def qualifying_nodes(request: ExecutionRequestV1) -> list[str]:
@@ -126,9 +130,18 @@ class Dispatcher:
         strategy: str,
         decision: PlacementDecision,
         local_executor: LocalExecutor,
+        deadline_monotonic: float | None = None,
+        cancel_event: asyncio.Event | None = None,
     ) -> DispatchResult:
+        deadline = deadline_monotonic or (time.monotonic() + request.timeout_seconds)
         if decision.selected == "local":
-            result = await self._local(unit, local_executor, request.max_output_bytes)
+            result = await self._local(
+                unit,
+                local_executor,
+                request.max_output_bytes,
+                deadline_monotonic=deadline,
+                cancel_event=cancel_event,
+            )
             result.fallback_reason = decision.fallback_reason
             if decision.fallback_reason:
                 self.emit(
@@ -142,10 +155,31 @@ class Dispatcher:
                 )
             return result
 
-        remote = await self._distributed(unit, request, execution_id, strategy, decision)
+        remote_options: dict[str, Any] = {}
+        if deadline_monotonic is not None:
+            remote_options["deadline_monotonic"] = deadline
+        if cancel_event is not None:
+            remote_options["cancel_event"] = cancel_event
+        remote = await self._distributed(
+            unit,
+            request,
+            execution_id,
+            strategy,
+            decision,
+            **remote_options,
+        )
         if remote.status == "completed":
             if unit.kind == "dag_subtask":
-                self._maybe_verify_remote(unit, request, execution_id, strategy, decision, remote)
+                self._maybe_verify_remote(
+                    unit,
+                    request,
+                    execution_id,
+                    strategy,
+                    decision,
+                    remote,
+                    deadline_monotonic=deadline_monotonic,
+                    cancel_event=cancel_event,
+                )
             return remote
         if not request.requirements.allow_local_fallback:
             return remote
@@ -160,9 +194,17 @@ class Dispatcher:
                 "placement_selected": "local",
             },
         )
-        local = await self._local(unit, local_executor, request.max_output_bytes)
+        local = await self._local(
+            unit,
+            local_executor,
+            request.max_output_bytes,
+            deadline_monotonic=deadline,
+            cancel_event=cancel_event,
+        )
         local.fallback_reason = reason
         local.attempt_count += remote.attempt_count
+        local.retry_count += remote.retry_count
+        local.reassignment_count += remote.reassignment_count
         return local
 
     def _maybe_verify_remote(
@@ -173,6 +215,8 @@ class Dispatcher:
         strategy: str,
         decision: PlacementDecision,
         primary: DispatchResult,
+        deadline_monotonic: float | None = None,
+        cancel_event: asyncio.Event | None = None,
     ) -> None:
         """Sample a second node without adding its latency to the deliverable."""
         state._refresh_verify_rate()
@@ -197,12 +241,18 @@ class Dispatcher:
         )
 
         async def collect() -> None:
+            remote_options: dict[str, Any] = {}
+            if deadline_monotonic is not None:
+                remote_options["deadline_monotonic"] = deadline_monotonic
+            if cancel_event is not None:
+                remote_options["cancel_event"] = cancel_event
             secondary = await self._distributed(
                 duplicate,
                 request,
                 execution_id,
                 strategy,
                 verification_decision,
+                **remote_options,
             )
             if secondary.status != "completed" or not secondary.node_id:
                 return
@@ -230,11 +280,49 @@ class Dispatcher:
         unit: ExecutionUnit,
         executor: LocalExecutor,
         max_output_bytes: int,
+        *,
+        deadline_monotonic: float | None = None,
+        cancel_event: asyncio.Event | None = None,
     ) -> DispatchResult:
         started = time.perf_counter()
+        work: asyncio.Task | None = None
+        cancellation: asyncio.Task | None = None
         self.emit("attempt_started", {"unit_id": unit.unit_id, "placement": "local"})
         try:
-            output = await executor()
+            if cancel_event and cancel_event.is_set():
+                raise asyncio.CancelledError
+            remaining = (
+                max(0.0, deadline_monotonic - time.monotonic())
+                if deadline_monotonic is not None
+                else None
+            )
+            if remaining is not None and remaining <= 0:
+                raise TimeoutError("execution deadline exceeded before local inference")
+
+            work = asyncio.create_task(executor())
+            cancellation = (
+                asyncio.create_task(cancel_event.wait()) if cancel_event is not None else None
+            )
+            waits = {work}
+            if cancellation is not None:
+                waits.add(cancellation)
+            done, _ = await asyncio.wait(
+                waits,
+                timeout=remaining,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if cancellation is not None and cancellation in done:
+                work.cancel()
+                with suppress(asyncio.CancelledError):
+                    await work
+                raise asyncio.CancelledError
+            if work in done:
+                output = await work
+            else:
+                work.cancel()
+                with suppress(asyncio.CancelledError):
+                    await work
+                raise TimeoutError("execution deadline exceeded during local inference")
             output_size = len(output.encode("utf-8")) if output else 0
             status = "completed" if output and output_size <= max_output_bytes else "failed"
             error = (
@@ -246,10 +334,41 @@ class Dispatcher:
             )
             if status == "failed" and output_size > max_output_bytes:
                 output = ""
+        except asyncio.CancelledError:
+            duration = max(0, int((time.perf_counter() - started) * 1000))
+            self.emit(
+                "attempt_completed",
+                {
+                    "unit_id": unit.unit_id,
+                    "placement": "local",
+                    "status": "cancelled",
+                    "duration_ms": duration,
+                },
+            )
+            raise
+        except (asyncio.TimeoutError, TimeoutError) as exc:
+            duration = max(0, int((time.perf_counter() - started) * 1000))
+            self.emit(
+                "attempt_completed",
+                {
+                    "unit_id": unit.unit_id,
+                    "placement": "local",
+                    "status": "failed",
+                    "duration_ms": duration,
+                    "reason": "execution deadline exceeded",
+                },
+            )
+            raise asyncio.TimeoutError(str(exc)) from exc
         except Exception as exc:
             output = ""
             status = "failed"
             error = f"{type(exc).__name__}: {exc}"[:500]
+        finally:
+            for pending in (work, cancellation):
+                if pending is not None and not pending.done():
+                    pending.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await pending
         duration = max(0, int((time.perf_counter() - started) * 1000))
         self.emit(
             "attempt_completed",
@@ -273,8 +392,17 @@ class Dispatcher:
         execution_id: str,
         strategy: str,
         decision: PlacementDecision,
+        *,
+        deadline_monotonic: float | None = None,
+        cancel_event: asyncio.Event | None = None,
     ) -> DispatchResult:
         started = time.perf_counter()
+        deadline = deadline_monotonic or (time.monotonic() + request.timeout_seconds)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise asyncio.TimeoutError("execution deadline expired before distributed dispatch")
+        if cancel_event and cancel_event.is_set():
+            raise asyncio.CancelledError
         task_id = f"unit_{uuid.uuid4().hex}"
         contract_summary = request.output_contract.model_dump(mode="json") if request.output_contract else None
         verification_summary = request.verification.model_dump(mode="json")
@@ -293,7 +421,10 @@ class Dispatcher:
             "max_output_bytes": request.max_output_bytes,
             "requires": list(request.requirements.required_capabilities),
             "eligible_nodes": list(decision.qualifying_nodes),
-            "lease_seconds": min(7200, max(state.ATTEMPT_LEASE_SECONDS, request.timeout_seconds + 30)),
+            # The worker lease cannot outlive the caller's total execution
+            # deadline. A late result is rejected by the durable attempt state.
+            "lease_seconds": min(7200, max(1, int(remaining + 0.999))),
+            "execution_deadline_at": time.time() + remaining,
         }
         if not state.enqueue_task(task):
             return DispatchResult(
@@ -314,47 +445,122 @@ class Dispatcher:
                 "placement": "distributed",
             },
         )
-        deadline = time.monotonic() + request.timeout_seconds
-        while task_id not in state.task_results:
-            if time.monotonic() >= deadline:
-                self._cancel(task_id)
-                return DispatchResult(
-                    unit=unit,
-                    status="failed",
-                    placement="distributed",
-                    error=f"distributed attempt timed out after {request.timeout_seconds}s",
-                    duration_ms=max(0, int((time.perf_counter() - started) * 1000)),
-                    attempt_count=1,
-                )
-            await asyncio.sleep(0.05)
+        receipt = None
+        try:
+            while receipt is None:
+                try:
+                    receipt = state.accepted_result_broker.get_matching(
+                        task_id=task_id,
+                        execution_id=execution_id,
+                        execution_unit_id=unit.unit_id,
+                        execution_unit_kind=unit.kind,
+                        contract_version="1",
+                    )
+                except ReceiptBindingError as exc:
+                    self._cancel(task_id, reason=str(exc))
+                    attempts = state.attempt_store.count_attempts(task_id)
+                    return DispatchResult(
+                        unit=unit,
+                        status="failed",
+                        placement="distributed",
+                        error=str(exc),
+                        duration_ms=max(0, int((time.perf_counter() - started) * 1000)),
+                        attempt_count=attempts,
+                        retry_count=max(0, attempts - 1),
+                        reassignment_count=max(0, attempts - 1),
+                    )
+                if receipt is not None:
+                    break
+                if cancel_event and cancel_event.is_set():
+                    self._cancel(task_id, reason="execution cancellation requested")
+                    raise asyncio.CancelledError
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    cancelled = self._cancel(task_id, reason="execution deadline exceeded")
+                    if not cancelled:
+                        # Settlement and cancellation can meet at the deadline.
+                        # If settlement won the database race, consume it.
+                        receipt = state.accepted_result_broker.get_matching(
+                            task_id=task_id,
+                            execution_id=execution_id,
+                            execution_unit_id=unit.unit_id,
+                            execution_unit_kind=unit.kind,
+                            contract_version="1",
+                        )
+                    if receipt is None:
+                        raise asyncio.TimeoutError(
+                            "distributed attempt exceeded the execution deadline"
+                        )
+                    break
+                await asyncio.sleep(min(0.05, remaining))
+        except asyncio.CancelledError:
+            self._cancel(task_id, reason="dispatcher task cancelled")
+            raise
 
-        raw = state.task_results.pop(task_id)
+        # Remove only the compatibility mirror. The immutable receipt remains
+        # durable and is the authority consumed above.
+        state.task_results.pop(task_id, None)
         duration = max(0, int((time.perf_counter() - started) * 1000))
-        output = raw.get("output") or ""
-        error = raw.get("error")
+        output = receipt.output or ""
+        error = receipt.error
         if len(output.encode("utf-8")) > request.max_output_bytes:
             output = ""
             error = f"worker output exceeds max_output_bytes={request.max_output_bytes}"
+        attempts = max(1, state.attempt_store.count_attempts(task_id))
         return DispatchResult(
             unit=unit,
             status="completed" if output and not error else "failed",
             output=output,
             placement="distributed",
-            node_id=raw.get("node_id"),
+            node_id=receipt.assigned_node_id,
             error=str(error)[:500] if error else (None if output else "worker returned empty output"),
             duration_ms=duration,
-            attempt_count=1,
+            attempt_count=attempts,
+            retry_count=max(0, attempts - 1),
+            reassignment_count=max(0, attempts - 1),
         )
 
     @staticmethod
-    def _cancel(task_id: str) -> None:
-        if state.remove_queued_task(task_id):
-            return
-        task = state.task_inflight.pop(task_id, None)
-        if task and task.get("attempt_id"):
-            state.remember_settlement(
-                task["attempt_id"],
-                {"status": "cancelled", "credits_earned": 0},
-                node_id=task.get("assigned_to"),
-                task_id=task_id,
+    def _cancel(task_id: str, *, reason: str) -> bool:
+        """Remove queued work or durably cancel one active attempt."""
+        with state._task_queue_lock:
+            if state.remove_queued_task(task_id):
+                return True
+            task = state.task_inflight.get(task_id)
+            if not task:
+                return False
+            attempt_id = task.get("attempt_id")
+            changed = bool(
+                attempt_id
+                and state.attempt_store.transition_active(
+                    attempt_id=attempt_id,
+                    state="cancelled",
+                    reason=reason,
+                )
             )
+            record = state.attempt_store.get(attempt_id) if attempt_id else None
+            terminal_without_receipt = bool(
+                record
+                and record.state
+                in {"expired", "reclaimed", "cancelled", "superseded", "interrupted"}
+            )
+            if changed or not attempt_id or terminal_without_receipt:
+                state.task_inflight.pop(task_id, None)
+            return changed or not attempt_id or terminal_without_receipt
+
+    @staticmethod
+    def cancel_execution(execution_id: str, *, reason: str = "execution cancelled") -> int:
+        """Cancel all queued and leased units belonging to an execution."""
+        with state._task_queue_lock:
+            queued = [
+                task.get("task_id")
+                for task in state.task_queue
+                if task.get("execution_id") == execution_id
+            ]
+            for task_id in queued:
+                if task_id:
+                    state.remove_queued_task(task_id)
+            active_task_ids = state.attempt_store.cancel_execution(execution_id, reason)
+            for task_id in active_task_ids:
+                state.task_inflight.pop(task_id, None)
+        return len(queued) + len(active_task_ids)
