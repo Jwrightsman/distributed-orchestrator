@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -47,10 +49,36 @@ class ExecutionStore:
                     result_json        TEXT NOT NULL,
                     candidate_summaries TEXT NOT NULL,
                     validation_summaries TEXT NOT NULL,
-                    error_json         TEXT NOT NULL
+                    error_json         TEXT NOT NULL,
+                    lifecycle_status   TEXT,
+                    validation_outcome TEXT,
+                    assurance_level    TEXT,
+                    interruption_reason TEXT,
+                    coordinator_restart_marker TEXT,
+                    interrupted_at     TEXT,
+                    retryable          INTEGER NOT NULL DEFAULT 0,
+                    cancellation_requested INTEGER NOT NULL DEFAULT 0,
+                    remote_dispatch_consent INTEGER NOT NULL DEFAULT 0
                 )
                 """
             )
+            # SQLite has no ``ADD COLUMN IF NOT EXISTS``. Inspecting the table
+            # keeps this migration safe for databases created by protocol v1.
+            existing = {row[1] for row in con.execute("PRAGMA table_info(executions)")}
+            additions = {
+                "lifecycle_status": "TEXT",
+                "validation_outcome": "TEXT",
+                "assurance_level": "TEXT",
+                "interruption_reason": "TEXT",
+                "coordinator_restart_marker": "TEXT",
+                "interrupted_at": "TEXT",
+                "retryable": "INTEGER NOT NULL DEFAULT 0",
+                "cancellation_requested": "INTEGER NOT NULL DEFAULT 0",
+                "remote_dispatch_consent": "INTEGER NOT NULL DEFAULT 0",
+            }
+            for name, declaration in additions.items():
+                if name not in existing:
+                    con.execute(f"ALTER TABLE executions ADD COLUMN {name} {declaration}")
             con.execute(
                 "CREATE INDEX IF NOT EXISTS idx_executions_job_id ON executions(job_id)"
             )
@@ -79,8 +107,12 @@ class ExecutionStore:
                     strategy_options, selector_reason, selector_version,
                     placement_requested, placement_selected, fallback_reason,
                     status, created_at, started_at, completed_at, result_json,
-                    candidate_summaries, validation_summaries, error_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    candidate_summaries, validation_summaries, error_json,
+                    lifecycle_status, validation_outcome, assurance_level,
+                    interruption_reason, coordinator_restart_marker,
+                    interrupted_at, retryable, cancellation_requested,
+                    remote_dispatch_consent
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(execution_id) DO UPDATE SET
                     job_id=excluded.job_id,
                     request_json=excluded.request_json,
@@ -99,7 +131,16 @@ class ExecutionStore:
                     result_json=excluded.result_json,
                     candidate_summaries=excluded.candidate_summaries,
                     validation_summaries=excluded.validation_summaries,
-                    error_json=excluded.error_json
+                    error_json=excluded.error_json,
+                    lifecycle_status=excluded.lifecycle_status,
+                    validation_outcome=excluded.validation_outcome,
+                    assurance_level=excluded.assurance_level,
+                    interruption_reason=excluded.interruption_reason,
+                    coordinator_restart_marker=excluded.coordinator_restart_marker,
+                    interrupted_at=excluded.interrupted_at,
+                    retryable=excluded.retryable,
+                    cancellation_requested=excluded.cancellation_requested,
+                    remote_dispatch_consent=excluded.remote_dispatch_consent
                 """,
                 (
                     result.execution_id,
@@ -125,9 +166,89 @@ class ExecutionStore:
                         [v.model_dump(mode="json") for v in result.validation_evidence], 65_536
                     ),
                     self._bounded_json([e.model_dump(mode="json") for e in result.errors], 16_384),
+                    getattr(result, "lifecycle_status", result.status),
+                    getattr(result, "validation_outcome", "not_run"),
+                    getattr(result, "assurance_level", "unverified"),
+                    getattr(result, "interruption_reason", None),
+                    getattr(result, "coordinator_restart_marker", None),
+                    getattr(result, "interrupted_at", None),
+                    int(bool(getattr(result, "retryable", False))),
+                    int(bool(getattr(result, "cancellation_requested", False))),
+                    int(bool(getattr(result, "remote_dispatch_consent", False))),
                 ),
             )
             con.commit()
+
+    @staticmethod
+    def _now() -> str:
+        return datetime.now(timezone.utc).isoformat()
+
+    def reconcile_nonterminal(self, restart_marker: str | None = None) -> list[str]:
+        """Truthfully interrupt persisted work that this process cannot resume.
+
+        The task queue intentionally remains process-local. Therefore a fresh
+        coordinator has no resumable coroutine for a row left queued/running.
+        The update is transactional and idempotent; already terminal rows and
+        rows marked by a previous reconciliation are untouched.
+        """
+        self.migrate()
+        marker = restart_marker or uuid.uuid4().hex
+        interrupted_at = self._now()
+        changed: list[str] = []
+        with self._lock, sqlite3.connect(self.path) as con:
+            con.execute("BEGIN IMMEDIATE")
+            rows = con.execute(
+                """
+                SELECT execution_id, result_json
+                FROM executions
+                WHERE COALESCE(lifecycle_status, status) IN ('queued', 'running')
+                """
+            ).fetchall()
+            for execution_id, raw_result in rows:
+                try:
+                    payload = json.loads(raw_result)
+                except (TypeError, json.JSONDecodeError):
+                    payload = {"execution_id": execution_id}
+                payload["status"] = "failed"  # compatibility projection
+                payload["lifecycle_status"] = "interrupted"
+                payload["interruption_reason"] = "coordinator restarted without resumable in-process work"
+                payload["coordinator_restart_marker"] = marker
+                payload["interrupted_at"] = interrupted_at
+                payload["completed_at"] = payload.get("completed_at") or interrupted_at
+                payload["retryable"] = True
+                errors = list(payload.get("errors") or [])
+                if not any(item.get("code") == "coordinator_restarted" for item in errors if isinstance(item, dict)):
+                    errors.append(
+                        {
+                            "code": "coordinator_restarted",
+                            "message": "Execution was interrupted by a coordinator restart.",
+                            "retryable": True,
+                        }
+                    )
+                payload["errors"] = errors[:20]
+                con.execute(
+                    """
+                    UPDATE executions
+                    SET status='failed', lifecycle_status='interrupted',
+                        interruption_reason=?, coordinator_restart_marker=?,
+                        interrupted_at=?, retryable=1, completed_at=?,
+                        result_json=?, error_json=?
+                    WHERE execution_id=?
+                      AND COALESCE(lifecycle_status, status) IN ('queued', 'running')
+                    """,
+                    (
+                        payload["interruption_reason"],
+                        marker,
+                        interrupted_at,
+                        payload["completed_at"],
+                        self._bounded_json(payload),
+                        self._bounded_json(errors, 16_384),
+                        execution_id,
+                    ),
+                )
+                changed.append(execution_id)
+            con.commit()
+        return changed
 
     def get(self, execution_id: str) -> ExecutionResultV1 | None:
         self.migrate()

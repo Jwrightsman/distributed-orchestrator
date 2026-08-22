@@ -173,6 +173,7 @@ class ArtifactStore:
                     root_path TEXT NOT NULL,
                     strategy TEXT,
                     active INTEGER NOT NULL DEFAULT 0,
+                    manifest_prefix TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )
@@ -201,6 +202,11 @@ class ArtifactStore:
             con.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_artifact_roots_path ON artifact_roots(root_path)"
             )
+            root_columns = {
+                row[1] for row in con.execute("PRAGMA table_info(artifact_roots)")
+            }
+            if "manifest_prefix" not in root_columns:
+                con.execute("ALTER TABLE artifact_roots ADD COLUMN manifest_prefix TEXT")
             con.commit()
 
     @staticmethod
@@ -297,6 +303,32 @@ class ArtifactStore:
         if cursor.rowcount == 0:
             raise ArtifactNotFound("artifact root is not registered")
 
+    def _validated_subtree(self, root: Path, prefix: str) -> tuple[str, Path]:
+        normalized = normalize_relative_path(prefix)
+        candidate = root.joinpath(*PurePosixPath(normalized).parts)
+        self._reject_symlink_components(candidate, root)
+        if candidate.is_symlink():
+            raise ArtifactSecurityError("symlink artifact directories are not allowed")
+        resolved = candidate.resolve(strict=True)
+        if not resolved.is_relative_to(root) or not resolved.is_dir():
+            raise ArtifactSecurityError("artifact subtree escaped its registered root")
+        return normalized, resolved
+
+    def set_manifest_prefix(self, execution_id: str, prefix: str) -> None:
+        """Publish only one validated subtree of an execution artifact root."""
+        execution_id = self._validate_execution_id(execution_id)
+        root, _, _ = self._root_record(execution_id)
+        normalized, _ = self._validated_subtree(root, prefix)
+        with self._lock, sqlite3.connect(self.db_path) as con:
+            cursor = con.execute(
+                "UPDATE artifact_roots SET manifest_prefix = ?, updated_at = ? "
+                "WHERE execution_id = ?",
+                (normalized, _utc_iso(), execution_id),
+            )
+            con.commit()
+        if cursor.rowcount == 0:
+            raise ArtifactNotFound("artifact root is not registered")
+
     def active_root_paths(self) -> set[Path]:
         """Internal resolved roots that retention code must never prune."""
         self.migrate()
@@ -333,20 +365,20 @@ class ArtifactStore:
         match = re.fullmatch(r"candidate_(\d+)", first)
         return ArtifactSource(candidate_id=f"candidate-{match.group(1)}") if match else ArtifactSource()
 
-    def refresh_manifest(
+    def _scan_entries(
         self,
-        execution_id: str,
+        root: Path,
+        scan_root: Path,
         *,
         sources: Mapping[str, ArtifactSource] | None = None,
-    ) -> ArtifactManifestV1:
-        """Rebuild a manifest from disk after enforcing all configured quotas."""
-        root, manifest_created_at, _ = self._root_record(execution_id)
+    ) -> tuple[list[ArtifactEntryV1], int]:
+        """Inspect one root/subtree without trusting directory contents."""
         max_files, max_file_bytes, max_total_bytes = self._limits()
         entries: list[ArtifactEntryV1] = []
         aggregate = 0
         normalized_seen: set[str] = set()
 
-        for directory, directory_names, file_names in os.walk(root, followlinks=False):
+        for directory, directory_names, file_names in os.walk(scan_root, followlinks=False):
             directory_path = Path(directory)
             for name in list(directory_names):
                 if (directory_path / name).is_symlink():
@@ -387,6 +419,33 @@ class ArtifactStore:
                 )
 
         entries.sort(key=lambda item: item.relative_path)
+        return entries, aggregate
+
+    def validate_subtree(self, execution_id: str, prefix: str) -> list[ArtifactEntryV1]:
+        """Validate a candidate subtree without publishing it as the manifest."""
+        root, _, _ = self._root_record(execution_id)
+        _, scan_root = self._validated_subtree(root, prefix)
+        entries, _ = self._scan_entries(root, scan_root)
+        return entries
+
+    def refresh_manifest(
+        self,
+        execution_id: str,
+        *,
+        sources: Mapping[str, ArtifactSource] | None = None,
+    ) -> ArtifactManifestV1:
+        """Rebuild a manifest from disk after enforcing all configured quotas."""
+        root, manifest_created_at, _ = self._root_record(execution_id)
+        with self._lock, sqlite3.connect(self.db_path) as con:
+            prefix_row = con.execute(
+                "SELECT manifest_prefix FROM artifact_roots WHERE execution_id = ?",
+                (execution_id,),
+            ).fetchone()
+        prefix = prefix_row[0] if prefix_row else None
+        scan_root = root
+        if prefix:
+            _, scan_root = self._validated_subtree(root, prefix)
+        entries, aggregate = self._scan_entries(root, scan_root, sources=sources)
         with self._lock, sqlite3.connect(self.db_path) as con:
             con.execute("DELETE FROM artifact_entries WHERE execution_id = ?", (execution_id,))
             con.executemany(

@@ -94,10 +94,9 @@ def rank(results: list[CandidateResult], browser_ok: dict[int, bool] | None = No
     """Best first, using only what a coordinator can know without the answer.
 
     Order: candidates that pass the browser check, then ones that parse, then
-    ones that at least produced a file, then the rest. Within a tier, the larger
-    artifact wins — for a single-file deliverable, truncation is the failure that
-    shows up as "shorter", and every tie observed so far has been a truncated
-    candidate against a complete one.
+    ones that at least produced a file, then the rest. Within a tier, lower
+    observed generation latency wins and the stable candidate identifier is the
+    final tie-break. Output size is not treated as a quality signal.
     """
     browser_ok = browser_ok or {}
 
@@ -106,7 +105,8 @@ def rank(results: list[CandidateResult], browser_ok: dict[int, bool] | None = No
             0 if browser_ok.get(r.index) else 1,
             0 if r.parses else 1,
             0 if r.extracted else 1,
-            -sum(Path(f).stat().st_size for f in r.files if Path(f).exists()),
+            r.elapsed_seconds,
+            r.index,
         )
 
     return sorted(results, key=key)

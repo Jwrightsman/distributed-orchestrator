@@ -621,6 +621,7 @@ async def run_pipeline(
     selector_version: str = "legacy-v1",
     placement_fallback: str | None = None,
     on_revision_start=None,
+    on_artifact_root=None,
 ) -> dict:
     """Run the full planner -> builder -> reviewer pipeline.
 
@@ -784,6 +785,8 @@ async def run_pipeline(
 
     # 5. Save everything
     timestamp, project_dir = make_run_dir()
+    if on_artifact_root:
+        on_artifact_root(project_dir)
 
     (project_dir / "plan.json").write_text(json.dumps(subtasks, indent=2), encoding="utf-8")
 

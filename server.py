@@ -72,8 +72,8 @@ async def _lifespan(app: FastAPI):
     reconcile_executions = getattr(get_execution_service(), "reconcile_after_restart", None)
     if reconcile_executions:
         reconcile_executions()
-    # Legacy-job restart reconciliation belongs immediately here once its
-    # server_state helper lands; canonical/access/share migrations must precede it.
+    # ``_db_load_jobs`` above reconciles legacy queued/running rows before
+    # exposing them; canonical reconciliation follows the same fail-closed rule.
     warn_if_viewer_auth_unconfigured()
     cleanup_task = asyncio.create_task(_cleanup_stale_nodes())
     try:

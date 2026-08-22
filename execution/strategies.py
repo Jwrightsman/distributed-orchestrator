@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -11,6 +12,7 @@ from typing import Any, Callable
 import ensemble
 import orchestrator
 from execution.contracts import DagOptionsV1, EnsembleOptionsV1
+from execution.artifacts import ArtifactError, ArtifactStore
 from execution.dispatch import DispatchResult, Dispatcher, ExecutionUnit, PlacementDecision
 from execution.registry import ExecutionStrategy, StrategyOutcome
 from execution.validators import ValidatorRegistry
@@ -29,6 +31,42 @@ class StrategyContext:
     callbacks: dict[str, Any] = field(default_factory=dict)
     dag_runner: Callable[..., Any] = orchestrator.run_pipeline
     dispatch_results: list[DispatchResult] = field(default_factory=list)
+    deadline_monotonic: float | None = None
+    cancel_event: asyncio.Event | None = None
+    artifacts: ArtifactStore | None = None
+    artifact_root_path: Path | None = None
+    artifact_registration_error: str | None = None
+
+    def ensure_active(self) -> None:
+        if self.cancel_event and self.cancel_event.is_set():
+            raise asyncio.CancelledError
+        if self.deadline_monotonic is not None and time.monotonic() >= self.deadline_monotonic:
+            raise TimeoutError("execution deadline exceeded")
+
+    async def validate_candidate(self, request, output: str, files: list[str], *, artifact_root: Path):
+        """Run synchronous validators off-loop under the execution deadline."""
+        return await self.run_blocking(
+            self.validators.validate,
+            request,
+            output,
+            files,
+            artifact_root=artifact_root,
+        )
+
+    async def run_blocking(self, function, *args, **kwargs):
+        """Run bounded filesystem/validator work under the execution deadline."""
+        self.ensure_active()
+        remaining = (
+            None
+            if self.deadline_monotonic is None
+            else self.deadline_monotonic - time.monotonic()
+        )
+        if remaining is not None and remaining <= 0:
+            raise TimeoutError("execution deadline exceeded before blocking stage")
+        work = asyncio.to_thread(function, *args, **kwargs)
+        if remaining is None:
+            return await work
+        return await asyncio.wait_for(work, timeout=remaining)
 
 
 def _unit_summary(result: DispatchResult) -> dict[str, Any]:
@@ -57,6 +95,7 @@ class DagStrategy(ExecutionStrategy):
         by_subtask: dict[int, DispatchResult] = {}
 
         async def dispatch_build(subtask: dict, dependency_context: str) -> str:
+            context.ensure_active()
             unit = ExecutionUnit(
                 unit_id=f"dag-{subtask['id']}",
                 kind="dag_subtask",
@@ -84,6 +123,8 @@ class DagStrategy(ExecutionStrategy):
                 self.identifier,
                 context.placement,
                 local_executor,
+                deadline_monotonic=context.deadline_monotonic,
+                cancel_event=context.cancel_event,
             )
             by_subtask[subtask["id"]] = dispatched
             context.dispatch_results.append(dispatched)
@@ -107,6 +148,20 @@ class DagStrategy(ExecutionStrategy):
             if callback:
                 callback()
 
+        def artifact_root_ready(path: Path) -> None:
+            context.artifact_root_path = Path(path)
+            if context.artifacts:
+                try:
+                    context.artifacts.register_root(
+                        context.execution_id,
+                        path,
+                        strategy=self.identifier,
+                        active=True,
+                    )
+                except ArtifactError as exc:
+                    context.artifact_registration_error = str(exc)
+
+        context.ensure_active()
         result = await context.dag_runner(
             request.task,
             on_plan=context.callbacks.get("on_plan"),
@@ -129,13 +184,17 @@ class DagStrategy(ExecutionStrategy):
             on_revision_start=lambda revision_pass: context.emit(
                 "revision_started", {"strategy": self.identifier, "revision_pass": revision_pass}
             ),
+            on_artifact_root=artifact_root_ready,
         )
 
         files = [str(path) for path in result.get("code_files", [])]
-        validation = context.validators.validate(
+        project_dir = Path(result.get("project_dir", ""))
+        context.ensure_active()
+        validation = await context.validate_candidate(
             request,
             result.get("final_output") or result.get("review", ""),
             files,
+            artifact_root=(project_dir / "code") if (project_dir / "code").is_dir() else project_dir,
         )
         for evidence in validation:
             context.emit(
@@ -148,15 +207,18 @@ class DagStrategy(ExecutionStrategy):
             )
 
         accepted = context.validators.accepted(validation)
+        validation_summary = context.validators.summarize(validation)
         if accepted:
             status = "completed"
+            lifecycle_status = "completed"
         elif request.verification.allow_unverified_fallback and result.get("final_output"):
             status = "unverified"
+            lifecycle_status = "completed"
         else:
             status = "failed"
+            lifecycle_status = "failed"
 
         log: dict[str, Any] = {}
-        project_dir = Path(result.get("project_dir", ""))
         log_path = project_dir / "full_log.json"
         if log_path.is_file():
             try:
@@ -189,6 +251,10 @@ class DagStrategy(ExecutionStrategy):
         output_path = project_dir / "output.md"
         return StrategyOutcome(
             status=status,
+            lifecycle_status=lifecycle_status,
+            validation_outcome=validation_summary.outcome,
+            assurance_level=validation_summary.assurance_level,
+            validation_summary=validation_summary,
             legacy_payload=legacy,
             execution_units=units,
             validation_evidence=[item.model_dump(mode="json") for item in validation],
@@ -228,9 +294,20 @@ class EnsembleStrategy(ExecutionStrategy):
 
         root = self.artifact_root / context.execution_id
         root.mkdir(parents=True, exist_ok=True)
+        context.artifact_root_path = root
+        if context.artifacts:
+            try:
+                context.artifacts.register_root(
+                    context.execution_id,
+                    root,
+                    strategy=self.identifier,
+                    active=True,
+                )
+            except ArtifactError as exc:
+                context.artifact_registration_error = str(exc)
         semaphore = asyncio.Semaphore(options.concurrency)
 
-        async def run_candidate(index: int) -> tuple[DispatchResult, list[str], list[Any]]:
+        async def run_candidate(index: int) -> tuple[DispatchResult, list[str], list[Any], str | None]:
             candidate_id = f"candidate-{index}"
             contract_text = ""
             if request.output_contract:
@@ -247,30 +324,78 @@ class EnsembleStrategy(ExecutionStrategy):
                 system=ensemble._system_prompt(),
             )
 
-            async def local_executor():
-                return await generate(prompt, system=unit.system)
-
-            async with semaphore:
-                dispatched = await context.dispatcher.execute(
-                    unit,
-                    request,
-                    context.execution_id,
-                    self.identifier,
-                    context.placement,
-                    local_executor,
-                )
-            context.dispatch_results.append(dispatched)
             files: list[str] = []
             evidence = []
-            if dispatched.output:
-                candidate = ensemble.CandidateResult(index=index, raw_output=dispatched.output)
-                candidate.elapsed_seconds = dispatched.duration_ms / 1000
-                candidate_dir = root / f"candidate_{index}"
-                candidate_dir.mkdir(parents=True, exist_ok=True)
-                (candidate_dir / "candidate.md").write_text(dispatched.output, encoding="utf-8")
-                candidate = ensemble.materialise(candidate, root)
-                files = list(candidate.files)
-                evidence = context.validators.validate(request, dispatched.output, files)
+            failure_stage: str | None = None
+            dispatched: DispatchResult | None = None
+            try:
+                context.ensure_active()
+
+                async def local_executor():
+                    return await generate(prompt, system=unit.system)
+
+                failure_stage = "generation"
+                async with semaphore:
+                    dispatched = await context.dispatcher.execute(
+                        unit,
+                        request,
+                        context.execution_id,
+                        self.identifier,
+                        context.placement,
+                        local_executor,
+                        deadline_monotonic=context.deadline_monotonic,
+                        cancel_event=context.cancel_event,
+                    )
+                context.dispatch_results.append(dispatched)
+                if dispatched.status != "completed":
+                    failure_stage = "generation"
+                elif dispatched.output:
+                    candidate = ensemble.CandidateResult(index=index, raw_output=dispatched.output)
+                    candidate.elapsed_seconds = dispatched.duration_ms / 1000
+                    candidate_dir = root / f"candidate_{index}"
+                    failure_stage = "directory_creation"
+                    candidate_dir.mkdir(parents=True, exist_ok=True)
+                    failure_stage = "materialization"
+                    await context.run_blocking(
+                        (candidate_dir / "candidate.md").write_text,
+                        dispatched.output,
+                        encoding="utf-8",
+                    )
+                    failure_stage = "artifact_extraction"
+                    candidate = await context.run_blocking(ensemble.materialise, candidate, root)
+                    files = list(candidate.files)
+                    failure_stage = "manifest_creation"
+                    if context.artifacts:
+                        await context.run_blocking(
+                            context.artifacts.validate_subtree,
+                            context.execution_id,
+                            f"candidate_{index}",
+                        )
+                    failure_stage = "validation"
+                    evidence = await context.validate_candidate(
+                        request,
+                        dispatched.output,
+                        files,
+                        artifact_root=(candidate_dir / "code") if (candidate_dir / "code").is_dir() else candidate_dir,
+                    )
+                    failure_stage = None
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                error = f"{failure_stage or 'candidate'} failed: {type(exc).__name__}: {exc}"[:500]
+                if dispatched is None:
+                    dispatched = DispatchResult(
+                        unit=unit,
+                        status="failed",
+                        placement=context.placement.selected,
+                        error=error,
+                        attempt_count=0,
+                    )
+                    context.dispatch_results.append(dispatched)
+                else:
+                    dispatched.status = "failed"
+                    dispatched.error = error
+                evidence = []
             context.emit(
                 "candidate_generated",
                 {
@@ -288,9 +413,25 @@ class EnsembleStrategy(ExecutionStrategy):
                         "status": item.status,
                     },
                 )
-            return dispatched, files, evidence
+            return dispatched, files, evidence, failure_stage
 
-        generated = await asyncio.gather(*(run_candidate(index) for index in range(1, options.candidates + 1)))
+        tasks = [asyncio.create_task(run_candidate(index)) for index in range(1, options.candidates + 1)]
+        generated_completion_order = []
+        try:
+            for completed_task in asyncio.as_completed(tasks):
+                generated_completion_order.append(await completed_task)
+        finally:
+            # ``as_completed`` does not own the candidate tasks.  A total
+            # deadline or operator cancellation must not leave model calls
+            # running after the execution has become terminal.
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+        generated = sorted(
+            generated_completion_order,
+            key=lambda item: int(item[0].unit.unit_id.rsplit("-", 1)[-1]),
+        )
         accepted = [item for item in generated if item[0].status == "completed" and context.validators.accepted(item[2])]
         completed = [item for item in generated if item[0].status == "completed" and item[0].output]
 
@@ -298,21 +439,76 @@ class EnsembleStrategy(ExecutionStrategy):
             evidence = item[2]
             return sum(ev.score if ev.score is not None else (1.0 if ev.status == "passed" else 0.0) for ev in evidence)
 
+        def selection_key(item):
+            evidence = item[2]
+            assurance_order = {"unverified": 0, "structural": 1, "model_judged": 2, "deterministic": 3}
+            assurance = context.validators.summarize(evidence).assurance_level
+            candidate_number = int(item[0].unit.unit_id.rsplit("-", 1)[-1])
+            return (
+                assurance_order.get(assurance, 0),
+                validation_score(item),
+                -item[0].duration_ms,
+                -candidate_number,
+            )
+
         winner = None
         verified = False
         if accepted:
-            winner = accepted[0] if options.selection_policy == "first_valid" else max(
-                accepted,
-                key=lambda item: (validation_score(item), len(item[0].output), -int(item[0].unit.unit_id.split("-")[-1])),
-            )
+            if options.selection_policy == "first_valid":
+                winner = next(item for item in generated_completion_order if item in accepted)
+                decisive = "first acceptable completion order"
+            else:
+                winner = max(accepted, key=selection_key)
+                other_candidates = [item for item in accepted if item is not winner]
+                if not other_candidates:
+                    decisive = "only candidate with acceptable required validation"
+                else:
+                    runner_up = max(other_candidates, key=selection_key)
+                    winner_summary = context.validators.summarize(winner[2])
+                    runner_summary = context.validators.summarize(runner_up[2])
+                    comparisons = (
+                        (
+                            "assurance strength",
+                            winner_summary.assurance_level,
+                            runner_summary.assurance_level,
+                        ),
+                        (
+                            "meaningful validator score",
+                            f"{validation_score(winner):.3f}",
+                            f"{validation_score(runner_up):.3f}",
+                        ),
+                        (
+                            "lower generation latency",
+                            str(winner[0].duration_ms),
+                            str(runner_up[0].duration_ms),
+                        ),
+                        (
+                            "stable candidate identifier",
+                            winner[0].unit.unit_id,
+                            runner_up[0].unit.unit_id,
+                        ),
+                    )
+                    criterion, winner_value, runner_value = next(
+                        comparison
+                        for comparison in comparisons
+                        if comparison[1] != comparison[2]
+                    )
+                    decisive = (
+                        f"{criterion} ({winner_value} versus {runner_value} for "
+                        f"{runner_up[0].unit.unit_id})"
+                    )
             verified = True
             explanation = (
-                f"Selected {winner[0].unit.unit_id} because it passed all required validators; "
-                f"selection policy was {options.selection_policy}."
+                f"Selected {winner[0].unit.unit_id}: required validation passed; assurance="
+                f"{context.validators.summarize(winner[2]).assurance_level}; score={validation_score(winner):.3f}; "
+                f"generation_ms={winner[0].duration_ms}; policy={options.selection_policy}; "
+                f"decisive criterion={decisive}. "
+                "Stable candidate id is the final tie-break. These checks establish contract assurance, "
+                "not general behavioral correctness."
             )
             status = "completed"
         elif completed and request.verification.allow_unverified_fallback:
-            winner = max(completed, key=lambda item: (validation_score(item), len(item[0].output)))
+            winner = max(completed, key=selection_key)
             explanation = (
                 f"Selected {winner[0].unit.unit_id} as an unverified fallback because no candidate passed all "
                 "required validators. This is not a deterministic correctness claim."
@@ -325,7 +521,7 @@ class EnsembleStrategy(ExecutionStrategy):
         winner_id = winner[0].unit.unit_id if winner else None
         summaries = []
         all_evidence = []
-        for dispatched, files, evidence in generated:
+        for dispatched, files, evidence, failure_stage in generated:
             is_winner = dispatched.unit.unit_id == winner_id
             passed = context.validators.accepted(evidence) if evidence else False
             if is_winner:
@@ -340,6 +536,7 @@ class EnsembleStrategy(ExecutionStrategy):
                 )
             else:
                 candidate_status = "completed"
+            candidate_validation = context.validators.summarize(evidence)
             summaries.append(
                 {
                     "candidate_id": dispatched.unit.unit_id,
@@ -353,6 +550,10 @@ class EnsembleStrategy(ExecutionStrategy):
                     "generation_duration_ms": dispatched.duration_ms,
                     "validation_duration_ms": sum(item.duration_ms for item in evidence),
                     "validation": [item.model_dump(mode="json") for item in evidence],
+                    "validation_outcome": candidate_validation.outcome,
+                    "assurance_level": candidate_validation.assurance_level,
+                    "validation_summary": candidate_validation.model_dump(mode="json"),
+                    "failure_stage": failure_stage,
                 }
             )
             all_evidence.extend(item.model_dump(mode="json") for item in evidence)
@@ -389,6 +590,22 @@ class EnsembleStrategy(ExecutionStrategy):
         }
         return StrategyOutcome(
             status=status,
+            lifecycle_status="failed" if status == "failed" else "completed",
+            validation_outcome=(
+                context.validators.summarize(winner[2]).outcome
+                if winner
+                else context.validators.summarize([]).outcome
+            ),
+            assurance_level=(
+                context.validators.summarize(winner[2]).assurance_level
+                if winner
+                else "unverified"
+            ),
+            validation_summary=(
+                context.validators.summarize(winner[2])
+                if winner
+                else context.validators.summarize([])
+            ),
             legacy_payload=legacy,
             execution_units=[_unit_summary(item[0]) for item in generated],
             candidates=summaries,
@@ -408,7 +625,7 @@ class EnsembleStrategy(ExecutionStrategy):
                 "candidate_outcomes": {item[0].unit.unit_id: item[0].status for item in generated},
                 "attempt_count": sum(item[0].attempt_count for item in generated),
                 "generation_duration_ms": sum(item[0].duration_ms for item in generated),
-                "validation_duration_ms": sum(item.duration_ms for _, _, ev in generated for item in ev),
+                "validation_duration_ms": sum(item.duration_ms for _, _, ev, _ in generated for item in ev),
                 "total_output_bytes": sum(len(item[0].output.encode("utf-8")) for item in generated),
             },
         )

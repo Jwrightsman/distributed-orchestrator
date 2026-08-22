@@ -54,6 +54,7 @@ class DispatchResult:
     attempt_count: int = 0
     retry_count: int = 0
     reassignment_count: int = 0
+    observed_placements: tuple[SelectedPlacementV1, ...] = ()
 
 
 def qualifying_nodes(request: ExecutionRequestV1) -> list[str]:
@@ -205,6 +206,10 @@ class Dispatcher:
         local.attempt_count += remote.attempt_count
         local.retry_count += remote.retry_count
         local.reassignment_count += remote.reassignment_count
+        remote_observed = remote.observed_placements or (remote.placement,)
+        local.observed_placements = tuple(
+            dict.fromkeys((*remote_observed, *local.observed_placements))
+        )
         return local
 
     def _maybe_verify_remote(
@@ -383,6 +388,7 @@ class Dispatcher:
             error=error,
             duration_ms=duration,
             attempt_count=1,
+            observed_placements=("local",),
         )
 
     async def _distributed(
@@ -434,6 +440,7 @@ class Dispatcher:
                 error="task queue is full",
                 duration_ms=max(0, int((time.perf_counter() - started) * 1000)),
                 attempt_count=0,
+                observed_placements=("distributed",),
             )
 
         self.emit(
@@ -468,6 +475,7 @@ class Dispatcher:
                         attempt_count=attempts,
                         retry_count=max(0, attempts - 1),
                         reassignment_count=max(0, attempts - 1),
+                        observed_placements=("distributed",),
                     )
                 if receipt is not None:
                     break
@@ -518,6 +526,7 @@ class Dispatcher:
             attempt_count=attempts,
             retry_count=max(0, attempts - 1),
             reassignment_count=max(0, attempts - 1),
+            observed_placements=("distributed",),
         )
 
     @staticmethod
