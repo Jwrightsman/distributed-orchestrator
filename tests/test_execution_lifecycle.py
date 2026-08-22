@@ -159,10 +159,17 @@ async def test_total_deadline_applies_during_candidate_validation(tmp_path, monk
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stage", ["review", "revision"])
-async def test_total_deadline_applies_during_dag_post_build_stages(tmp_path, stage):
+async def test_total_deadline_applies_during_dag_post_build_stages(tmp_path, stage, monkeypatch):
     entered = asyncio.Event()
 
+    async def local_build(*args, **kwargs):
+        return "completed builder output"
+
     async def slow_stage(*args, **kwargs):
+        await kwargs["build_fn"](
+            {"id": 1, "title": "Build", "prompt": "p", "depends_on": []},
+            "",
+        )
         if stage == "review":
             kwargs["on_review_start"]()
         else:
@@ -171,6 +178,7 @@ async def test_total_deadline_applies_during_dag_post_build_stages(tmp_path, sta
         await asyncio.sleep(10)
 
     service = _service(tmp_path)
+    monkeypatch.setattr(strategies.orchestrator, "build", local_build)
     request = ExecutionRequestV1(task="Build it", strategy="dag", timeout_seconds=1)
     control = _short_control(service, request)
     run = await service.execute(
@@ -183,6 +191,9 @@ async def test_total_deadline_applies_during_dag_post_build_stages(tmp_path, sta
     assert entered.is_set()
     assert run.result.lifecycle_status == "failed"
     assert run.result.errors[0].code == "execution_timeout"
+    assert run.result.attempt_count == 1
+    assert run.result.units_local == 1
+    assert run.result.observed_placements == ["local"]
 
 
 @pytest.mark.asyncio

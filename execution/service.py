@@ -167,6 +167,102 @@ class ExecutionService:
             return "completed" if validation_outcome == "passed" else "unverified"
         return "failed" if lifecycle == "interrupted" else lifecycle
 
+    @staticmethod
+    def _apply_terminal_progress(
+        result: ExecutionResultV1,
+        context: StrategyContext | None,
+        execution_id: str,
+        attempt_starts: list[tuple[str, str]],
+        placement_fallback: str | None,
+    ) -> None:
+        """Merge completed in-process work with durable remote attempts."""
+        dispatch_results = context.dispatch_results if context is not None else []
+        durable = server_state.attempt_store.execution_attempt_summary(execution_id)
+
+        observed_by_result = [
+            (item, item.observed_placements or (item.placement,))
+            for item in dispatch_results
+        ]
+        completed_local_units = {
+            item.unit.unit_id
+            for item, observed in observed_by_result
+            if "local" in observed
+        }
+        started_local_units = {
+            unit_id for unit_id, placement in attempt_starts if placement == "local"
+        }
+        unfinished_local_units = started_local_units - completed_local_units
+        context_remote_attempts = sum(
+            max(0, item.attempt_count - (1 if "local" in observed else 0))
+            for item, observed in observed_by_result
+            if "distributed" in observed
+        )
+        context_attempts = sum(item.attempt_count for item in dispatch_results)
+        additional_remote_attempts = max(
+            0,
+            durable["attempt_count"] - context_remote_attempts,
+        )
+        context_retries = sum(item.retry_count for item in dispatch_results)
+        context_reassignments = sum(item.reassignment_count for item in dispatch_results)
+
+        observed = {
+            placement
+            for _, placements in observed_by_result
+            for placement in placements
+        }
+        if started_local_units:
+            observed.add("local")
+        if durable["unit_count"]:
+            observed.add("distributed")
+        result.observed_placements = sorted(observed)
+        result.units_local = len(completed_local_units | unfinished_local_units)
+        completed_remote_units = sum(
+            "distributed" in placements for _, placements in observed_by_result
+        )
+        result.units_distributed = max(completed_remote_units, durable["unit_count"])
+        result.placement_observed = (
+            "mixed"
+            if len(observed) > 1
+            else next(iter(observed))
+            if observed
+            else "none"
+        )
+        result.attempt_count = (
+            context_attempts
+            + len(unfinished_local_units)
+            + additional_remote_attempts
+        )
+        result.retry_count = context_retries + max(
+            0,
+            durable["retry_count"] - context_retries,
+        )
+        result.reassignment_count = context_reassignments + max(
+            0,
+            durable["reassignment_count"] - context_reassignments,
+        )
+        result.participating_nodes = sorted(
+            {item.node_id for item in dispatch_results if item.node_id}
+        )
+        unit_fallbacks = [
+            item.fallback_reason for item in dispatch_results if item.fallback_reason
+        ]
+        result.fallback_count = len(unit_fallbacks) or int(bool(placement_fallback))
+        reasons = list(unit_fallbacks)
+        if placement_fallback:
+            reasons.insert(0, placement_fallback)
+        if reasons:
+            result.fallback_reason = "; ".join(dict.fromkeys(reasons))[:1000]
+        result.telemetry = {
+            **result.telemetry,
+            "observed_placements": result.observed_placements,
+            "units_local": result.units_local,
+            "units_distributed": result.units_distributed,
+            "fallback_count": result.fallback_count,
+            "attempt_count": result.attempt_count,
+            "retry_count": result.retry_count,
+            "reassignment_count": result.reassignment_count,
+        }
+
     async def execute(
         self,
         request: ExecutionRequestV1,
@@ -189,6 +285,8 @@ class ExecutionService:
         result.lifecycle_status = "running"
         result.started_at = _now()
         started = time.perf_counter()
+        progress_accounted = False
+        attempt_starts: list[tuple[str, str]] = []
         if control is None:
             control = ExecutionControl(
                 execution_id=execution_id,
@@ -247,6 +345,10 @@ class ExecutionService:
             self._save(request, result)
 
             def emit(event_type: str, data: dict[str, Any]) -> None:
+                if event_type == "attempt_started":
+                    attempt_starts.append(
+                        (str(data.get("unit_id", "unknown")), str(data.get("placement", "local")))
+                    )
                 self._emit(event_type, {"execution_id": execution_id, **data})
 
             context = StrategyContext(
@@ -428,29 +530,15 @@ class ExecutionService:
             result.attempt_count = sum(item.attempt_count for item in context.dispatch_results)
             result.retry_count = retry_count
             result.reassignment_count = reassignment_count
+            progress_accounted = True
         except asyncio.TimeoutError:
             control.cancel_event.set()
             Dispatcher.cancel_execution(execution_id, reason="execution deadline exceeded")
-            attempt_progress = server_state.attempt_store.execution_attempt_summary(execution_id)
             result.lifecycle_status = "failed"
             result.status = "failed"
             result.validation_outcome = "not_run"
             result.assurance_level = "unverified"
             result.retryable = True
-            result.attempt_count = attempt_progress["attempt_count"]
-            result.retry_count = attempt_progress["retry_count"]
-            result.reassignment_count = attempt_progress["reassignment_count"]
-            if attempt_progress["unit_count"]:
-                result.observed_placements = ["distributed"]
-                result.placement_observed = "distributed"
-                result.units_distributed = attempt_progress["unit_count"]
-            result.telemetry = {
-                "attempt_count": result.attempt_count,
-                "retry_count": result.retry_count,
-                "reassignment_count": result.reassignment_count,
-                "units_distributed": result.units_distributed,
-                "observed_placements": result.observed_placements,
-            }
             result.errors = [
                 {
                     "code": "execution_timeout",
@@ -501,6 +589,15 @@ class ExecutionService:
                 }
             ]
             legacy = {}
+
+        if not progress_accounted:
+            self._apply_terminal_progress(
+                result,
+                context if "context" in locals() else None,
+                execution_id,
+                attempt_starts,
+                placement.fallback_reason if "placement" in locals() else None,
+            )
 
         result.completed_at = _now()
         result.duration_ms = max(0, int((time.perf_counter() - started) * 1000))
