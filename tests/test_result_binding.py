@@ -203,9 +203,34 @@ def test_v1_result_requires_attempt_identifier(client):
     assert "missing attempt id" in response.json()["detail"]
 
 
+def test_v1_worker_cannot_downgrade_by_omitting_contract_and_bindings(client):
+    """Strictness comes from the server-issued attempt, never the submission."""
+    _register(client, "worker")
+    task = _claim_v1(client, "worker")
+
+    downgraded = {
+        "node_id": "worker",
+        "output": "plausible but unbound work",
+        "error": None,
+        "elapsed_seconds": 1.0,
+    }
+    rejected = client.post("/tasks/t-v1/result", json=downgraded)
+
+    assert rejected.status_code == 403
+    assert "missing contract version" in rejected.json()["detail"]
+    assert "t-v1" in state.task_inflight, "rejection must not settle the attempt"
+    assert "t-v1" not in state.task_results, "unbound output entered the operational channel"
+    assert state.nodes["worker"].get("credits_earned", 0) == 0
+
+    legitimate = client.post("/tasks/t-v1/result", json=_v1_body(task))
+    assert legitimate.status_code == 200
+    assert legitimate.json() == {"status": "accepted", "credits_earned": 5}
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
+        ("contract_version", "0", "contract version"),
         ("nonce", "wrong", "nonce"),
         ("execution_id", "wrong", "execution id"),
         ("execution_unit_id", "wrong", "execution unit id"),

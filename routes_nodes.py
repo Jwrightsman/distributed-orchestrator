@@ -209,6 +209,14 @@ def _attempt_rejection(pending: dict, result, *, strict_v1: bool) -> str | None:
     """
     if result.node_id != pending.get("assigned_to"):
         return "submitting node is not the assigned node"
+    if strict_v1:
+        expected_contract = pending.get("contract_version")
+        if not result.contract_version:
+            return "missing contract version"
+        if not expected_contract or not secrets.compare_digest(
+            str(result.contract_version), str(expected_contract)
+        ):
+            return "contract version does not match"
     expected = pending.get("nonce")
     if expected and (strict_v1 or result.nonce):
         if strict_v1 and not result.nonce:
@@ -259,7 +267,9 @@ async def submit_result(task_id: str, result: TaskResult, request: Request):
 
     pending = task_inflight.get(task_id)
     if pending is not None:
-        strict_v1 = result.contract_version == "1"
+        # The server-issued attempt is authoritative. A v1 worker cannot opt
+        # into the legacy path by omitting its submitted version or bindings.
+        strict_v1 = pending.get("contract_version") == "1"
         reason = _attempt_rejection(pending, result, strict_v1=strict_v1)
         if reason:
             # Reject loudly. Silently ignoring this would hide exactly the
