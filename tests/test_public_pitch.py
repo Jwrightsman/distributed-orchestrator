@@ -169,6 +169,48 @@ async def test_global_public_inference_concurrency_is_one(tmp_path, monkeypatch)
     assert all(server.jobs[f"job_public_{index}"]["status"] == "complete" for index in range(2))
 
 
+@pytest.mark.asyncio
+async def test_legacy_job_transitions_through_running(tmp_path, monkeypatch):
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def generated(*args, **kwargs):
+        started.set()
+        await release.wait()
+        return "complete output"
+
+    monkeypatch.setattr(strategies, "generate", generated)
+    monkeypatch.setattr(strategies.EnsembleStrategy, "artifact_root", tmp_path / "execution_artifacts")
+    monkeypatch.setattr(routes_pitch, "_db_write_job", lambda job: None)
+    service = get_execution_service()
+    service._emit = lambda *args, **kwargs: None
+    job_id = "job_running_transition"
+    request = ExecutionRequestV1(task="build", strategy="direct")
+    server.jobs[job_id] = {
+        "job_id": job_id,
+        "task": "build",
+        "project_id": None,
+        "status": "queued",
+        "submitted_at": "now",
+        "result": None,
+        "error": None,
+        "trace_id": "trace",
+        "execution_request": request.model_dump(mode="json"),
+    }
+
+    await routes_pitch._run_job(job_id, "build", trace_id="trace")
+    await asyncio.wait_for(started.wait(), timeout=1)
+    assert server.jobs[job_id]["status"] == "running"
+    assert server.jobs[job_id]["started_at"]
+
+    release.set()
+    for _ in range(200):
+        if server.jobs[job_id]["status"] == "complete":
+            break
+        await asyncio.sleep(0.01)
+    assert server.jobs[job_id]["status"] == "complete"
+
+
 def test_task_length_cap(client, public_enabled):
     long_task = "x" * (server_state._PUBLIC_TASK_MAX + 1)
     resp = client.post("/public/pitch", json={"task": long_task})

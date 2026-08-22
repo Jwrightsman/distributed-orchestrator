@@ -293,8 +293,7 @@ def artifact_manifest_for_share(
         if (
             entry.source_candidate_id
             and not share.include_candidate_details
-            and winner
-            and entry.source_candidate_id != winner
+            and (not winner or entry.source_candidate_id != winner)
         ):
             continue
         entries.append(entry)

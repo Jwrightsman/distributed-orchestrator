@@ -520,7 +520,7 @@ class EnsembleStrategy(ExecutionStrategy):
 
         winner_id = winner[0].unit.unit_id if winner else None
         summaries = []
-        all_evidence = []
+        aggregate_evidence = []
         for dispatched, files, evidence, failure_stage in generated:
             is_winner = dispatched.unit.unit_id == winner_id
             passed = context.validators.accepted(evidence) if evidence else False
@@ -556,7 +556,7 @@ class EnsembleStrategy(ExecutionStrategy):
                     "failure_stage": failure_stage,
                 }
             )
-            all_evidence.extend(item.model_dump(mode="json") for item in evidence)
+            aggregate_evidence.extend(evidence)
 
         if winner:
             context.emit("winner_selected", {"candidate_id": winner_id, "verified": verified, "reason": explanation})
@@ -567,6 +567,20 @@ class EnsembleStrategy(ExecutionStrategy):
             winner_output = ""
             winner_files = []
             output_reference = str(root)
+
+        selected_evidence = winner[2] if winner else []
+        result_validation = context.validators.summarize(
+            selected_evidence if winner else aggregate_evidence
+        )
+        if not winner and aggregate_evidence:
+            result_validation = result_validation.model_copy(
+                update={
+                    "explanation": (
+                        "Candidate validation ran, but no candidate satisfied the required "
+                        f"policy and no final result was selected. {result_validation.explanation}"
+                    )[:1000]
+                }
+            )
 
         legacy = {
             "project_dir": str(root),
@@ -591,25 +605,18 @@ class EnsembleStrategy(ExecutionStrategy):
         return StrategyOutcome(
             status=status,
             lifecycle_status="failed" if status == "failed" else "completed",
-            validation_outcome=(
-                context.validators.summarize(winner[2]).outcome
-                if winner
-                else context.validators.summarize([]).outcome
-            ),
-            assurance_level=(
-                context.validators.summarize(winner[2]).assurance_level
-                if winner
-                else "unverified"
-            ),
-            validation_summary=(
-                context.validators.summarize(winner[2])
-                if winner
-                else context.validators.summarize([])
-            ),
+            validation_outcome=result_validation.outcome,
+            assurance_level=result_validation.assurance_level,
+            validation_summary=result_validation,
             legacy_payload=legacy,
             execution_units=[_unit_summary(item[0]) for item in generated],
             candidates=summaries,
-            validation_evidence=all_evidence,
+            # Top-level evidence describes the selected final only. Complete
+            # per-candidate evidence remains in each candidate summary. With no
+            # selected final, the aggregate summary above still records what ran.
+            validation_evidence=[
+                item.model_dump(mode="json") for item in selected_evidence
+            ],
             winning_candidate=winner_id,
             winner_selection_explanation=explanation,
             produced_files=winner_files,

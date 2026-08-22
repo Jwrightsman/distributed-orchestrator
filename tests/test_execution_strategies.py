@@ -501,6 +501,12 @@ async def test_all_validation_rejected_without_fallback_is_failed(tmp_path, monk
     assert run.result.lifecycle_status == "failed"
     assert run.result.winning_candidate is None
     assert all(item.status == "rejected" for item in run.result.candidates)
+    assert run.result.validation_outcome == "partial"
+    assert run.result.assurance_level == "structural"
+    assert run.result.validation_summary.checks_run
+    assert "no final result was selected" in run.result.validation_summary.explanation
+    assert run.result.validation_evidence == []
+    assert all(item.validation for item in run.result.candidates)
 
 
 @pytest.mark.asyncio
@@ -573,3 +579,129 @@ async def test_remote_to_local_fallback_is_reported_as_mixed(tmp_path, monkeypat
     assert run.result.units_local == 1
     assert run.result.attempt_count == 2
     assert run.result.fallback_count == 1
+
+
+@pytest.mark.asyncio
+async def test_fallback_count_counts_units_not_unique_reason_strings(tmp_path, monkeypatch):
+    state.nodes["worker"] = {"capabilities": [], "last_seen": 0}
+
+    async def remote_failure(self, unit, request, execution_id, strategy, decision, **kwargs):
+        return DispatchResult(
+            unit=unit,
+            status="failed",
+            placement="distributed",
+            error="same worker failure",
+            attempt_count=1,
+            observed_placements=("distributed",),
+        )
+
+    async def local_build(subtask, *args, **kwargs):
+        return f"local output {subtask['id']}"
+
+    async def runner(task, build_fn, **kwargs):
+        first = await build_fn(
+            {"id": 1, "title": "One", "prompt": "p", "depends_on": []},
+            "",
+        )
+        second = await build_fn(
+            {"id": 2, "title": "Two", "prompt": "p", "depends_on": []},
+            first,
+        )
+        result = dag_result(tmp_path, second)
+        result["plan"] = [
+            {"id": 1, "title": "One", "prompt": "p", "depends_on": []},
+            {"id": 2, "title": "Two", "prompt": "p", "depends_on": [1]},
+        ]
+        return result
+
+    monkeypatch.setattr(Dispatcher, "_distributed", remote_failure)
+    monkeypatch.setattr(strategies.orchestrator, "build", local_build)
+    run = await service(tmp_path).execute(
+        ExecutionRequestV1(
+            task="Build it",
+            strategy="dag",
+            placement="distributed",
+            confidentiality="trusted_guild",
+            remote_dispatch_consent=True,
+        ),
+        dag_runner=runner,
+    )
+
+    assert run.result.units_local == 2
+    assert run.result.units_distributed == 2
+    assert run.result.attempt_count == 4
+    assert run.result.fallback_count == 2
+
+
+@pytest.mark.asyncio
+async def test_five_candidates_keep_top_level_evidence_bounded_to_winner(tmp_path, monkeypatch):
+    async def generated(*args, **kwargs):
+        return '{"answer": 42}'
+
+    monkeypatch.setattr(strategies, "generate", generated)
+    execution_service = service(tmp_path)
+    request = ExecutionRequestV1(
+        task="Return a complete candidate",
+        strategy="ensemble",
+        strategy_options={"candidates": 5, "concurrency": 2},
+        output_contract={
+            "kind": "structured_json",
+            "validators": [
+                {"name": name}
+                for name in (
+                    "nonempty",
+                    "structured_json",
+                    "json_schema",
+                    "file_manifest",
+                    "code_parse",
+                    "artifact_extraction",
+                    "artifact_contract",
+                )
+            ],
+            "json_schema": {
+                "type": "object",
+                "properties": {"answer": {"type": "integer"}},
+                "required": ["answer"],
+            },
+        },
+    )
+
+    run = await execution_service.execute(request)
+    persisted = execution_service.store.get(run.result.execution_id)
+
+    assert run.result.lifecycle_status == "completed"
+    assert run.result.winning_candidate is not None
+    winner = next(
+        item
+        for item in run.result.candidates
+        if item.candidate_id == run.result.winning_candidate
+    )
+    assert run.result.validation_evidence == winner.validation
+    assert len(run.result.validation_evidence) <= 16
+    assert persisted.lifecycle_status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_artifact_root_stays_active_through_manifest_hashing(tmp_path, monkeypatch):
+    async def generated(*args, **kwargs):
+        return "```python\nprint('safe')\n```"
+
+    monkeypatch.setattr(strategies, "generate", generated)
+    execution_service = service(tmp_path)
+    original_refresh = execution_service.artifacts.refresh_manifest
+    active_during_refresh = []
+
+    def checked_refresh(execution_id, **kwargs):
+        active_during_refresh.append(
+            bool(execution_service.artifacts.active_root_paths())
+        )
+        return original_refresh(execution_id, **kwargs)
+
+    monkeypatch.setattr(execution_service.artifacts, "refresh_manifest", checked_refresh)
+    run = await execution_service.execute(
+        ExecutionRequestV1(task="Build it", strategy="direct")
+    )
+
+    assert run.result.lifecycle_status == "completed"
+    assert active_during_refresh == [True]
+    assert execution_service.artifacts.active_root_paths() == set()

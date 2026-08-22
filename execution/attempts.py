@@ -599,6 +599,28 @@ class AttemptStore:
             ).fetchone()
         return int(row[0]) if row else 0
 
+    def execution_attempt_summary(self, execution_id: str) -> dict[str, int]:
+        """Return durable attempt/retry counts for terminal telemetry."""
+        self.migrate()
+        with self._lock, self._connect() as con:
+            rows = con.execute(
+                "SELECT task_id, state FROM attempts WHERE execution_id = ?",
+                (execution_id,),
+            ).fetchall()
+        attempts_by_task: dict[str, int] = {}
+        for row in rows:
+            task_id = str(row["task_id"])
+            attempts_by_task[task_id] = attempts_by_task.get(task_id, 0) + 1
+        repeated_attempts = sum(
+            max(0, count - 1) for count in attempts_by_task.values()
+        )
+        return {
+            "attempt_count": len(rows),
+            "unit_count": len(attempts_by_task),
+            "retry_count": repeated_attempts,
+            "reassignment_count": repeated_attempts,
+        }
+
     def transition_active(
         self,
         *,

@@ -99,12 +99,22 @@ def normalize_relative_path(value: str) -> str:
     if not isinstance(value, str) or not value or len(value) > 500 or "\x00" in value:
         raise ArtifactSecurityError("invalid artifact path")
     decoded = value
-    for _ in range(3):
+    for _ in range(8):
         expanded = unquote(decoded)
         if expanded == decoded:
             break
         decoded = expanded
-    if not decoded or "\\" in decoded or ":" in decoded or "\ufffd" in decoded:
+    else:
+        raise ArtifactSecurityError("artifact path encoding is too deeply nested")
+    if unquote(decoded) != decoded:
+        raise ArtifactSecurityError("artifact path encoding is too deeply nested")
+    if (
+        not decoded
+        or "\x00" in decoded
+        or "\\" in decoded
+        or ":" in decoded
+        or "\ufffd" in decoded
+    ):
         raise ArtifactSecurityError("invalid artifact path")
     if decoded.startswith(("/", "//")) or PureWindowsPath(decoded).is_absolute():
         raise ArtifactSecurityError("artifact paths must be relative")

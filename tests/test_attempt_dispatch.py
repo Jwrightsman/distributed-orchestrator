@@ -179,3 +179,74 @@ async def test_local_inference_obeys_cancellation_event():
             cancel_event=cancellation,
         )
     await trigger
+
+
+@pytest.mark.asyncio
+async def test_reclaimed_attempt_reports_real_retry_and_reassignment_counts():
+    dispatcher = Dispatcher()
+    running = asyncio.create_task(
+        dispatcher._distributed(
+            _unit(),
+            _request(),
+            "e" * 32,
+            "ensemble",
+            PlacementDecision("distributed", "test", qualifying_nodes=("worker",)),
+            deadline_monotonic=time.monotonic() + 5,
+        )
+    )
+    queued = await _wait_for_queue()
+    with state._task_queue_lock:
+        state.task_queue.remove(queued)
+        first_issued = time.time()
+        state.attempt_store.issue(
+            queued,
+            assigned_node_id="worker",
+            attempt_id="attempt-first",
+            nonce="nonce-first",
+            issued_at=first_issued,
+            lease_expires_at=first_issued + 30,
+        )
+        assert state.attempt_store.transition_active(
+            attempt_id="attempt-first",
+            state="reclaimed",
+            reason="worker lease reclaimed",
+        )
+        second_issued = time.time()
+        queued.update(
+            {
+                "assigned_to": "worker",
+                "assigned_at": second_issued,
+                "attempt_id": "attempt-second",
+                "nonce": "nonce-second",
+                "lease_expires_at": second_issued + 30,
+            }
+        )
+        state.attempt_store.issue(
+            queued,
+            assigned_node_id="worker",
+            attempt_id="attempt-second",
+            nonce="nonce-second",
+            issued_at=second_issued,
+            lease_expires_at=second_issued + 30,
+        )
+        state.task_inflight[queued["task_id"]] = queued
+
+    settled = state.attempt_store.settle(
+        task_id=queued["task_id"],
+        node_id="worker",
+        output="accepted output",
+        error=None,
+        elapsed_seconds=1,
+        contract_version="1",
+        attempt_id="attempt-second",
+        nonce="nonce-second",
+        execution_id=queued["execution_id"],
+        execution_unit_id=queued["execution_unit_id"],
+        execution_unit_kind=queued["execution_unit_kind"],
+    )
+    state.accepted_result_broker.publish(settled.receipt)
+    result = await running
+
+    assert result.attempt_count == 2
+    assert result.retry_count == 1
+    assert result.reassignment_count == 1

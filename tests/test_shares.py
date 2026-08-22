@@ -184,6 +184,33 @@ def test_public_artifact_manifest_excludes_internal_and_unselected_candidates(tm
     ]
 
 
+def test_public_share_without_a_winner_hides_all_candidate_artifacts(tmp_path):
+    store = ShareStore(str(tmp_path / "shares.db"))
+    created = store.create(EXECUTION_ID, CreateExecutionShareV1())
+    share = store.get_active(created.token)
+    execution = _execution()
+    execution["winning_candidate"] = None
+    base = _manifest()
+    second = base.entries[0].model_copy(
+        update={
+            "relative_path": "candidate_2/code/other.html",
+            "source_candidate_id": "candidate-2",
+        }
+    )
+    manifest = ArtifactManifestV1(
+        execution_id=EXECUTION_ID,
+        created_at=base.created_at,
+        file_count=2,
+        aggregate_size_bytes=base.entries[0].size_bytes + second.size_bytes,
+        entries=[base.entries[0], second],
+    )
+
+    public = artifact_manifest_for_share(manifest, share, execution)
+
+    assert public.entries == []
+    assert public.file_count == 0
+
+
 @pytest.fixture
 def share_api(tmp_path, monkeypatch):
     cfg = {

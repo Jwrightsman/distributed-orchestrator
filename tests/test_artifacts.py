@@ -82,6 +82,10 @@ def test_nested_artifact_resolution_rechecks_hash(tmp_path):
         "nested/./dot.txt",
         "%2e%2e/secret.txt",
         "%252e%252e/secret.txt",
+        "%2525252e%2525252e/secret.txt",
+        "%2525252525252525252e%2525252525252525252e/secret.txt",
+        "%00.txt",
+        "%2500.txt",
         "%2Fabsolute.txt",
     ],
 )

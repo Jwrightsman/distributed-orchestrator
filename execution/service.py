@@ -321,7 +321,9 @@ class ExecutionService:
                             execution_id,
                             artifact_root,
                             strategy=selection.selected,
-                            active=False,
+                            # Keep retention's durable active guard in place
+                            # until hashing and result finalization complete.
+                            active=True,
                         )
                         if selection.selected == "ensemble" and result.winning_candidate:
                             candidate_number = result.winning_candidate.rsplit("-", 1)[-1]
@@ -366,7 +368,15 @@ class ExecutionService:
 
             nodes = sorted({item.node_id for item in context.dispatch_results if item.node_id})
             result.participating_nodes = nodes
-            fallbacks = [item.fallback_reason for item in context.dispatch_results if item.fallback_reason]
+            unit_fallbacks = [
+                item.fallback_reason
+                for item in context.dispatch_results
+                if item.fallback_reason
+            ]
+            fallback_count = len(unit_fallbacks)
+            if not unit_fallbacks and placement.fallback_reason:
+                fallback_count = 1
+            fallbacks = list(unit_fallbacks)
             if placement.fallback_reason:
                 fallbacks.insert(0, placement.fallback_reason)
             if fallbacks:
@@ -407,25 +417,40 @@ class ExecutionService:
                 "observed_placements": observed,
                 "units_local": result.units_local,
                 "units_distributed": result.units_distributed,
-                "fallback_count": len(dict.fromkeys(fallbacks)),
+                "fallback_count": fallback_count,
                 "participating_node_count": len(nodes),
                 "observed_compute_ms": sum(item.duration_ms for item in context.dispatch_results),
                 "attempt_count": sum(item.attempt_count for item in context.dispatch_results),
                 "retry_count": retry_count,
                 "reassignment_count": reassignment_count,
             }
-            result.fallback_count = len(dict.fromkeys(fallbacks))
+            result.fallback_count = fallback_count
             result.attempt_count = sum(item.attempt_count for item in context.dispatch_results)
             result.retry_count = retry_count
             result.reassignment_count = reassignment_count
         except asyncio.TimeoutError:
             control.cancel_event.set()
             Dispatcher.cancel_execution(execution_id, reason="execution deadline exceeded")
+            attempt_progress = server_state.attempt_store.execution_attempt_summary(execution_id)
             result.lifecycle_status = "failed"
             result.status = "failed"
             result.validation_outcome = "not_run"
             result.assurance_level = "unverified"
             result.retryable = True
+            result.attempt_count = attempt_progress["attempt_count"]
+            result.retry_count = attempt_progress["retry_count"]
+            result.reassignment_count = attempt_progress["reassignment_count"]
+            if attempt_progress["unit_count"]:
+                result.observed_placements = ["distributed"]
+                result.placement_observed = "distributed"
+                result.units_distributed = attempt_progress["unit_count"]
+            result.telemetry = {
+                "attempt_count": result.attempt_count,
+                "retry_count": result.retry_count,
+                "reassignment_count": result.reassignment_count,
+                "units_distributed": result.units_distributed,
+                "observed_placements": result.observed_placements,
+            }
             result.errors = [
                 {
                     "code": "execution_timeout",
@@ -480,20 +505,52 @@ class ExecutionService:
         result.completed_at = _now()
         result.duration_ms = max(0, int((time.perf_counter() - started) * 1000))
         result.telemetry = {**result.telemetry, "total_duration_ms": result.duration_ms}
-        if (
-            "context" in locals()
-            and context.artifact_root_path is not None
-            and context.artifact_registration_error is None
-        ):
+        should_clear_artifact_marker = (
+            "artifact_root" in locals() and bool(artifact_root)
+        ) or (
+            "context" in locals() and context.artifact_root_path is not None
+        )
+        if should_clear_artifact_marker:
             try:
                 self.artifacts.set_active(execution_id, False)
-            except ArtifactError:
-                logger.exception("failed to clear active artifact marker for %s", execution_id)
+            except ArtifactError as exc:
+                logger.warning(
+                    "could not clear artifact active marker for %s: %s",
+                    execution_id,
+                    exc,
+                )
         # Assignment validation is intentionally disabled on the wire models so
         # strategy adapters can assemble results efficiently. Re-validate once
         # at the service boundary so persistence and every caller always see
-        # fully typed protocol objects rather than nested dictionaries.
-        result = ExecutionResultV1.model_validate(dict(result.__dict__))
+        # fully typed protocol objects rather than nested dictionaries. A bad
+        # adapter result must itself become a durable terminal failure; it may
+        # never escape while leaving the prior row marked running.
+        try:
+            result = ExecutionResultV1.model_validate(dict(result.__dict__))
+        except Exception as exc:
+            logger.exception("execution result normalization failed for %s", execution_id)
+            fallback = self._new_result(
+                request,
+                execution_id,
+                job_id,
+                "failed",
+                created_at=result.created_at,
+            )
+            fallback.lifecycle_status = "failed"
+            fallback.started_at = result.started_at
+            fallback.completed_at = _now()
+            fallback.duration_ms = max(0, int((time.perf_counter() - started) * 1000))
+            fallback.retryable = False
+            fallback.errors = [
+                {
+                    "code": "result_normalization_failed",
+                    "message": f"{type(exc).__name__}: strategy result violated protocol bounds"[:500],
+                    "retryable": False,
+                }
+            ]
+            result = ExecutionResultV1.model_validate(dict(fallback.__dict__))
+            legacy = {}
+        control.result = result
         self._persist_terminal(request, result)
         self._emit(
             "execution_completed"
