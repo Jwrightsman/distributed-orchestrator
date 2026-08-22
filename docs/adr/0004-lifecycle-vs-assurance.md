@@ -67,8 +67,10 @@ behavioral correctness.
 `model_judged` is reserved for model-evaluated evidence and must be identified
 as model judgment rather than mechanical proof.
 
-`unverified` means no passing evidence earned a stronger classification or the
-selected fallback did not satisfy required validation.
+`unverified` means no passing evidence earned a stronger classification. A
+fallback that did not satisfy all required validation may still retain a
+limited level such as `structural` when those specific checks passed; its
+compatibility status remains `unverified` and it is not a correctness claim.
 
 No built-in structural or JSON Schema check currently sets
 `proves_behavioral_correctness=true`. Generated code parsing is not execution,

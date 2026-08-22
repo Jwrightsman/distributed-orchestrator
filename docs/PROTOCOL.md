@@ -108,8 +108,9 @@ evidence, not the first candidate in input order.
 If no candidate satisfies the required validation policy, the execution fails
 unless `allow_unverified_fallback` is true and a usable candidate completed. An
 unverified fallback has lifecycle `completed`, validation outcome `failed` or
-`partial`, assurance `unverified`, and compatibility status `unverified`. It is
-not a correctness claim.
+`partial`, and compatibility status `unverified`. Its assurance still records
+the strongest limited evidence that actually passed (for example `structural`);
+that evidence is not a general correctness claim.
 
 ### Direct and auto
 
