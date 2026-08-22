@@ -25,6 +25,7 @@ from fastapi.responses import JSONResponse
 
 import routes_events
 import routes_executions
+import routes_access
 import routes_history
 import routes_nodes
 import routes_pitch
@@ -33,6 +34,10 @@ import routes_run
 import routes_status
 import routes_try
 from dashboard import router as dashboard_router
+from access_control import ViewerAccessMiddleware, warn_if_viewer_auth_unconfigured
+from execution.artifacts import get_artifact_store
+from execution.service import get_execution_service
+from execution.sharing import get_share_store
 from server_state import _cleanup_stale_nodes, _db_load_jobs, _init_db
 
 # Re-exported for back-compat: tests and scripts reach server state through
@@ -62,6 +67,14 @@ from server_state import (  # noqa: F401
 async def _lifespan(app: FastAPI):
     _init_db()
     _db_load_jobs()
+    get_artifact_store().migrate()
+    get_share_store().migrate()
+    reconcile_executions = getattr(get_execution_service(), "reconcile_after_restart", None)
+    if reconcile_executions:
+        reconcile_executions()
+    # ``_db_load_jobs`` above reconciles legacy queued/running rows before
+    # exposing them; canonical reconciliation follows the same fail-closed rule.
+    warn_if_viewer_auth_unconfigured()
     cleanup_task = asyncio.create_task(_cleanup_stale_nodes())
     try:
         yield
@@ -70,6 +83,7 @@ async def _lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Mycelium", version="0.3.0", lifespan=_lifespan)
+app.add_middleware(ViewerAccessMiddleware)
 
 
 @app.exception_handler(Exception)
@@ -89,6 +103,7 @@ async def unhandled_exception_handler(request, exc):
 app.include_router(dashboard_router)
 app.include_router(routes_events.router)
 app.include_router(routes_executions.router)
+app.include_router(routes_access.router)
 app.include_router(routes_pitch.router)
 app.include_router(routes_nodes.router)
 app.include_router(routes_history.router)

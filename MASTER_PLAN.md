@@ -1,57 +1,75 @@
 # MASTER PLAN — Mycelium
 
-_Last updated: August 21, 2026._
+_Last updated: August 22, 2026._
 _This file is the single source of truth for project direction. Any AI assistant working in this repo (Claude Code, etc.) must read this fully before making changes. It overrides older priority lists in CLAUDE.md._
 
 ---
 
 ## 1. What this project is
 
-A collectively-owned AI orchestration layer that runs on consumer hardware. A planner agent decomposes a pitched task into subtasks, builder agents execute them in parallel across volunteer machines, a reviewer validates and assembles the result, and a reviser auto-fixes flagged issues. Contributions (compute, pitches, reviews) are tracked in an append-only credit ledger — the seed of a guild economy. Phase 0 of a three-layer vision: **open protocol → contributor guild → marketplace**. No tokens, no blockchain, no cloud dependency.
+A collectively operated AI orchestration layer that runs on consumer hardware.
+Canonical requests choose between a planner/builder/reviewer DAG and independent
+complete-candidate ensemble execution; direct is one candidate and auto is a
+deterministic selector. Placement is a separate local or explicitly consented
+distributed decision. Compute, pitch, and review work are recorded as
+non-monetary contribution points. There are no tokens, transfers, wallets, or
+claims that points prove correctness.
 
 ## 2. Where we actually are (honest status)
 
-**Built and working:** full planner→builder→reviewer→reviser pipeline; parallel
-wave-based DAG execution; production complete-candidate ensemble execution;
-direct-as-one-candidate and deterministic auto-selection; strategy-independent
-local/distributed placement; normalized durable execution records; distributed
-workers with task reclaim, attempt-bound streams/results, circuit breaker, and
-auto-reconnect; persistent project memory; async APIs; events; live dashboard;
-gallery; contribution ledger; LAN discovery; demo modes; and deployment guides.
+**Built and working:** planner→builder→reviewer→reviser DAG; complete-candidate
+ensemble; direct-as-one-candidate; deterministic auto-selection;
+strategy-independent placement; canonical durable execution records; total
+deadlines, cancellation, and restart reconciliation; server-authoritative
+durable worker attempts and accepted receipts; validator contract floors and
+honest assurance; authenticated artifact delivery; explicit redacted shares;
+viewer/pitch/node credential separation; privacy-safe canonical defaults;
+persistent DAG project memory; REST, CLI, MCP, events, dashboard, contribution
+records, LAN discovery, demo modes, and deployment guides.
 
-**Never happened:** the demo video. The community posts. External users. The repo has 0 stars and has been dormant since early April.
+**Current trust tier:** a small private trusted alpha. Worker identity still
+uses a shared secret, the queue is process-local, `network_policy` is not
+enforced, generated code is not sandboxed, and there is no permissionless
+network defense. Ensemble/direct reject project memory rather than ignoring it.
+
+**Not established by the current repository record:** a published demo video,
+repeat external users, or sustained outside adoption. Check current external
+state before making a launch-status claim.
 
 **Diagnosis:** the bottleneck is distribution, not code. Every additional feature built before external users exist is building in a vacuum.
 
 ## 3. Reality check — August 2026
 
-- **Technical feasibility:** proven by our own Phase 0. The pipeline works. Distributed execution works on LAN. Remaining unknowns (WAN latency, stranger nodes, small-model output quality) are testable, not speculative.
+- **Technical feasibility:** proven by our own Phase 0. The pipeline works and distributed execution works on LAN. Anonymous or hostile-node operation remains explicitly unsupported; WAN behavior and small-model output quality remain measurable rather than reasons to weaken the trust boundary.
 - **The lane is still open.** SwarmHarness (arXiv 2605.28764, May 2026) academically validates this exact niche — decentralized, incentive-aligned agent networks *without* blockchain — and explicitly notes no existing system ships the combination. It is a protocol paper, not a product. This repo is a working implementation in the same design space. Reference it in the README for credibility.
 - **Non-competitors:** DePIN GPU networks (Render, Spheron, etc.) are token-based compute marketplaces — a different lane we deliberately avoid. Kimi "Agent Swarm" and similar are centralized cloud products — they normalize swarm UX without touching volunteer hardware or collective ownership. OpenClaw remains the single-machine personal-agent king; we are the multi-machine collective, a different animal.
 - **Model tailwind:** Qwen3.5 small series (March 2026) — `qwen3.5:4b` is ~2.5GB, a major quality jump for 8GB CPU-only nodes. Gemma 4 E2B/E4B and Phi-4 Mini are the other strong 8GB picks. Our default model and auto-detect ladder must be refreshed.
-- **Ecosystem tailwind:** MCP is now a Linux Foundation standard adopted by every major lab. Exposing this orchestrator as an MCP server (post-launch) would let any agent app delegate tasks to the swarm.
+- **Ecosystem tailwind:** MCP is now a Linux Foundation standard adopted broadly across agent tooling. Mycelium's shipped MCP adapter lets an authorized client submit and inspect canonical-backed work; private reads need the viewer credential.
 - **Outcome tiers (calibrated):** (a) launch + small tester community — very achievable; (b) niche traction, 100+ stars, recurring contributors — plausible with a good video; (c) the full guild/marketplace vision — multi-year, requires collaborators, only reachable through (a) and (b).
 
 ## 4. The Prime Directive
 
-**No unbounded feature expansion until the demo video is public.** The user
-explicitly authorized the bounded Execution Strategy Protocol v1 sprint on
-August 21; that exception is complete and documented in
-`SPRINT_STRATEGY_PROTOCOL.md`. It superseded the older freeze only for DAG,
-ensemble/direct/auto, placement, validation, persistence, REST/CLI/MCP, and
-adjacent worker-attempt hardening. Normal freeze discipline now resumes. In
-particular, do not implement map, research, debate, consensus, marketplace,
-token, blockchain, or model-sharding features without a new explicit sprint.
+**No unbounded feature expansion until the demo video is public.** The bounded
+Execution Strategy Protocol v1 sprint and Trusted-Alpha Integrity sprint are
+the only authorized exceptions. Their records are
+`SPRINT_STRATEGY_PROTOCOL.md` and `SPRINT_TRUSTED_ALPHA_INTEGRITY.md`. Normal
+freeze discipline resumes after handoff. Do not infer authorization for map,
+research, debate, consensus, marketplace, token, blockchain, federation,
+accounts, major UI, sandbox, or model-sharding work.
 
 ### Current backend protocol baseline
 
 - `ExecutionRequestV1` is the one entry contract for REST, CLI, MCP, and legacy adapters.
 - DAG and ensemble are the only registered production strategies; direct normalizes to ensemble.
-- Strategy and placement are orthogonal, with confidentiality and capability filtering.
-- Canonical execution metadata and final normalized results survive SQLite reopening.
-- Protocol-v1 streams and results are bound to active node/task/attempt/nonce/unit leases.
+- Canonical placement defaults local/local-only; remote-capable requests require recorded consent.
+- Lifecycle, validation outcome, and assurance are separate and persisted.
+- Server-owned attempts, exact replay, accepted receipts, and compute contributions settle durably and atomically.
+- Rejected or late output is quarantined outside the operational broker.
+- Non-resumable executions/jobs become retryable `interrupted` after restart.
+- Complete artifacts use authenticated, path-confined APIs; public result access uses explicit hashed share tokens.
+- Viewer, pitch, and node credentials are separate; empty viewer auth is a warned local-development mode.
 - The worker scheduler remains in memory and node admission still uses a shared secret.
-- Normative behavior is in `docs/PROTOCOL.md`; diagrams are in `docs/ARCHITECTURE.md`.
+- Normative behavior is in `docs/PROTOCOL.md`; security boundaries are in `docs/THREAT_MODEL.md`.
 
 ## 5. The 30-day launch plan
 
@@ -62,7 +80,7 @@ token, blockchain, or model-sharding features without a new explicit sprint.
 4. Run the full test gauntlet: `py status.py`, `py cli.py "Build a hello world Python script"`, `py cli.py --demo` end-to-end. Fix anything broken by dependency or model drift. Do not proceed to Phase B until `--demo` completes cleanly.
 
 ### Phase B — Record (Days 3–7, Jett + Claude Code support)
-1. Second machine options, in order of preference: (a) a friend's laptop for an evening; (b) an IU computer-lab machine; (c) a free Oracle Cloud ARM VM (24GB RAM free tier — can run `qwen3.5:4b` on CPU) joined as a node. Any of the three makes the distributed story real.
+1. Second machine options, in order of preference: (a) a friend's laptop with that owner's explicit consent; (b) an institutional machine only with explicit administrator authorization; (c) a cloud VM Jett controls joined as a node. Any of the three makes the distributed story real without borrowing hardware silently.
 2. Follow `docs/video-setup.md` exactly. Record `--demo-live` with the dashboard visible: planner decomposing, tasks routing to both machines, credits ticking on the leaderboard, second pitch loading memory from the first, reviser firing.
 3. Cut to 60–90 seconds. Structure: hook (task typed, both machines light up) → swarm magic (parallel builders, live credits) → memory wow (iteration 2 remembers iteration 1) → self-fix (reviser) → guild payoff (leaderboard) → CTA (`python join.py` one-liner + repo link).
 4. If no second machine is obtainable this week, record the honest solo version rather than delaying: "distributed pipeline is built and tested — I need nodes." Shipped honesty beats unshipped polish.
@@ -75,29 +93,42 @@ token, blockchain, or model-sharding features without a new explicit sprint.
 
 ### Phase D — First external nodes (Days 10–30)
 1. Private testers first: Tailscale (free). Testers install Tailscale, join the tailnet by invite, run `python join.py http://<tailscale-ip>:8000`. Zero public port exposure; laptop stays the orchestrator.
-2. Public alpha (if demand): 24/7 orchestrator on Oracle free tier or Hetzner (~€4/mo). Requirements before exposure: `node_secret` set and enforced on every node endpoint; a `pitch_key` gate on `/pitch*`; rate limits verified; output-directory disk cap. (Claude Code: Section 7.)
+2. Internet-reachable **private** alpha (if demand): a 24/7 orchestrator may be used only after independent `node_secret`, `pitch_key`, and `viewer_key` configuration; TLS or a private overlay; verified route denial and WebSocket auth; rate/admission and artifact caps; share expiry/revocation; restart reconciliation; and a current branch verification run. This is still not anonymous-node or permissionless readiness.
 3. Turn on GitHub Discussions for coordination. A Discord server only when there are ≥10 active people to talk to.
-4. Goal: 3–5 external nodes, 10 real pitches from strangers, every rough edge they hit logged as an issue.
+4. Goal: 3–5 invited external node owners, 10 real pitches from testers, every rough edge they hit logged as an issue.
 
 ### Day-30 decision point
-- **Traction** (external nodes + engaged comments): switch to a user-driven roadmap. Likely candidates: MCP server interface, web-based pitch UX, verification/reputation beyond the circuit breaker.
+- **Traction** (invited external nodes + engaged comments): switch to a user-driven roadmap. Likely candidates come from observed tester problems, not speculative strategy expansion.
 - **Silence:** one deliberate repositioning iteration (new angle, new demo, one more launch). If still silence, park the project gracefully — polished README, honest status note. It remains a top-tier portfolio piece either way.
 
 ## 6. Division of labor
 
 **Jett (human-only tasks):** press record; edit/caption the video (CapCut or DaVinci Resolve, free); create accounts (Oracle Cloud, Tailscale); recruit the second machine; write nothing from scratch — approve and post the drafts; reply to comments; invite testers.
 
-**Claude Code (everything in the codebase):** all of Section 5 Phase A; Section 7 hardening; deployment docs; keeping CLAUDE.md and README current; drafting posts and replies for Jett's approval.
+**Claude Code:** visual follow-up consumes the documented backend contracts but owns page layout, CSS, components, and interface copy. Backend agents keep protocol, access, artifact, lifecycle, and threat-model claims accurate. Both sides preserve the sprint boundary and run current checks before handoff.
 
-## 7. Technical worklist (Claude Code — launch-path only)
+## 7. Technical launch baseline
 
-1. Model refresh + structured-output planner (Phase A above).
-2. **Security audit for WAN exposure:** confirm `node_secret` is checked on `/nodes/register`, `/tasks/next`, `/tasks/{id}/result`; add optional `pitch_key` (config) required on `/pitch`, `/pitch/async`, `/pitch/distributed` when set; verify rate limiting on pitch endpoints; add a configurable cap on total `output/` size with oldest-run pruning.
-3. **`docs/DEPLOY.md`** written for a beginner, three paths: (a) LAN-only for the video, (b) Tailscale private testing, (c) Oracle-free-tier / Hetzner public orchestrator — exact commands, account-signup pointers, and a plain-language security note for each.
-4. **Dockerfile + docker-compose** for the orchestrator (optional but strongly preferred — makes the VPS path nearly copy-paste).
-5. **README refresh:** status line updated to August 2026; a short "Positioning" paragraph citing SwarmHarness (arXiv 2605.28764) as academic validation of the niche; a prominent "Looking for nodes" CTA with the `join.py` one-liner; model requirements updated to the new ladder.
-6. **`docs/community-pitch.md` refresh:** title leads with the demo result; body mentions persistent memory, parallel waves, auto-revision, credits/guild standings, one-command join; ends with the CTA.
-7. Keep the standing rules: no crypto/tokens/blockchain; no big rewrites of working code; test after every change; warn Jett before anything network-facing.
+The WAN-era node/pitch checks, rate limits, disk cap, deployment guide, Docker
+packaging, model refresh, MCP interface, and structured planner are already in
+the repository. Trusted-alpha integrity adds the required private-read,
+attempt-authority, lifecycle, validation, artifact, share, privacy-default, and
+interface contracts. Do not recreate those systems from the older worklist.
+
+Before any deployment or demo:
+
+1. Run the current full suite, Ruff, server import, and Compose configuration;
+   record exact results rather than copying a historical count.
+2. Configure independent `node_secret`, `pitch_key`, and `viewer_key`; use TLS
+   or Tailscale and verify `/health` reports private routes protected.
+3. Keep keyless public pitch off unless its fixed local profile and compute caps
+   are intentionally wanted.
+4. Review generated artifacts before execution; validation is not a sandbox.
+5. Verify the deployed build fingerprint and exercise viewer denial, share
+   expiry/revocation, artifact download, cancellation, and worker rejection.
+6. Keep the standing rules: no money/tokens/blockchain, no permissionless-node
+   claims, no major UI work without Claude's handoff, and no new strategy without
+   a new explicit sprint.
 
 ## 8. After launch — see ROADMAP.md
 
@@ -110,14 +141,14 @@ queue** — every item there is gated on a trigger, and nothing moves into a spr
 trigger fires. The active work is always in `SPRINT_*.md`.
 
 Of the five items this section used to list, two are done: the **MCP server interface shipped**
-(five tools, an end-to-end check at 10/10) and **verification and reputation is wired** (sampled
+(five tools; rerun its current checks before deployment) and **verification and reputation is wired** (sampled
 duplicate execution, `verify_rate`, per-node routing weight — off by default). Layer sharding,
 agent specialization and the guild charter carried over to ROADMAP §10, §9 and §8 respectively.
 
 ## 9. Success metrics
 
-**30-day:** video public; ≥1 external node connected by a stranger; ≥10 external pitches processed; ≥25 GitHub stars (stretch: 100).
-**90-day:** ≥5 recurring nodes; first community PR merged; ~~MCP interface shipped~~ — **done Aug 2026, ahead of plan** (five tools, 10/10 end to end with real inference); a named list of the guild's first ten members.
+**30-day:** video public; ≥1 invited external owner connects a machine with informed consent; ≥10 tester pitches processed; ≥25 GitHub stars (stretch: 100).
+**90-day:** ≥5 recurring nodes; first community PR merged; MCP interface remains compatible through current regression coverage; a named list of the guild's first ten members.
 
 ---
 

@@ -151,6 +151,27 @@ def test_prune_disabled_when_cap_zero(monkeypatch):
     assert (Path("output") / "20260801_010000").exists()
 
 
+def test_prune_never_deletes_an_active_artifact_root(monkeypatch):
+    _set_cap(monkeypatch, 1)
+    _fake_run("20260801_010000", 600 * 1024)
+    _fake_run("20260801_020000", 600 * 1024)
+    _fake_run("20260801_030000", 600 * 1024)
+    active = (Path("output") / "20260801_010000").resolve()
+
+    class Store:
+        def active_root_paths(self):
+            return {active}
+
+    import execution.artifacts as artifacts
+
+    monkeypatch.setattr(artifacts, "get_artifact_store", lambda: Store())
+
+    pruned = _prune_output_dir()
+
+    assert "20260801_010000" not in pruned
+    assert active.exists()
+
+
 # ── The 500 handler must not echo the exception ──────────────────────
 #
 # This was hardened once and silently un-hardened: a second

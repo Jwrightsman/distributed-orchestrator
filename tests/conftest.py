@@ -16,6 +16,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import config  # noqa: E402
 import ledger  # noqa: E402
+import execution.artifacts as artifact_module  # noqa: E402
+import execution.service as service_module  # noqa: E402
+import execution.sharing as sharing_module  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -28,8 +31,14 @@ def isolated_cwd(tmp_path, monkeypatch):
     # config.get caches the loaded dict on the function object
     if hasattr(config.get, "_cache"):
         del config.get._cache
+    artifact_module._ARTIFACT_STORE = None
+    sharing_module._SHARE_STORE = None
+    service_module._SERVICE = None
     yield
     if hasattr(config.get, "_cache"):
         del config.get._cache
     ledger._cache = None
     ledger._cache_mtime = 0.0
+    artifact_module._ARTIFACT_STORE = None
+    sharing_module._SHARE_STORE = None
+    service_module._SERVICE = None

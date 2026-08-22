@@ -23,6 +23,7 @@ import argparse
 import sys
 import time
 import json
+import os
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -51,8 +52,27 @@ from memory import create_project, load_project, list_projects, PROJECTS_DIR
 import showcase
 
 SERVER_URL = "http://localhost:8000"
+PITCH_KEY = os.environ.get("PITCH_KEY", "")
+VIEWER_KEY = os.environ.get("VIEWER_KEY", "")
 
 console = Console()
+
+
+def _server_headers(*, pitch: bool = False, viewer: bool = False) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    if pitch and PITCH_KEY:
+        headers["X-Pitch-Key"] = PITCH_KEY
+    if viewer and VIEWER_KEY:
+        headers["X-Viewer-Key"] = VIEWER_KEY
+    return headers
+
+
+def _health_node_count(health: dict) -> int:
+    """Consume the stable, privacy-safe health schema."""
+    try:
+        return max(0, int(health.get("nodes_online", 0) or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def show_projects():
@@ -545,8 +565,15 @@ async def run_demo_live():
             ))
             return
 
-        nodes = health.get("nodes", [])
-        node_count = len(nodes)
+        node_count = _health_node_count(health)
+        nodes = []
+        if node_count and VIEWER_KEY:
+            detail = await client.get(
+                f"{SERVER_URL}/nodes",
+                headers=_server_headers(viewer=True),
+            )
+            if detail.status_code == 200:
+                nodes = detail.json().get("nodes", [])
 
     # ── Node list panel ──────────────────────────────────────────────────
     if node_count == 0:
@@ -554,7 +581,7 @@ async def run_demo_live():
             "[yellow]⚠  No worker nodes connected — tasks will run locally as fallback.[/yellow]\n"
             "[dim]To add a node: python node.py --server http://localhost:8000 --node-id Laptop-1[/dim]"
         )
-    else:
+    elif nodes:
         node_lines = []
         for n in nodes:
             caps = [c for c in n.get("capabilities", []) if not c.startswith("model:")]
@@ -564,6 +591,11 @@ async def run_demo_live():
             caps_str = ", ".join(caps) if caps else "builder"
             node_lines.append(f"  [green]●[/green] [bold]{n['node_id']}[/bold]  {hw}  [{caps_str}]")
         node_status = f"[green]{node_count} node(s) connected:[/green]\n" + "\n".join(node_lines)
+    else:
+        node_status = (
+            f"[green]{node_count} node(s) connected.[/green]\n"
+            "[dim]Set VIEWER_KEY to display private node hardware details.[/dim]"
+        )
 
     console.print(Panel(
         "[bold cyan]LIVE DISTRIBUTED DEMO[/bold cyan]\n\n"
@@ -595,6 +627,7 @@ async def run_demo_live():
             resp = await client.post(
                 f"{SERVER_URL}/pitch/async",
                 json={"task": task, "project_id": project_id},
+                headers=_server_headers(pitch=True),
             )
             resp.raise_for_status()
             data = resp.json()
@@ -614,6 +647,7 @@ async def run_demo_live():
                     ev_resp = await client.get(
                         f"{SERVER_URL}/events",
                         params={"since": last_event_id},
+                        headers=_server_headers(viewer=True),
                     )
                     if ev_resp.status_code == 200:
                         ev_data = ev_resp.json()
@@ -621,7 +655,7 @@ async def run_demo_live():
                             eid = ev.get("id", 0)
                             if eid > last_event_id:
                                 last_event_id = eid
-                            ev_job = ev.get("job_id") or ev.get("data", {}).get("job_id", "")
+                            ev_job = ev.get("job_id", "")
                             if ev_job and ev_job != job_id:
                                 continue  # skip events from other jobs
                             _render_event(ev, seen_subtasks)
@@ -630,7 +664,10 @@ async def run_demo_live():
 
                 # Check job status
                 try:
-                    job_resp = await client.get(f"{SERVER_URL}/jobs/{job_id}")
+                    job_resp = await client.get(
+                        f"{SERVER_URL}/jobs/{job_id}",
+                        headers=_server_headers(viewer=True),
+                    )
                     job = job_resp.json()
                     status = job.get("status", "queued")
                     if status in ("complete", "failed"):
@@ -647,10 +684,11 @@ async def run_demo_live():
                 ev_resp = await client.get(
                     f"{SERVER_URL}/events",
                     params={"since": last_event_id},
+                    headers=_server_headers(viewer=True),
                 )
                 if ev_resp.status_code == 200:
                     for ev in ev_resp.json().get("events", []):
-                        ev_job = ev.get("job_id") or ev.get("data", {}).get("job_id", "")
+                        ev_job = ev.get("job_id", "")
                         if ev_job and ev_job != job_id:
                             continue
                         _render_event(ev, seen_subtasks)
@@ -713,7 +751,10 @@ async def run_demo_live():
 def _render_event(ev: dict, seen_subtasks: set):
     """Print a single server event in a readable format for the live demo terminal."""
     etype = ev.get("type", "")
-    data = ev.get("data", {})
+    # The server event contract is flat: event metadata and event-specific
+    # fields are peers. Keeping a second nested shape made the live CLI render
+    # empty plans even though the wire payload was correct.
+    data = ev
 
     if etype == "plan":
         subtasks = data.get("subtasks", [])

@@ -99,14 +99,15 @@ def test_a_readmitted_node_can_receive_work(client):
     assert resp.json()["task_id"] == "t2"
 
 
-def test_submitting_a_result_also_readmits(client):
-    """A node that finishes work after being evicted must not vanish either."""
+def test_late_unbound_result_does_not_readmit_evicted_node(client):
+    """Rejected output has no authority to mutate node liveness."""
     _register(client)
     state.task_inflight["t3"] = {"task_id": "t3", "prompt": "x", "assigned_to": "laptop"}
     _sleep_the_laptop()
     assert client.get("/nodes").json()["count"] == 0
 
-    client.post("/tasks/t3/result", json={
+    response = client.post("/tasks/t3/result", json={
         "node_id": "laptop", "output": "done", "elapsed_seconds": 1.0,
     })
-    assert client.get("/nodes").json()["count"] == 1
+    assert response.status_code == 403
+    assert client.get("/nodes").json()["count"] == 0

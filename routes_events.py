@@ -11,6 +11,7 @@ import time
 import httpx
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from access_control import authorize_viewer_websocket, viewer_health_fields
 from ledger import get_history, get_standings
 from ollama_client import OLLAMA_URL
 import server_state as state
@@ -47,6 +48,7 @@ async def health():
         "models": models,
         "nodes_online": len(nodes),
         "tasks_pending": len(task_queue),
+        **viewer_health_fields(),
     }
 
 
@@ -81,6 +83,8 @@ async def get_events(since: int = 0):
 @router.websocket("/ws/events")
 async def ws_events(websocket: WebSocket):
     """WebSocket endpoint — clients receive pipeline events in real time."""
+    if not await authorize_viewer_websocket(websocket):
+        return
     await ws_manager.connect(websocket)
     # Replay last 20 persisted events from SQLite so new clients aren't blind
     try:

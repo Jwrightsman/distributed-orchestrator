@@ -1,264 +1,306 @@
 # Threat model
 
-_What is true of this system today — August 2026, Phase 0. Not what it should
-be, not what it will be. Where a protection is missing, this says so._
+_Implemented state on August 21, 2026. This describes current controls and
+current gaps, not the intended end state._
 
-A public protocol without a written threat model accumulates incompatible
-assumptions: one person believes nodes are untrusted, another writes code that
-trusts them, and nobody notices until it matters. This file exists so the
-assumptions are legible.
+**One-sentence version:** Mycelium is suitable for a small private trusted
+alpha whose operators and node holders are known. It is not safe as an open,
+permissionless compute network.
 
-**The one-sentence version:** Mycelium today is a **trusted-network** system.
-It assumes everyone holding the shared secret is non-hostile, and it is not
-safe to run as an open, permissionless network. Everything below elaborates
-that sentence.
+Trusted-alpha hardening changed two important defaults: a worker result must
+settle a server-issued durable attempt before execution can consume it, and
+sensitive read routes can be protected by a viewer credential. It did not add
+per-node cryptographic identity, TLS, sandboxing, or multi-user accounts.
 
----
+## 1. Assets
 
-## 1. What is being protected
-
-| Asset | Where it lives | Worst realistic outcome today |
+| Asset | Where it lives | Realistic failure |
 | --- | --- | --- |
-| Task text (the prompts people submit) | Orchestrator memory, `output/`, and **every worker that gets a subtask** | Disclosure to node operators and to anyone who can reach the HTTP port |
-| Generated output | `output/`, served over HTTP | Disclosure; and it is **unreviewed code** that someone may run |
-| The contribution ledger | `data/ledger.json` on the orchestrator | Mis-credit — points misattributed between contributors |
-| `node_secret` / `pitch_key` | `data/config.json` on the orchestrator | Full node access / full submit access to whoever obtains one |
-| Contributor hardware | Volunteers' own machines | CPU and disk consumed; a bad model pull; nothing executes on them (see §4) |
-| Orchestrator availability | One VM, no failover | The network stops until it is restarted |
+| Task and project text | execution/job SQLite, project files, coordinator memory, assigned worker prompts | disclosure to an unauthorized reader or worker operator |
+| Generated output and artifacts | SQLite previews/receipts, `output/`, `execution_artifacts/` | disclosure, tampering, retention beyond intent, or unsafe code execution by an operator |
+| Attempt authority | SQLite attempt rows and accepted receipts | an unbound, late, or duplicate result entering execution or earning points |
+| Viewer, pitch, and node secrets | local config/environment and HTTP headers | private reads, unwanted compute use, or worker admission |
+| Contribution history | SQLite plus `ledger.json` compatibility projection | misattribution or misleading claims about correctness/value |
+| Contributor hardware | worker machines | sustained model inference, disk use for the model, prompt disclosure |
+| Orchestrator availability | one process and its SQLite/disk | total service interruption or lost process-local queue work |
 
-There is **no user data, no accounts, no payment information, and no personal
-data** in the system. That is a deliberate scope limit and it removes a large
-class of risk.
-
----
+There are no full user accounts, payment data, wallets, or token balances. A
+deployment may still hold confidential task content, project memory, node
+hardware descriptions, hostnames, and generated artifacts, so "no accounts"
+does not mean "no sensitive data."
 
 ## 2. Trust boundaries
 
-```
-   Requester ──HTTP──▶ ORCHESTRATOR ──HTTP──▶ Worker node
-   (pitch_key)         (trusted: runs        (node_secret)
-                        planner + reviewer,   ── runs a local model
-                        holds ledger,         ── returns TEXT only
-                        holds both secrets)   ── never executes what it gets
-
+```text
+Requester ── pitch_key ──▶ ORCHESTRATOR ── node_secret ──▶ Worker
+                              │                              │
+                              │ viewer_key                  ├─ sees assigned prompt
+                              ▼                              └─ returns model text
+                         Private readers
                               │
-                              └──▶ Anyone who can reach the port
-                                   (no credential required — see §5)
+                              └─ explicit share token ──▶ capability holder
 ```
 
-**Inside the boundary:** the orchestrator process and the machine it runs on.
-Everything else is outside it, including every worker node.
+- The orchestrator process and host filesystem are inside the primary trust
+  boundary.
+- Requesters, viewers, workers, and share holders are outside it.
+- The three configured static secrets represent different authority. Possessing
+  one must not imply possessing the other two.
+- Every worker holding `node_secret` shares the same admission credential.
+  `node_id` is a claimed label, not a cryptographic identity.
+- A share token is a bearer capability. Anyone who receives it can use its
+  exact redacted scope until expiry or revocation.
 
----
+## 3. Controls implemented today
 
-## 3. What is enforced today
-
-| Control | What it actually does | Where |
+| Control | What it enforces | What it does not enforce |
 | --- | --- | --- |
-| `node_secret` | A single shared password in an `X-Node-Secret` header, checked on node registration, task poll, result submission and token stream | `server_state._check_node_auth` |
-| `pitch_key` | A single shared password required on `/pitch`, `/pitch/async`, `/pitch/distributed` | `server_state._check_pitch_key` |
-| Attempt binding | Every handout mints an `attempt_id` + nonce; settlement requires the assigned node, matching nonce, unexpired lease (900 s), unsettled attempt. Idempotent on retry | `server_state`, `routes_nodes` |
-| Rate limiting | Pitches per IP per window (`pitch_rate_max`, default 5/min) | `routes_pitch` |
-| Disk cap | `output_max_mb` (default 500) with oldest-run pruning | `server_state._prune_output_dir` |
-| Circuit breaker | A node failing 3× is benched 60 s | `routes_nodes` |
-| Sampled verification | Duplicate a fraction of subtasks to a second node and compare shape; reputation feeds routing order | `verification.py` — **off by default** (`verify_rate: 0`), and needs ≥2 nodes |
-| Generic 500s | Unhandled errors return `{"detail": "internal server error"}` rather than the exception text | `server.py` |
+| `viewer_key` | private HTTP and WebSocket access via header, Bearer token, or signed expiring HttpOnly cookie | users, roles, per-execution ACLs, TLS |
+| `pitch_key` | canonical and compatibility task submission when configured | private reads or public-share revocation |
+| `node_secret` | registration, polling, result, and token-stream admission when configured | individual node identity or revocation |
+| Server-owned attempts | active lease and exact task/execution/unit/kind/node/version/nonce binding | truthfulness or quality of the returned model output |
+| Atomic settlement | exactly-once attempt transition, receipt, response, and compute contribution; exact replay after restart | durable scheduling or worker resumption |
+| Result quarantine | bounded diagnostics for rejected output outside operational execution | malware analysis or a complete forensic archive |
+| Total execution deadline | shared remaining budget for strategy, local calls, worker waits, validation, and finalization | forcibly stopping an external process that ignores cancellation |
+| Restart reconciliation | truthful `interrupted` state for non-resumable executions/jobs and active attempts | resuming lost process-local work |
+| Artifact registry | root confinement, normalized paths, symlink rejection, hashes, quotas, streaming delivery, retention | content safety, immutability, sandboxing |
+| Explicit shares | unguessable hashed bearer tokens, expiry, revocation, redaction, artifact permission | preventing redistribution by a token holder |
+| Public-pitch profile | one local candidate with short timeout/output and compute-aware admission | strong abuse prevention or semantic content moderation |
+| SQLite contribution ledger | concurrent-safe, idempotent non-monetary records | tamper evidence against the host operator |
 
-**Both secrets default to empty, which disables both checks.** That is correct
-for a laptop on your own LAN and wrong for anything reachable from the
-internet. `docs/DEPLOY.md` Path 3 requires both.
+Secret comparisons use constant-time comparison where static credentials or
+signatures are checked. This reduces one narrow side channel. It does not make a
+shared secret equivalent to cryptographic identity.
 
----
+## 4. Public and private reachability
 
-## 4. What a malicious worker node can do
+When `viewer_key` is configured, the deliberate unauthenticated surface is:
 
-A node is any machine holding `node_secret`. Assume it is fully hostile.
+- `GET /` and `GET /try`;
+- static assets under `GET /static/*`;
+- `GET /health` and `GET /status.json`;
+- `GET /v1/shares/{token}` and token-scoped share artifact routes;
+- `POST /public/pitch` only when the operator enables it;
+- viewer session exchange/logout endpoints.
 
-**It can:**
+Pitch and worker protocol routes are exempt from the viewer gate because they
+use their own credentials. If `pitch_key` or `node_secret` is empty, that
+separate control is open.
 
-- **Read the text of every subtask it is given.** This is inherent — you cannot
-  ask a machine to work on a prompt without showing it the prompt. Do not pitch
-  anything confidential to a network whose operators you do not trust.
-- **Return anything at all** as a result. The circuit breaker catches a node
-  that *fails*; nothing catches a node that returns plausible, wrong output.
-  Sampled verification raises the cost of that, and it is off by default.
-- **Claim any `node_id` it likes at registration**, including one that looks
-  like somebody else's, and so appear on the dashboard and standings under a
-  chosen name.
-- **Refuse work, or hold it until the lease expires**, forcing reassignment and
-  wasting network capacity.
-- **Register many identities** (Sybil) — nothing limits identities per secret.
-- **See task text for subtasks it did not win**, indirectly, because the read
-  endpoints in §5 are open.
+Everything else is viewer-protected, including canonical execution reads and
+cancellation, jobs, events, WebSockets, node details, history, gallery, run
+pages, projects, ledger, standings, metrics, artifact APIs, share creation and
+revocation, and the dashboard.
 
-**It cannot:**
+`/status.json` is deliberately narrow: service/inference state, model name,
+counts, uptime, repository, and build fingerprint. It does not include task
+text, result text, hostnames, hardware detail, attempt identifiers, nonces, or
+project ids. `/health` includes liveness, model names, queue/node counts, and
+whether private routes are protected. It warns when they are not.
 
-- **Execute code on the requester's machine.** A node returns text. Whether
-  anything is ever run is the requester's decision on the requester's hardware.
-- **Take another node's credit.** This is what attempt binding fixed: a result
-  is settled only for the node the attempt was issued to, with the matching
-  nonce, before the lease expires, once. Submitting under another node's id is
-  rejected 403 and raises a `result_rejected` event.
-- **Get paid twice for one attempt.** Settlement is idempotent; a retry replays
-  the original outcome.
-- **Read the orchestrator's secrets, ledger file, or filesystem.**
+### Fail-open local-development mode
 
-**What attempt binding does NOT do, stated plainly:** it does not establish
-*identity*. `node_secret` is network *admission* — everyone presenting it
-presents the same credential. Anyone holding the shared secret can still join
-under a name of their choosing; binding only stops an admitted node stealing a
-*different* node's credit for a specific attempt. Per-node keypairs, signed
-result envelopes, revocation and rotation are the real answer and are deferred
-— see [ROADMAP.md](../ROADMAP.md) §5.
+All three secrets default to empty for local compatibility. Most importantly,
+when `viewer_key` is empty the viewer middleware allows private routes. Startup
+logs and `/health` explicitly say so. Anyone who can reach that deployment can
+then read tasks, results, projects, events, node detail, and artifacts.
 
----
+An operator must not bind such a configuration to an untrusted network. Set all
+three secrets as appropriate, put TLS in front, and prefer a private network
+such as Tailscale. Viewer access control without transport encryption still
+sends bearer credentials and private content in clear text.
 
-## 5. What an unauthenticated stranger can do
+## 5. Worker-result integrity
 
-Anyone who can reach the port, with no credential at all:
+### The invariant
 
-- **Read every past task's text and output** — `/history`, `/history/{id}`,
-  `/gallery`, `/run/{id}` (and the `/share/{id}` redirect kept for old links),
-  `/history/{id}/download`.
-- **Read the live event stream** — `/events`, `/ws/events` — including task
-  text as it runs.
-- **Read the ledger and standings** — `/ledger`, `/standings`.
-- **Read operational metrics** — `/metrics`, `/status.json`, `/health`.
+A worker result is operational only after it settles the current durable
+server-issued attempt. The server record, not the submitted payload, determines
+whether contract-v1 binding is mandatory.
 
-**None of these require `pitch_key` or `node_secret`.** `pitch_key` gates
-*submitting* work; it does not gate *reading* anything. This is the single
-most under-appreciated fact about the current deployment, and the practical
-consequence is simple: **treat everything you pitch, and everything the swarm
-produces, as public.**
+For v1, omission of contract version, attempt id, nonce, execution id, unit id,
+or unit kind is a rejection. The assigned node, URL task, lease, state, and all
+bindings must match. A worker cannot downgrade validation by omitting fields.
 
-`/status.json` is deliberately public and deliberately narrow — counts, uptime,
-model, no task text — so that a stranger can verify the network is real without
-an invite. The rest of the list above is not deliberate design so much as
-Phase 0 not having grown access control yet.
+Settlement uses a SQLite write transaction and uniqueness constraints. The
+active attempt becomes settled, an immutable accepted receipt is inserted, and
+any compute contribution is inserted in the same transaction. The dispatcher
+consumes only a receipt matching its expected execution and unit. Exact replay
+returns the stored response; a changed replay fails.
 
----
+Unknown, queued-but-unleased, expired, reclaimed, cancelled, superseded,
+interrupted, wrong-node, wrong-execution, wrong-unit, wrong-kind, and malformed
+submissions never enter the accepted-result broker. Rejected output may be
+quarantined as a reason, hash, and at most 4 KiB preview, capped at 500 rows. It
+does not satisfy dispatch, update normal success statistics, earn points, or
+emit normal completion.
 
-## 6. Generated code is not sandboxed
+### What attempt authority does not prove
 
-The pipeline writes runnable files to `output/`. It checks that Python parses
-and that HTML loads in a headless browser. **It does not sandbox anything, and
-those checks are not a security boundary** — parsing proves syntax, not intent.
+An admitted worker can still return plausible but wrong, malicious, copied, or
+low-quality text. Attempt binding proves which active lease admitted a byte
+sequence; it does not prove who physically controlled the node or whether the
+bytes satisfy the user's intent.
 
-- **On the orchestrator**, the eval harness executes generated Python in a
-  subprocess with a scrubbed environment. That is a speed bump, not a jail: no
-  container, no seccomp, no filesystem or network restriction.
-- **On worker nodes**, nothing generated is executed at all. Nodes run a model
-  and return text.
-- **On your machine**, nothing runs unless you run it.
+The shared node secret permits any holder to register any `node_id`, create many
+claimed identities, and impersonate another label on a future registration.
+Attempt binding prevents settlement under the wrong active assignment, but not
+admission-level Sybil behavior. Per-node keypairs, individual revocation,
+rotation, and signed result envelopes remain prerequisites for a less-trusted
+network.
 
-**Do not execute generated code you have not read.** The README says this, the
-docs say this, and it is the single most likely way this project hurts someone.
-Real sandboxing — disposable containers or microVMs, no network by default,
-read-only base, resource caps — is in [ROADMAP.md](../ROADMAP.md) §5 and is a
-prerequisite for accepting code from untrusted nodes.
+## 6. What a malicious admitted worker can do
 
----
+It can:
 
-## 7. The ledger is contribution points, not currency
+- read every task, contract, dependency context, or project-derived context
+  assigned to it;
+- return arbitrary text that passes structural checks while being behaviorally
+  wrong;
+- hold work until its lease expires and waste capacity;
+- register many claimed node labels while holding the shared secret;
+- report misleading hardware/capability metadata;
+- consume operator time through repeated failures or plausible bad output.
 
-`ledger.json` is an append-only JSON file recording who contributed what.
-Credits are **contribution points denominated in work**. They are not a token,
-not tradable, not redeemable, and there is no monetary value attached to them
-anywhere in the system. There is no wallet, no transfer, and no settlement
-against anything of value.
+It cannot, through the worker protocol alone:
 
-Consequences that matter for a threat model:
+- settle a queued-but-unleased or inactive task;
+- downgrade a v1 attempt into legacy settlement;
+- settle with a missing or mismatched nonce, contract, execution, or unit;
+- settle the same attempt twice with changed output;
+- turn a quarantined result into operational output or points;
+- execute generated code on the requester machine.
 
-- The economic incentive to attack the ledger is currently **zero**, which is
-  the main reason its integrity properties can be weak without being urgent.
-- Ledger entries are recorded on a non-empty, verified-settlement result. They
-  do not carry a verifier version, evidence, or a signature, and there are no
-  provisional/disputed/reversed states.
-- The file is not tamper-evident. Anyone with write access to the orchestrator's
-  disk can rewrite history undetectably. Hash-chaining is the cheap fix and is
-  in [ROADMAP.md](../ROADMAP.md) §5.
-- **No credit-related bug can cost anyone money, because credits are not
-  money.** That will stop being true the moment they buy anything, and the
-  hardening in §5 of the roadmap is what has to land first.
+Workers run a local model and return text. They do not execute the generated
+artifact. That last boundary depends on operators continuing not to run
+unreviewed generated code.
 
----
+## 7. Read access and shares
 
-## 8. Known weaknesses, stated rather than implied
+`viewer_key` is one instance-wide reader authority. Every holder can read every
+private route; there are no owners, roles, groups, or per-project ACLs. Browser
+sessions are signed rather than server-stored, default to eight hours, and are
+capped at seven days. Rotating `viewer_key` invalidates them. The cookie is
+HttpOnly and SameSite=Lax; it is Secure when the request is HTTPS or the operator
+sets `viewer_cookie_secure`.
 
-- **Shared-secret admission.** One credential for all nodes. Rotating it means
-  restarting every node. A leaked secret is a full compromise of node access
-  with no way to revoke one holder.
-- **The secret comparison is not constant-time** (`provided != secret`).
-  Remote timing attacks on a string compare across a network are impractical in
-  practice; it is listed because it is true, not because it is urgent.
-- **No transport security.** No HTTPS out of the box. Task text, results and
-  both secrets travel in clear text over any network between the parties. On
-  the public internet, assume they are readable. HTTPS via a domain and Caddy
-  is [ROADMAP.md](../ROADMAP.md) §4.
-- **No per-node identity, no revocation, no signed results.** §4 above.
-- **Process-local scheduler state.** Nodes, queues, in-flight assignments,
-  reputation and breaker state live in memory. A restart loses them. Jobs and
-  event history survive in SQLite; the rest does not.
-- **Unbounded memory growth.** ~1.25 MB per pitch, measured, source not found.
-  Not a denial-of-service risk at ~800 pitches per GB, but real for a
-  long-lived public orchestrator.
-- **No Sybil resistance.** Nothing limits how many identities one secret-holder
-  registers.
-- **Verification is a spot check, not a proof.** Duplicate-and-compare measures
-  output *shape*, and when two results disagree the coordinator cannot tell
-  which is wrong — it lowers both reputations and lets the pattern emerge over
-  samples.
-- **One orchestrator, no failover.** Availability depends on one VM.
+Shares are deliberately narrower. A random 32-byte token is returned once at
+creation; SQLite stores only its SHA-256 hash. Invalid, expired, and revoked
+tokens all look like `404`. The response is built from an allowlist and omits
+project/job ids, absolute paths, attempt credentials, raw logs, credit records,
+private telemetry, and unbounded validator failures. Node identity is redacted
+by default. Candidate details and artifact downloads require separate share
+flags.
 
----
+Share output is not an immutable snapshot. It reflects the current durable
+execution record and currently retained artifacts. Revocation stops future
+server access but cannot retract content already copied by a token holder. A
+leaked token remains usable until expiry or revocation, so share URLs should be
+treated like passwords.
 
-## 9. The trusted-network assumption, plainly
+## 8. Artifact safety
 
-**Everything above adds up to one assumption: every party holding a credential
-is non-hostile.** The controls that exist raise the cost of casual misbehaviour
-and make accidents visible. They do not withstand a determined adversary, and
-they are not designed to.
+The artifact registry accepts only existing non-symlink directories strictly
+below `output/` or `execution_artifacts/`. One root cannot belong to multiple
+executions and an execution cannot switch roots. Public models contain only
+normalized POSIX-relative paths.
 
-That is a reasonable posture for what this is — a Phase 0 system run by one
-person, with a handful of invited testers, no user data and no money. It is not
-a reasonable posture for a public permissionless network, and the project does
-not claim otherwise.
+Manifest scans and every open reject absolute paths, drives, colons,
+backslashes, NULs, dot segments, parent traversal, encoded traversal, duplicate
+normalized paths, symlink components, and resolved paths outside the root. The
+server enforces file-count, per-file, and aggregate-byte limits and computes a
+SHA-256 for every entry. Downloads re-scan and re-hash. ZIPs are built in a
+bounded temporary file and streamed.
 
-**Run it this way:** on your own hardware, on a network you control, or with
-people you have vetted, with both secrets set the moment it leaves your LAN,
-and with everything it produces treated as public.
+These controls stop path confusion and unbounded artifact delivery. They do not
+make content safe. SHA-256 detects a changed file at access time but is not a
+signature, provenance proof, malware scan, or content-addressed immutable store.
+Private viewers can retrieve internal run files; public shares filter logs,
+plans, transcripts, and hidden candidate detail.
 
----
+Retention applies to registered roots in both storage families. Active roots
+and canonical executions still queued/running are skipped. Pruning deletes the
+artifact directory and manifest rows, not the durable execution result. A share
+may therefore remain valid after its artifact files have expired.
 
-## 10. What would have to change for a permissionless network
+## 9. Generated code and `network_policy`
 
-Not duplicated here, because a second copy of a list is a list that drifts.
-[ROADMAP.md](../ROADMAP.md) §5 has it in full, ordered by severity: per-node
-cryptographic identity, server-issued expiring leases with signed result
-envelopes, a durable attempt-based scheduler, layered verification
-(deterministic checks → canaries → redundancy → tie-breaking → semantic judging
-→ reputation), a transactional ledger with hash-chaining, real sandboxing,
-confidentiality classes, and adversarial protocol tests. §5 also covers the
-verification endgame — trusted execution environments, then zero-knowledge
-proofs of inference — which is what genuinely untrusted compute would
-eventually require.
+Generated code is not sandboxed. Structural parsing and JSON Schema checks are
+validation evidence, not security boundaries and not behavioral proof. Do not
+execute generated code without review.
 
-The short version: **identity first, because everything else depends on it.**
+`network_policy` is recorded intent only. No OS firewall, container policy,
+syscall filter, tool broker, or worker enforcement consumes it today. In
+particular, `network_policy="disabled"` must not be advertised as guaranteed
+network isolation. The worker normally runs only inference, but custom model
+providers and later operator execution are outside this field's control.
 
----
+## 10. Lifecycle and availability
 
-## 11. Non-goals
+Canonical lifecycle is durable, but the scheduler is not. Queues, connected
+nodes, in-flight coroutines, and breaker state are process-local. On restart,
+queued/running canonical executions and legacy jobs become retryable
+`interrupted`; active attempts become interrupted and reject late output. This
+prevents false forever-running state but does not resume work.
 
-Stated so nobody builds toward them by accident:
+Deadlines and cancellation remove queued units, signal local tasks, and cancel
+active attempts. External calls may not stop immediately if a dependency ignores
+cancellation, but their late output cannot settle. The orchestrator is still one
+process on one machine with no failover.
 
-- **Confidential computing.** Task text is visible to node operators by design.
-- **Anonymity.** No attempt is made to hide who pitched or who built what.
-- **Byzantine fault tolerance.** There is no consensus mechanism and no plan
-  for one; see §7 of the roadmap on why a coordinator, not a chain.
-- **Protecting the network from its own operator.** Whoever runs the
-  orchestrator holds the queue, the ledger and the routing. The check on that
-  is the fork right, not a technical control.
+## 11. Contribution points are not correctness or money
 
----
+The authoritative trusted-alpha ledger is SQLite. Worker settlement records
+`basis=compute_contribution` and `points_are_monetary=false`. A worker may earn
+compute points for an accepted bound attempt even if its candidate is later not
+selected or the final execution fails validation. Those are different events.
 
-_Reporting a vulnerability: [SECURITY.md](../SECURITY.md)._
+`credits` and `ledger.json` remain compatibility names/projections. There is no
+token, wallet, transfer, redemption, price, or payment. The host operator can
+still alter SQLite or its compatibility file; the ledger is concurrent-safe and
+idempotent, not tamper-evident against the machine owner.
+
+## 12. Keyless public pitch
+
+The optional public endpoint is off by default. When enabled it accepts only a
+short task and rejects caller-controlled strategy, candidates, placement,
+project, validators, and confidentiality. It uses one local direct candidate,
+one global inference slot, a 120-second deadline, 64 KiB output cap, per-source
+rate and active limits, and a global active cap. It cannot send a public task to
+contributors.
+
+This is bounded demo admission, not a hardened public service. Source identity
+is derived from the request IP as seen by the application and can be distorted
+by proxy configuration. The content filter is a coarse substring filter. A
+request-count and concurrency cap reduce abuse; they do not eliminate it.
+
+## 13. Remaining weaknesses
+
+- Shared static secrets with instance-wide authority.
+- No per-node cryptographic identity, rotation, or individual revocation.
+- No built-in HTTPS; bearer secrets and content require external TLS.
+- No generated-code or model-executor sandbox.
+- `network_policy` is not enforced.
+- Process-local scheduler, connected-node state, and breaker state.
+- One orchestrator and no failover.
+- No Sybil resistance or trustworthy worker hardware attestation.
+- Structural/deterministic contract validation does not prove arbitrary
+  behavioral correctness.
+- Viewer auth is one role for the whole instance, not multi-user authorization.
+- Share revocation cannot retract already downloaded content.
+- The orchestrator host can alter SQLite, artifacts, or configuration.
+
+## 14. Safe deployment posture
+
+Run Mycelium on hardware you control, or among a small invited group whose node
+operators you trust. Set `node_secret`, `pitch_key`, and `viewer_key` before
+binding beyond localhost; use TLS or a private overlay network; keep keyless
+pitching off unless you intentionally accept the compute cost; review generated
+code; rotate a viewer key after suspected disclosure; and treat shared prompts
+as disclosed to every worker that receives them.
+
+Do not describe this implementation as trustless, permissionless,
+confidential-compute, sandboxed, behaviorally verified, or safe for anonymous
+stranger nodes.
+
+Reporting a vulnerability: [SECURITY.md](../SECURITY.md).

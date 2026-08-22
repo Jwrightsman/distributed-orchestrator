@@ -86,10 +86,32 @@ DEFAULTS = {
     # Leave empty ("") to allow open pitching (default — trusted networks only).
     "pitch_key": "",
 
+    # Separate read credential for task-, result-, project-, and machine-sensitive
+    # routes.  A configured key may be sent as X-Viewer-Key, as an Authorization
+    # Bearer token, or exchanged for a short-lived signed HttpOnly cookie through
+    # POST /v1/viewer/session.  It is deliberately not node_secret or pitch_key:
+    # permission to contribute compute or submit work does not imply permission
+    # to read every private run on the coordinator.
+    #
+    # Empty keeps local-development compatibility, but the server reports this
+    # clearly in its startup log and public health response.
+    "viewer_key": "",
+    "viewer_session_ttl_seconds": 8 * 3600,
+    "viewer_cookie_secure": False,
+
     # Cap on total size of the output/ directory, in megabytes.
     # When exceeded, the oldest runs are deleted until back under the cap.
     # Set 0 to disable pruning.
     "output_max_mb": 500,
+
+    # Canonical artifact API limits.  They apply before a manifest or ZIP is
+    # returned, so a generated directory cannot turn one authenticated request
+    # into unbounded memory, disk, or network use.
+    "artifact_max_files": 100,
+    "artifact_max_file_bytes": 50 * 1024 * 1024,
+    "artifact_max_aggregate_bytes": 100 * 1024 * 1024,
+    "artifact_retention_seconds": 7 * 24 * 3600,
+    "execution_artifacts_max_mb": 500,
 
     # Pitch rate limit, per IP: at most `pitch_rate_max` pitches per
     # `pitch_rate_window` seconds on /pitch, /pitch/async and /pitch/distributed.

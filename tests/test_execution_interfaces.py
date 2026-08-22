@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 import httpx
@@ -14,6 +15,7 @@ import execution.strategies as strategies
 import mcp_server
 import routes_executions
 import server_state as state
+from execution.artifacts import ArtifactStore
 from execution.contracts import ExecutionRequestV1
 from execution.dispatch import DispatchResult, Dispatcher, ExecutionUnit, PlacementDecision
 from execution.persistence import ExecutionStore
@@ -37,7 +39,11 @@ def clean_runtime():
 
 
 def test_canonical_rest_post_and_get_normalized_execution(tmp_path, monkeypatch):
-    service = ExecutionService(store=ExecutionStore(tmp_path / "executions.db"))
+    database = tmp_path / "executions.db"
+    service = ExecutionService(
+        store=ExecutionStore(database),
+        artifacts=ArtifactStore(database, allowed_roots=[tmp_path]),
+    )
     captured = {}
 
     def submit(request):
@@ -67,7 +73,7 @@ def test_canonical_rest_post_and_get_normalized_execution(tmp_path, monkeypatch)
     body = fetched.json()
     assert body["protocol_version"] == "1"
     assert body["strategy_requested"] == "direct"
-    assert body["selector_version"] == "conservative-v1"
+    assert body["selector_version"] == "conservative-v2"
 
 
 def test_canonical_rest_rejects_unknown_strategy_before_service(monkeypatch):
@@ -80,6 +86,22 @@ def test_canonical_rest_rejects_unknown_strategy_before_service(monkeypatch):
         response = client.post("/v1/executions", json={"task": "x", "strategy": "debate"})
     assert response.status_code == 422
     assert "strategy" in response.text
+
+
+def test_legacy_async_rejects_ignored_direct_project_memory():
+    with TestClient(app) as client:
+        response = client.post(
+            "/pitch/async",
+            json={
+                "task": "Continue this project",
+                "project_id": "project-1",
+                "strategy": "direct",
+            },
+        )
+
+    assert response.status_code == 422
+    assert "project_id is not supported" in response.text
+    assert not state.jobs
 
 
 @pytest.mark.parametrize(
@@ -162,7 +184,11 @@ async def test_execution_events_cover_selection_units_validation_and_completion(
 
     monkeypatch.setattr(strategies, "generate", generated)
     monkeypatch.setattr(strategies.EnsembleStrategy, "artifact_root", tmp_path / "artifacts")
-    service = ExecutionService(store=ExecutionStore(tmp_path / "executions.db"))
+    database = tmp_path / "executions.db"
+    service = ExecutionService(
+        store=ExecutionStore(database),
+        artifacts=ArtifactStore(database, allowed_roots=[tmp_path]),
+    )
     service._emit = lambda name, data: emitted.append((name, data))
     queued = service.submit(
         ExecutionRequestV1(task="Complete it", strategy="direct", placement="local")
@@ -189,6 +215,8 @@ async def test_distributed_worker_payload_carries_protocol_identity():
         "strategy": "ensemble",
         "strategy_options": {"candidates": 1},
         "placement": "distributed",
+        "confidentiality": "trusted_guild",
+        "remote_dispatch_consent": True,
         "output_contract": {"kind": "single_artifact"},
     })
     unit = ExecutionUnit(
@@ -213,11 +241,38 @@ async def test_distributed_worker_payload_carries_protocol_identity():
         if state.task_queue:
             break
     queued = state.task_queue[0]
-    state.task_results[queued["task_id"]] = {
-        "node_id": "worker",
-        "output": "complete output",
-        "error": None,
-    }
+    with state._task_queue_lock:
+        state.task_queue.remove(queued)
+        queued.update({
+            "assigned_to": "worker",
+            "assigned_at": time.time(),
+            "attempt_id": "attempt-test",
+            "nonce": "nonce-test",
+            "lease_expires_at": time.time() + 30,
+        })
+        state.task_inflight[queued["task_id"]] = queued
+        state.attempt_store.issue(
+            queued,
+            assigned_node_id="worker",
+            attempt_id=queued["attempt_id"],
+            nonce=queued["nonce"],
+            issued_at=queued["assigned_at"],
+            lease_expires_at=queued["lease_expires_at"],
+        )
+    settled = state.attempt_store.settle(
+        task_id=queued["task_id"],
+        node_id="worker",
+        output="complete output",
+        error=None,
+        elapsed_seconds=1,
+        contract_version="1",
+        attempt_id=queued["attempt_id"],
+        nonce=queued["nonce"],
+        execution_id=queued["execution_id"],
+        execution_unit_id=queued["execution_unit_id"],
+        execution_unit_kind=queued["execution_unit_kind"],
+    )
+    state.accepted_result_broker.publish(settled.receipt)
     result = await running
 
     assert queued["contract_version"] == "1"
@@ -269,7 +324,12 @@ async def test_distributed_dag_sampled_verification_remains_wired(monkeypatch):
     dispatcher = Dispatcher(emit=lambda name, data: emitted.append((name, data)))
     dispatcher._maybe_verify_remote(
         unit,
-        ExecutionRequestV1(task="Build", placement="distributed"),
+        ExecutionRequestV1(
+            task="Build",
+            placement="distributed",
+            confidentiality="trusted_guild",
+            remote_dispatch_consent=True,
+        ),
         "e" * 32,
         "dag",
         PlacementDecision(

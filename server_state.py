@@ -20,6 +20,7 @@ from fastapi import HTTPException, Request, WebSocket
 from pydantic import BaseModel, Field, field_validator
 
 from config import get as get_config
+from execution.attempts import AcceptedResultBroker, AttemptStore
 from execution.contracts import (
     ConfidentialityV1,
     ExecutionRequirementsV1,
@@ -50,6 +51,7 @@ _PUBLIC_RATE_WINDOW = 3600   # seconds
 _PUBLIC_RATE_MAX = 2         # pitches per IP per window
 _PUBLIC_TASK_MAX = 300       # task length cap (chars)
 _PUBLIC_MAX_ACTIVE = 3       # concurrent public jobs across all visitors
+_PUBLIC_MAX_ACTIVE_PER_SOURCE = 1
 _public_pitch_timestamps: dict[str, list[float]] = {}
 
 # Basic content filter for keyless public pitching. Substring match, so it
@@ -73,11 +75,11 @@ nodes: dict[str, dict] = {}          # node_id -> info
 # the request body and locate the task by task_id alone, so any admitted node
 # could submit a result attributed to a different node and take its credit.
 #
-# The fix is deliberately small. When a task is handed out the server mints an
-# attempt: an id and a nonce, both unguessable and both distinct from task_id
-# (which is visible in events and logs). A result is only settled if the
-# submitting node is the assigned node, the nonce matches, the lease has not
-# expired, and the attempt has not already been settled.
+# When a task is handed out the server durably mints an attempt: an id and a
+# nonce, both unguessable and distinct from task_id. ``AttemptStore`` validates
+# and atomically settles it; ``AcceptedResultBroker`` is the only dispatcher
+# channel. The dictionaries below are process-local scheduling/compatibility
+# projections, not settlement authority.
 #
 # DEFERRED, and this is not equivalent to it: per-node keypairs with signed
 # receipts, revocation and rotation. That is the right long-term answer and is
@@ -86,8 +88,8 @@ nodes: dict[str, dict] = {}          # node_id -> info
 # joining under a name of its choosing in the first place.
 ATTEMPT_LEASE_SECONDS = 900
 
-# attempt_id -> the outcome we already recorded, so a retry is idempotent
-# rather than a second payment.
+# Deprecated in-memory compatibility mirror. Durable exact replay is handled by
+# AttemptStore.response_json/result_hash and does not consult this dictionary.
 settled_attempts: dict[str, dict] = {}
 _MAX_SETTLED = 5000
 
@@ -216,7 +218,7 @@ def _refresh_verify_rate() -> float:
 
 # ── Async job store ──────────────────────────────────────────────────
 # Jobs allow /pitch/async to return immediately with a job_id.
-# Status: "queued" | "running" | "complete" | "failed"
+# Status: "queued" | "running" | "complete" | "failed" | "interrupted"
 jobs: dict[str, dict] = {}          # job_id -> job record
 OUTPUT_DIR = Path("output")
 
@@ -226,6 +228,13 @@ _RESULT_TTL = 3600           # keep raw task results for 1 hour
 # ── SQLite event persistence ──────────────────────────────────────────
 _DB_PATH = Path("events.db")
 _db_lock = threading.Lock()
+
+# Durable attempt state and receipts share the existing SQLite database. The
+# queue above remains deliberately process-local; receipts, settlement and
+# rejection authority do not.
+attempt_store = AttemptStore(_DB_PATH)
+accepted_result_broker = AcceptedResultBroker(attempt_store)
+_COORDINATOR_RESTART_MARKER = f"restart-{secrets.token_hex(12)}"
 
 
 def _init_db() -> None:
@@ -253,8 +262,28 @@ def _init_db() -> None:
                 trace_id    TEXT
             )
         """)
+        existing_job_columns = {
+            row[1] for row in con.execute("PRAGMA table_info(jobs)").fetchall()
+        }
+        for name, declaration in {
+            "started_at": "TEXT",
+            "interrupted_at": "TEXT",
+            "interruption_reason": "TEXT",
+            "coordinator_restart_marker": "TEXT",
+            "retryable": "INTEGER NOT NULL DEFAULT 0",
+        }.items():
+            if name not in existing_job_columns:
+                con.execute(f"ALTER TABLE jobs ADD COLUMN {name} {declaration}")
         con.commit()
         con.close()
+    attempt_store.migrate()
+    # A live attempt cannot be resumed after coordinator restart because the
+    # worker queue is process-local. Fail it closed instead of accepting a late
+    # result into a new process that has no matching dispatcher wait.
+    attempt_store.interrupt_active(
+        "coordinator restarted; process-local worker task is no longer resumable"
+    )
+    accepted_result_broker.clear()
 
 
 def _db_write_job(job: dict) -> None:
@@ -262,15 +291,23 @@ def _db_write_job(job: dict) -> None:
         con = sqlite3.connect(_DB_PATH)
         con.execute(
             """INSERT OR REPLACE INTO jobs
-               (job_id, task, project_id, status, submitted_at, finished_at, error, project_dir, rating, trace_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               (job_id, task, project_id, status, submitted_at, started_at,
+                finished_at, error, project_dir, rating, trace_id,
+                interrupted_at, interruption_reason,
+                coordinator_restart_marker, retryable)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 job["job_id"], job.get("task"), job.get("project_id"),
-                job.get("status"), job.get("submitted_at"), job.get("finished_at"),
+                job.get("status"), job.get("submitted_at"), job.get("started_at"),
+                job.get("finished_at"),
                 job.get("error"),
                 job["result"]["project_dir"] if job.get("result") else None,
                 job["result"].get("rating") if job.get("result") else None,
                 job.get("trace_id"),
+                job.get("interrupted_at"),
+                job.get("interruption_reason"),
+                job.get("coordinator_restart_marker"),
+                int(bool(job.get("retryable", False))),
             ),
         )
         con.commit()
@@ -278,11 +315,33 @@ def _db_write_job(job: dict) -> None:
 
 
 def _db_load_jobs() -> None:
-    """Populate in-memory jobs dict from SQLite on startup (last 200 jobs)."""
+    """Reconcile non-resumable jobs, then load the latest durable records."""
     try:
         with _db_lock:
             con = sqlite3.connect(_DB_PATH)
             con.row_factory = sqlite3.Row
+            interrupted_at = datetime.now(timezone.utc).isoformat()
+            reason = (
+                "coordinator restarted; process-local execution task is no longer resumable"
+            )
+            con.execute(
+                """
+                UPDATE jobs
+                SET status = 'interrupted', interrupted_at = ?,
+                    interruption_reason = ?, coordinator_restart_marker = ?,
+                    retryable = 1, finished_at = COALESCE(finished_at, ?),
+                    error = COALESCE(error, ?)
+                WHERE status IN ('queued', 'running')
+                """,
+                (
+                    interrupted_at,
+                    reason,
+                    _COORDINATOR_RESTART_MARKER,
+                    interrupted_at,
+                    reason,
+                ),
+            )
+            con.commit()
             rows = con.execute(
                 "SELECT * FROM jobs ORDER BY submitted_at DESC LIMIT 200"
             ).fetchall()
@@ -296,14 +355,23 @@ def _db_load_jobs() -> None:
                     "project_id": row["project_id"],
                     "status": row["status"],
                     "submitted_at": row["submitted_at"],
+                    "started_at": row["started_at"],
                     "finished_at": row["finished_at"],
                     "error": row["error"],
                     "result": {"project_dir": row["project_dir"], "rating": row["rating"]}
                              if row["project_dir"] else None,
                     "trace_id": row["trace_id"],
+                    "interrupted_at": row["interrupted_at"],
+                    "interruption_reason": row["interruption_reason"],
+                    "coordinator_restart_marker": row["coordinator_restart_marker"],
+                    "retryable": bool(row["retryable"]),
                 }
-    except Exception:
-        pass  # non-fatal — in-memory state is still usable
+    except Exception as exc:
+        import logging
+
+        logging.getLogger("mycelium.jobs").exception(
+            "failed to reconcile/load legacy jobs: %s", exc
+        )
 
 
 def _db_write_event(event_type: str, event_time: str, data: dict) -> int:
@@ -503,8 +571,8 @@ class TaskResult(BaseModel):
     output: str | None = Field(default=None, max_length=10_485_760)
     error: str | None = Field(default=None, max_length=500)
     elapsed_seconds: float = Field(default=0, ge=0, le=7200)
-    # Issued with the task. Absent means an old node build: the result is still
-    # recorded so work is never lost, but it cannot be settled for credit.
+    # Issued with the task. Missing/mismatched bindings are rejected and may be
+    # retained only in the bounded quarantine, never as operational output.
     attempt_id: str | None = Field(default=None, max_length=128)
     nonce: str | None = Field(default=None, max_length=128)
     contract_version: str | None = Field(default=None, max_length=16)
@@ -521,6 +589,7 @@ class TokenBatch(BaseModel):
     nonce: str | None = Field(default=None, max_length=128)
     execution_id: str | None = Field(default=None, max_length=64)
     execution_unit_id: str | None = Field(default=None, max_length=128)
+    execution_unit_kind: str | None = Field(default=None, max_length=64)
 
 
 class NewProjectRequest(BaseModel):
@@ -541,6 +610,14 @@ def _prune_output_dir() -> list[str]:
     max_mb = get_config().get("output_max_mb", 0)
     if not max_mb or not OUTPUT_DIR.exists():
         return []
+    try:
+        from execution.artifacts import get_artifact_store
+
+        active_roots = get_artifact_store().active_root_paths()
+    except Exception:
+        # If the active-root registry is unavailable, deletion cannot prove a
+        # target is terminal. Retention fails closed.
+        return []
     cap_bytes = max_mb * 1024 * 1024
 
     run_dirs = sorted(d for d in OUTPUT_DIR.iterdir() if d.is_dir())
@@ -555,6 +632,11 @@ def _prune_output_dir() -> list[str]:
     for d in run_dirs:  # oldest first
         if total <= cap_bytes:
             break
+        try:
+            if d.resolve() in active_roots:
+                continue
+        except OSError:
+            continue
         try:
             shutil.rmtree(d)
             total -= sizes[d]
@@ -588,25 +670,107 @@ def _cleanup_pass():
     """
     now = time.time()
 
-    # 1. Dead nodes
+    # 1. Expired worker leases. Close the old attempt before either dropping or
+    # re-queuing its process-local task, so late output cannot win a race.
+    with _task_queue_lock:
+        expired = [
+            tid
+            for tid, task in task_inflight.items()
+            if task.get("lease_expires_at") and float(task["lease_expires_at"]) < now
+        ]
+    for tid in expired:
+        with _task_queue_lock:
+            task = task_inflight.get(tid)
+            if task is None:
+                continue
+            attempt_id = task.get("attempt_id")
+            try:
+                if attempt_id:
+                    attempt_store.transition_active(
+                        attempt_id=attempt_id,
+                        state="expired",
+                        reason="lease expired",
+                        now=now,
+                    )
+            except Exception as exc:
+                _emit("attempt_expiry_failed", {
+                    "task_id": tid,
+                    "reason": f"{type(exc).__name__}: {exc}"[:300],
+                })
+                continue
+            task = task_inflight.pop(tid)
+            deadline = task.get("execution_deadline_at")
+            if not deadline or float(deadline) > now:
+                assigned_node = task.get("assigned_to")
+                for field in (
+                    "assigned_to",
+                    "assigned_at",
+                    "attempt_id",
+                    "nonce",
+                    "lease_expires_at",
+                ):
+                    task.pop(field, None)
+                task_queue.append(task)
+                _emit("task_reclaimed", {
+                    "task_id": tid,
+                    "node_id": assigned_node,
+                    "reason": "lease expired",
+                })
+            else:
+                _emit("worker_task_expired", {
+                    "task_id": tid,
+                    "execution_id": task.get("execution_id"),
+                    "reason": "execution deadline elapsed",
+                })
+
+    # 2. Dead nodes
     cutoff = now - _NODE_TIMEOUT
     stale = [nid for nid, n in nodes.items() if n.get("last_seen", 0) < cutoff]
     for nid in stale:
         nodes.pop(nid, None)
         # Reclaim any in-flight tasks assigned to this dead node
-        reclaimed = [
-            tid for tid, t in task_inflight.items()
-            if t.get("assigned_to") == nid
-        ]
+        with _task_queue_lock:
+            reclaimed = [
+                tid for tid, t in task_inflight.items()
+                if t.get("assigned_to") == nid
+            ]
         for tid in reclaimed:
-            task = task_inflight.pop(tid)
-            task.pop("assigned_to", None)
-            task.pop("assigned_at", None)
             with _task_queue_lock:
+                task = task_inflight.get(tid)
+                if task is None:
+                    continue
+                attempt_id = task.get("attempt_id")
+                try:
+                    if attempt_id:
+                        attempt_store.transition_active(
+                            attempt_id=attempt_id,
+                            state="reclaimed",
+                            reason=f"assigned node {nid} became stale",
+                            now=now,
+                        )
+                except Exception as exc:
+                    # Fail closed: without a durable terminal transition, the
+                    # old worker could still settle. Leave the task in-flight
+                    # for a later cleanup pass instead of reissuing it.
+                    _emit("attempt_reclaim_failed", {
+                        "task_id": tid,
+                        "node_id": nid,
+                        "reason": f"{type(exc).__name__}: {exc}"[:300],
+                    })
+                    continue
+                task = task_inflight.pop(tid)
+                for field in (
+                    "assigned_to",
+                    "assigned_at",
+                    "attempt_id",
+                    "nonce",
+                    "lease_expires_at",
+                ):
+                    task.pop(field, None)
                 task_queue.append(task)
             _emit("task_reclaimed", {"task_id": tid, "node_id": nid})
 
-    # 2. Old task results (only needed long enough for the caller to collect them)
+    # 3. Old task results (only needed long enough for the caller to collect them)
     result_cutoff = now - _RESULT_TTL
     stale_results = [
         tid for tid, r in task_results.items()
@@ -615,12 +779,12 @@ def _cleanup_pass():
     for tid in stale_results:
         task_results.pop(tid, None)
 
-    # 3. Old async jobs (finished jobs older than 7 days)
+    # 4. Old async jobs (finished jobs older than 7 days)
     job_cutoff = now - _JOB_TTL
     stale_jobs = []
     for jid, job in jobs.items():
         finished = job.get("finished_at")
-        if finished and job["status"] in ("complete", "failed"):
+        if finished and job["status"] in ("complete", "failed", "interrupted", "cancelled"):
             try:
                 finished_ts = datetime.fromisoformat(finished).timestamp()
                 if finished_ts < job_cutoff:
@@ -630,7 +794,7 @@ def _cleanup_pass():
     for jid in stale_jobs:
         jobs.pop(jid, None)
 
-    # 4. Prune SQLite event log — keep only the last 2000 rows
+    # 5. Prune SQLite event log — keep only the last 2000 rows
     try:
         with _db_lock:
             con = sqlite3.connect(_DB_PATH)
@@ -643,8 +807,32 @@ def _cleanup_pass():
     except Exception:
         pass
 
-    # 5. Enforce the output/ directory size cap (config: output_max_mb)
+    # 6. Enforce retention across legacy output/ and canonical artifact roots.
     try:
         _prune_output_dir()
+    except Exception:
+        pass
+    try:
+        from execution.artifacts import get_artifact_store
+
+        active_execution_ids = {
+            str(job["execution_id"])
+            for job in jobs.values()
+            if job.get("execution_id")
+            and job.get("status") in {"queued", "running"}
+        }
+        with _db_lock:
+            con = sqlite3.connect(_DB_PATH)
+            columns = {
+                row[1] for row in con.execute("PRAGMA table_info(executions)").fetchall()
+            }
+            if "execution_id" in columns and "lifecycle_status" in columns:
+                rows = con.execute(
+                    "SELECT execution_id FROM executions "
+                    "WHERE lifecycle_status IN ('queued', 'running')"
+                ).fetchall()
+                active_execution_ids.update(str(row[0]) for row in rows)
+            con.close()
+        get_artifact_store().prune(active_execution_ids=active_execution_ids)
     except Exception:
         pass

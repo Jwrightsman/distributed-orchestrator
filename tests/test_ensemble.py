@@ -107,12 +107,12 @@ def test_rank_puts_a_candidate_that_produced_nothing_last(tmp_path):
     assert ordered[-1].index == 0
 
 
-def test_rank_breaks_ties_toward_the_larger_artifact(tmp_path):
+def test_rank_breaks_ties_by_stable_id_not_output_length(tmp_path):
     small, large = tmp_path / "s.html", tmp_path / "l.html"
     small.write_text("<html>tiny</html>", encoding="utf-8")
     large.write_text("<html>" + "y" * 3000 + "</html>", encoding="utf-8")
     ordered = ensemble.rank([_cand(0, files=[str(small)]), _cand(1, files=[str(large)])])
-    assert ordered[0].index == 1, "truncation is the failure that shows up as 'shorter'"
+    assert ordered[0].index == 0
 
 
 def test_selection_uses_no_knowledge_of_the_right_answer():

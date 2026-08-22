@@ -17,7 +17,12 @@ async def create_execution(request_body: ExecutionRequestV1, request: Request, r
     remaining = _check_rate_limit(request)
     response.headers["X-RateLimit-Limit"] = str(state._rate_limits()[0])
     response.headers["X-RateLimit-Remaining"] = str(remaining)
-    queued = get_execution_service().submit(request_body)
+    service = get_execution_service()
+    try:
+        service.validate_request(request_body)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    queued = service.submit(request_body)
     return {
         "execution_id": queued.execution_id,
         "status": queued.status,
@@ -32,6 +37,15 @@ async def create_execution(request_body: ExecutionRequestV1, request: Request, r
 async def get_execution(execution_id: str):
     """Return persisted normalized state, including after coordinator restart."""
     result = get_execution_service().get(execution_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Execution not found")
+    return result
+
+
+@router.post("/executions/{execution_id}/cancel", response_model=ExecutionResultV1)
+async def cancel_execution(execution_id: str):
+    """Idempotently request cancellation and persist a truthful terminal state."""
+    result = await get_execution_service().cancel(execution_id)
     if result is None:
         raise HTTPException(status_code=404, detail="Execution not found")
     return result
