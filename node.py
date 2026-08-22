@@ -178,6 +178,7 @@ async def poll_and_execute(server: str, node_id: str, session: dict, secret: str
                             "nonce": task.get("nonce"),
                             "execution_id": task.get("execution_id"),
                             "execution_unit_id": task.get("execution_unit_id"),
+                            "execution_unit_kind": task.get("execution_unit_kind"),
                         },
                         headers=_auth_headers(secret),
                     )
@@ -205,8 +206,8 @@ async def poll_and_execute(server: str, node_id: str, session: dict, secret: str
                     "node_id": node_id,
                     "output": result,
                     "elapsed_seconds": elapsed,
-                    # Issued with this task. Without them the server records the
-                    # result but cannot settle it for credit.
+                    # Issued with this task. An unbound result is rejected and
+                    # quarantined; it can never satisfy operational execution.
                     "attempt_id": task.get("attempt_id"),
                     "nonce": task.get("nonce"),
                     "contract_version": task.get("contract_version"),
@@ -216,9 +217,17 @@ async def poll_and_execute(server: str, node_id: str, session: dict, secret: str
                 },
                 headers=_auth_headers(secret),
             )
-            credits = 0
-            if submit_resp.status_code == 200:
-                credits = submit_resp.json().get("credits_earned", 0)
+            if submit_resp.status_code != 200:
+                try:
+                    detail = submit_resp.json().get("detail", submit_resp.text)
+                except Exception:
+                    detail = submit_resp.text
+                console.print(
+                    f"[red bold]FAILED[/red bold]  {title}: "
+                    f"orchestrator rejected result ({submit_resp.status_code}): {detail}\n"
+                )
+                return None
+            credits = submit_resp.json().get("credits_earned", 0)
 
             session["tasks"] += 1
             session["credits"] += credits
@@ -232,24 +241,39 @@ async def poll_and_execute(server: str, node_id: str, session: dict, secret: str
             console.print()
             return task_id
 
-        except Exception as e:
-            await client.post(
-                f"{server}/tasks/{task_id}/result",
-                json={
-                    "node_id": node_id,
-                    "attempt_id": task.get("attempt_id"),
-                    "nonce": task.get("nonce"),
-                    "contract_version": task.get("contract_version"),
-                    "execution_id": task.get("execution_id"),
-                    "execution_unit_id": task.get("execution_unit_id"),
-                    "execution_unit_kind": task.get("execution_unit_kind"),
-                    "output": None,
-                    "error": str(e),
-                    "elapsed_seconds": time.time() - start,
-                },
-                headers=_auth_headers(secret),
+        except Exception as original_error:
+            report_problem = ""
+            try:
+                error_response = await client.post(
+                    f"{server}/tasks/{task_id}/result",
+                    json={
+                        "node_id": node_id,
+                        "attempt_id": task.get("attempt_id"),
+                        "nonce": task.get("nonce"),
+                        "contract_version": task.get("contract_version"),
+                        "execution_id": task.get("execution_id"),
+                        "execution_unit_id": task.get("execution_unit_id"),
+                        "execution_unit_kind": task.get("execution_unit_kind"),
+                        "output": None,
+                        "error": str(original_error),
+                        "elapsed_seconds": time.time() - start,
+                    },
+                    headers=_auth_headers(secret),
+                )
+                if error_response.status_code != 200:
+                    report_problem = (
+                        f"; error report was rejected with HTTP "
+                        f"{error_response.status_code}"
+                    )
+            except Exception as report_error:
+                report_problem = (
+                    f"; error report also failed: "
+                    f"{type(report_error).__name__}: {report_error}"
+                )
+            console.print(
+                f"[red bold]FAILED[/red bold]  {title}: "
+                f"{original_error}{report_problem}\n"
             )
-            console.print(f"[red bold]FAILED[/red bold]  {title}: {e}\n")
             return None
 
 
