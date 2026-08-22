@@ -15,7 +15,9 @@ def test_valid_v1_request_uses_bounded_defaults():
     request = ExecutionRequestV1(task="Build something", project_id="example")
     assert request.protocol_version == "1"
     assert request.strategy == "auto"
-    assert request.placement == "auto"
+    assert request.placement == "local"
+    assert request.confidentiality == "local_only"
+    assert request.remote_dispatch_consent is False
     assert request.timeout_seconds <= 7200
 
 
@@ -76,7 +78,7 @@ def test_legacy_shaped_request_preserves_dag_behavior():
     request = ExecutionRequestV1.model_validate({"task": "Build something", "project_id": "example"})
     selection = StrategySelector().select(request)
     assert selection.selected == "dag"
-    assert "no single-artifact" in selection.reason
+    assert "structural only" in selection.reason
 
 
 def test_local_only_cannot_explicitly_dispatch_to_nodes():
@@ -101,7 +103,7 @@ def test_explicit_strategy_always_wins():
     assert StrategySelector().select(request).selected == "dag"
 
 
-def test_auto_selects_ensemble_only_for_explicit_deterministic_contract():
+def test_auto_does_not_treat_code_parse_as_correctness_evidence():
     request = ExecutionRequestV1(
         task="x",
         output_contract={
@@ -110,9 +112,23 @@ def test_auto_selects_ensemble_only_for_explicit_deterministic_contract():
         },
     )
     selection = StrategySelector().select(request)
+    assert selection.selected == "dag"
+    assert selection.selector_version == "conservative-v2"
+    assert "structural only" in selection.reason
+
+
+def test_auto_can_use_deterministic_schema_conformance_without_claiming_correctness():
+    request = ExecutionRequestV1(
+        task="x",
+        output_contract={
+            "kind": "structured_json",
+            "json_schema": {"type": "object"},
+        },
+    )
+    selection = StrategySelector().select(request)
     assert selection.selected == "ensemble"
-    assert selection.selector_version == "conservative-v1"
-    assert selection.reason
+    assert "contract conformance" in selection.reason
+    assert "does not establish behavioral correctness" in selection.reason
 
 
 def test_ambiguous_auto_defaults_to_dag_with_reason():
@@ -132,3 +148,25 @@ def test_auto_with_explicit_ensemble_options_selects_ensemble():
     assert selection.selected == "ensemble"
     assert selection.options.candidates == 3
     assert "explicit ensemble strategy options" in selection.reason
+
+
+def test_remote_capable_canonical_request_requires_explicit_consent():
+    with pytest.raises(ValidationError, match="remote_dispatch_consent"):
+        ExecutionRequestV1(
+            task="x",
+            placement="auto",
+            confidentiality="trusted_guild",
+        )
+
+    request = ExecutionRequestV1(
+        task="x",
+        placement="distributed",
+        confidentiality="trusted_guild",
+        remote_dispatch_consent=True,
+    )
+    assert request.remote_dispatch_consent is True
+
+
+def test_remote_consent_cannot_be_recorded_for_a_local_only_request():
+    with pytest.raises(ValidationError, match="remote_dispatch_consent"):
+        ExecutionRequestV1(task="x", remote_dispatch_consent=True)

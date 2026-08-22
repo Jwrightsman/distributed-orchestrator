@@ -7,19 +7,30 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from execution.contracts import (
+    AssuranceLevelV1,
+    CompatibilityStatusV1,
     DagOptionsV1,
     EnsembleOptionsV1,
     ExecutionRequestV1,
+    LifecycleStatusV1,
     SelectedStrategyV1,
     StrategyOptionsV1,
+    ValidationOutcomeV1,
+    ValidationSummaryV1,
 )
 
-SELECTOR_VERSION_V1 = "conservative-v1"
+SELECTOR_VERSION_V1 = "conservative-v2"
 
 
 @dataclass
 class StrategyOutcome:
-    status: str
+    # ``status`` remains as a temporary compatibility input for strategy
+    # adapters. Canonical lifecycle logic consumes ``lifecycle_status``.
+    status: CompatibilityStatusV1 | None = None
+    lifecycle_status: LifecycleStatusV1 = "completed"
+    validation_outcome: ValidationOutcomeV1 = "not_run"
+    assurance_level: AssuranceLevelV1 = "unverified"
+    validation_summary: ValidationSummaryV1 = field(default_factory=ValidationSummaryV1)
     legacy_payload: dict[str, Any] = field(default_factory=dict)
     execution_units: list[dict[str, Any]] = field(default_factory=list)
     candidates: list[dict[str, Any]] = field(default_factory=list)
@@ -33,6 +44,12 @@ class StrategyOutcome:
     revision_metadata: dict[str, Any] = field(default_factory=dict)
     errors: list[dict[str, Any]] = field(default_factory=list)
     telemetry: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.status is not None:
+            self.lifecycle_status = "completed" if self.status == "unverified" else self.status
+        else:
+            self.status = self.lifecycle_status
 
 
 class ExecutionStrategy(ABC):
@@ -72,13 +89,7 @@ class StrategySelection:
     selector_version: str = SELECTOR_VERSION_V1
 
 
-_DETERMINISTIC_VALIDATORS = {
-    "structured_json",
-    "json_schema",
-    "file_manifest",
-    "code_parse",
-    "artifact_extraction",
-}
+_DETERMINISTIC_CONTRACT_VALIDATORS = {"json_schema"}
 
 
 class StrategySelector:
@@ -128,18 +139,24 @@ class StrategySelector:
         validator_names = {v.name for v in request.verification.validators}
         if contract:
             validator_names.update(v.name for v in contract.validators)
-        has_deterministic = bool(validator_names.intersection(_DETERMINISTIC_VALIDATORS))
-        if contract and contract.kind == "single_artifact" and has_deterministic:
+            if contract.json_schema is not None:
+                validator_names.add("json_schema")
+        has_deterministic_contract_check = bool(
+            validator_names.intersection(_DETERMINISTIC_CONTRACT_VALIDATORS)
+        )
+        if contract and has_deterministic_contract_check:
             selected_options = options if isinstance(options, EnsembleOptionsV1) else EnsembleOptionsV1()
             return StrategySelection(
                 "ensemble",
                 selected_options,
-                "Selected ensemble because a single-artifact output contract and deterministic validator were supplied.",
+                "Selected ensemble because candidates can be compared using deterministic JSON Schema "
+                "contract conformance. This does not establish behavioral correctness.",
             )
 
         selected_options = options if isinstance(options, DagOptionsV1) else DagOptionsV1()
         return StrategySelection(
             "dag",
             selected_options,
-            "Selected DAG because no single-artifact output contract with a deterministic validator was supplied.",
+            "Selected DAG because no deterministic contract-conformance check suitable for candidate "
+            "comparison was supplied; extraction, parsing, and manifest checks are structural only.",
         )
