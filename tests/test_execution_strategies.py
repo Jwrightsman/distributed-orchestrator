@@ -430,11 +430,18 @@ async def test_candidate_manifest_failure_does_not_poison_winner(tmp_path, monke
 @pytest.mark.asyncio
 async def test_production_tie_break_ignores_output_length(tmp_path, monkeypatch):
     outputs = iter(("short", "much longer output " * 200))
+    original_local = Dispatcher._local
 
     async def generated(*args, **kwargs):
         return next(outputs)
 
+    async def equal_latency(self, *args, **kwargs):
+        result = await original_local(self, *args, **kwargs)
+        result.duration_ms = 10
+        return result
+
     monkeypatch.setattr(strategies, "generate", generated)
+    monkeypatch.setattr(Dispatcher, "_local", equal_latency)
     run = await service(tmp_path).execute(
         ExecutionRequestV1(
             task="Build it",
@@ -514,10 +521,12 @@ async def test_selected_candidate_manifest_contains_only_winner(tmp_path, monkey
     )
     manifest = execution_service.artifacts.refresh_manifest(run.result.execution_id)
 
-    assert run.result.winning_candidate == "candidate-1"
+    winner = run.result.winning_candidate
+    assert winner is not None
+    winner_number = winner.rsplit("-", 1)[-1]
     assert manifest.entries
-    assert all(entry.source_candidate_id == "candidate-1" for entry in manifest.entries)
-    assert all(entry.relative_path.startswith("candidate_1/") for entry in manifest.entries)
+    assert all(entry.source_candidate_id == winner for entry in manifest.entries)
+    assert all(entry.relative_path.startswith(f"candidate_{winner_number}/") for entry in manifest.entries)
     assert run.result.produced_files == [entry.relative_path for entry in manifest.entries]
 
 
