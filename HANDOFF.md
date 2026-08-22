@@ -1,387 +1,186 @@
-# Handoff — Mycelium / distributed-orchestrator
+# Handoff — Mycelium trusted-alpha integrity
 
-_Current handoff updated August 21, 2026. Older operational history remains below._
+_Updated August 22, 2026._
 
----
+## Read these first
 
-## Read these first, in order
+1. `MASTER_PLAN.md` — current direction and scope boundaries
+2. `SPRINT_TRUSTED_ALPHA_INTEGRITY.md` — sprint delivery map and verification
+   requirements
+3. `docs/PROTOCOL.md` — normative client and worker contract
+4. `docs/ARCHITECTURE.md`, `docs/ACCESS_CONTROL.md`, and
+   `docs/ARTIFACTS.md` — backend boundaries and APIs
+5. `docs/THREAT_MODEL.md` — what is and is not defended
+6. `docs/adr/0003-attempt-authority.md` and
+   `docs/adr/0004-lifecycle-vs-assurance.md` — integrity decisions
+7. `CLAUDE.md` — repository working rules
+8. `ROADMAP.md` — reference only, not a work queue
 
-1. `MASTER_PLAN.md` — direction and launch constraints
-2. `SPRINT_STRATEGY_PROTOCOL.md` — current completed backend sprint and scope
-3. `docs/PROTOCOL.md` and `docs/ARCHITECTURE.md` — normative behavior and system boundaries
-4. `CLAUDE.md` — house rules
-5. `SPRINT_PHASE2.md` — historical Phase 2 plan and session log, not the active queue
-6. `ROADMAP.md` — **REFERENCE, NOT A WORK QUEUE.** Everything *not* being built
-   right now: the long-term vision, deferred engineering, the August 2026
-   external review, speculative ideas. Every item is gated on a trigger. **Do
-   not pull work from it.** Read it to know why something isn't built, to avoid
-   proposing something already rejected, and to avoid rebuilding something the
-   sprint files already shipped. Items move into a sprint file only when Jett
-   says so.
-7. This file
+`SPRINT_STRATEGY_PROTOCOL.md` and `SPRINT_PHASE2.md` are historical records.
+Do not copy their old test counts or priority lists into a current claim.
 
-## Jett context — read before planning anything
+## Human context
 
-No programming experience. Make the technical calls, explain in plain language,
-warn before anything network-facing, and tell him only what he must act on. He
-is comfortable with long autonomous stretches and would rather you keep working
-than stop to ask.
+Jett has no programming background. Make technical calls, explain the decisions
+he must act on, and warn before anything network-facing. Do not install or join
+Mycelium on a machine without that machine owner's explicit informed consent.
 
-**He is NOT at IU yet.** As of Aug 14 he is roughly **1–2 weeks** from
-travelling, and the video is recorded **after** he arrives. Do not plan around
-campus hardware or a second machine before then.
+The trusted-alpha sprint is a bounded backend exception to the feature freeze.
+It does not authorize more strategies, visual UI work, marketplace or token
+features, federation, model sharding, accounts, or a generated-code sandbox.
 
-**Freeze discipline:** the explicitly authorized execution-strategy sprint is
-complete. Resume stability work after handoff; do not infer authorization for
-additional strategies or UI work.
+## Branch
 
-## Current branch handoff — execution protocol v1
+- Branch: `codex/trusted-alpha-integrity-v1`
+- Base: `origin/master` at `e6d6888`
+- Merge: review explicitly; do not auto-merge
 
-Branch: `codex/execution-strategy-protocol-v1`, based directly on
-`origin/master` commit `b2ce65d7cc6f0299431afa8d3f758a45320d461d`. It must
-not be merged automatically.
+The final commit list, test results, Ruff result, server import, Compose result,
+and conditional Docker result belong in the parent task's final report after all
+concurrent implementation commits are integrated. Do not freeze a transient
+test count in this handoff.
 
-Delivered backend architecture:
+## Delivered architecture
 
-- strict versioned requests/results and typed DAG/ensemble options;
-- deterministic auto selector, registry, and direct normalization;
-- one service shared by REST, legacy pitch adapters, CLI, and MCP;
-- strategy-independent local/distributed/auto dispatch;
-- production DAG adapter and complete-candidate ensemble strategy;
-- validator registry, evidence-based selection, and honest unverified status;
-- idempotent `executions` SQLite migration and restart-visible normalized results;
-- protocol-v1 worker payloads plus lease-bound streams/results and no-credit legacy path;
-- bounded candidate concurrency, queue admission, timeouts, outputs, and fallback records;
-- canonical `POST /v1/executions` and `GET /v1/executions/{execution_id}`;
-- Docker package/fingerprint inclusion and model-free regression coverage.
+### Worker result authority
 
-No templates, dashboard JavaScript, CSS, visual components, homepage structure,
-or public marketing files were changed. Claude Code can add UI controls later by
-posting the documented `ExecutionRequestV1`; the backend does not require them.
+- The server persists an active SQLite attempt before handing a unit to a
+  worker.
+- Attempt authority binds task, execution, unit, kind, assigned node, contract,
+  nonce digest, state, and lease. Strictness never comes from the worker's
+  submitted version.
+- V1 omissions and mismatches reject; there is no downgrade to a legacy path.
+- Settlement atomically records the terminal attempt, immutable accepted
+  receipt, replay response/hash, and unique compute contribution.
+- Exact replay survives restart without paying twice. Changed replay fails.
+- The dispatcher consumes only a receipt matching its execution and unit.
+- Unknown, unleased, expired, reclaimed, cancelled, interrupted, and wrong-bound
+  output goes only to bounded diagnostic quarantine, never operational results.
 
-Known limitations are intentional and documented: shared node secret, in-memory
-queue/leases, no general sandbox or network enforcement, no per-node public-key
-identity, and no permissionless settlement. Research is design-only in ADR 0002.
+### Lifecycle and assurance
 
-The final exact verification results and commit list are recorded in the branch
-handoff report and `SPRINT_STRATEGY_PROTOCOL.md`.
+- `timeout_seconds` is one total deadline beginning at canonical queueing.
+- Cancellation removes queued work, cancels active attempts, signals local
+  execution, persists terminal cancellation, and rejects late results.
+- Startup makes non-resumable canonical executions, legacy jobs, and active
+  attempts truthfully interrupted/retryable.
+- Lifecycle, validation outcome, and assurance are separate fields. The old
+  `status` is a compatibility projection.
+- Validation summaries name checks run, passed, failed, and not run. Structural
+  checks are not marketed as behavioral proof.
 
-## Historical state (August 14; retained for operational context)
+### Validation and ensemble
 
-`master` has PRs #27–#45 merged. **#45 (result binding) is merged** — it was
-already in when this session started, despite the previous handoff saying
-otherwise.
+- Output contracts impose validator floors explicit policy cannot remove.
+- `require_all` has defined semantics for explicit required validators.
+- JSON Schema draft 2020-12 is validated at request time.
+- Manifest paths, exact counts, supported formats, and parser coverage are
+  checked honestly.
+- Candidate generation, materialization, extraction, and validation failures are
+  isolated. Winner ordering does not use output length.
 
-**⚠ Two PRs in a row silently lost commits.** #46 and #47 were each merged
-while more commits were still being pushed to their branch, so that work
-stranded. Most of Session 5's checker fixes never reached `master` this way,
-and it surfaced only because an experiment produced an obviously wrong number.
-**Before assuming work landed, run `git log origin/master..HEAD`.** Everything
-stranded has been carried forward onto `claude/ensemble-strategy-e3d93e`, which
-also supersedes PR #48 — merge that branch and close #48.
+### Privacy, artifacts, and sharing
 
-**#46 and #47 are merged.** `master` carries the ROADMAP
-**#46 and #47 are both merged. Nothing is open.** `master` carries the ROADMAP
-integration, the demo script rehearsed in full (all seven shots executed), the
-deploy-verification tool, and seven bug fixes. 390 tests, ruff clean.
+- Canonical defaults are local, local-only, and no remote consent. Remote-
+  capable canonical calls require explicit recorded consent.
+- Ensemble/direct reject `project_id`; DAG remains the supported memory path.
+- `viewer_key` is separate from `pitch_key` and `node_secret`, and works as a
+  header, Bearer token, or signed expiring HttpOnly session.
+- Middleware is deny-by-default when configured. Empty viewer auth is a warned
+  fail-open local-development mode.
+- Complete artifacts use authenticated relative-path manifest/file/ZIP APIs with
+  root confinement, symlink rejection, SHA-256, quotas, streaming, and
+  active-aware retention across both storage roots.
+- Explicit shares use durable token hashes, expiry, revocation, node redaction,
+  candidate-detail scope, and independent artifact permission.
+- The public share representation is allowlist-based and contains no server
+  path, project/job id, attempt secret, credit detail, or private telemetry.
 
-**Seven bugs, every one found by running something rather than reading it** —
-four in the system, three in the instrument that measures it:
+### Public profile, telemetry, contribution, and interfaces
 
-1. Nodes evicted mid-build (streamed tokens were not a heartbeat); a node was
-   paid **+0 credits** for a 329-second build it completed.
-2. 500 responses echoed their exception text, including filesystem paths, on
-   the public orchestrator.
-3. The advertised one-line join could never reach its consent prompt.
-4. `scripts/mcp_e2e.py` had silently stopped being able to verify the MCP flow.
-5-7. Three compounding bugs in `check_artifact()` — see below.
+- Keyless public pitch is off by default and accepts only task text. The server
+  forces one local direct candidate, short deadline/output cap, no project, and
+  compute-aware admission limits.
+- Results record requested, planned, and observed placement, unit counts,
+  fallback, attempts, retries, reassignments, and consent.
+- SQLite contribution records are concurrent-safe and idempotent. Compute
+  points mean accepted compute, not selected output, correctness, or money.
+- `/health` uses `nodes_online: integer`; `/events` is flat; jobs pass through
+  running; worker rejection is reported as failure; error-report failure does
+  not hide the original exception.
 
-Only two things are outstanding, and both are Jett's.
+## Durability boundary
 
-| what | measured |
+| Durable | Process-local |
 | --- | --- |
-| Output quality | **~57%** of 28 eval prompts, 95% CI 44–69% (`v3`) |
-| Eval noise floor | **18 of 28 prompts flip between two identical runs** |
-| `--demo-showcase chart` | **10/10** — safe to generate live on camera |
-| `--demo-showcase` (Snake) | **2/10** — pre-generate only |
-| `--demo` | **6/6 on a fresh Ollama, 0/2 after 5+ h** — restart Ollama before filming |
-| WAN overhead | 216 ms RTT Indiana→Germany; network ~2% of a pitch |
-| Restart recovery | 17/17 on Linux with Ollama stopped |
-| MCP flow | **10/10** end to end with real inference |
-| Planner non-determinism | same pitch → **5, 1 and 4 subtasks**; 181 s, 82 s, 97 s |
-| Builder subtask length | 41–329 s observed on qwen3.5:4b, CPU |
-| Known memory leak | ~1.25 MB/pitch, linear, source not found |
-| MCP flow, re-verified Aug 14 | **10/10** after fixing the checker that had silently stopped working |
-| Demo shots executed | **all 7**; chart PASS, memory PASS, MCP 10/10, snake PASS |
-| Snake showcase | **2/10 — unchanged**, re-scored under four fixed checker bugs |
-| Ensemble vs decomposition | **12/22 (55%) vs 2/10 (20%), p = 0.073 — inconclusive, NOT promoted** |
-| Ensemble cost per attempt | **~6 min** (median 365 s) against **~50 min** for a decomposed run |
-| Cost of running two pipelines at once | **~3x wall clock on both** — chart 81 min vs ~22, `--demo` 76 vs ~35 |
+| canonical execution snapshots | worker queue |
+| legacy job records | connected-node registry |
+| active/terminal attempts | breaker and waiting-node state |
+| accepted receipts and replay responses | running coroutines and dispatcher waits |
+| contribution records | in-memory receipt cache |
+| share records/token hashes | live WebSocket connections |
+| artifact root/manifest metadata plus retained files | active model call process state |
 
-**Nothing is running.** The CPU is free.
+Restart reconciliation makes process-local loss truthful. It does not resume
+lost work or provide failover.
 
----
+## Claude visual handoff
 
-## ⚠ Two things need Jett, in this order
+This branch intentionally does not modify templates, CSS, page layout,
+dashboard components, animations, or visual marketing design. Claude may safely
+build against:
 
-### 1. Merge #46, then redeploy the live orchestrator
+- `ExecutionRequestV1` and `ExecutionResultV1`;
+- `lifecycle_status`, `validation_outcome`, `assurance_level`, and
+  `validation_summary`;
+- `ArtifactManifestV1` and the canonical artifact routes;
+- `CreateExecutionShareV1`, `PublicExecutionShareV1`, and the share routes;
+- `POST/DELETE /v1/viewer/session`;
+- public `/health.private_routes_protected` and `warnings`;
+- requested/planned/observed placement and remote-consent fields.
 
-The live box has not picked up #43, #44 or #45. Merge #46 first so the deploy
-check below exists on the server side.
+Safe UI language:
 
-```bash
-ssh -i ~/.ssh/swarm_orchestrator root@167.233.239.33 "cd /root/distributed-orchestrator && git pull && docker compose up -d --build"
-```
+- “Accepted from an active server-issued attempt,” not “worker identity
+  cryptographically verified.”
+- “Lifecycle completed” separately from “validation passed.”
+- “Structural checks passed” or “JSON Schema conformance passed,” not “working
+  code” without actual behavioral evidence.
+- “Private when viewer auth is configured,” and show the health warning when it
+  is not.
+- “Shared with an explicit expiring/revocable link,” not an old public run id.
+- “Artifact available through authenticated download,” never a filesystem path.
+- “Compute contribution points,” never payment or proof of correctness.
 
-Then **prove it actually landed** — from an up-to-date `master` checkout on his
-laptop:
+The visual client must handle `401` on old dashboard/history/run routes and
+`4401` on the event WebSocket. It must not assume `/nodes` is part of public
+health; public health carries only the node count.
 
-```bash
-python scripts/verify_deploy.py http://167.233.239.33:8000
-```
+## Operational checklist before a reachable deployment
 
-`MATCH` means the live server is running exactly that code. `STALE` means it is
-not, and the script prints what to check. This is new in #46 and exists because
-a deploy that silently did nothing looks identical to one that worked — which
-has already cost this project a day. `/status.json` now carries a `build` hash
-computed inside the running process, so a `git pull` that succeeded while the
-rebuild didn't cannot fake it.
+1. Configure independent `node_secret`, `pitch_key`, and `viewer_key`.
+2. Use Tailscale or TLS; the application does not provide HTTPS.
+3. Set `viewer_cookie_secure=true` behind HTTPS.
+4. Verify `/health` reports `private_routes_protected: true`.
+5. Verify private HTTP returns `401` without a viewer credential and
+   `/ws/events` closes with `4401`.
+6. Exercise canonical local submission, explicit remote-consent rejection and
+   acceptance, cancellation, restart reconciliation, artifact download, share
+   expiry/revocation, and rejected worker settlement.
+7. Keep public pitch disabled unless its fixed local profile and resource budget
+   are intentionally accepted.
+8. Review generated artifacts before execution. No validator is a sandbox.
+9. Verify the deployed build fingerprint rather than assuming a rebuild landed.
 
-If it prints **"no build field"**, the rebuild did not happen: the image
-predates #46 entirely.
+## Claims that remain prohibited
 
-### 2. Restart his laptop node from current code
+Do not claim public-network readiness, trustlessness, permissionless nodes,
+cryptographic worker identity, confidential compute, enforced no-network
+execution, sandboxed generated code, Sybil resistance, durable queue resume,
+multi-user authorization, monetary credits, or proof that arbitrary generated
+output is correct.
 
-**It is not currently joined.** After #45, a node running older code has its
-results *recorded but not settled* — it works but earns nothing, deliberately,
-so no work is lost. And without #46 it gets evicted mid-build on any subtask
-over 90 seconds (see below), which is most of them.
-
-```bash
-cd C:\Users\wrigh\Projects\distributed-orchestrator
-git pull
-py node.py --server http://167.233.239.33:8000 --secret <node_secret>
-```
-
-The secret is in `/root/distributed-orchestrator/data/config.json` on the VM;
-he has a copy. Never ask him to paste it into chat.
-
----
-
-## What the dress rehearsal found (Aug 14) — read this before touching the node path
-
-`docs/demo-script.md` had never been executed by anyone. Running it literally
-found three code bugs. All are fixed in #46, all have regression tests confirmed
-to fail with the fix removed.
-
-**1. A node streaming tokens did not count as alive.** `last_seen` was refreshed
-only by `/tasks/next` and `/tasks/{id}/result`, so a node was "alive" only
-*between* tasks. Any builder subtask longer than `_NODE_TIMEOUT` (90 s) looked
-silent — while the node posted a token batch every 0.3 s. Observed on a real
-pitch: the subtask was reclaimed out from under the node, the node was evicted,
-the task was re-queued into an empty registry, and the node was paid **+0
-credits** for a 329-second build it went on to finish. `/metrics` said
-`nodes_online: 0` while the node's terminal showed it building.
-
-Note how this interacts with #45: the reclaim invalidates the attempt, so #45's
-settlement check *correctly* refuses to pay. Attempt binding working as designed
-on top of a broken liveness signal is exactly what produces "my laptop stopped
-earning and nobody can say why."
-
-After the fix, the same work re-run gave five subtasks at 87/138/282/236/269 s —
-four past the old cutoff — with `nodes_online` never below 1, zero reclaims, and
-all five paid.
-
-**2. Every 500 echoed its exception text.** Two `@app.exception_handler(Exception)`
-handlers were registered in `server.py`; Starlette keys them by class, so the
-later, leaky one silently replaced the hardened one. Live on the public
-orchestrator. The chaos test that should have caught it was asserting the
-*leaky* handler's response shape — it passed throughout.
-
-**3. `scripts/mcp_e2e.py` could no longer verify the MCP flow at all.** It
-matched job ids with `job_\d+`, but they became `job_{uuid4().hex}`, so every
-run failed at step 3. **The 10/10 in the sprint log was true when recorded and
-had quietly stopped being reproducible** — the check guarding the video's
-differentiator was dead and nothing said so. Fixed, and 10/10 again.
-
-**4. The committed fallback Snake game is not the clean copy the script
-implied.** `docs/demo-assets/snake-game/` is a folder of transcripts; the
-openable file is `code/index.html`, and it **also opens on GAME OVER**. It
-animates, so it is playable, but the restart click applies to it too.
-
-**5. The advertised one-line join could never finish.** `curl … | bash -s -- URL`
-gives bash the downloaded script as stdin, so `install.sh`'s closing
-`exec join.py` inherited a pipe, and join.py's consent gate correctly refuses
-without a terminal. The installer did all its work and stopped on "Not running
-in a terminal, so nobody can consent." Fixed by handing over on `/dev/tty` —
-**not** with `--yes`, which would consent on the machine owner's behalf. A test
-blocks that shortcut. It survived because the launch checklist tested
-`join.py` directly, which is a different code path from the piped one-liner.
-
-**Verified fixed on a clean Debian container with a real terminal**, which is
-the only way to prove it: the old installer reports `isatty False` and refuses;
-the new one reports `isatty True` and reaches `Type 'yes' to join`. A human
-still consents — the fix is `/dev/tty`, never `--yes`.
-
----
-
-## The showcase checker had three bugs, and the 2/10 survived them
-
-Jett noticed the Snake game *does* start — it runs into a wall and says GAME
-OVER. He was right, and `check_artifact()` could not tell that from a game that
-never started:
-
-1. **A 1200 ms blind spot.** It slept 1200 ms before its first look; an
-   unsteered snake dies in ~1 s (measured: 550/850/1100/1250 ms). It arrived at
-   the death screen and reported "GAME OVER visible" + "frame never changes" —
-   the same two symptoms as a game that never ran.
-2. **Visibility read the element's own computed style**, so `<h2>GAME OVER</h2>`
-   inside a `display:none` overlay reported as visible. Every game that did what
-   the pitch asked was failed for doing it.
-3. **The forbidden-text scan used `textContent`**, which includes hidden
-   descendants, so the visible wrapper around a hidden overlay matched.
-
-**The published 2/10 is unchanged.** All ten original artifacts were still on
-disk; re-scored with the fixed checker they come out 2/10 again, and the two
-that pass are the two independently confirmed playable by steering them in a
-browser (surviving 5.5–6.0 s against 0.85–1.25 s unattended). Instrument and
-hand-verification now agree — before, the number was right by luck.
-
-What *was* wrong is the README's explanation: it said failures "load without
-errors but never start". Really **6 of 10 never draw at all**, one throws a JS
-error, one draws and dies instantly. Fixed.
-
-**Keyboard artifacts are now sampled at 150 ms and then steered**, rather than
-watching an unattended snake expire. If you re-run `showcase_reliability.py`,
-that is why its numbers are comparable to the old ones rather than a
-re-baselining.
-
-## The demo script is now honest about the rebuilt dashboard
-
-Prep gained two missing prerequisites — **start a worker node** (Shots 2 and 3
-are blank without one) and **clear `events.db`** (Live Activity opens showing
-entries from days earlier). The "15-minute prep" claim was replaced with a real
-budget: ~2 hours, or ~35 minutes on the short path.
-
-Shot 3 no longer says "dashboard, full frame": after the rebuild the plan is in
-**Overview**, node cards in **Nodes**, credits on the node card or in **Guild**.
-And **with one machine nothing runs in parallel** — five subtasks queued at once
-went strictly sequentially through one node — so that shot needs a second
-machine or a different caption. Do not narrate parallel execution over one node.
-
-`docs/demo-script.md` ends with a provenance section: what was actually executed
-in the rehearsal and what is still on trust (Shot 1's live chart, the Claude
-Desktop MCP take, the `--demo` memory run, Snake generation).
-
----
-
-## The finding that reframes everything: the eval is mostly noise
-
-v3 was run against **itself** — same prompts, same model, same machine, nothing
-changed (`evals/results/20260811_052310` vs `20260808_050610`):
-
-    run 1: 17/28 (61%)      run 2: 15/28 (54%)
-    8 improved, 10 regressed
-    CHURN: 18 of 28 prompts changed outcome, with NO cause
-
-That is **higher** churn than any prompt-set comparison ever produced here, so
-every difference previously attributed to a prompt change is consistent with
-dice. Per-category is worse than useless: `api` went 3/4 → 0/4 and `vague` went
-2/4 → 4/4 with nothing changed.
-
-- README publishes **~57% (95% CI 44–69%)** and shows both runs with the churn.
-- `prompts/v3.py` carries the floor: **a net difference of ≤2 prompts is noise.**
-- `evals/compare.py` does the arithmetic and reproduces every historical decision.
-
-**Do not write a v6 expecting to see it.** At n=28 this instrument cannot resolve
-anything smaller than about six prompts. Growing the prompt set, or averaging
-repeated runs, is the only way to measure anything subtler. The rehearsal added
-a reason: the *planner* is non-deterministic too — the same pitch decomposed
-into 5, 1 and 4 subtasks on three consecutive runs.
-
----
-
-## Secrets
-
-Not in the repo, ever. `node_secret` and `pitch_key` live in
-`/root/distributed-orchestrator/data/config.json` on the VM; Jett has copies. SSH
-key is `~/.ssh/swarm_orchestrator` on his laptop only. The eval harness reads
-`PITCH_KEY` from the environment or an untracked `.pitch_key` file — never ask
-him to paste a key into chat.
-
-**Running evals remotely does not free Jett's laptop:** `/pitch/async` hands
-builder subtasks to connected nodes, and his laptop is normally the only one, so
-work returns to it plus 216 ms each way. Stop `node.py` first if you try it.
-
----
-
-## What to do next, best first
-
-1. **Merge #46**, then the two Jett actions above.
-2. **Grow the eval prompt set** if anyone wants to tune prompts again. Nothing
-   else makes prompt work measurable.
-3. Optional: `clock` and `particles` showcases are only at n=4. The clock is the
-   prettier artifact if the chart ever feels too static; ~6 more runs settle it.
-
-## Do NOT build
-
-**Org multi-tenancy.** Enterprise plumbing for a system with zero external users;
-an org can already get a private pool by running its own instance. Confirmed with
-Jett Aug 10, and recorded in ROADMAP §7.
-
-Anything else in `ROADMAP.md`. It is reference. Every item is gated on a trigger
-and none of them have fired.
-
-## How this project works (earned the hard way)
-
-- **Only running the real thing finds real bugs.** Three code bugs in one
-  rehearsal, after the suite, the eval harness and careful reading all missed
-  them. The WebSocket 404, the Windows `SIGKILL`, and the soak's `/proc` probe
-  were the same shape.
-- **A test pinned to the wrong contract is worse than no test.** The chaos test
-  asserted the leaky 500 handler's response shape and passed for months.
-- **`evals/compare.py` decides promote-or-delete — never eyeball two summary
-  files.** A 4–6 prompt category can *never* reach p<0.05 on its own.
-- **Verify negative results by running the artifact.** A grep once "proved" a
-  working game had no game logic; a 0/7 demo result was Ollama being down.
-- **A deploy that did nothing looks exactly like one that worked.** Now checkable:
-  `scripts/verify_deploy.py`.
-- **Never run tests/servers/browsers/inference while a measurement is going.**
-  8 GB, CPU-only — it starves Ollama. **Measured Aug 14: two pipelines at once
-  roughly triples the wall clock of both** (chart 81 min against a documented
-  22). Any timing taken while something else ran is worthless — throw it out
-  rather than publishing it.
-- **A failed `echo` is not evidence a script died.** A chain script whose log
-  redirect broke on a quoting bug was assumed dead and relaunched; it was still
-  running, and the two copies then ran three pipelines concurrently. Check for
-  the *process*, not for output.
-- **Windows specifics:** write UTF-8 explicitly; `python` hits the Microsoft
-  Store alias — use `py`; `SystemRoot` must survive into subprocess envs; there
-  is no `SIGKILL` — use `Popen.kill()`.
-
----
-
-## Paste this into a new session
-
-> I'm continuing work on Mycelium (github.com/Jwrightsman/distributed-orchestrator).
-> Read `HANDOFF.md` first, then `MASTER_PLAN.md` and `SPRINT_PHASE2.md` — the
-> sprint file's Session Log is the real history and carries every measured
-> number. Then `CLAUDE.md` for house rules. `ROADMAP.md` is reference only —
-> don't pull work from it.
->
-> State: master is current through #47 and nothing is open. Last session
-> integrated ROADMAP.md, executed the demo script end to end for the first time,
-> and fixed seven bugs — four in the system (nodes evicted mid-build and paid
-> nothing, 500s echoing exception text, the one-line join never reaching its
-> consent prompt, the MCP end-to-end check silently broken) and three in the
-> showcase checker, which had been failing correct games. The published 2/10
-> Snake figure survived a full re-score.
->
-> Two things need me and I'd like them queued up: redeploying the live
-> orchestrator (#46 adds `scripts/verify_deploy.py` to prove it landed), and
-> restarting my laptop node from current code so it earns credits again.
->
-> Standing rules: use `evals/compare.py` for any prompt comparison, don't write
-> a v6 at n=28, org multi-tenancy stays dead, verify negative results by running
-> the artifact. Work on branches. I have no programming experience — make the
-> technical calls yourself and tell me only what I need to act on.
+The intended handoff state is a **small private trusted alpha** with honest
+integrity and access boundaries. Historical operational detail removed from this
+file remains available in Git history if needed; it must not override the
+current protocol documents.

@@ -16,7 +16,7 @@ active model, no auth required. **Agents:** read [AGENTS.md](AGENTS.md) first;
 it states plainly that installing this on a machine requires that machine
 owner's consent.
 
-> **Status (August 2026):** Phase 0 works end-to-end. Execution protocol v1 adds first-class DAG and ensemble strategies, direct-as-one-candidate, deterministic auto-selection, durable normalized records, and attempt-bound worker streams/results. The queue and shared-secret trust model remain alpha limitations; see [the protocol](docs/PROTOCOL.md).
+> **Status (August 2026):** The current target is a **small private trusted alpha**. Execution protocol v1 has DAG and ensemble strategies, direct-as-one-candidate, deterministic auto-selection, durable server-authoritative worker attempts, truthful lifecycle/assurance fields, authenticated artifact delivery, and explicit redacted shares. The scheduler is still process-local, node identity is still a shared secret, and generated code is not sandboxed. See [the protocol](docs/PROTOCOL.md), [access model](docs/ACCESS_CONTROL.md), and [threat model](docs/THREAT_MODEL.md).
 
 ## Positioning
 
@@ -24,13 +24,13 @@ Decentralized, incentive-aligned agent networks *without* blockchain are an open
 
 ## Looking for nodes 🖥️
 
-The network gets real when strangers connect hardware. Joining takes one command — any machine with 8GB RAM:
+The network gets real when invited testers connect hardware they own. Joining takes one command — any machine with 8GB RAM:
 
 ```bash
 python join.py http://ORCHESTRATOR_ADDRESS:8000
 ```
 
-**There is a public orchestrator running 24/7 right now**, and during the tester phase joining it is by invite — the node endpoints require a shared key, so an address on its own would only get you a `401`. If you want a machine on it, open the **[I'd like to join a machine to the network](https://github.com/Jwrightsman/distributed-orchestrator/issues/new?template=join-the-network.yml)** issue and you'll get the address and join command back. Testers are being added deliberately, a few at a time, so that problems surface at a scale where they can be fixed.
+There is an internet-reachable orchestrator used for status and invited testing, but it is **not a permissionless public network**. Worker endpoints require a shared key and node operators are admitted deliberately. If you want to volunteer a machine you own, open the **[I'd like to join a machine to the network](https://github.com/Jwrightsman/distributed-orchestrator/issues/new?template=join-the-network.yml)** issue. Do not install or join this software on somebody else's machine without that owner's explicit informed consent.
 
 You don't have to wait for that to try it: `python cli.py "your task"` runs the whole pipeline on one machine, and [docs/DEPLOY.md](docs/DEPLOY.md) has a LAN setup that takes minutes, plus a [Tailscale](docs/DEPLOY.md) path for inviting friends to your own instance.
 
@@ -65,7 +65,7 @@ POST /pitch  (or: python cli.py "your task")
 - `/pitch/distributed` — planner and reviewer run locally; builder subtasks are distributed to connected worker nodes and execute in parallel across machines
 - `/v1/executions` — canonical asynchronous API for explicit strategy and placement combinations
 
-All agents use local models via [Ollama](https://ollama.com). No data leaves your machine unless you connect worker nodes across a network.
+The canonical API defaults to `placement: local` and `confidentiality: local_only`. Remote-capable canonical requests require an explicit `remote_dispatch_consent: true`; any worker that receives a unit can read that unit's prompt. `network_policy` is recorded intent, not an enforced sandbox or firewall.
 
 ## Quick start
 
@@ -113,7 +113,7 @@ Config
   Provider:    Ollama only
 ```
 
-`Status: offline` means Ollama isn't running — start it with `ollama serve` and re-run. If the model is missing, run `ollama pull qwen3.5:4b`. The two `off` lines are expected on your own machine; you turn them on before exposing the server to the internet ([docs/DEPLOY.md](docs/DEPLOY.md)).
+`Status: offline` means Ollama isn't running — start it with `ollama serve` and re-run. If the model is missing, run `ollama pull qwen3.5:4b`. The two displayed `off` lines are expected on your own machine. Before binding beyond localhost, configure `node_secret`, `pitch_key`, and the separate `viewer_key`; verify public `/health` reports `private_routes_protected: true`. See [access control](docs/ACCESS_CONTROL.md).
 
 `status.py` reads local files only, so it works with Ollama stopped — as do `python cli.py --history`, `--standings` and `--projects`.
 
@@ -187,8 +187,16 @@ curl -X POST http://localhost:8000/v1/executions \
   -H "Content-Type: application/json" \
   -d '{"task":"Build one HTML file","strategy":"ensemble","strategy_options":{"kind":"ensemble","candidates":3,"concurrency":2},"placement":"local"}'
 
-curl http://localhost:8000/v1/executions/{execution_id}
+curl -H "X-Viewer-Key: $VIEWER_KEY" \
+  http://localhost:8000/v1/executions/{execution_id}
 ```
+
+Canonical remote placement is opt-in. Set a non-local confidentiality class
+and `remote_dispatch_consent: true` together; omitting either is rejected.
+Complete artifacts are retrieved through the authenticated manifest/file/ZIP
+APIs, not server paths. Public access to a result requires an explicit
+revocable share token. Examples: [docs/ARTIFACTS.md](docs/ARTIFACTS.md) and
+[docs/ACCESS_CONTROL.md](docs/ACCESS_CONTROL.md).
 
 ## Worker nodes
 
@@ -218,7 +226,7 @@ python join.py http://ORCHESTRATOR_IP:8000
 python node.py --server http://ORCHESTRATOR_IP:8000
 ```
 
-The orchestrator handles planning and review locally. Builder subtasks are distributed to connected nodes and executed in parallel where dependencies allow. If a node goes offline mid-task, its work is automatically reclaimed and re-queued.
+For DAG, planning and review remain on the coordinator while builder units may be distributed. Ensemble candidates may also be distributed as complete-task units. If a node goes offline mid-attempt, its work can be reclaimed and reassigned; only a result that settles the current server-issued attempt can enter execution.
 
 ## Project structure
 
@@ -226,11 +234,13 @@ The orchestrator handles planning and review locally. Builder subtasks are distr
 cli.py              # Terminal interface
 server.py           # App assembly — routers, lifespan, exception handling
 server_state.py     # Shared state, SQLite persistence, events, auth, rate limits
+access_control.py   # Viewer auth, signed sessions, public/private route policy
 routes_pitch.py     # /pitch, /pitch/async, /pitch/distributed, /jobs*
 routes_executions.py # Canonical POST/GET /v1/executions API
+routes_access.py    # Viewer sessions, artifacts, explicit share capabilities
 routes_nodes.py     # Worker protocol: register, poll, results, circuit breaker
 routes_history.py   # /history*, /gallery ( /share/{id} redirects to /run/{id} )
-routes_run.py       # /run/{id} — the shareable permalink for one run
+routes_run.py       # /run/{id} — legacy private run page when viewer auth is configured
 routes_status.py    # /status and /node/{id} — the read-for-humans pages
 routes_try.py       # /try, in its open and invite-only states
 routes_projects.py  # /projects*
@@ -240,10 +250,10 @@ join.py             # One-command node setup
 dashboard.py        # Assembles pages from templates/ (theme + CSS + JS partials)
 templates/          # _theme.html (tokens) + _dashboard.css/.js + one file per page
 orchestrator.py     # Core pipeline: plan → build → review → revise
-execution/          # Versioned contracts, registry, strategies, dispatch, validation, persistence
+execution/          # Contracts, strategies, dispatch, attempts, validation, artifacts, sharing, persistence
 ollama_client.py    # Ollama HTTP client + token streaming + structured outputs
 memory.py           # Persistent project memory across sessions
-ledger.py           # Contribution ledger (append-only JSON)
+ledger.py           # SQLite contribution points + atomic JSON compatibility projection
 extract.py          # Extracts runnable code files from pipeline output
 config.py           # Centralized settings (model, auth keys, provider routing)
 prompts/            # Versioned prompt sets — v1 is the measured baseline
@@ -261,33 +271,35 @@ events.db           # SQLite event log (survives server restarts)
 
 ## Deploying beyond your machine
 
-See **[docs/DEPLOY.md](docs/DEPLOY.md)** — three copy-paste paths: LAN (no setup), Tailscale (private testers, free), or a 24/7 public orchestrator on Oracle's free tier / Hetzner via `docker compose up`. Each path has a plain-language security note.
+See **[docs/DEPLOY.md](docs/DEPLOY.md)** for LAN, Tailscale, and hosted deployment mechanics. Treat the hosted path as an internet-reachable **private alpha**, not permissionless public infrastructure: configure all three credentials, use TLS or a private overlay, and verify the current [access-control checklist](docs/ACCESS_CONTROL.md).
 
 ## API reference
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/health` | GET | Server + Ollama status, connected nodes |
+| `/health` | GET | Public sanitized liveness, node count, and viewer-protection warning |
+| `/status.json` | GET | Public sanitized status and build fingerprint |
 | `/v1/executions` | POST | Queue a canonical versioned execution |
-| `/v1/executions/{id}` | GET | Read durable normalized execution state/result |
+| `/v1/executions/{id}` | GET | Read durable normalized execution state/result (viewer) |
+| `/v1/executions/{id}/cancel` | POST | Cancel queued/running execution (viewer) |
+| `/v1/executions/{id}/artifacts*` | GET | Manifest, file, and ZIP artifact delivery (viewer) |
+| `/v1/executions/{id}/shares` | POST | Create an explicit redacted share (viewer) |
+| `/v1/shares/{token}` | GET | Read one redacted execution capability |
 | `/pitch` | POST | Run pipeline, block until complete |
 | `/pitch/async` | POST | Submit job, return `job_id` immediately |
 | `/pitch/distributed` | POST | Distribute builders to worker nodes |
-| `/jobs/{id}` | GET | Poll async job status and result |
-| `/jobs` | GET | List recent jobs |
-| `/dashboard` | GET | Live web UI |
-| `/run/{id}` | GET | **Permalink for one run** — plan, machines, timings, review, credits. Shareable, previews in Discord/Reddit |
-| `/status` | GET | Human-readable network status |
-| `/node/{id}` | GET | One machine's own page — what it built and earned |
-| `/ws/events` | WS | Real-time pipeline event stream |
-| `/history` | GET | Past pipeline runs |
-| `/history/{ts}` | GET | Full run detail with output and code files |
-| `/standings` | GET | Contributor rankings by credits |
-| `/metrics` | GET | Queue depth, latency, node count, job status |
-| `/gallery` | GET | Completed tasks as cards, each linking to its `/run/{id}` page |
-| `/projects` | GET/POST | List or create persistent projects |
-| `/projects/{id}` | GET | Project metadata, memory, iteration list |
-| `/nodes` | GET | Connected worker nodes |
+| `/jobs/{id}` | GET | Poll private async job status and result (viewer) |
+| `/jobs` | GET | List recent private jobs (viewer) |
+| `/dashboard` | GET | Live web UI (viewer when configured) |
+| `/run/{id}` | GET | Private legacy run page (viewer when configured) |
+| `/status` | GET | Human-readable private network status |
+| `/node/{id}` | GET | Private machine contribution page |
+| `/ws/events` | WS | Private real-time pipeline event stream |
+| `/history*` | GET | Private past-run details and legacy downloads |
+| `/standings`, `/ledger`, `/metrics` | GET | Private contribution and operational detail |
+| `/gallery` | GET | Private completed-task gallery |
+| `/projects*` | GET/POST | Private persistent project APIs |
+| `/nodes` | GET | Private connected-worker details |
 | `/nodes/register` | POST | Worker node registration |
 | `/tasks/next` | GET | Worker polls for next task (long-polls 25s) |
 | `/tasks/{id}/result` | POST | Worker submits completed task |
@@ -295,7 +307,7 @@ See **[docs/DEPLOY.md](docs/DEPLOY.md)** — three copy-paste paths: LAN (no set
 
 ## Reliability and trust model
 
-This is a **Phase 0 trusted-network prototype**. Here's exactly what's durable and what isn't:
+This is a **Phase 0 private trusted-alpha system**. Here's exactly what's durable and what isn't:
 
 | Thing | Durable? | Notes |
 |---|---|---|
@@ -303,17 +315,20 @@ This is a **Phase 0 trusted-network prototype**. Here's exactly what's durable a
 | Event history | Yes | SQLite (`events.db`) — survives restarts |
 | Job status | Yes | SQLite (`events.db`) — `/jobs/{id}` works after restart |
 | Normalized execution metadata | Yes | SQLite `executions` table — strategy, placement, candidates, validation, errors |
+| Attempt settlement and accepted receipts | Yes | SQLite — exact replay survives restart; active attempts interrupt on restart |
+| Share records and token hashes | Yes | SQLite — expiry and revocation survive restart |
+| Artifact manifests | Yes | SQLite metadata plus files under registered `output/` or `execution_artifacts/` roots |
 | Project memory | Yes | `projects/<id>/memory.md` on disk |
 | Connected nodes | No | Nodes must re-register after server restart |
-| Task queue | No | In-flight tasks are reclaimed automatically if a node goes silent; a server restart drops queued-but-not-started tasks |
+| Task queue and running coroutines | No | Restart marks affected canonical executions/jobs/attempts `interrupted`; it does not resume them |
 
-**Execution guarantees:** Tasks are at-least-once in the distributed path — if a node goes offline mid-task, the task is re-queued and can run on another node. There's no deduplication guard, so in rare race conditions a task may run twice. The final reviewer sees all outputs and merges them, so this typically doesn't affect the result.
+**Execution guarantees:** Distributed compute may be attempted more than once after expiry or reclaim, but only the current active server-issued attempt can settle. Settlement, its accepted receipt, replay response, and compute contribution are atomic and durable. Exact replay is idempotent; changed, unknown, queued-but-unleased, expired, reclaimed, cancelled, interrupted, or mismatched results are rejected and kept only in a bounded diagnostic quarantine. The queue itself remains process-local.
 
-**Trust model:** Worker nodes authenticate with a shared secret (`node_secret`), task submission can be gated with `pitch_key`, pitch endpoints are rate-limited (`pitch_rate_max`, default 5/min/IP), and `output/` disk usage is capped (`output_max_mb`). Protocol-v1 streams and results must match the assigned node, task, attempt id, nonce, execution unit, and unexpired lease; legacy unbound work receives no credit. This is structural attempt binding, not per-node cryptographic identity. All auth is off by default for trusted-network mode; **set both keys before any internet exposure** — [docs/DEPLOY.md](docs/DEPLOY.md) walks through it. No HTTPS out of the box: treat pitched tasks and outputs as public on a public deployment.
+**Trust model:** `node_secret` admits workers, `pitch_key` admits task submissions, and `viewer_key` protects task-, result-, project-, event-, artifact-, and machine-sensitive routes. Explicit share tokens expose one allowlisted redacted result instead of making every execution public. All three keys default empty for local compatibility, and `/health` warns when viewer protection is off. **Set the applicable three keys and use TLS or a private overlay before network exposure.** Attempt binding is structural integrity, not per-node cryptographic identity; an admitted worker can still return plausible wrong output. Full details: [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
 
-**Verified, not assumed.** `scripts/restart_recovery.py` hard-kills a running server mid-job and checks what comes back: jobs and event history survive, nodes re-register, the dashboard recovers, and WebSocket clients reconnect — **17/17 checks**. `scripts/soak_test.py` runs 60 consecutive pitches through one server session: **no orphaned tasks, no latency drift** (±1% across halves). Both run in under a minute.
+`scripts/restart_recovery.py` and `scripts/soak_test.py` remain reproducible operational checks, but do not copy an old pass count into a current claim: rerun them against the commit being deployed. Canonical startup reconciliation now truthfully interrupts non-resumable queued/running state rather than leaving it active indefinitely.
 
-> **Known issue, measured and open:** memory grows about **1.25 MB per pitch** on Windows — linear over 120 pitches (67 MB → 218 MB), so it is a leak rather than allocator noise. An earlier "+0.9 MB over 60 pitches" figure came from Linux, where the soak's memory probe read `/proc`; on Windows that silently returned "unmeasured" while the script still printed a clean verdict. Both bugs are fixed — the probe is cross-platform and the verdict is now a per-pitch rate — but the leak's source is not yet found and Linux has not been re-measured with the working probe. At roughly 800 pitches per GB it is not a launch risk; it is a real one for a long-lived public orchestrator.
+> **Known issue, measured and open:** memory grows about **1.25 MB per pitch** on Windows — linear over 120 pitches (67 MB → 218 MB), so it is a leak rather than allocator noise. An earlier "+0.9 MB over 60 pitches" figure came from Linux, where the soak's memory probe read `/proc`; on Windows that silently returned "unmeasured" while the script still printed a clean verdict. Both bugs are fixed — the probe is cross-platform and the verdict is now a per-pitch rate — but the leak's source is not yet found and Linux has not been re-measured with the working probe. At roughly 800 pitches per GB it is not a launch risk; it is a real one for any long-lived orchestrator.
 
 > Run the restart check with **Ollama stopped**. It wants pitches to fail fast so a job reaches a terminal state in seconds; with Ollama up they start real multi-minute inference instead and four unrelated checks fail. The script says so on startup.
 
@@ -361,9 +376,9 @@ Stated plainly, because you'll find them anyway:
   Shrinking the ask fixes it. The same harness, model and prompts produce a labelled bar chart in **10 of 10 attempts** (`python cli.py --demo-showcase chart`), with all seven labels and values correct every time — Fisher exact p = 0.0004 against the game, though ten-for-ten still only puts the true rate at ≥74% with 95% confidence. An analog clock and a particle field both scored 3/4 at a smaller sample. The lesson is about coupling, not about the model being bad: [`docs/showcase-ceiling.md`](docs/showcase-ceiling.md) has the full write-up and `scripts/showcase_results/` has the raw logs.
 - **CPU-only is slow.** A full pitch is minutes, not seconds — the planner, each builder, and the reviewer are each a separate model call, and the reviewer has to re-emit the whole deliverable. A GPU changes this dramatically.
 - **Generated code is not sandboxed.** The pipeline writes runnable files to `output/`. It checks that Python parses and HTML is structurally sound, but *you* are responsible for reading anything before you run it.
-- **The full threat model is written down**, including what a malicious node can and cannot do, what is readable without any credential, and what would have to change for a public network: [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md). Reporting a vulnerability: [SECURITY.md](SECURITY.md).
+- **The full threat model is written down**, including the deliberate public allowlist, viewer-protected surfaces, share capabilities, malicious-worker limits, and what still blocks a permissionless network: [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md). Reporting a vulnerability: [SECURITY.md](SECURITY.md).
 - **It's a trusted network, not a trustless one.** `node_secret` is a shared password, not per-node identity. A node that authenticates can return whatever it likes. The circuit breaker catches a node that fails repeatedly; it does not catch a node that returns plausible-looking garbage. For that there is sampled redundant execution with per-node reputation feeding routing weight (`verify_rate`, **off by default**, needs at least two nodes) — it raises the cost of being a bad node, but it is a spot check, not a proof of correctness.
-- **One orchestrator, no failover.** The planner and reviewer always run on the orchestrator; only builder subtasks are distributed. If the orchestrator goes down, the swarm stops — it restarts cleanly, but there's no second one.
+- **One orchestrator, no failover.** DAG planning/review remain on the coordinator; DAG builder units and complete ensemble candidates may run on workers. If the orchestrator goes down, the swarm stops. Durable records reconcile truthfully on restart, but process-local work is not resumed.
 - **No HTTPS, no accounts, no multi-tenancy.** This is a prototype you run for yourself or a group you know.
 
 None of these are secrets being kept until someone notices. What would fix each one — per-node
@@ -376,7 +391,12 @@ a reference, not a promise of dates.
 - [x] Planner → builder → reviewer → reviser pipeline
 - [x] Parallel builder execution (wave-based DAG, `asyncio.gather`)
 - [x] Distributed execution across worker nodes with automatic task reclaim
-- [x] **Persistent project memory** — `projects/<id>/memory.md` injected into every run; planner and reviewer know what's already been built
+- [x] Server-authoritative durable attempts, accepted-result broker, exact replay, and bounded quarantine
+- [x] Total execution deadline, cancellation API, and restart reconciliation
+- [x] Separate lifecycle, validation outcome, assurance, and check summaries
+- [x] Viewer-protected private routes and explicit redacted share capabilities
+- [x] Path-safe authenticated artifact manifests, files, ZIPs, hashes, quotas, and retention
+- [x] **Persistent DAG project memory** — `projects/<id>/memory.md` is loaded by the DAG pipeline; ensemble/direct reject `project_id` until selected-result-only updates exist
 - [x] Async job API (`/pitch/async`, `/jobs/{id}`) — fire and forget, poll or stream
 - [x] Live token streaming — watch builder output appear character by character via WebSocket
 - [x] WebSocket real-time event feed with polling fallback
@@ -392,8 +412,8 @@ a reference, not a promise of dates.
 - [x] Worker node hardware reporting (CPU, RAM, GPU) and auto-reconnect
 - [x] `/metrics` endpoint — queue depth, latency, blacklisted nodes, job status
 - [x] Schema-enforced planner output (Ollama structured outputs, with text-parsing fallback)
-- [x] WAN hardening — `node_secret` + `pitch_key` auth, rate limits, output disk cap
-- [x] Docker + docker-compose deployment; test suite (376) + CI
+- [x] Trusted-alpha access controls — separate node, pitch, and viewer credentials; rate/admission limits; output caps
+- [x] Docker + docker-compose deployment; model-free regression suite + CI
 - [x] **MCP server interface** — five tools, so any agent app (Claude Desktop etc.) can delegate a build to the swarm ([docs/MCP.md](docs/MCP.md))
 - [x] Sampled verification with per-node reputation feeding routing weight (`verify_rate`, off by default)
 
