@@ -1,12 +1,17 @@
 """Tests for the keyless public pitch endpoint (sprint 2.4)."""
 
+import asyncio
+
 import pytest
 from fastapi.testclient import TestClient
 
 import config
+import execution.strategies as strategies
 import routes_pitch
 import server
 import server_state
+from execution.contracts import EnsembleOptionsV1, ExecutionRequestV1
+from execution.service import get_execution_service
 
 
 @pytest.fixture(autouse=True)
@@ -58,14 +63,110 @@ def test_enabled_accepts_task(client, public_enabled):
     # job is tagged as public
     job = server.jobs[resp.json()["job_id"]]
     assert job["source"] == "public"
+    assert resp.json()["share_token"]
+    assert resp.json()["share_url"].startswith("/v1/shares/")
+    profile = job["execution_request"]
+    assert profile["strategy"] == "direct"
+    assert profile["strategy_options"]["candidates"] == 1
+    assert profile["strategy_options"]["concurrency"] == 1
+    assert profile["placement"] == "local"
+    assert profile["confidentiality"] == "local_only"
+    assert profile["project_id"] is None
+    assert profile["timeout_seconds"] == 120
+    assert profile["max_output_bytes"] == 65_536
 
 
-def test_per_ip_hourly_limit(client, public_enabled):
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"strategy": "ensemble", "candidates": 5},
+        {"placement": "distributed"},
+        {"confidentiality": "public"},
+        {"project_id": "private"},
+        {"verification": {"validators": [{"name": "code_parse"}]}},
+    ],
+)
+def test_public_caller_cannot_override_server_profile(client, public_enabled, override):
+    response = client.post("/public/pitch", json={"task": "build a widget", **override})
+    assert response.status_code == 422
+    assert not server.jobs
+
+
+def test_per_ip_hourly_limit(client, public_enabled, monkeypatch):
+    monkeypatch.setattr(
+        server_state,
+        "_PUBLIC_MAX_ACTIVE_PER_SOURCE",
+        server_state._PUBLIC_RATE_MAX + 1,
+    )
+    monkeypatch.setattr(server_state, "_PUBLIC_MAX_ACTIVE", server_state._PUBLIC_RATE_MAX + 1)
     for _ in range(server_state._PUBLIC_RATE_MAX):
         assert client.post("/public/pitch", json={"task": "build a widget"}).status_code == 200
     resp = client.post("/public/pitch", json={"task": "build a widget"})
     assert resp.status_code == 429
     assert "per hour" in resp.json()["detail"]
+
+
+def test_per_source_active_limit(client, public_enabled):
+    assert client.post("/public/pitch", json={"task": "first widget"}).status_code == 200
+    response = client.post("/public/pitch", json={"task": "second widget"})
+    assert response.status_code == 429
+    assert "one active" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_global_public_inference_concurrency_is_one(tmp_path, monkeypatch):
+    active = 0
+    maximum = 0
+
+    async def generated(*args, **kwargs):
+        nonlocal active, maximum
+        active += 1
+        maximum = max(maximum, active)
+        await asyncio.sleep(0.03)
+        active -= 1
+        return "complete output"
+
+    monkeypatch.setattr(strategies, "generate", generated)
+    monkeypatch.setattr(strategies.EnsembleStrategy, "artifact_root", tmp_path / "execution_artifacts")
+    monkeypatch.setattr(routes_pitch, "_PUBLIC_INFERENCE_SEMAPHORE", asyncio.Semaphore(1))
+    monkeypatch.setattr(routes_pitch, "_db_write_job", lambda job: None)
+    service = get_execution_service()
+    service._emit = lambda *args, **kwargs: None
+    request = ExecutionRequestV1(
+        task="build",
+        strategy="direct",
+        strategy_options=EnsembleOptionsV1(candidates=1, concurrency=1),
+    )
+    for index in range(2):
+        job_id = f"job_public_{index}"
+        server.jobs[job_id] = {
+            "job_id": job_id,
+            "task": "build",
+            "project_id": None,
+            "status": "queued",
+            "submitted_at": "now",
+            "result": None,
+            "error": None,
+            "trace_id": str(index),
+            "source": "public",
+            "source_ip": str(index),
+            "execution_request": request.model_dump(mode="json"),
+        }
+
+    await asyncio.gather(
+        routes_pitch._run_job("job_public_0", "build", trace_id="0"),
+        routes_pitch._run_job("job_public_1", "build", trace_id="1"),
+    )
+    for _ in range(200):
+        if all(
+            server.jobs[f"job_public_{index}"]["status"] == "complete"
+            for index in range(2)
+        ):
+            break
+        await asyncio.sleep(0.01)
+
+    assert maximum == 1
+    assert all(server.jobs[f"job_public_{index}"]["status"] == "complete" for index in range(2))
 
 
 def test_task_length_cap(client, public_enabled):

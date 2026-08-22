@@ -21,6 +21,7 @@ import server_state as state
 from config import get as get_config
 from execution.contracts import EnsembleOptionsV1, ExecutionRequestV1
 from execution.service import ServiceExecution, get_execution_service
+from execution.sharing import CreateExecutionShareV1, get_share_store
 from ollama_client import generate as _generate
 from server_state import (
     PitchRequest,
@@ -46,6 +47,7 @@ router = APIRouter()
 # for the sampled node-reputation mechanism; canonical output validation is a
 # separate registry under execution/validators.py.
 _verify_tasks: set = set()
+_PUBLIC_INFERENCE_SEMAPHORE = asyncio.Semaphore(1)
 
 
 def _spawn_comparison(dup_id, subtask_title, job_id, trace_id,
@@ -93,17 +95,25 @@ def _execution_request(req: PitchRequest, default_placement: str) -> ExecutionRe
         )
         if strategy == "auto" and req.candidates > 1:
             strategy = "ensemble"
+    resolved_placement = req.placement or default_placement
     try:
         return ExecutionRequestV1(
             task=req.task,
             project_id=req.project_id,
             strategy=strategy,
             strategy_options=options,
-            placement=req.placement or default_placement,
+            placement=resolved_placement,
             requirements=req.requirements,
             output_contract=req.output_contract,
             verification=req.verification,
             confidentiality=req.confidentiality,
+            # Legacy adapters historically allowed auto/distributed dispatch.
+            # Recording that adapter-owned consent preserves compatibility
+            # without weakening privacy-safe canonical defaults.
+            remote_dispatch_consent=(
+                resolved_placement in ("auto", "distributed")
+                and req.confidentiality != "local_only"
+            ),
         )
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors(include_url=False)) from exc
@@ -115,6 +125,9 @@ def _normalized_metadata(run: ServiceExecution) -> dict[str, Any]:
         "execution_id": result.execution_id,
         "protocol_version": result.protocol_version,
         "execution_status": result.status,
+        "lifecycle_status": result.lifecycle_status,
+        "validation_outcome": result.validation_outcome,
+        "assurance_level": result.assurance_level,
         "strategy_requested": result.strategy_requested,
         "strategy_selected": result.strategy_selected,
         "strategy_version": result.strategy_version,
@@ -184,7 +197,12 @@ async def pitch(req: PitchRequest, request: Request, response: Response):
     _emit("pitch", {"task": req.task, "trace_id": trace_id})
 
     canonical = _execution_request(req, default_placement="local")
-    run = await get_execution_service().execute(
+    service = get_execution_service()
+    try:
+        service.validate_request(canonical)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    run = await service.execute(
         canonical,
         callbacks=_callbacks(req.task, trace_id),
         dag_runner=run_pipeline,
@@ -219,6 +237,11 @@ async def pitch_async(req: PitchRequest, request: Request, response: Response):
         "trace_id": trace_id,
     }
     canonical = _execution_request(req, default_placement="auto")
+    try:
+        get_execution_service().validate_request(canonical)
+    except ValueError as exc:
+        jobs.pop(job_id, None)
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     jobs[job_id]["execution_request"] = canonical.model_dump(mode="json")
     _db_write_job(jobs[job_id])
     # Keep the legacy helper's four-argument call contract: a few integrations
@@ -255,13 +278,29 @@ async def _run_job(
         )
     )
 
+    def started(_result):
+        job = jobs.get(job_id)
+        if not job:
+            return
+        job["status"] = "running"
+        job["started_at"] = datetime.now(timezone.utc).isoformat()
+        _db_write_job(job)
+
     async def completed(run: ServiceExecution):
         job = jobs.get(job_id)
         if not job:
             return
-        if run.result.status == "failed":
+        if run.result.lifecycle_status == "failed":
             job["status"] = "failed"
             job["error"] = run.result.errors[0].message if run.result.errors else "execution failed"
+            job["result"] = None
+        elif run.result.lifecycle_status == "cancelled":
+            job["status"] = "cancelled"
+            job["error"] = run.result.cancellation_reason
+            job["result"] = None
+        elif run.result.lifecycle_status == "interrupted":
+            job["status"] = "interrupted"
+            job["error"] = run.result.interruption_reason
             job["result"] = None
         else:
             job["status"] = "complete"
@@ -269,11 +308,16 @@ async def _run_job(
         job["finished_at"] = datetime.now(timezone.utc).isoformat()
         _db_write_job(job)
 
+    execution_callbacks = _callbacks(task, trace_id, job_id)
+    if jobs.get(job_id, {}).get("source") == "public":
+        execution_callbacks["execution_semaphore"] = _PUBLIC_INFERENCE_SEMAPHORE
+
     queued = get_execution_service().submit(
         canonical,
         job_id=job_id,
-        callbacks=_callbacks(task, trace_id, job_id),
+        callbacks=execution_callbacks,
         dag_runner=run_pipeline,
+        on_start=started,
         on_complete=completed,
     )
     jobs[job_id]["execution_id"] = queued.execution_id
@@ -307,6 +351,24 @@ async def public_pitch(req: PitchRequest, request: Request):
             status_code=422,
             detail="That task isn't something this public demo will build. Pitch something constructive!",
         )
+    overrides = set(req.model_fields_set) - {"task"}
+    if overrides:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Public pitching accepts only 'task'; execution strategy, placement, project, "
+                "validator, and confidentiality settings are server-owned."
+            ),
+        )
+    active_for_source = sum(
+        1
+        for job in jobs.values()
+        if job.get("source") == "public"
+        and job.get("source_ip") == ip
+        and job["status"] in ("queued", "running")
+    )
+    if active_for_source >= state._PUBLIC_MAX_ACTIVE_PER_SOURCE:
+        raise HTTPException(status_code=429, detail="Only one active public execution is allowed per source.")
     active = sum(
         1 for job in jobs.values()
         if job.get("source") == "public" and job["status"] in ("queued", "running")
@@ -328,17 +390,41 @@ async def public_pitch(req: PitchRequest, request: Request):
         "error": None,
         "trace_id": trace_id,
         "source": "public",
+        "source_ip": ip,
     }
-    canonical = _execution_request(req, default_placement="auto")
+    # Never feed a keyless caller's protocol knobs into execution. This fixed
+    # profile is one local model call with no project or executable validators.
+    canonical = ExecutionRequestV1(
+        task=req.task,
+        project_id=None,
+        strategy="direct",
+        strategy_options=EnsembleOptionsV1(candidates=1, concurrency=1),
+        placement="local",
+        confidentiality="local_only",
+        timeout_seconds=120,
+        max_output_bytes=65_536,
+        network_policy="disabled",
+    )
     jobs[job_id]["execution_request"] = canonical.model_dump(mode="json")
     _db_write_job(jobs[job_id])
     await _run_job(job_id, req.task, None, trace_id)
+    created_share = get_share_store().create(
+        jobs[job_id]["execution_id"],
+        CreateExecutionShareV1(
+            expires_in_seconds=3600,
+            allow_artifact_download=True,
+            redact_node_identity=True,
+            include_candidate_details=False,
+        ),
+    )
     return {
         "job_id": job_id,
         "execution_id": jobs[job_id].get("execution_id"),
         "status": "queued",
         "trace_id": trace_id,
         "protocol_version": "1",
+        "share_token": created_share.token,
+        "share_url": f"/v1/shares/{created_share.token}",
     }
 
 
@@ -415,7 +501,12 @@ async def pitch_distributed(req: PitchRequest, request: Request):
     trace_id = str(uuid.uuid4())
     _emit("pitch", {"task": req.task, "trace_id": trace_id, "mode": "distributed"})
     canonical = _execution_request(req, default_placement="distributed")
-    run = await get_execution_service().execute(
+    service = get_execution_service()
+    try:
+        service.validate_request(canonical)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    run = await service.execute(
         canonical,
         callbacks=_callbacks(req.task, trace_id),
         dag_runner=run_pipeline,
