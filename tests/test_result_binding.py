@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient
 
 import server_state as state
 from server import app
+from execution.dispatch import Dispatcher
 
 
 @pytest.fixture
@@ -136,7 +137,7 @@ def test_guessing_the_task_id_is_not_enough(client):
 
     r = _submit(client, "t-1", "worker", None, nonce="guessed", attempt_id="guessed")
     assert r.status_code == 403
-    assert "nonce" in r.json()["detail"]
+    assert "attempt" in r.json()["detail"]
 
 
 def test_replaying_a_settled_attempt_pays_once(client):
@@ -156,7 +157,7 @@ def test_expired_lease_is_rejected(client):
     """Work returned long after the task was reclaimed and redone elsewhere."""
     _register(client, "worker")
     task = _claim(client, "worker")
-    state.task_inflight["t-1"]["lease_expires_at"] = time.time() - 1
+    state.attempt_store.expire_due(task["lease_expires_at"] + 1)
 
     r = _submit(client, "t-1", "worker", task)
     assert r.status_code == 403
@@ -179,19 +180,17 @@ def test_rejections_are_logged_not_silent(client):
     assert ev["claimed_by"] == "thief" and ev["assigned_to"] == "worker"
 
 
-def test_unverifiable_result_is_recorded_but_not_paid(client):
-    """A node on an old build still gets its work kept — it just is not settled.
-
-    Losing a finished deliverable would be worse than not paying for it.
-    """
+def test_unverifiable_legacy_result_is_quarantined_not_published(client):
+    """Old-node output is diagnostic only; it cannot satisfy a dispatcher."""
     _register(client, "worker")
     _claim(client, "worker")
     state.task_inflight["t-1"].pop("nonce", None)     # as if never issued one
 
     r = _submit(client, "t-1", "worker")
-    assert r.status_code == 200
-    assert r.json()["credits_earned"] == 0
-    assert state.task_results["t-1"]["output"] == "work"
+    assert r.status_code == 403
+    assert "t-1" not in state.task_results
+    assert "t-1" in state.task_inflight
+    assert state.attempt_store.quarantine_count() == 1
 
 
 def test_v1_result_requires_attempt_identifier(client):
@@ -225,6 +224,85 @@ def test_v1_worker_cannot_downgrade_by_omitting_contract_and_bindings(client):
     legitimate = client.post("/tasks/t-v1/result", json=_v1_body(task))
     assert legitimate.status_code == 200
     assert legitimate.json() == {"status": "accepted", "credits_earned": 5}
+
+
+def test_attacker_claiming_assigned_node_without_nonce_cannot_settle(client):
+    _register(client, "worker")
+    task = _claim_v1(client, "worker")
+    attacker = _v1_body(task, node_id="worker", nonce=None)
+
+    rejected = client.post("/tasks/t-v1/result", json=attacker)
+
+    assert rejected.status_code == 403
+    assert "missing attempt nonce" in rejected.json()["detail"]
+    assert "t-v1" in state.task_inflight
+    assert "t-v1" not in state.task_results
+
+
+def test_queued_but_unleased_result_is_quarantined(client):
+    _register(client, "worker")
+    queued = {
+        "task_id": "t-queued",
+        "title": "candidate",
+        "prompt": "complete task",
+        "system": "system",
+        "contract_version": "1",
+        "execution_id": "e" * 32,
+        "execution_unit_id": "candidate-1",
+        "execution_unit_kind": "candidate",
+    }
+    state.task_queue.append(queued)
+
+    response = client.post("/tasks/t-queued/result", json={
+        "node_id": "worker",
+        "output": "plausible queued-task output",
+        "elapsed_seconds": 1,
+    })
+
+    assert response.status_code == 403
+    assert state.task_queue == [queued]
+    assert "t-queued" not in state.task_results
+    assert state.attempt_store.quarantine_count() == 1
+
+
+def test_late_result_after_reclamation_is_rejected(client):
+    _register(client, "worker")
+    task = _claim_v1(client, "worker")
+    state.nodes["worker"]["last_seen"] = time.time() - state._NODE_TIMEOUT - 1
+    state._cleanup_pass()
+
+    response = client.post("/tasks/t-v1/result", json=_v1_body(task))
+
+    assert response.status_code == 403
+    assert "reclaimed" in response.json()["detail"]
+    assert "t-v1" not in state.task_results
+    assert any(item["task_id"] == "t-v1" for item in state.task_queue)
+
+
+def test_late_result_after_cancellation_is_rejected(client):
+    _register(client, "worker")
+    task = _claim_v1(client, "worker")
+    assert Dispatcher._cancel("t-v1", reason="test cancellation")
+
+    response = client.post("/tasks/t-v1/result", json=_v1_body(task))
+
+    assert response.status_code == 403
+    assert "cancelled" in response.json()["detail"]
+    assert "t-v1" not in state.task_results
+
+
+def test_changed_replay_payload_is_rejected(client):
+    _register(client, "worker")
+    task = _claim_v1(client, "worker")
+    accepted = client.post("/tasks/t-v1/result", json=_v1_body(task))
+    changed = client.post(
+        "/tasks/t-v1/result",
+        json=_v1_body(task, output="different replay output"),
+    )
+
+    assert accepted.status_code == 200
+    assert changed.status_code == 403
+    assert "replay payload does not match" in changed.json()["detail"]
 
 
 @pytest.mark.parametrize(
@@ -268,6 +346,7 @@ def test_v1_stream_requires_current_node_attempt_nonce_and_unit(client):
         "nonce": task["nonce"],
         "execution_id": task["execution_id"],
         "execution_unit_id": task["execution_unit_id"],
+        "execution_unit_kind": task["execution_unit_kind"],
     }
 
     assert client.post("/tasks/t-v1/stream", json=base).json() == {"ok": True}
@@ -277,6 +356,7 @@ def test_v1_stream_requires_current_node_attempt_nonce_and_unit(client):
         ("nonce", "wrong"),
         ("execution_id", "wrong"),
         ("execution_unit_id", "wrong"),
+        ("execution_unit_kind", "wrong"),
     ):
         response = client.post("/tasks/t-v1/stream", json={**base, field: value})
         assert response.status_code == 403
@@ -294,6 +374,7 @@ def test_v1_stream_rejects_expired_lease(client):
         "nonce": task["nonce"],
         "execution_id": task["execution_id"],
         "execution_unit_id": task["execution_unit_id"],
+        "execution_unit_kind": task["execution_unit_kind"],
     })
     assert response.status_code == 403
     assert "lease expired" in response.json()["detail"]

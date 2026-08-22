@@ -232,8 +232,8 @@ def test_refusal_text_still_counts_as_a_completed_task(client):
     assert server.task_results["t-refuse"]["output"].startswith("I'm sorry")
 
 
-def test_result_for_unknown_task_does_not_crash(client):
-    """A node reconnecting with a stale task id must not take the server down."""
+def test_result_for_unknown_task_is_quarantined_not_published(client):
+    """A stale task id is rejected without entering operational execution."""
     register(client, "zombie")
 
     resp = client.post(
@@ -241,8 +241,9 @@ def test_result_for_unknown_task_does_not_crash(client):
         json={"node_id": "zombie", "output": "late work", "error": None, "elapsed_seconds": 1.0},
     )
 
-    assert resp.status_code == 200
-    assert "does-not-exist" in server.task_results
+    assert resp.status_code == 403
+    assert "does-not-exist" not in server.task_results
+    assert server_state.attempt_store.quarantine_count() == 1
 
 
 def test_stream_from_stale_task_is_ignored_not_fatal(client):
