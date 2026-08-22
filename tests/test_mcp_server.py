@@ -119,6 +119,63 @@ async def test_full_flow_pitch_status_result():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("canonical_rating", "expected_rating"),
+    [("FAIL", "FAIL"), (None, "PASS")],
+)
+async def test_get_result_prefers_canonical_rating_without_leaking_project_dir(
+    monkeypatch, canonical_rating, expected_rating
+):
+    execution_id = "e" * 32
+    private_path = r"C:\private\output\run-123"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/jobs/job_rating":
+            return httpx.Response(
+                200,
+                json={
+                    "job_id": "job_rating",
+                    "execution_id": execution_id,
+                    "status": "complete",
+                    "rating": "PASS",
+                    "project_dir": private_path,
+                },
+            )
+        if path == f"/v1/executions/{execution_id}":
+            review_metadata = {"rating": canonical_rating} if canonical_rating else {}
+            return httpx.Response(
+                200,
+                json={
+                    "status": "completed",
+                    "lifecycle_status": "completed",
+                    "assurance_level": "model_judged",
+                    "strategy_selected": "dag",
+                    "winning_candidate": None,
+                    "review_metadata": review_metadata,
+                    "output_preview": "bounded canonical preview",
+                },
+            )
+        if path == f"/v1/executions/{execution_id}/artifacts":
+            return httpx.Response(200, json={"entries": []})
+        return httpx.Response(404)
+
+    def make_client():
+        return httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+            base_url="http://test",
+        )
+
+    monkeypatch.setattr(mcp_server, "_client", make_client)
+
+    result = await mcp_server.get_result("job_rating")
+
+    assert f"Rating: {expected_rating}" in result
+    assert "bounded canonical preview" in result
+    assert private_path not in result
+
+
+@pytest.mark.asyncio
 async def test_get_status_unknown_job():
     out = await mcp_server.get_job_status("job_nope")
     assert "No job" in out

@@ -24,7 +24,6 @@ Setup guide: docs/MCP.md
 
 import os
 import sys
-from pathlib import PurePath
 from typing import Annotated, Any, Literal
 
 import httpx
@@ -35,6 +34,7 @@ CandidateCount = Annotated[int, Field(ge=1, le=5)]
 
 ORCHESTRATOR_URL = os.environ.get("ORCHESTRATOR_URL", "http://localhost:8000").rstrip("/")
 PITCH_KEY = os.environ.get("PITCH_KEY", "")
+VIEWER_KEY = os.environ.get("VIEWER_KEY", "")
 
 server = MCPServer(
     name="mycelium",
@@ -43,7 +43,8 @@ server = MCPServer(
         "on volunteer hardware. pitch_task returns a job_id immediately; the swarm "
         "works in the background (minutes on CPU hardware — poll get_job_status, "
         "don't wait synchronously). Use projects to iterate: work pitched with the "
-        "same project_id remembers what was built before. Strategy choices are: "
+        "same project_id remembers what was built before when using DAG; "
+        "ensemble/direct reject project memory until selected-result-only updates are available. Strategy choices are: "
         "dag for coordinated components, ensemble for complete alternatives, "
         "direct for one complete attempt, and auto for a conservative recorded choice."
     ),
@@ -52,7 +53,11 @@ server = MCPServer(
 
 def _client() -> httpx.AsyncClient:
     """One place to build the HTTP client — tests swap this for an in-process app."""
-    headers = {"X-Pitch-Key": PITCH_KEY} if PITCH_KEY else {}
+    headers = {}
+    if PITCH_KEY:
+        headers["X-Pitch-Key"] = PITCH_KEY
+    if VIEWER_KEY:
+        headers["X-Viewer-Key"] = VIEWER_KEY
     return httpx.AsyncClient(base_url=ORCHESTRATOR_URL, headers=headers, timeout=30)
 
 
@@ -69,10 +74,10 @@ async def pitch_task(
     project_id: str | None = None,
     strategy: Literal["auto", "dag", "ensemble", "direct"] = "auto",
     candidates: CandidateCount | None = None,
-    placement: Literal["auto", "local", "distributed"] = "auto",
+    placement: Literal["auto", "local", "distributed"] = "local",
     output_contract: dict[str, Any] | None = None,
     verification_policy: dict[str, Any] | None = None,
-    confidentiality: Literal["local_only", "trusted_guild", "approved_nodes", "public"] = "trusted_guild",
+    confidentiality: Literal["local_only", "trusted_guild", "approved_nodes", "public"] = "local_only",
     requirements: dict[str, Any] | None = None,
 ) -> str:
     """Submit a task to the swarm. Returns immediately with a job_id.
@@ -83,8 +88,9 @@ async def pitch_task(
 
     Args:
         task: what to build/write/analyze, in plain language (max 1000 chars)
-        project_id: optional — continue an existing project so the swarm
-            remembers previous iterations (see list_projects)
+        project_id: optional — continue an existing DAG project so the swarm
+            remembers previous iterations (ensemble/direct reject this until
+            selected-result-only memory updates are implemented)
         strategy: auto, dag, ensemble, or direct
         candidates: ensemble candidate count, from 1 through 5
         placement: auto, local, or distributed
@@ -162,7 +168,7 @@ async def get_job_status(job_id: str) -> str:
 
 @server.tool()
 async def get_result(job_id: str) -> str:
-    """Fetch the final assembled output of a completed job."""
+    """Fetch final metadata and artifacts through authenticated canonical APIs."""
     try:
         async with _client() as client:
             resp = await client.get(f"/jobs/{job_id}")
@@ -175,52 +181,51 @@ async def get_result(job_id: str) -> str:
             if status == "failed":
                 return f"Job failed: {job.get('error')}"
 
-            project_dir = job.get("project_dir") or ""
-            timestamp = PurePath(project_dir).name
             execution_id = job.get("execution_id")
-            if not timestamp:
-                if not execution_id:
-                    return "Job is complete but has no output reference recorded."
-                canonical = await client.get(f"/v1/executions/{execution_id}")
-                if canonical.status_code != 200:
-                    return "Job is complete but its normalized execution record could not be read."
-                normalized = canonical.json()
-                return (
-                    f"Status: {normalized.get('status', '?')}\n"
-                    f"Strategy: {normalized.get('strategy_selected', '?')}\n"
-                    f"Winner: {normalized.get('winning_candidate') or 'n/a'}\n"
-                    f"Output reference: {normalized.get('output_reference') or 'n/a'}\n\n"
-                    f"{normalized.get('output_preview') or '(no bounded preview recorded)'}"
+            if not execution_id:
+                return "Job is complete but has no canonical execution identifier."
+            canonical = await client.get(f"/v1/executions/{execution_id}")
+            if canonical.status_code != 200:
+                return "Job is complete but its normalized execution record could not be read."
+            normalized = canonical.json()
+            manifest_response = await client.get(f"/v1/executions/{execution_id}/artifacts")
+            manifest = manifest_response.json() if manifest_response.status_code == 200 else {"entries": []}
+            entries = manifest.get("entries", [])
+            review_metadata = normalized.get("review_metadata") or {}
+            rating = review_metadata.get("rating") or job.get("rating") or "?"
+            lines = [
+                f"Status: {normalized.get('status', '?')}",
+                f"Lifecycle: {normalized.get('lifecycle_status', normalized.get('status', '?'))}",
+                f"Assurance: {normalized.get('assurance_level', 'unverified')}",
+                f"Strategy: {normalized.get('strategy_selected', '?')}",
+                f"Winner: {normalized.get('winning_candidate') or 'n/a'}",
+                f"Rating: {rating}",
+            ]
+            if entries:
+                lines.append("Artifacts: " + ", ".join(item["relative_path"] for item in entries))
+                preferred = next(
+                    (
+                        item for item in entries
+                        if item.get("relative_path", "").endswith("output.md")
+                        and item.get("size_bytes", 0) <= 1_048_576
+                    ),
+                    None,
                 )
-            detail = await client.get(f"/history/{timestamp}")
-            if detail.status_code != 200 and execution_id:
-                canonical = await client.get(f"/v1/executions/{execution_id}")
-                if canonical.status_code == 200:
-                    normalized = canonical.json()
-                    return (
-                        f"Status: {normalized.get('status', '?')}\n"
-                        f"Strategy: {normalized.get('strategy_selected', '?')}\n"
-                        f"Winner: {normalized.get('winning_candidate') or 'n/a'}\n"
-                        f"Output reference: {normalized.get('output_reference') or 'n/a'}\n\n"
-                        f"{normalized.get('output_preview') or '(no bounded preview recorded)'}"
+                if preferred:
+                    artifact = await client.get(
+                        f"/v1/executions/{execution_id}/artifacts/{preferred['relative_path']}"
                     )
+                    if artifact.status_code == 200:
+                        lines.extend(("", artifact.text))
+                        return "\n".join(lines)
+                lines.append(
+                    f"Authenticated archive: /v1/executions/{execution_id}/download"
+                )
+            else:
+                lines.extend(("", normalized.get("output_preview") or "(no artifact or preview recorded)"))
+            return "\n".join(lines)
     except httpx.HTTPError as e:
         return _connection_help(e)
-    if detail.status_code != 200:
-        return f"Output lookup failed ({detail.status_code}) for run {timestamp}."
-    run = detail.json()
-    parts = [f"Rating: {run.get('rating', '?')}"]
-    if run.get("code_files"):
-        parts.append("Extracted code files: " + ", ".join(run["code_files"]))
-    if run.get("code_problems"):
-        # The reviewer's rating covers prose; this is whether the code actually runs
-        parts.append(
-            "Known problems in the extracted code (verified mechanically):\n"
-            + "\n".join(f"  - {p}" for p in run["code_problems"])
-        )
-    parts.append("")
-    parts.append(run.get("final_output") or run.get("review") or "(no output recorded)")
-    return "\n".join(parts)
 
 
 @server.tool()
