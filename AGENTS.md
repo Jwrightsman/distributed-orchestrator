@@ -125,3 +125,11 @@ measured ~57% of test tasks come back runnable, with a wide error bar."*
 Not accurate: *"distributed AI that writes working software"* — it produces
 runnable output about half the time on a small test set, and the project says so
 in its own README.
+
+## Historical architecture research
+
+A point-in-time comparative architecture audit is available at
+`docs/audits/2026-08-23-comparative-architecture-audit.md`.
+
+The audit is non-normative. Current source code, protocol documentation, and
+accepted ADRs take precedence when they conflict with the report.

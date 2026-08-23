@@ -267,6 +267,7 @@ tests/              # pytest suite — run with: pytest -q
 docs/DEPLOY.md      # LAN / Tailscale / cloud deployment for beginners
 docs/PROTOCOL.md    # Normative execution and worker protocol v1
 docs/ARCHITECTURE.md # Strategy/placement/validation/persistence diagrams
+docs/audits/        # Historical, non-normative architecture research
 Dockerfile          # + docker-compose.yml: one-command orchestrator + Ollama
 output/             # Saved results, one directory per run
 projects/           # Persistent project memory (one dir per project)
