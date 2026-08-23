@@ -19,7 +19,10 @@ Usage:
 
 import asyncio
 import logging
+import os
+import sys
 from contextlib import asynccontextmanager, suppress
+from typing import Mapping, Sequence
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
@@ -69,6 +72,37 @@ from server_state import (  # noqa: F401
 _LOG = logging.getLogger("mycelium.startup")
 
 
+def _runtime_bind_host(
+    settings: Mapping[str, object],
+    *,
+    argv: Sequence[str] | None = None,
+) -> str:
+    """Resolve the interface the running ASGI server actually requested.
+
+    Uvicorn's host is a process-launch option, so it can differ from the
+    compatibility value in config.json. Embedders can declare it explicitly;
+    normal Uvicorn and Docker launches expose it in their process arguments.
+    """
+    explicit = os.environ.get("MYCELIUM_BIND_HOST", "").strip()
+    if explicit:
+        return explicit
+
+    arguments = tuple(sys.argv[1:] if argv is None else argv)
+    resolved: str | None = None
+    for index, argument in enumerate(arguments):
+        if argument == "--host" and index + 1 < len(arguments):
+            candidate = arguments[index + 1].strip()
+            if candidate:
+                resolved = candidate
+        elif argument.startswith("--host="):
+            candidate = argument.partition("=")[2].strip()
+            if candidate:
+                resolved = candidate
+    if resolved is not None:
+        return resolved
+    return str(settings.get("bind_host", "127.0.0.1"))
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     settings = get_config()
@@ -83,7 +117,7 @@ async def _lifespan(app: FastAPI):
             CONFIG_FILE,
             state_dir=coordinator_lock.state_dir,
             requested_mode=deployment_mode,
-            bind_host=str(settings.get("bind_host", "127.0.0.1")),
+            bind_host=_runtime_bind_host(settings),
             check_lock=False,
         )
         errors = [check for check in preflight.checks if check.status == "error"]
