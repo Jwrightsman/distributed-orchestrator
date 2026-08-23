@@ -1,281 +1,264 @@
-# Deployment Guide
+# Deployment
 
-Three ways to run the orchestrator, from safest to most public. If you've never
-deployed anything before: start with Path 1, move to Path 2 when you want
-testers, and only do Path 3 when you want a 24/7 public orchestrator.
+Mycelium RC1 is intended for a small private trusted alpha: one protected
+coordinator and invited workers. It is not a permissionless network, a
+multi-tenant service, or a public-Internet-ready application. Workers receive
+the prompts assigned to them, and generated artifacts are not sandboxed or
+automatically safe to execute.
 
-**Security in one paragraph:** the orchestrator has two locks — `node_secret`
-(who may join as a worker) and `pitch_key` (who may submit tasks). Both live in
-`config.json` and both are **off by default**, which is fine on your own Wi-Fi
-but not on the internet. Path 3 requires both. Rate limiting (5 pitches per
-minute per IP) and a disk cap on output (`output_max_mb`, default 500 MB) are
-always on.
+## Choose a deployment shape
 
----
+| Shape | Mode | Reachability | Appropriate use |
+| --- | --- | --- | --- |
+| Local-only development | `local` | Loopback | Development and evaluation on one owned machine |
+| Private-overlay trusted alpha | `trusted_alpha` | Tailscale, WireGuard, or equivalent | Recommended invited alpha |
+| Internet-facing reverse proxy | `trusted_alpha` | Restricted TLS proxy; app port remains private | Only when an overlay is impractical |
 
-## Path 1 — Same Wi-Fi / LAN (for the demo video)
+Do not expose port 8000 directly to the public Internet. The three static
+credentials are instance-wide shared authorities, not user accounts, and node
+admission is not public-key identity.
 
-No accounts, nothing installed beyond the project itself. Machines must be on
-the same network.
+## The three authorities
 
-**On the main machine (orchestrator):**
+A trusted-alpha deployment requires three independent random values. Each must
+be at least 32 characters, and all three must differ.
 
-```bash
-python -m uvicorn server:app --host 0.0.0.0 --port 8000
-```
+| Configuration field | Authority granted to every holder |
+| --- | --- |
+| `viewer_key` | Read private executions, results, projects, nodes, artifacts, and operator routes; administer shares |
+| `pitch_key` | Submit work that consumes coordinator and worker compute |
+| `node_secret` | Register a worker on the instance and obtain a process-local node session |
 
-Find your local IP address:
+Do not reuse one value for two roles. Give each person or machine only the
+authority it needs. A node session narrows subsequent worker-protocol calls,
+but the shared `node_secret` still admits any holder under an available node
+label; it is not a per-machine identity credential.
 
-```bash
-ipconfig
-```
+## Local-only development
 
-Look for "IPv4 Address" (something like `192.168.1.23`).
-
-**On each other machine (worker node):**
-
-```bash
-python join.py http://192.168.1.23:8000
-```
-
-(Replace the IP with the orchestrator's. `join.py` checks Python and Ollama,
-pulls the model, and connects. On the same LAN it can usually find the
-orchestrator automatically: `python join.py` with no address.)
-
-Dashboard: `http://192.168.1.23:8000/dashboard` from any device on the network.
-
-> **Is this safe?** Anyone *on your Wi-Fi* can pitch tasks and join nodes.
-> At home that's you and your family. On dorm/public Wi-Fi, set `node_secret`
-> and `pitch_key` in `config.json` first (see Path 3, step 4).
-
----
-
-## Path 2 — Tailscale (private testers anywhere)
-
-Tailscale creates a private network between machines you invite — testers
-anywhere in the world, **zero ports opened to the public internet**. Free for
-up to 100 devices.
-
-1. **Create a Tailscale account:** https://tailscale.com/ → "Get started" —
-   sign in with Google or GitHub. Install Tailscale on the orchestrator
-   machine and log in.
-2. **Find your Tailscale IP:** run `tailscale ip -4` — it looks like
-   `100.x.y.z`.
-3. **Start the orchestrator** exactly as in Path 1.
-4. **Invite testers:** in the Tailscale admin page (https://login.tailscale.com/admin/machines)
-   choose "Invite external users". Each tester installs Tailscale, accepts the
-   invite, then runs:
-
-   ```bash
-   python join.py http://100.x.y.z:8000
-   ```
-
-5. Recommended even here: set a `node_secret` (Path 3, step 4) and give it to
-   testers — they pass it with `python join.py http://100.x.y.z:8000 --secret <value>`.
-
-> **Is this safe?** Yes — traffic is end-to-end encrypted and only invited
-> machines can reach you. Your home IP is never exposed. This is the
-> recommended way to let strangers-you've-vetted join before going public.
-
----
-
-## Path 3 — Public 24/7 orchestrator (Oracle free tier or Hetzner)
-
-A cloud VM runs the orchestrator around the clock; your laptop and anyone
-else's machine joins as a worker from anywhere. **Do not skip step 4.**
-
-### 3a. Get a VM
-
-**Oracle Cloud (free forever, but frequently out of stock):**
-
-> **Try Hetzner first if you're on a deadline.** Oracle's free ARM capacity is
-> heavily oversubscribed — "Out of capacity for shape VM.Standard.A1.Flex" in
-> every availability domain is the common result, and Always Free resources can
-> only be created in your account's home region, so there's nowhere else to try.
-> Attempts can take days or weeks to succeed. Verified Aug 2026 in us-chicago-1:
-> all three ADs full.
-
-1. Sign up at https://www.oracle.com/cloud/free/ (credit card required for
-   identity, not charged).
-2. Create an instance: shape **VM.Standard.A1.Flex** (Ampere ARM), 4 CPUs,
-   24 GB RAM — that's the free tier maximum and it runs qwen3.5:4b on CPU
-   comfortably. OS: Ubuntu 24.04.
-3. During creation, download the SSH private key it offers. On the
-   "networking" step, note the public IP.
-4. Open port 8000: Networking → Virtual Cloud Network → Security Lists →
-   Add Ingress Rule: source `0.0.0.0/0`, protocol TCP, destination port `8000`.
-
-**Hetzner (a few euros a month, simpler UI, always has capacity):**
-1. Sign up at https://www.hetzner.com/cloud
-2. Create a server: **CAX21** (Arm64, 4 vCPU, 8 GB). 8 GB is the floor for
-   running `qwen3.5:4b` on the VM — the model needs ~6 GB resident, so the
-   4 GB types can't load it.
-   > **The Arm64 types are only offered in Hetzner's European locations**
-   > (Falkenstein, Nuremberg, Helsinki). Pick one of those. Trans-atlantic
-   > latency is irrelevant here: pipeline stages take minutes of inference and
-   > worker nodes hold a 25-second long-poll, so ~100ms of network is noise.
-   > A US x86 machine with the same 8 GB costs roughly double.
-3. OS: **Ubuntu 24.04**.
-4. Add your SSH key during creation (`ssh-keygen -t ed25519` locally, then
-   paste the contents of the `.pub` file).
-5. In the server's Firewall tab, allow inbound TCP on ports 22 and 8000.
-
-### 3b. Install and run — one command
-
-SSH in (replace the IP):
+`local` is the compatibility default. No config file is required when the app
+is bound to loopback:
 
 ```bash
-ssh ubuntu@YOUR_VM_IP
+python -m uvicorn server:app --host 127.0.0.1 --port 8000
 ```
 
-Then run this on the VM:
+Or use Compose, which also publishes to loopback by default:
+
+```bash
+docker compose up -d --build
+```
+
+Empty credentials retain the historical local workflow. Startup and
+`/health` warn that private routes are unprotected. Binding local mode beyond
+loopback with disabled credentials emits an additional preflight warning. Do
+not interpret compatibility mode as a secure LAN default; shared or public
+Wi-Fi is outside this boundary.
+
+## Recommended: private-overlay trusted alpha
+
+Install and authenticate Tailscale, WireGuard, or an equivalent private
+overlay on the coordinator before inviting workers. Then deploy on the
+coordinator:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Jwrightsman/distributed-orchestrator/master/deploy.sh | bash
 ```
 
-That script does everything: installs Docker, clones the repo, **generates both
-security keys for you**, starts the orchestrator and Ollama, pulls the model,
-waits until it reports healthy, and then prints your dashboard address, your two
-keys, and the exact commands to join a node and submit a task. It takes about
-ten minutes, mostly model download. Re-running it is safe — your keys are kept.
+The script:
 
-Write the two keys down somewhere private when it prints them:
+- installs the local Docker prerequisites when needed;
+- creates or updates `data/config.json` atomically with owner-only permissions
+  on POSIX systems;
+- generates any missing, short, or duplicate authority with 32 random bytes;
+- preserves valid independent authorities and unrelated settings on rerun;
+- upgrades a two-key installation by adding `viewer_key` without rotating a
+  valid `node_secret` or `pitch_key`;
+- runs strict preflight before launch;
+- starts one coordinator process and Ollama; and
+- reports success only when `/health` has both `status: ok` and
+  `private_routes_protected: true`.
 
-- `node_secret` — give only to people you allow to join as workers.
-- `pitch_key` — give only to people you allow to submit tasks.
+Credential values are deliberately not printed, even under shell tracing.
+Their storage location and authority names are printed. Transfer individual
+values from `data/config.json` through a secret manager or another secure
+channel; do not paste the whole file into chat, tickets, or logs.
 
-**Join your laptop as the first worker node** (from your laptop, not the VM):
+Compose publishes only on `127.0.0.1` by default. To publish on the
+coordinator's private overlay address, create a local `.env` file in the
+checkout and recreate the service:
 
 ```bash
-python join.py http://YOUR_VM_IP:8000 --secret THE_NODE_SECRET_IT_PRINTED
+printf 'MYCELIUM_PUBLISH_ADDRESS=%s\n' "$(tailscale ip -4)" > .env
+docker compose up -d
 ```
 
-<details>
-<summary>Manual steps, if you'd rather not run a script</summary>
+Restrict the overlay ACL so only invited operators and workers can reach port
+8000. Do not set `MYCELIUM_PUBLISH_ADDRESS=0.0.0.0` as a shortcut.
+
+The owner of each worker machine must explicitly consent before it joins:
 
 ```bash
-sudo apt-get update && sudo apt-get install -y docker.io docker-compose-v2 git
-sudo usermod -aG docker $USER && newgrp docker
-git clone https://github.com/Jwrightsman/distributed-orchestrator.git
-cd distributed-orchestrator && mkdir -p data
+python join.py http://OVERLAY_ADDRESS:8000 --secret NODE_SECRET
+```
 
-cat > data/config.json <<'EOF'
+`join.py` describes the model download and CPU/RAM/disk cost and waits for the
+owner. An agent must not bypass that gate on someone else's machine.
+
+## Manual trusted-alpha configuration
+
+The supported generator avoids shell interpolation and never prints generated
+values:
+
+```bash
+mkdir -p data
+python -c "from config import ensure_trusted_alpha_config as e; e('data/config.json', ollama_url='http://ollama:11434')"
+python scripts/preflight.py --config data/config.json --state-dir data --mode trusted_alpha
+```
+
+The resulting settings include this shape; the placeholders below are not
+valid credentials and must never be deployed literally:
+
+```json
 {
+  "deployment_mode": "trusted_alpha",
   "ollama_url": "http://ollama:11434",
-  "model": "qwen3.5:4b",
-  "node_secret": "REPLACE-WITH-LONG-RANDOM-STRING-1",
-  "pitch_key": "REPLACE-WITH-LONG-RANDOM-STRING-2",
-  "output_max_mb": 500
+  "viewer_key": "<independent-random-viewer-authority-at-least-32-chars>",
+  "pitch_key": "<independent-random-pitch-authority-at-least-32-chars>",
+  "node_secret": "<independent-random-node-authority-at-least-32-chars>",
+  "public_pitch": false,
+  "public_pitch_acknowledged": false,
+  "https_enabled": false,
+  "viewer_cookie_secure": false,
+  "trust_proxy_headers": false
 }
-EOF
-
-docker compose up -d --build
-docker compose exec ollama ollama pull qwen3.5:4b
 ```
 
-Generate the two random strings with `openssl rand -hex 24` (run it twice).
-</details>
+The generator writes `.mycelium-trusted-alpha` beside the config. This
+out-of-band marker makes a later missing or malformed JSON file fail closed
+instead of silently reverting to local defaults. A successfully loaded manual
+`deployment_mode: trusted_alpha` config also establishes the marker.
 
-> **Is this safe?** With both keys set: joining and pitching require secrets,
-> pitch rate limiting is on, and disk usage is capped. What this does *not*
-> give you: HTTPS (traffic is readable in transit — fine for demo tasks, don't
-> pitch anything sensitive), and the dashboard/history pages are readable by
-> anyone who finds the address. Treat everything the orchestrator produces as
-> public. If the VM is ever compromised, it holds nothing but this project's
-> output and your two random strings — rotate them by editing config.json and
-> restarting: `docker compose restart orchestrator`.
+## Preflight
 
----
-
-## Updating a running orchestrator
-
-Once it is deployed, this is how you ship a fix to it. **Run it and then verify** —
-a deploy that silently did nothing looks exactly like a deploy that worked.
+For a source checkout whose state is the current directory:
 
 ```bash
-ssh -i ~/.ssh/YOUR_KEY root@YOUR_SERVER_IP "cd /root/distributed-orchestrator && git pull && docker compose up -d --build"
+python scripts/preflight.py
+python scripts/preflight.py --json
 ```
 
-Then confirm the new code is actually serving. **Run this from an up-to-date
-checkout of the branch you just deployed** — it compares the code in front of
-you against the code the server is really executing:
+For the Compose layout:
 
 ```bash
-python scripts/verify_deploy.py http://YOUR_SERVER_IP:8000
+python scripts/preflight.py \
+  --config data/config.json \
+  --state-dir data \
+  --mode trusted_alpha
 ```
 
-It prints `MATCH` (and exits 0) or `STALE` (exits 1) with what to check next.
-The server reports a hash of its own source in `/status.json`, computed inside
-the running process, so it cannot be faked by a `git pull` that succeeded while
-the rebuild didn't. That distinction is the whole point: the deploy failure this
-project actually had was a successful-looking pull with no rebuild behind it.
+Preflight returns nonzero for an unsafe trusted-alpha deployment and never
+prints credential values. It validates JSON, deployment mode, authority length
+and separation, public-pitch acknowledgement, HTTPS/cookie coherence, writable
+SQLite/artifact/output/project paths, database integrity when one exists, and
+availability of the single-coordinator OS lock.
 
-Two older tells, still useful when the script says `STALE` and you want to know
-which half broke:
+An active coordinator legitimately holds the lock. Use
+`--skip-lock-check` only to validate its other settings while it is running;
+the result includes a warning that the lock probe was skipped. Stop the
+coordinator and run the full command before a restore or controlled restart.
+
+## Internet-facing reverse proxy
+
+Prefer an overlay. If browser clients cannot use one, keep the application
+published on loopback and put a maintained TLS reverse proxy on the same host.
+The proxy must:
+
+- use a valid certificate and redirect HTTP to HTTPS;
+- forward WebSocket upgrades for `/ws/events`;
+- enforce request-body and connection limits;
+- restrict operator access where possible; and
+- redact `/v1/shares/<token>` paths from access logs, because a share URL is a
+  bearer capability.
+
+Set these fields before restarting:
+
+```json
+{
+  "deployment_mode": "trusted_alpha",
+  "https_enabled": true,
+  "viewer_cookie_secure": true,
+  "trust_proxy_headers": false
+}
+```
+
+Merge them into the existing config; do not replace the authority values.
+RC1 does not consume trusted proxy headers, so `trust_proxy_headers: true` is a
+preflight error in trusted-alpha mode. Restrict direct access to port 8000 so a
+client cannot bypass the proxy. Even with TLS, this remains a small invited
+alpha: there are no per-user roles, per-node public keys, generated-code
+sandbox, or high-availability coordinator.
+
+## Viewer login and health
+
+Private APIs accept `X-Viewer-Key`, `Authorization: Bearer`, or a signed
+HttpOnly viewer cookie. The browser session endpoint is:
+
+```text
+POST /v1/viewer/session
+{"viewer_key":"..."}
+```
+
+The cookie is signed, short-lived, and does not contain the static key. Rotating
+`viewer_key` invalidates existing viewer cookies.
+
+Two public, sanitized checks remain available:
 
 ```bash
-# The container was recreated? Uptime should be seconds, not days.
-docker compose ps
+curl -fsS http://127.0.0.1:8000/health
+curl -fsS http://127.0.0.1:8000/status.json
 ```
 
-```bash
-# 101 = the WebSocket (live dashboard updates) is working. 404 = image predates Aug 12.
-curl -s -o /dev/null -w "%{http_code}\n" \
-  -H "Connection: Upgrade" -H "Upgrade: websocket" \
-  -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
-  http://YOUR_SERVER_IP:8000/ws/events
+`/health` is deployment-ready only when `status` is `ok` and
+`private_routes_protected` is `true`. With viewer authorization, private
+`GET /v1/operator/health` reports the process `instance_id`, deployment mode,
+preflight warnings, and whether the coordinator lock is held. It contains no
+credential values.
+
+## Public pitch is an explicit exception
+
+`public_pitch` lets unauthenticated visitors spend compute through the bounded
+public profile. Trusted-alpha preflight rejects it unless both fields are true:
+
+```json
+{
+  "public_pitch": true,
+  "public_pitch_acknowledged": true
+}
 ```
 
-> The WebSocket check only proves the image is newer than Aug 12 — it cannot
-> tell one recent deploy from another. `verify_deploy.py` can.
+Rate, task-length, and concurrency limits reduce abuse; they do not eliminate
+it. Enable this only for a supervised event and disable it afterward. It does
+not make private execution or artifact routes public.
 
-### "not a git repository" — the tarball trap
+## Updating and recovery
 
-If the server was set up before this repo was public, its code was copied over as
-a tarball and has **no `.git` directory**. `git pull` then fails with
-`fatal: not a git repository`, and because the command is chained with `&&`,
-**the rebuild never runs and nothing tells you** — the deploy appears to succeed.
-This happened to the live orchestrator and went unnoticed for a day.
-
-Convert it to a real checkout once, and every future update is a normal
-`git pull`. Your runtime state lives in `data/`, which is gitignored, so this
-does not touch `config.json`, the ledger, the event database or past output:
-
-```bash
-cd /root/distributed-orchestrator
-cp -a data /root/data-backup-$(date +%F)          # belt and braces
-git init -b master
-git remote add origin https://github.com/Jwrightsman/distributed-orchestrator.git
-git fetch origin master
-git reset --hard origin/master                     # untracked data/ is untouched
-git branch --set-upstream-to=origin/master master
-docker compose up -d --build
-```
-
-Then run the `curl` check above. If anything went wrong, `data/` is in the backup
-and the code is all in git, so nothing is unrecoverable.
-
-## The public pitch page (`/try`) — read before enabling
-
-`"public_pitch": true` in config.json turns on a page where **anyone on the
-internet can submit tasks with no key**. Protections that are always on with
-it: 2 tasks per hour per visitor, at most 3 public tasks running at once,
-300-character task limit, and a basic word filter.
-
-**What can still go wrong:** strangers decide what your hardware works on for
-minutes at a time; the word filter is basic, so someone determined can phrase
-something distasteful and the swarm will write text about it; and outputs are
-publicly readable. Enable it for demo events and launch windows, watch the
-dashboard while it's on, and turn it off (`"public_pitch": false` + restart)
-when you're not looking at it.
+Use the procedures in [Trusted Alpha Runbook](TRUSTED_ALPHA_RUNBOOK.md). Back up
+before an update, keep one coordinator per `data/` directory, and expect queued
+or running executions to become interrupted rather than resume after restart.
+The backup/restore tools and their non-recoverable process-local state are
+documented there and in [Operations](OPERATIONS.md).
 
 ## Troubleshooting
 
-| Symptom | Fix |
-|---|---|
-| `/health` shows `"ollama": "unavailable"` | `docker compose logs ollama`; make sure the model pull finished |
-| Node gets 401 on join | The node isn't sending the right `node_secret` |
-| Pitches get 401 | Send header `X-Pitch-Key: <your pitch_key>` |
-| Pitches get 429 | Rate limit: 5/minute per IP — wait a minute |
-| VM slow / out of memory | Use a smaller model (`gemma3:1b`) or route builders to worker nodes |
+| Symptom | Action |
+| --- | --- |
+| Preflight says another coordinator owns the state directory | Stop the other process or select a different state directory; do not delete the lock file to bypass ownership |
+| `/health` is `degraded` | Check `docker compose logs ollama` and confirm the configured model pull completed |
+| `/health` says private routes are unprotected | Configure a distinct `viewer_key`, run preflight, and restart |
+| Worker registration returns 401 | Confirm only that worker received the current `node_secret`; do not send `viewer_key` or `pitch_key` |
+| Worker protocol returns a session-specific 401 | The stock worker automatically re-registers; repeated failures require checking coordinator and worker clocks/logs |
+| Registration returns 409 | The normalized node ID already has a live different session; choose another ID or wait for the old session to become stale |
+| Pitch returns 401 | Send the current `pitch_key` on the pitch route |
+| Browser logs in but immediately loses the cookie | HTTPS and `viewer_cookie_secure` declarations disagree, or the proxy is not actually serving HTTPS |
+| Compose is reachable only locally | This is the safe default; set `MYCELIUM_PUBLISH_ADDRESS` to the private overlay address, not a public wildcard |
