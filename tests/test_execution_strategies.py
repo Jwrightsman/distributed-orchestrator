@@ -688,20 +688,23 @@ async def test_artifact_root_stays_active_through_manifest_hashing(tmp_path, mon
 
     monkeypatch.setattr(strategies, "generate", generated)
     execution_service = service(tmp_path)
-    original_refresh = execution_service.artifacts.refresh_manifest
-    active_during_refresh = []
+    original_seal = execution_service.artifacts.seal_manifest
+    active_during_seal = []
 
-    def checked_refresh(execution_id, **kwargs):
-        active_during_refresh.append(
+    def checked_seal(execution_id, **kwargs):
+        active_during_seal.append(
             bool(execution_service.artifacts.active_root_paths())
         )
-        return original_refresh(execution_id, **kwargs)
+        return original_seal(execution_id, **kwargs)
 
-    monkeypatch.setattr(execution_service.artifacts, "refresh_manifest", checked_refresh)
+    monkeypatch.setattr(execution_service.artifacts, "seal_manifest", checked_seal)
     run = await execution_service.execute(
         ExecutionRequestV1(task="Build it", strategy="direct")
     )
 
     assert run.result.lifecycle_status == "completed"
-    assert active_during_refresh == [True]
+    # The final seal reads and hashes the tree while retention still sees the
+    # durable active marker. A second idempotent call may occur in terminal
+    # cleanup, but it must observe an already sealed (therefore inactive) row.
+    assert active_during_seal[0] is True
     assert execution_service.artifacts.active_root_paths() == set()

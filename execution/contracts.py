@@ -451,6 +451,32 @@ class ExecutionResultV1(ProtocolModel):
     review_metadata: dict[str, Any] = Field(default_factory=dict)
     revision_metadata: dict[str, Any] = Field(default_factory=dict)
     produced_files: list[str] = Field(default_factory=list, max_length=100)
+    primary_deliverables: list[str] = Field(default_factory=list, max_length=100)
+    artifact_manifest_url: str | None = Field(default=None, max_length=500)
+    audit_manifest_url: str | None = Field(default=None, max_length=500)
+    sealed_manifest_hash: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    artifact_integrity_mode: Literal[
+        "none",
+        "active",
+        "sealed",
+        "legacy_live",
+        "invalid",
+    ] = "none"
+    posthoc_verification_status: Literal[
+        "disabled",
+        "not_requested",
+        "pending",
+        "running",
+        "completed",
+        "failed",
+    ] = "not_requested"
+    posthoc_verification_started_at: str | None = None
+    posthoc_verification_completed_at: str | None = None
+    posthoc_agreement: bool | None = None
+    posthoc_reason: str | None = Field(default=None, max_length=500)
     output_reference: str | None = Field(default=None, max_length=500)
     output_preview: str = Field(default="", max_length=1000)
     participating_nodes: list[str] = Field(default_factory=list, max_length=32)

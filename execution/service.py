@@ -13,6 +13,7 @@ from typing import Any, Callable
 
 import orchestrator
 import server_state
+from config import get as get_config
 from execution.contracts import (
     CandidateSummaryV1,
     ExecutionRequestV1,
@@ -103,6 +104,7 @@ class ExecutionService:
             deadline_at = (datetime.fromisoformat(created) + timedelta(seconds=request.timeout_seconds)).isoformat()
         except ValueError:
             deadline_at = None
+        trusted_alpha = get_config().get("deployment_mode", "local") == "trusted_alpha"
         return ExecutionResultV1(
             execution_id=execution_id,
             job_id=job_id,
@@ -119,6 +121,13 @@ class ExecutionService:
             created_at=created,
             deadline_at=deadline_at,
             remote_dispatch_consent=getattr(request, "remote_dispatch_consent", False),
+            posthoc_verification_status=("disabled" if trusted_alpha else "not_requested"),
+            posthoc_reason=(
+                "sampled duplicate verification is disabled in trusted-alpha mode "
+                "until it has durable post-hoc semantics"
+                if trusted_alpha
+                else None
+            ),
         )
 
     def _remember(self, request: ExecutionRequestV1, result: ExecutionResultV1) -> None:
@@ -433,13 +442,26 @@ class ExecutionService:
                                 execution_id,
                                 f"candidate_{candidate_number}",
                             )
-                        return self.artifacts.refresh_manifest(execution_id)
+                        return self.artifacts.seal_manifest(execution_id)
 
                     remaining = control.deadline_monotonic - time.monotonic()
                     if remaining <= 0:
                         raise asyncio.TimeoutError
                     manifest = await asyncio.wait_for(asyncio.to_thread(build_manifest), timeout=remaining)
                     result.produced_files = [entry.relative_path for entry in manifest.entries]
+                    result.primary_deliverables = [
+                        entry.relative_path
+                        for entry in manifest.entries
+                        if entry.role == "deliverable"
+                    ]
+                    result.artifact_manifest_url = (
+                        f"/v1/executions/{execution_id}/artifacts?role=deliverable"
+                    )
+                    result.audit_manifest_url = (
+                        f"/v1/executions/{execution_id}/artifacts?role=audit"
+                    )
+                    result.sealed_manifest_hash = manifest.manifest_hash
+                    result.artifact_integrity_mode = manifest.integrity_mode
                     result.output_reference = f"/v1/executions/{execution_id}/artifacts"
                     for candidate in result.candidates:
                         candidate.produced_files = [
@@ -609,10 +631,31 @@ class ExecutionService:
         )
         if should_clear_artifact_marker:
             try:
-                self.artifacts.set_active(execution_id, False)
+                terminal_manifest = await asyncio.to_thread(
+                    self.artifacts.seal_manifest,
+                    execution_id,
+                )
+                result.produced_files = [
+                    entry.relative_path for entry in terminal_manifest.entries
+                ]
+                result.primary_deliverables = [
+                    entry.relative_path
+                    for entry in terminal_manifest.entries
+                    if entry.role == "deliverable"
+                ]
+                result.artifact_manifest_url = (
+                    f"/v1/executions/{execution_id}/artifacts?role=deliverable"
+                )
+                result.audit_manifest_url = (
+                    f"/v1/executions/{execution_id}/artifacts?role=audit"
+                )
+                result.sealed_manifest_hash = terminal_manifest.manifest_hash
+                result.artifact_integrity_mode = terminal_manifest.integrity_mode
+                result.output_reference = f"/v1/executions/{execution_id}/artifacts"
             except ArtifactError as exc:
+                result.artifact_integrity_mode = "invalid"
                 logger.warning(
-                    "could not clear artifact active marker for %s: %s",
+                    "could not seal terminal artifacts for %s: %s",
                     execution_id,
                     exc,
                 )
