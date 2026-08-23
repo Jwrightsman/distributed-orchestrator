@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 
 import httpx
 import pytest
@@ -109,7 +110,17 @@ def test_legacy_async_rejects_ignored_direct_project_memory():
     [
         (["build", "it"], "auto", None, "local", ["build", "it"]),
         (
-            ["build", "it", "--strategy", "ensemble", "--candidates", "3", "--placement", "distributed"],
+            [
+                "build",
+                "it",
+                "--strategy",
+                "ensemble",
+                "--candidates",
+                "3",
+                "--placement",
+                "distributed",
+                "--allow-remote",
+            ],
             "ensemble",
             3,
             "distributed",
@@ -206,6 +217,61 @@ async def test_execution_events_cover_selection_units_validation_and_completion(
     assert "candidate_validation_completed" in names
     assert "winner_selected" in names
     assert names[-1] == "execution_completed"
+
+
+@pytest.mark.asyncio
+async def test_terminal_state_is_published_only_after_artifact_sealing_and_event(
+    tmp_path,
+    monkeypatch,
+):
+    emitted = []
+    seal_started = Event()
+    release_seal = Event()
+
+    async def generated(*args, **kwargs):
+        return "complete output"
+
+    monkeypatch.setattr(strategies, "generate", generated)
+    monkeypatch.setattr(
+        strategies.EnsembleStrategy,
+        "artifact_root",
+        tmp_path / "artifacts",
+    )
+    database = tmp_path / "executions.db"
+    service = ExecutionService(
+        store=ExecutionStore(database),
+        artifacts=ArtifactStore(database, allowed_roots=[tmp_path]),
+    )
+    original_seal = service.artifacts.seal_manifest
+
+    def blocked_seal(execution_id):
+        seal_started.set()
+        if not release_seal.wait(timeout=5):
+            raise TimeoutError("test did not release artifact sealing")
+        return original_seal(execution_id)
+
+    monkeypatch.setattr(service.artifacts, "seal_manifest", blocked_seal)
+    service._emit = lambda name, data: emitted.append((name, data))
+    queued = service.submit(
+        ExecutionRequestV1(task="Complete it", strategy="direct", placement="local")
+    )
+    try:
+        assert await asyncio.to_thread(seal_started.wait, 2)
+        visible = service.get(queued.execution_id)
+        assert visible.lifecycle_status == "running"
+        assert not any(name == "execution_completed" for name, _ in emitted)
+    finally:
+        release_seal.set()
+
+    for _ in range(200):
+        await asyncio.sleep(0.01)
+        visible = service.get(queued.execution_id)
+        if visible and visible.lifecycle_status == "completed":
+            break
+    else:
+        pytest.fail("execution never published its terminal state")
+
+    assert emitted[-1][0] == "execution_completed"
 
 
 @pytest.mark.asyncio
