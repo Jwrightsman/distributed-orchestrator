@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from execution.contracts import ExecutionRequestV1, ExecutionResultV1
+from sqlite_store import connection, migration_lock
 
 
 class ExecutionStore:
@@ -25,7 +26,7 @@ class ExecutionStore:
 
     def migrate(self) -> None:
         """Create the v1 execution table idempotently, preserving old tables."""
-        with self._lock, sqlite3.connect(self.path) as con:
+        with self._lock, migration_lock(self.path), connection(self.path) as con:
             con.execute(
                 """
                 CREATE TABLE IF NOT EXISTS executions (
@@ -98,7 +99,7 @@ class ExecutionStore:
         self.migrate()
         request_json = self._bounded_json(request.model_dump(mode="json"), 65_536)
         result_json = self._bounded_json(result.model_dump(mode="json"))
-        with self._lock, sqlite3.connect(self.path) as con:
+        with self._lock, connection(self.path) as con:
             con.execute(
                 """
                 INSERT INTO executions (
@@ -195,7 +196,7 @@ class ExecutionStore:
         marker = restart_marker or uuid.uuid4().hex
         interrupted_at = self._now()
         changed: list[str] = []
-        with self._lock, sqlite3.connect(self.path) as con:
+        with self._lock, connection(self.path) as con:
             con.execute("BEGIN IMMEDIATE")
             rows = con.execute(
                 """
@@ -252,7 +253,7 @@ class ExecutionStore:
 
     def get(self, execution_id: str) -> ExecutionResultV1 | None:
         self.migrate()
-        with self._lock, sqlite3.connect(self.path) as con:
+        with self._lock, connection(self.path) as con:
             row = con.execute(
                 "SELECT result_json FROM executions WHERE execution_id = ?",
                 (execution_id,),
@@ -263,7 +264,7 @@ class ExecutionStore:
 
     def get_by_job_id(self, job_id: str) -> ExecutionResultV1 | None:
         self.migrate()
-        with self._lock, sqlite3.connect(self.path) as con:
+        with self._lock, connection(self.path) as con:
             row = con.execute(
                 "SELECT result_json FROM executions WHERE job_id = ? ORDER BY created_at DESC LIMIT 1",
                 (job_id,),
@@ -275,7 +276,7 @@ class ExecutionStore:
     def raw_record(self, execution_id: str) -> dict[str, Any] | None:
         """Return the stored row for diagnostics and migration tests."""
         self.migrate()
-        with self._lock, sqlite3.connect(self.path) as con:
+        with self._lock, connection(self.path) as con:
             con.row_factory = sqlite3.Row
             row = con.execute(
                 "SELECT * FROM executions WHERE execution_id = ?",

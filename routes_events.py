@@ -26,6 +26,7 @@ from server_state import (
     task_results,
     ws_manager,
 )
+from sqlite_store import connection
 
 router = APIRouter()
 
@@ -56,19 +57,17 @@ async def health():
 async def get_events(since: int = 0):
     """Get pipeline events. since=0 returns last 100; since=N returns events with id > N."""
     with _db_lock:
-        con = sqlite3.connect(state._DB_PATH)
-        con.row_factory = sqlite3.Row
-        if since == 0:
-            rows = con.execute(
-                "SELECT id, type, time, data FROM events ORDER BY id DESC LIMIT 100"
-            ).fetchall()
-            rows = list(reversed(rows))
-        else:
-            rows = con.execute(
-                "SELECT id, type, time, data FROM events WHERE id > ? ORDER BY id",
-                (since,),
-            ).fetchall()
-        con.close()
+        with connection(state._DB_PATH, row_factory=sqlite3.Row) as con:
+            if since == 0:
+                rows = con.execute(
+                    "SELECT id, type, time, data FROM events ORDER BY id DESC LIMIT 100"
+                ).fetchall()
+                rows = list(reversed(rows))
+            else:
+                rows = con.execute(
+                    "SELECT id, type, time, data FROM events WHERE id > ? ORDER BY id",
+                    (since,),
+                ).fetchall()
 
     events = []
     for row in rows:
@@ -89,12 +88,10 @@ async def ws_events(websocket: WebSocket):
     # Replay last 20 persisted events from SQLite so new clients aren't blind
     try:
         with _db_lock:
-            con = sqlite3.connect(state._DB_PATH)
-            con.row_factory = sqlite3.Row
-            rows = con.execute(
-                "SELECT id, type, time, data FROM events ORDER BY id DESC LIMIT 20"
-            ).fetchall()
-            con.close()
+            with connection(state._DB_PATH, row_factory=sqlite3.Row) as con:
+                rows = con.execute(
+                    "SELECT id, type, time, data FROM events ORDER BY id DESC LIMIT 20"
+                ).fetchall()
         for row in reversed(rows):
             blob = json.loads(row["data"])
             blob.update({"id": row["id"], "type": row["type"], "time": row["time"]})
