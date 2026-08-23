@@ -1,9 +1,21 @@
 """Tests for the contribution ledger (runs against a temp CWD — see conftest)."""
 
 import json
+import sqlite3
 from pathlib import Path
 
-from ledger import get_history, get_standings, log_contribution
+import pytest
+
+import orchestrator
+import routes_events
+import routes_pitch
+import server_state
+from ledger import (
+    ensure_contribution_schema,
+    get_history,
+    get_standings,
+    log_contribution,
+)
 
 
 def test_log_creates_ledger_file():
@@ -52,3 +64,172 @@ def test_corrupt_ledger_treated_as_empty():
     # And logging still works afterwards
     log_contribution("node-a", "compute", credits=5)
     assert len(get_standings()) == 1
+
+
+@pytest.mark.asyncio
+async def test_pipeline_contributions_never_persist_prompt_or_model_text(
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    prompt_sentinel = "PRIVATE_REQUEST_SENTINEL_8f61"
+    output_sentinel = "PRIVATE_MODEL_OUTPUT_SENTINEL_4ad2"
+    plan = json.dumps(
+        [
+            {
+                "id": 1,
+                "title": f"{output_sentinel} generated title",
+                "prompt": f"{output_sentinel} generated subtask",
+                "depends_on": [],
+            }
+        ]
+    )
+    builder_output = (f"{output_sentinel} generated builder output. " * 5).strip()
+    review_output = (
+        "## Quality Rating\nPASS\n\n"
+        "## Issues Found\nNone\n\n"
+        f"## Final Assembled Output\n{output_sentinel} generated review output."
+    )
+
+    async def fake_generate(_prompt, system="", **_kwargs):
+        if system == orchestrator.PLANNER_SYSTEM:
+            return plan
+        if system == orchestrator.REVIEWER_SYSTEM:
+            return review_output
+        return builder_output
+
+    async def fake_stream(*_args, **_kwargs):
+        yield builder_output
+
+    monkeypatch.setattr(orchestrator, "generate", fake_generate)
+    monkeypatch.setattr(orchestrator, "generate_stream", fake_stream)
+    monkeypatch.setattr(orchestrator, "OUTPUT_DIR", tmp_path / "output")
+    monkeypatch.setattr(server_state, "pipeline_events", [])
+    server_state._init_db()
+    callbacks = routes_pitch._callbacks(prompt_sentinel, "privacy-regression")
+
+    await orchestrator.run_pipeline(
+        f"Build {prompt_sentinel}",
+        on_plan=callbacks["on_plan"],
+        on_build=callbacks["on_build"],
+        on_review_start=callbacks["on_review_start"],
+        on_token=callbacks["on_token"],
+        revision_enabled=False,
+    )
+
+    with sqlite3.connect("events.db") as con:
+        contributions = con.execute(
+            "SELECT contribution_type, points, task, details FROM contributions "
+            "ORDER BY created_at, contribution_id"
+        ).fetchall()
+        persisted_events = con.execute(
+            "SELECT type, data FROM events ORDER BY id"
+        ).fetchall()
+
+    assert [(row[0], row[1]) for row in contributions] == [
+        ("pitch", 1.0),
+        ("compute", 5.0),
+        ("compute", 3.0),
+    ]
+    assert [row[2] for row in contributions] == [
+        "pipeline_submission",
+        "pipeline_subtask",
+        "pipeline_review",
+    ]
+    assert all(row[3] == "" for row in contributions)
+
+    route_payload = await routes_events.ledger(limit=50)
+    persisted_surfaces = [
+        json.dumps(contributions),
+        Path("ledger.json").read_text(encoding="utf-8"),
+        json.dumps(persisted_events),
+        json.dumps(server_state.pipeline_events),
+        json.dumps(route_payload),
+        caplog.text,
+    ]
+    for sentinel in (prompt_sentinel, output_sentinel):
+        assert all(sentinel not in surface for surface in persisted_surfaces)
+
+
+@pytest.mark.asyncio
+async def test_startup_redacts_sqlite_and_imported_legacy_contribution_text():
+    sqlite_prompt = "HISTORICAL_SQLITE_PROMPT_18d5"
+    json_prompt = "HISTORICAL_JSON_PROMPT_c703"
+    with sqlite3.connect("events.db") as con:
+        ensure_contribution_schema(con)
+        con.execute(
+            """
+            INSERT INTO contributions (
+                contribution_id, contributor, contribution_type, points,
+                task, details, basis, points_are_monetary, attempt_id, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+            """,
+            (
+                "sqlite-contribution",
+                "node-sqlite",
+                "compute",
+                7.0,
+                sqlite_prompt,
+                f"details {sqlite_prompt}",
+                "compute_contribution",
+                "attempt-sqlite",
+                1.0,
+            ),
+        )
+        con.commit()
+    Path("ledger.json").write_text(
+        json.dumps(
+            [
+                {
+                    "contribution_id": "json-contribution",
+                    "contributor": "node-json",
+                    "type": "pitch",
+                    "credits": 1,
+                    "task": json_prompt,
+                    "details": f"details {json_prompt}",
+                    "contribution_basis": "pitch",
+                    "timestamp": 2.0,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    server_state._init_db()
+    server_state._init_db()
+
+    with sqlite3.connect("events.db") as con:
+        rows = con.execute(
+            """
+            SELECT contribution_id, points, task, details, basis, attempt_id
+            FROM contributions ORDER BY contribution_id
+            """
+        ).fetchall()
+    assert rows == [
+        (
+            "json-contribution",
+            1.0,
+            "pipeline_submission",
+            "",
+            "pitch",
+            None,
+        ),
+        (
+            "sqlite-contribution",
+            7.0,
+            "compute_contribution",
+            "",
+            "compute_contribution",
+            "attempt-sqlite",
+        ),
+    ]
+
+    projection = json.loads(Path("ledger.json").read_text(encoding="utf-8"))
+    route_payload = await routes_events.ledger(limit=50)
+    assert {entry["contribution_id"] for entry in projection} == {
+        "json-contribution",
+        "sqlite-contribution",
+    }
+    for serialized in (json.dumps(projection), json.dumps(route_payload)):
+        assert sqlite_prompt not in serialized
+        assert json_prompt not in serialized

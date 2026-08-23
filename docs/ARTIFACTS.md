@@ -57,10 +57,16 @@ All canonical execution artifact routes require viewer authorization when
 | `GET /v1/executions/{id}/artifacts` | deliverable-only manifest (default) |
 | `GET /v1/executions/{id}/artifacts?role=audit` | provenance, logs, candidate source, and internal manifest entries |
 | `GET /v1/executions/{id}/artifacts?role=all` | deprecated complete compatibility view |
-| `POST /v1/executions/{id}/artifacts/seal` | idempotently seal the current bounded baseline |
+| `POST /v1/executions/{id}/artifacts/seal` | return the already committed sealed baseline; never publish an active/legacy baseline as newly terminal |
 | `GET /v1/executions/{id}/artifacts/{relative_path}` | one streamed file |
 | `GET /v1/executions/{id}/download` | streamed deliverable-only ZIP |
 | `GET /v1/executions/{id}/audit-download` | streamed non-deliverable audit ZIP |
+
+Every route in this table requires a durable terminal execution snapshot. A
+sealed manifest must match the `sealed_manifest_hash` bound into that snapshot.
+Until then, active files and even a prepared seal are finalization state, not an
+authoritative terminal artifact publication. The routes fail closed instead of
+using a process-local terminal result or a new unbound sealed manifest.
 
 Example:
 
@@ -101,7 +107,15 @@ A share token can retrieve artifacts only when it was created with
 
 The token binds the request to one execution. Supplying a path from another
 execution cannot cross the registered root, and the token cannot authorize a
-private execution route.
+private execution route. Share artifact delivery applies the same durable
+terminal-execution gate as private delivery and, for sealed manifests, the same
+manifest-hash binding check. Historical `legacy_live` manifests remain the
+explicit rescan-based compatibility exception described below.
+
+A share record can be created before an execution becomes terminal. Its public
+view may show the last committed nonterminal execution snapshot, but it omits
+the artifact manifest and cannot retrieve artifacts until the terminal gate is
+satisfied.
 
 Share manifests allow `deliverable` entries only by default and also exclude
 internal run records such as `full_log.json`, `plan.json`, `review.md`, builder
@@ -157,6 +171,13 @@ same stored baseline. A sealed manifest is never refreshed from later directory
 contents. Every file or ZIP retrieval still resolves the live path and hashes
 its bytes against the sealed entry; missing, changed, symlinked, or escaped
 content fails closed.
+
+Sealing the filesystem baseline does not itself publish terminal lifecycle
+truth. The execution service must next commit the terminal execution snapshot
+that references the manifest hash. Only that durable binding opens private and
+share-scoped terminal delivery. If terminal persistence permanently fails, the
+seal may remain as internal finalization state while the last durable execution
+remains queued or running; callers cannot retrieve it as a terminal artifact.
 
 If the final tree cannot be safely scanned, sealing marks it `invalid` and
 retrieval returns an integrity failure. Historical registrations without the
@@ -278,6 +299,15 @@ share remains readable.
 - Artifact registration or manifest failure is represented as a structured
   `artifact_manifest_failed` execution error; it does not cause an unsafe path
   to be published.
+- Required terminal-execution persistence failure leaves the last durable
+  lifecycle authoritative and suppresses terminal manifest, file, ZIP, and
+  share publication. A later restart may reconcile that execution to
+  `interrupted`; it does not retroactively publish the failed terminal result.
+- Legacy run pages, history/gallery/status views, CLI history, archives, and
+  demo capture resolve registered root ownership before trusting mutable
+  `full_log.json` fields. Current runs require the same durable terminal and
+  sealed-hash binding; unmarked historical records remain the explicit
+  live-rescan compatibility case.
 - An active or legacy-live manifest reflects a fresh bounded disk scan. A sealed
   manifest uses its immutable SQLite baseline and re-hashes every requested live
   file before delivery.
@@ -297,4 +327,6 @@ rest, per-user ownership, or generated-code isolation. The backup tools preserve
 the local sealed baseline but do not turn it into an independent attestation. A
 compromised orchestrator host can change artifacts and their SQLite metadata.
 Hash recomputation detects ordinary drift at read time; it does not defend
-against a host attacker who can change both file and database.
+against a host attacker who can change both file and database. Commit-before-
+publication narrows coordinator inconsistency; it is not an external
+transaction, immutable object store, or host-independent attestation.

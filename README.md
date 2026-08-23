@@ -16,7 +16,7 @@ active model, no auth required. **Agents:** read [AGENTS.md](AGENTS.md) first;
 it states plainly that installing this on a machine requires that machine
 owner's consent.
 
-> **Status (August 2026):** The current target is a **small private trusted alpha**. Execution protocol v1 has DAG and ensemble strategies, direct-as-one-candidate, deterministic auto-selection, durable server-authoritative worker attempts, truthful lifecycle/assurance fields, authenticated artifact delivery, and explicit redacted shares. The scheduler is still process-local, node identity is still a shared secret, and generated code is not sandboxed. See [the protocol](docs/PROTOCOL.md), [access model](docs/ACCESS_CONTROL.md), and [threat model](docs/THREAT_MODEL.md).
+> **Status (August 2026):** The current target is a **small private trusted alpha**. Execution protocol v1 has DAG and ensemble strategies, direct-as-one-candidate, deterministic auto-selection, durable server-authoritative worker attempts, commit-before-publication lifecycle truth, requester-scoped canonical retry idempotency, authenticated artifact delivery, and explicit redacted shares. The scheduler is still process-local, node identity is still a shared secret, and generated code is not sandboxed. See [the protocol](docs/PROTOCOL.md), [access model](docs/ACCESS_CONTROL.md), and [threat model](docs/THREAT_MODEL.md).
 
 ## Positioning
 
@@ -66,6 +66,12 @@ POST /pitch  (or: python cli.py "your task")
 - `/v1/executions` — canonical asynchronous API for explicit strategy and placement combinations
 
 The canonical API defaults to `placement: local` and `confidentiality: local_only`. Remote-capable canonical requests require an explicit `remote_dispatch_consent: true`; any worker that receives a unit can read that unit's prompt. `network_policy` is recorded intent, not an enforced sandbox or firewall.
+
+Canonical lifecycle snapshots commit to SQLite before their live-cache copy,
+normal lifecycle event, callback, compatibility mirror, response, or terminal
+artifact/share publication. Optional requester-scoped `Idempotency-Key` lets an
+HTTP caller retry the same canonical submission without scheduling a second
+execution. Neither control makes the process-local scheduler resumable.
 
 ## Quick start
 
@@ -168,7 +174,7 @@ python cli.py --projects
 
 The dashboard sidebar also shows all projects with a **Continue** button that sets context for the next pitch.
 
-Each project stores a `memory.md` file that grows with every run — task history, what was built, key decisions. This gets injected into the planner and reviewer prompts automatically, so nothing gets repeated and each iteration builds on the last.
+Each project stores a `memory.md` file that grows after each durably completed DAG run — task history, what was built, key decisions. The iteration is published only after the terminal execution commit and lifecycle event. This gets injected into later planner and reviewer prompts automatically, so each committed iteration can build on the last.
 
 ### Async API
 
@@ -187,8 +193,10 @@ curl -X POST http://localhost:8000/pitch/async \
   -d '{"task": "Add authentication", "project_id": "my-app-abc123"}'
 
 # Canonical protocol-v1 submission — returns execution_id immediately
+SUBMISSION_KEY="$(python -c 'import uuid; print(uuid.uuid4())')"
 curl -X POST http://localhost:8000/v1/executions \
   -H "Content-Type: application/json" \
+  -H "Idempotency-Key: $SUBMISSION_KEY" \
   -d '{"task":"Build one HTML file","strategy":"ensemble","strategy_options":{"kind":"ensemble","candidates":3,"concurrency":2},"placement":"local"}'
 
 curl -H "X-Viewer-Key: $VIEWER_KEY" \
@@ -201,6 +209,13 @@ Complete artifacts are retrieved through the authenticated manifest/file/ZIP
 APIs, not server paths. Public access to a result requires an explicit
 revocable share token. Examples: [docs/ARTIFACTS.md](docs/ARTIFACTS.md) and
 [docs/ACCESS_CONTROL.md](docs/ACCESS_CONTROL.md).
+
+Keep `SUBMISSION_KEY` with that exact logical request. The first accepted
+response has `Idempotency-Replayed: false`; a matching retry returns the same
+execution with `true`. Reusing it for a different validated request returns
+`409 idempotency_conflict`. Omitting the header preserves create-every-time
+behavior and omits `Idempotency-Replayed` from the response. Idempotency is
+currently limited to canonical HTTP submission.
 
 ## Worker nodes
 
@@ -284,7 +299,7 @@ See **[docs/DEPLOY.md](docs/DEPLOY.md)** for local, private-overlay, and reverse
 |---|---|---|
 | `/health` | GET | Public sanitized liveness, node count, and viewer-protection warning |
 | `/status.json` | GET | Public sanitized status and build fingerprint |
-| `/v1/executions` | POST | Queue a canonical versioned execution |
+| `/v1/executions` | POST | Queue a canonical versioned execution; optional scoped `Idempotency-Key` |
 | `/v1/executions/{id}` | GET | Read durable normalized execution state/result (viewer) |
 | `/v1/executions/{id}/cancel` | POST | Cancel queued/running execution (viewer) |
 | `/v1/executions/{id}/artifacts*` | GET | Sealed deliverable manifest/files and compatibility views (viewer) |
@@ -319,23 +334,25 @@ This is a **Phase 0 private trusted-alpha system**. Here's exactly what's durabl
 | Thing | Durable? | Notes |
 |---|---|---|
 | Pipeline output | Yes | Saved to `output/{timestamp}/` on disk after every run |
-| Event history | Yes | SQLite (`events.db`) — survives restarts |
+| Event history | Yes | SQLite (`events.db`) — allowlisted structural telemetry only; survives restarts |
 | Job status | Yes | SQLite (`events.db`) — `/jobs/{id}` works after restart |
 | Normalized execution metadata | Yes | SQLite `executions` table — strategy, placement, candidates, validation, errors |
+| Keyed canonical submission mappings | Yes | Digest-only SQLite rows retained during trusted alpha; matching retries return one execution ID |
 | Attempt settlement and accepted receipts | Yes | SQLite — exact replay survives restart; active attempts interrupt on restart |
+| Contribution records | Yes | SQLite plus a regenerated JSON compatibility projection; fixed labels only, no prompt/output text |
 | Share records and token hashes | Yes | SQLite — expiry and revocation survive restart |
 | Artifact manifests | Yes | Terminal baselines, roles, hashes, and seal state in SQLite; files remain under registered roots |
 | Project memory | Yes | `projects/<id>/memory.md` on disk |
 | Connected nodes and node sessions | No | Workers automatically re-register after restart/session expiry |
 | Task queue and running coroutines | No | Restart marks affected canonical executions/jobs/attempts `interrupted`; it does not resume them |
 
-**Execution guarantees:** Distributed compute may be attempted more than once after expiry or reclaim, but only the current active server-issued attempt can settle. Settlement, its accepted receipt, replay response, and compute contribution are atomic and durable. Exact replay is idempotent; changed, unknown, queued-but-unleased, expired, reclaimed, cancelled, interrupted, or mismatched results are rejected and kept only in a bounded diagnostic quarantine. The queue itself remains process-local.
+**Execution guarantees:** Required execution snapshots commit before live, event, callback, project-memory/legacy mirrors, response, and terminal artifact/share publication. Current execution-linked history/run/gallery/download/demo surfaces require that durable terminal state and its sealed artifact binding; staged files are not completion authority. A keyed canonical retry converges on one durable execution ID; a changed request conflicts. Distributed compute may still be attempted more than once after expiry or reclaim, but only the current active server-issued attempt can settle. Settlement, its accepted receipt, replay response, and compute contribution are atomic and durable. Changed, unknown, queued-but-unleased, expired, reclaimed, cancelled, interrupted, or mismatched results are rejected and kept only in a bounded diagnostic quarantine. The queue itself remains process-local, and these controls are not an exactly-once external-side-effect guarantee.
 
-**Trust model:** `node_secret` admits workers, `pitch_key` admits task submissions, and `viewer_key` protects task-, result-, project-, event-, artifact-, and machine-sensitive routes. Explicit share tokens expose one allowlisted redacted result instead of making every execution public. All three keys default empty for local compatibility, and `/health` warns when viewer protection is off. **Set the applicable three keys and use TLS or a private overlay before network exposure.** Attempt binding is structural integrity, not per-node cryptographic identity; an admitted worker can still return plausible wrong output. Full details: [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
+**Trust model:** `node_secret` admits workers, `pitch_key` admits task submissions, and `viewer_key` protects task-, result-, project-, event-, artifact-, and machine-sensitive routes. All pitch-key holders share one idempotency scope; open development mode uses the direct peer address as a best-effort scope, not user identity. Explicit share tokens expose one allowlisted redacted result instead of making every execution public. All three keys default empty for local compatibility, and `/health` warns when viewer protection is off. **Set the applicable three keys and use TLS or a private overlay before network exposure.** Attempt binding is structural integrity, not per-node cryptographic identity; an admitted worker can still return plausible wrong output. Full details: [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
 
 `scripts/trusted_alpha_harness.py`, `scripts/restart_recovery.py`, and `scripts/soak_test.py` are reproducible operational checks, but do not copy an old pass count into a current claim: rerun them against the commit being deployed. The bounded trusted-alpha harness uses fake executors/workers and no live model. Canonical startup reconciliation truthfully interrupts non-resumable queued/running state rather than leaving it active indefinitely.
 
-> **Known issue, measured and open:** memory grows about **1.25 MB per pitch** on Windows — linear over 120 pitches (67 MB → 218 MB), so it is a leak rather than allocator noise. An earlier "+0.9 MB over 60 pitches" figure came from Linux, where the soak's memory probe read `/proc`; on Windows that silently returned "unmeasured" while the script still printed a clean verdict. Both bugs are fixed — the probe is cross-platform and the verdict is now a per-pitch rate — but the leak's source is not yet found and Linux has not been re-measured with the working probe. At roughly 800 pitches per GB it is not a launch risk; it is a real one for any long-lived orchestrator.
+> **Memory soak, remeasured:** the historical raw Windows run grew about **1.25 MB per pitch** over 120 pitches (67 MB → 218 MB). Theme 1 found both a real unbounded terminal service cache and substantial cyclic-GC/allocator sawtooth. Terminal request/result snapshots now leave memory after their post-commit observers finish, while durable reads continue from SQLite; the soak also separates one-workflow warmup and settles collectable cycles without changing its 0.5 MB/pitch limit. The final 20-pitch Windows run on this branch measured 78.5 → 85.6 MB (+7.1 MB, 0.36 MB/pitch), with zero retained execution/control/background entries and zero orphaned tasks. Legacy jobs remain intentionally retained for seven days. A post-fix 120-pitch run and a Linux rerun are still needed before making a long-run cross-platform claim.
 
 > Run the restart check with **Ollama stopped**. It wants pitches to fail fast so a job reaches a terminal state in seconds; with Ollama up they start real multi-minute inference instead and four unrelated checks fail. The script says so on startup.
 
@@ -385,7 +402,7 @@ Stated plainly, because you'll find them anyway:
 - **Generated code is not sandboxed.** The pipeline writes runnable files to `output/`. It checks that Python parses and HTML is structurally sound, but *you* are responsible for reading anything before you run it.
 - **The full threat model is written down**, including the deliberate public allowlist, viewer-protected surfaces, share capabilities, malicious-worker limits, and what still blocks a permissionless network: [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md). Reporting a vulnerability: [SECURITY.md](SECURITY.md).
 - **It's a trusted network, not a trustless one.** `node_secret` is a shared admission password, while a short-lived server session prevents active node-ID collisions; neither is public-key identity. A node that authenticates can still return plausible-looking garbage. Experimental sampled redundant execution remains available only in local mode; trusted-alpha mode disables it until post-hoc evidence has durable semantics. Shape agreement is not proof of correctness.
-- **One orchestrator, no failover.** DAG planning/review remain on the coordinator; DAG builder units and complete ensemble candidates may run on workers. If the orchestrator goes down, the swarm stops. Durable records reconcile truthfully on restart, but process-local work is not resumed.
+- **One orchestrator, no failover.** DAG planning/review remain on the coordinator; DAG builder units and complete ensemble candidates may run on workers. If the orchestrator goes down, the swarm stops. Durable records reconcile truthfully on restart, but process-local work is not resumed. Reusing an idempotency key returns the same interrupted record; it does not restart it.
 - **No HTTPS, no accounts, no multi-tenancy.** This is a prototype you run for yourself or a group you know.
 
 None of these are secrets being kept until someone notices. What would fix each one — per-node
@@ -400,6 +417,8 @@ a reference, not a promise of dates.
 - [x] Distributed execution across worker nodes with automatic task reclaim
 - [x] Server-authoritative durable attempts, accepted-result broker, exact replay, and bounded quarantine
 - [x] Total execution deadline, cancellation API, and restart reconciliation
+- [x] Required execution commit before live/event/callback/response and terminal artifact/share publication
+- [x] Requester-scoped, digest-only idempotency for canonical HTTP submission
 - [x] Separate lifecycle, validation outcome, assurance, and check summaries
 - [x] Viewer-protected private routes and explicit redacted share capabilities
 - [x] Path-safe sealed artifact manifests, deliverable/audit bundles, files, ZIPs, hashes, quotas, and retention

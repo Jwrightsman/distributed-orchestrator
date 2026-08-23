@@ -213,6 +213,8 @@ async def test_cancellation_while_queued_is_terminal_and_idempotent(tmp_path, mo
     assert first.cancellation_reason == "operator requested cancellation"
     assert second.lifecycle_status == "cancelled"
     assert service.store.get(queued.execution_id).lifecycle_status == "cancelled"
+    assert queued.execution_id not in service._controls
+    assert queued.execution_id not in service._background
 
 
 @pytest.mark.asyncio
@@ -404,25 +406,31 @@ def test_submit_rejects_project_memory_for_direct_before_persistence(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_running_persistence_failure_becomes_interrupted(tmp_path, monkeypatch):
+async def test_running_persistence_retries_transient_failure(tmp_path, monkeypatch):
+    async def generated(*args, **kwargs):
+        return "complete output"
+
     service = _service(tmp_path)
+    monkeypatch.setattr(strategies, "generate", generated)
+    monkeypatch.setattr(strategies.EnsembleStrategy, "artifact_root", tmp_path / "artifacts")
     original_save = service.store.save
-    failed_once = False
+    running_attempts = 0
 
     def fail_first_running_save(request, result):
-        nonlocal failed_once
-        if result.lifecycle_status == "running" and not failed_once:
-            failed_once = True
-            raise sqlite3.OperationalError("transient write failure")
+        nonlocal running_attempts
+        if result.lifecycle_status == "running":
+            running_attempts += 1
+            if running_attempts == 1:
+                raise sqlite3.OperationalError("transient write failure")
         return original_save(request, result)
 
     monkeypatch.setattr(service.store, "save", fail_first_running_save)
     request = ExecutionRequestV1(task="Build it", strategy="direct")
     run = await service.execute(request)
 
-    assert run.result.lifecycle_status == "interrupted"
-    assert run.result.retryable is True
-    assert service.store.get(run.result.execution_id).lifecycle_status == "interrupted"
+    assert running_attempts >= 2
+    assert run.result.lifecycle_status == "completed"
+    assert service.store.get(run.result.execution_id).lifecycle_status == "completed"
 
 
 @pytest.mark.asyncio

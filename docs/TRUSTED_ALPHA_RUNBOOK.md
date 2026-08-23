@@ -70,9 +70,11 @@ Local remains the default. This canonical example explicitly consents to a
 distributed direct execution and records `trusted_guild` confidentiality:
 
 ```bash
-curl -fsS -X POST "$BASE_URL/v1/executions" \
+IDEMPOTENCY_KEY="$(python -c 'import uuid; print(uuid.uuid4())')"
+curl -fsS -D submission.headers -X POST "$BASE_URL/v1/executions" \
   -H 'Content-Type: application/json' \
   -H 'X-Pitch-Key: PITCH_KEY' \
+  -H "Idempotency-Key: $IDEMPOTENCY_KEY" \
   --data-binary @- <<'JSON'
 {
   "protocol_version": "1",
@@ -88,8 +90,19 @@ curl -fsS -X POST "$BASE_URL/v1/executions" \
 JSON
 ```
 
-The response contains an `execution_id`. Read durable state with the viewer
-cookie:
+The response contains an `execution_id`; `submission.headers` contains
+`Idempotency-Replayed: false`. If the response is lost, repeat the same body
+with the same in-memory or privately retained key. A matching retry returns the
+same execution and `Idempotency-Replayed: true`; it does not schedule another
+task. Reusing that key for a different validated body returns `409
+idempotency_conflict`.
+
+Do not place the key in command history shared with other people, server logs,
+diagnostic bundles, metrics, or issue reports. A key identifies one logical
+submission, not a person. All trusted-alpha callers using the shared
+`pitch_key` share its requester scope.
+
+Read durable state with the viewer cookie:
 
 ```bash
 curl -fsS -b viewer.cookies "$BASE_URL/v1/executions/EXECUTION_ID"
@@ -98,6 +111,10 @@ curl -fsS -b viewer.cookies "$BASE_URL/v1/executions/EXECUTION_ID"
 Placement/confidentiality are recorded scheduling intent, not a sandbox. Every
 assigned worker can read its prompt. `local_only` cannot use distributed
 placement, and remote-capable work requires explicit consent.
+
+Without `Idempotency-Key`, every accepted canonical POST creates a new
+execution. Open development mode scopes a key to the direct peer address only;
+that is best-effort local behavior and not durable user identity.
 
 ## 5. Join a worker
 
@@ -311,8 +328,15 @@ already downloaded.
 5. Late worker results after cancellation, expiry, reclaim, or restart are
    rejected and quarantined for bounded diagnostics; they do not wake dispatch
    or earn contribution points.
-6. `interrupted` work is retryable state, not a resumable queue entry. Submit a
-   new execution after confirming the original cannot still become active.
+6. `interrupted` work is retryable state, not a resumable queue entry. Reusing
+   the original idempotency key returns that same interrupted execution and
+   does not restart it. After confirming the original cannot still become
+   active, intentionally submit replacement work with a new key or no key.
+7. A `503` with `execution_persistence_unavailable` means the requested
+   authoritative state was not committed. Do not treat cancellation or
+   completion as successful; read the execution again after storage health is
+   restored. An `idempotency_consistency_error` requires sanitized diagnostics
+   and database integrity investigation rather than deleting the mapping.
 
 If the coordinator itself is unresponsive, collect diagnostics, stop it once,
 run full preflight, and restart. Do not start a second process against the same
@@ -337,6 +361,10 @@ include `config.json`, viewer cookies, share URLs/tokens, the raw database,
 backups, prompts, or generated artifacts unless the recipient is authorized
 and the bundle is encrypted. Record timestamps, build fingerprint, OS, Python,
 Docker, and reproduction steps separately.
+
+Do not add idempotency keys, attempt nonces, or node session tokens to the
+bundle. Persistence failure logs should identify only the execution, commit
+phase, bounded attempt count, and safe error type.
 
 ## 15. Uninstall
 

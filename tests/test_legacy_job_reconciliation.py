@@ -69,6 +69,14 @@ def test_startup_reconciles_queued_and_running_jobs_once():
         assert job["retryable"] is True
     assert state.jobs["complete-job"]["status"] == "complete"
 
+    # A repeated in-process startup must refresh an existing projection from
+    # the reconciled durable row rather than preserving stale live state.
+    state.jobs["queued-job"]["status"] = "running"
+    state.jobs["queued-job"]["interruption_reason"] = None
+    state._db_load_jobs()
+    assert state.jobs["queued-job"]["status"] == "interrupted"
+    assert state.jobs["queued-job"]["interruption_reason"]
+
     first = {
         job_id: (
             state.jobs[job_id]["interrupted_at"],
