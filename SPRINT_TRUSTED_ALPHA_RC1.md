@@ -28,7 +28,7 @@ visual UI work.
 - Branch: `codex/trusted-alpha-rc1`
 - Base: `origin/master` at `fd6fa29`
 - Merge policy: explicit review; do not auto-merge
-- Integrated code checkpoint used for the final rerun: `c8662bc`
+- Integrated code checkpoint used for the final rerun: `0ed9be0`
 
 Test counts below belong to the stated integrated revision and commands. They
 must not be copied into a later release report without rerunning that revision.
@@ -48,13 +48,13 @@ were not reported as passed at baseline.
 
 | Check | Result |
 | --- | --- |
-| `python -m pytest -q` | 809 passed, 2 skipped in 104.82 seconds |
+| `python -m pytest -q` | 812 passed, 2 skipped in 110.76 seconds |
 | `python -m ruff check .` | passed |
 | `python -c "import server"` | passed |
 | `docker compose config` | passed |
 | Git Bash `bash -n deploy.sh install.sh` | passed |
 | Docker image build/start | not run; Docker daemon unavailable |
-| bounded live multi-node harness plus 44 focused tests | passed in 13.3 seconds |
+| bounded live multi-node harness plus 44 focused tests | passed in 13.0 seconds |
 | nightly harness, one iteration, plus 53 focused tests | passed in 19.6 seconds |
 
 The bounded harness is committed in `ef5a567`. CI runs the no-Ollama bounded
@@ -229,11 +229,11 @@ Decision: [ADR 0007](docs/adr/0007-sealed-artifact-manifests.md).
 | 22 | Backup/restore tooling tested | Delivered |
 | 23 | Bounded multi-node harness runs in CI | Delivered in `ef5a567` |
 | 24 | Trusted-alpha runbook complete | Delivered |
-| 25 | Existing safe behavior remains compatible | Covered by 809-test final suite |
+| 25 | Existing safe behavior remains compatible | Covered by 812-test final suite |
 | 26 | No new execution strategy | Preserved |
 | 27 | No marketplace/token/federation/public identity | Preserved |
 | 28 | No broad visual UI work | Preserved; frontend contract only |
-| 29 | Full suite passes | 809 passed, 2 skipped |
+| 29 | Full suite passes | 812 passed, 2 skipped |
 | 30 | Ruff passes | Passed |
 | 31 | Server import passes | Passed |
 | 32 | Compose validation passes | Passed |
@@ -265,6 +265,8 @@ ef5a567 test: add trusted-alpha operational harness
 dd93669 fix: redact share capabilities from application logs
 50e975c docs: complete trusted-alpha RC1 handoff
 c8662bc fix: preflight the runtime bind host
+dae9444 docs: record final RC1 verification
+0ed9be0 fix: accept graceful uvicorn signal exits
 ```
 
 Use `git log --oneline fd6fa29..HEAD` for the authoritative list after the final
