@@ -15,6 +15,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from fastapi import HTTPException, Request, WebSocket
 from pydantic import BaseModel, Field, field_validator
@@ -31,11 +32,24 @@ from execution.contracts import (
     VerificationPolicyV1,
 )
 from verification import VerificationPool
+from sqlite_store import connection, migration_lock
+from node_sessions import (
+    InvalidNodeId,
+    InvalidNodeSession,
+    NodeSessionRecord,
+    NodeSessionRegistry,
+    normalize_node_id,
+)
 
 # ── Node staleness threshold (seconds) ───────────────────────────────────
 _NODE_TIMEOUT = 90
 _MAX_TASK_QUEUE = 100
 _LONG_POLL_TIMEOUT = 25   # seconds to hold GET /tasks/next open waiting for work
+
+# Sessions deliberately live only for this coordinator process.  The shared
+# ``node_secret`` admits a worker; this registry prevents two admitted workers
+# from silently using the same node label at once.
+node_sessions = NodeSessionRegistry(stale_after_seconds=_NODE_TIMEOUT)
 
 # ── Circuit breaker thresholds ────────────────────────────────────────────
 _FAILURE_THRESHOLD = 3    # consecutive failures before blacklisting
@@ -159,58 +173,33 @@ _WAITING_FRESH = 3.0
 _ROUTING_DEFER = 1.5
 
 
-def touch_node(node_id: str) -> None:
-    """Mark a node alive, re-admitting it if the janitor already evicted it.
+def touch_node(node_id: str) -> bool:
+    """Mark a registered node alive without inventing a placeholder identity.
 
-    Closing a laptop lid is the most likely thing that happens to a volunteer
-    node, and it used to strand one permanently:
-
-      1. the lid closes, nothing reaches the server for `_NODE_TIMEOUT`, and the
-         janitor correctly evicts the node and reclaims its work;
-      2. the lid opens and the long poll simply *resumes* — the node never sees
-         a connection error, so it never re-registers;
-      3. the endpoint only refreshed `last_seen` `if node_id in nodes`, so the
-         node stayed absent from the registry forever.
-
-    An absent node is not merely cosmetic: both pitch paths only hand work to
-    nodes when the registry is non-empty, so the node polls indefinitely and
-    receives nothing while the dashboard shows an empty swarm. On camera that is
-    a demo that looks broken while it is in fact working.
-
-    Re-admitting server-side rather than asking the node to notice means this is
-    fixed for nodes already deployed, which cannot be updated remotely. The
-    placeholder record is replaced with full hardware details the next time the
-    node registers normally.
+    A worker whose registry entry was evicted must obtain a new server-issued
+    session through ``/nodes/register``.  Polling with an arbitrary label can no
+    longer create a fully admitted node record.
     """
     node = nodes.get(node_id)
     if node is not None:
         node["last_seen"] = time.time()
-        return
-    now = time.time()
-    nodes[node_id] = {
-        "node_id": node_id,
-        "model": "unknown",          # replaced on the next real registration
-        "platform": "unknown",
-        "machine": "unknown",
-        "hostname": node_id,
-        "cpu_count": None,
-        "ram_gb": None,
-        "gpu": None,
-        "capabilities": [],
-        "registered_at": datetime.now(timezone.utc).isoformat(),
-        "last_seen": now,
-        "tasks_completed": 0,
-        "credits_earned": 0,
-        "current_task": None,
-        "readmitted": True,
-    }
-    _emit("node_readmitted", {"node_id": node_id})
+        return True
+    return False
 
 
 def _refresh_verify_rate() -> float:
     """Sync the pool's sample rate with config. Returns the active rate."""
+    cfg = get_config()
+    # Sampled duplicates are detached, process-local work today.  Until their
+    # evidence and terminal state are durable, trusted-alpha mode disables them
+    # rather than allowing an unfinished post-hoc task to disappear or be
+    # mistaken for canonical assurance.  Local development retains the existing
+    # experimental switch.
+    if str(cfg.get("deployment_mode", "local")) == "trusted_alpha":
+        verification_pool.verify_rate = 0.0
+        return 0.0
     try:
-        rate = float(get_config().get("verify_rate", 0.0) or 0.0)
+        rate = float(cfg.get("verify_rate", 0.0) or 0.0)
     except (TypeError, ValueError):
         rate = 0.0
     verification_pool.verify_rate = max(0.0, min(1.0, rate))
@@ -238,8 +227,11 @@ _COORDINATOR_RESTART_MARKER = f"restart-{secrets.token_hex(12)}"
 
 
 def _init_db() -> None:
-    with _db_lock:
-        con = sqlite3.connect(_DB_PATH)
+    # Registration sessions are intentionally not durable.  Calling startup
+    # initialization represents a new coordinator epoch, even in an in-process
+    # test client, so every previous bearer token must stop authorizing work.
+    node_sessions.reset()
+    with _db_lock, migration_lock(_DB_PATH), connection(_DB_PATH) as con:
         con.execute("""
             CREATE TABLE IF NOT EXISTS events (
                 id   INTEGER PRIMARY KEY,
@@ -275,7 +267,6 @@ def _init_db() -> None:
             if name not in existing_job_columns:
                 con.execute(f"ALTER TABLE jobs ADD COLUMN {name} {declaration}")
         con.commit()
-        con.close()
     attempt_store.migrate()
     # A live attempt cannot be resumed after coordinator restart because the
     # worker queue is process-local. Fail it closed instead of accepting a late
@@ -287,8 +278,7 @@ def _init_db() -> None:
 
 
 def _db_write_job(job: dict) -> None:
-    with _db_lock:
-        con = sqlite3.connect(_DB_PATH)
+    with _db_lock, connection(_DB_PATH) as con:
         con.execute(
             """INSERT OR REPLACE INTO jobs
                (job_id, task, project_id, status, submitted_at, started_at,
@@ -311,15 +301,12 @@ def _db_write_job(job: dict) -> None:
             ),
         )
         con.commit()
-        con.close()
 
 
 def _db_load_jobs() -> None:
     """Reconcile non-resumable jobs, then load the latest durable records."""
     try:
-        with _db_lock:
-            con = sqlite3.connect(_DB_PATH)
-            con.row_factory = sqlite3.Row
+        with _db_lock, connection(_DB_PATH, row_factory=sqlite3.Row) as con:
             interrupted_at = datetime.now(timezone.utc).isoformat()
             reason = (
                 "coordinator restarted; process-local execution task is no longer resumable"
@@ -345,7 +332,6 @@ def _db_load_jobs() -> None:
             rows = con.execute(
                 "SELECT * FROM jobs ORDER BY submitted_at DESC LIMIT 200"
             ).fetchall()
-            con.close()
         for row in rows:
             jid = row["job_id"]
             if jid not in jobs:
@@ -376,52 +362,117 @@ def _db_load_jobs() -> None:
 
 def _db_write_event(event_type: str, event_time: str, data: dict) -> int:
     blob = {k: v for k, v in data.items() if k not in ("type", "time")}
-    with _db_lock:
-        con = sqlite3.connect(_DB_PATH)
+    with _db_lock, connection(_DB_PATH) as con:
         cur = con.execute(
             "INSERT INTO events (type, time, data) VALUES (?, ?, ?)",
             (event_type, event_time, json.dumps(blob)),
         )
         rowid = cur.lastrowid
         con.commit()
-        con.close()
     return rowid
 
 
 # ── WebSocket connection manager ──────────────────────────────────────
+_WS_QUEUE_MAX = 64
+
+
 class _WSManager:
     def __init__(self):
-        self._connections: list[WebSocket] = []
+        # One bounded queue and one sender task per viewer.  A slow socket can
+        # therefore retain at most ``_WS_QUEUE_MAX`` events instead of causing a
+        # new, indefinitely blocked broadcast task for every token batch.
+        self._connections: dict[WebSocket, dict[str, Any]] = {}
 
     async def connect(self, ws: WebSocket):
         await ws.accept()
-        self._connections.append(ws)
+        queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=_WS_QUEUE_MAX)
+        sender = asyncio.create_task(self._send_loop(ws, queue))
+        self._connections[ws] = {
+            "queue": queue,
+            "sender": sender,
+            "truncation_notified": False,
+        }
 
     def disconnect(self, ws: WebSocket):
-        if ws in self._connections:
-            self._connections.remove(ws)
+        connection = self._connections.pop(ws, None)
+        if connection is None:
+            return
+        sender = connection["sender"]
+        try:
+            current = asyncio.current_task()
+        except RuntimeError:
+            current = None
+        if sender is not current and not sender.done():
+            sender.cancel()
+
+    async def _send_loop(self, ws: WebSocket, queue: asyncio.Queue[dict]):
+        try:
+            while True:
+                event = await queue.get()
+                try:
+                    await ws.send_json(event)
+                finally:
+                    queue.task_done()
+        except (asyncio.CancelledError, Exception):
+            self.disconnect(ws)
+
+    def publish(self, data: dict) -> None:
+        """Non-blockingly fan out an event with a bounded slow-viewer policy."""
+
+        for ws, client_state in list(self._connections.items()):
+            queue: asyncio.Queue[dict] = client_state["queue"]
+            try:
+                queue.put_nowait(data)
+                continue
+            except asyncio.QueueFull:
+                pass
+
+            if data.get("type") == "token":
+                # Drop high-frequency token data for this viewer and enqueue one
+                # explicit truncation signal.  The worker attempt itself is not
+                # truncated; only this slow viewer's live projection is.
+                if client_state["truncation_notified"]:
+                    continue
+                try:
+                    queue.get_nowait()
+                    queue.task_done()
+                except asyncio.QueueEmpty:  # pragma: no cover - queue race guard
+                    pass
+                client_state["truncation_notified"] = True
+                try:
+                    queue.put_nowait({
+                        "type": "token_fanout_truncated",
+                        "time": datetime.now(timezone.utc).isoformat(),
+                        "reason": "slow viewer exceeded bounded live-event queue",
+                    })
+                except asyncio.QueueFull:  # pragma: no cover - defensive
+                    self.disconnect(ws)
+                continue
+
+            # Preserve lower-frequency lifecycle events by dropping the oldest
+            # queued projection.  Memory remains bounded and the latest state is
+            # more useful than stale intermediate state to a lagging viewer.
+            try:
+                queue.get_nowait()
+                queue.task_done()
+                queue.put_nowait(data)
+            except (asyncio.QueueEmpty, asyncio.QueueFull):  # pragma: no cover
+                self.disconnect(ws)
 
     async def broadcast(self, data: dict):
-        dead = []
-        for ws in list(self._connections):
-            try:
-                await ws.send_json(data)
-            except Exception:
-                dead.append(ws)
-        for ws in dead:
-            self.disconnect(ws)
+        """Compatibility coroutine for callers that previously awaited sends."""
+
+        self.publish(data)
+
+    @property
+    def queued_event_count(self) -> int:
+        return sum(connection["queue"].qsize() for connection in self._connections.values())
 
 
 ws_manager = _WSManager()
 
 
 # ── Event emission ────────────────────────────────────────────────────
-
-# Strong references to in-flight broadcasts. Without these, asyncio only holds
-# a weak reference and a broadcast can be garbage-collected before it is
-# delivered ("Task was destroyed but it is pending!").
-_broadcast_tasks: set = set()
-
 
 def _emit(event_type: str, data: dict):
     """Push an event to the pipeline log, SQLite, and broadcast to WebSocket clients."""
@@ -442,12 +493,10 @@ def _emit(event_type: str, data: dict):
     # client to broadcast to anyway. get_event_loop() used to be used here,
     # which raises on Python 3.12+ outside a coroutine.
     try:
-        loop = asyncio.get_running_loop()
+        asyncio.get_running_loop()
     except RuntimeError:
         return
-    task = loop.create_task(ws_manager.broadcast(event))
-    _broadcast_tasks.add(task)
-    task.add_done_callback(_broadcast_tasks.discard)
+    ws_manager.publish(event)
 
 
 # ── Rate limiting ─────────────────────────────────────────────────────
@@ -521,6 +570,24 @@ def _check_node_auth(request: Request):
         raise HTTPException(status_code=401, detail="Invalid or missing X-Node-Secret header")
 
 
+def _check_node_session(request: Request, node_id: str) -> NodeSessionRecord:
+    """Require the current server-issued bearer session for ``node_id``."""
+
+    provided = request.headers.get("X-Node-Session")
+    try:
+        return node_sessions.authenticate(node_id, provided)
+    except InvalidNodeSession as exc:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "code": "node_session_rejected",
+                "message": exc.reason,
+                "action": "register_again",
+            },
+            headers={"X-Node-Session-Required": "true"},
+        ) from exc
+
+
 # ── Request/response models ──────────────────────────────────────────
 class PitchRequest(BaseModel):
     task: str
@@ -553,23 +620,62 @@ class PitchResponse(BaseModel):
 
 
 class NodeRegistration(BaseModel):
-    node_id: str
-    model: str
-    platform: str
-    machine: str
-    hostname: str
-    cpu_count: int | None = None
-    ram_gb: float | None = None
-    gpu: str | None = None
+    node_id: str = Field(min_length=1, max_length=64)
+    model: str = Field(min_length=1, max_length=96)
+    platform: str = Field(min_length=1, max_length=64)
+    machine: str = Field(min_length=1, max_length=64)
+    hostname: str = Field(min_length=1, max_length=253)
+    cpu_count: int | None = Field(default=None, ge=1, le=4096)
+    ram_gb: float | None = Field(default=None, ge=0, le=1_048_576)
+    gpu: str | None = Field(default=None, max_length=128)
     # Optional capability tags — e.g. ["code", "large-context"] or ["gpu", "fast"]
     # Used by the dispatcher to match tasks to capable nodes.
-    capabilities: list[str] = Field(default_factory=list)
+    # One slot is reserved for the server-added ``model:<name>`` tag.
+    capabilities: list[str] = Field(default_factory=list, max_length=31)
+
+    @field_validator("node_id")
+    @classmethod
+    def normalize_id(cls, value: str) -> str:
+        try:
+            return normalize_node_id(value)
+        except InvalidNodeId as exc:
+            raise ValueError(str(exc)) from exc
+
+    @field_validator("model", "platform", "machine", "hostname", "gpu")
+    @classmethod
+    def normalize_bounded_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("registration text fields cannot be blank")
+        if any(ord(character) < 32 for character in normalized):
+            raise ValueError("registration text fields cannot contain control characters")
+        return normalized
+
+    @field_validator("capabilities")
+    @classmethod
+    def normalize_capabilities(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for raw in values:
+            value = str(raw).strip()
+            if not value:
+                raise ValueError("capabilities cannot contain blank values")
+            if len(value) > 64:
+                raise ValueError("each capability must be 64 characters or fewer")
+            if any(ord(character) < 32 for character in value):
+                raise ValueError("capabilities cannot contain control characters")
+            if value not in seen:
+                normalized.append(value)
+                seen.add(value)
+        return normalized
 
 
 class TaskResult(BaseModel):
     node_id: str = Field(min_length=1, max_length=128)
     output: str | None = Field(default=None, max_length=10_485_760)
-    error: str | None = Field(default=None, max_length=500)
+    error: str | None = Field(default=None, max_length=2048)
     elapsed_seconds: float = Field(default=0, ge=0, le=7200)
     # Issued with the task. Missing/mismatched bindings are rejected and may be
     # retained only in the bounded quarantine, never as operational output.
@@ -579,6 +685,14 @@ class TaskResult(BaseModel):
     execution_id: str | None = Field(default=None, max_length=64)
     execution_unit_id: str | None = Field(default=None, max_length=128)
     execution_unit_kind: str | None = Field(default=None, max_length=64)
+
+    @field_validator("node_id")
+    @classmethod
+    def normalize_id(cls, value: str) -> str:
+        try:
+            return normalize_node_id(value)
+        except InvalidNodeId as exc:
+            raise ValueError(str(exc)) from exc
 
 
 class TokenBatch(BaseModel):
@@ -590,6 +704,14 @@ class TokenBatch(BaseModel):
     execution_id: str | None = Field(default=None, max_length=64)
     execution_unit_id: str | None = Field(default=None, max_length=128)
     execution_unit_kind: str | None = Field(default=None, max_length=64)
+
+    @field_validator("node_id")
+    @classmethod
+    def normalize_id(cls, value: str) -> str:
+        try:
+            return normalize_node_id(value)
+        except InvalidNodeId as exc:
+            raise ValueError(str(exc)) from exc
 
 
 class NewProjectRequest(BaseModel):
@@ -704,6 +826,7 @@ def _cleanup_pass():
                 assigned_node = task.get("assigned_to")
                 for field in (
                     "assigned_to",
+                    "assigned_session_id",
                     "assigned_at",
                     "attempt_id",
                     "nonce",
@@ -727,6 +850,13 @@ def _cleanup_pass():
     cutoff = now - _NODE_TIMEOUT
     stale = [nid for nid, n in nodes.items() if n.get("last_seen", 0) < cutoff]
     for nid in stale:
+        stale_node = nodes.get(nid)
+        # Invalidate first so the old bearer cannot race the reclaim and submit
+        # through a node record that is already being removed.
+        node_sessions.invalidate_node(
+            nid,
+            session_id=stale_node.get("session_id") if stale_node else None,
+        )
         nodes.pop(nid, None)
         # Reclaim any in-flight tasks assigned to this dead node
         with _task_queue_lock:
@@ -761,6 +891,7 @@ def _cleanup_pass():
                 task = task_inflight.pop(tid)
                 for field in (
                     "assigned_to",
+                    "assigned_session_id",
                     "assigned_at",
                     "attempt_id",
                     "nonce",
@@ -796,14 +927,12 @@ def _cleanup_pass():
 
     # 5. Prune SQLite event log — keep only the last 2000 rows
     try:
-        with _db_lock:
-            con = sqlite3.connect(_DB_PATH)
+        with _db_lock, connection(_DB_PATH) as con:
             con.execute(
                 "DELETE FROM events WHERE id NOT IN "
                 "(SELECT id FROM events ORDER BY id DESC LIMIT 2000)"
             )
             con.commit()
-            con.close()
     except Exception:
         pass
 
@@ -821,8 +950,7 @@ def _cleanup_pass():
             if job.get("execution_id")
             and job.get("status") in {"queued", "running"}
         }
-        with _db_lock:
-            con = sqlite3.connect(_DB_PATH)
+        with _db_lock, connection(_DB_PATH) as con:
             columns = {
                 row[1] for row in con.execute("PRAGMA table_info(executions)").fetchall()
             }
@@ -832,7 +960,6 @@ def _cleanup_pass():
                     "WHERE lifecycle_status IN ('queued', 'running')"
                 ).fetchall()
                 active_execution_ids.update(str(row[0]) for row in rows)
-            con.close()
         get_artifact_store().prune(active_execution_ids=active_execution_ids)
     except Exception:
         pass

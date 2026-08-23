@@ -10,7 +10,8 @@ Does everything:
   2. Checks if Ollama is installed and running
   3. Pulls the model if needed
   4. Registers with the orchestrator
-  5. Starts polling for tasks
+  5. Receives a process-local server-issued node session
+  6. Starts polling for tasks
 """
 
 import asyncio
@@ -124,6 +125,7 @@ def confirm_consent(server: str, assume_yes: bool) -> bool:
         f"  - Download the [bold]{DEFAULT_MODEL}[/bold] model (~2.5 GB) if it is not already here\n"
         "  - Use your CPU at full load, in bursts of minutes, to build parts of\n"
         "    tasks that [bold]other people[/bold] submit\n"
+        "  - Receive assigned task prompts as readable text on this computer\n"
         "  - Send the resulting text back to that orchestrator\n"
         "  - Keep running until you stop it\n\n"
         "[bold]What it will NOT do:[/bold]\n"
@@ -162,7 +164,14 @@ async def main():
     import argparse
     parser = argparse.ArgumentParser(description="Join the network as a worker node (one-command setup)")
     parser.add_argument("server", nargs="?", default=None, help="Orchestrator URL (e.g. http://192.168.1.50:8000) — omit to auto-discover")
-    parser.add_argument("--secret", default="", help="Shared secret if the orchestrator has node_secret set in config.json")
+    parser.add_argument(
+        "--secret",
+        default="",
+        help=(
+            "Shared node-admission secret; the orchestrator issues a separate "
+            "process-local session after registration"
+        ),
+    )
     parser.add_argument("--yes", "-y", action="store_true",
                         help="Skip the consent prompt. For scripting your OWN machine; "
                              "agents should not pass this on someone else's behalf (see AGENTS.md).")
