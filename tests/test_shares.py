@@ -115,6 +115,23 @@ def test_expiry_and_revocation_are_enforced(tmp_path):
     assert not store.revoke(OTHER_EXECUTION_ID, revocable.share_id)
 
 
+def test_operator_can_list_active_metadata_and_revoke_all_without_tokens(tmp_path):
+    store = ShareStore(str(tmp_path / "shares.db"))
+    first = store.create(EXECUTION_ID, CreateExecutionShareV1())
+    second = store.create(
+        EXECUTION_ID,
+        CreateExecutionShareV1(include_candidate_details=True),
+    )
+    listed = store.list_active(EXECUTION_ID)
+    serialized = str([item.model_dump(mode="json") for item in listed])
+    assert {item.share_id for item in listed} == {first.share_id, second.share_id}
+    assert first.token not in serialized
+    assert second.token not in serialized
+    assert store.revoke_all(EXECUTION_ID) == 2
+    assert store.list_active(EXECUTION_ID) == []
+    assert store.revoke_all(EXECUTION_ID) == 0
+
+
 def test_public_projection_is_allowlist_based_and_path_free(tmp_path):
     store = ShareStore(str(tmp_path / "shares.db"))
     created = store.create(
@@ -226,6 +243,7 @@ def share_api(tmp_path, monkeypatch):
     root = storage / EXECUTION_ID
     root.mkdir(parents=True)
     (root / "safe.txt").write_bytes(b"safe")
+    (root / "plan.json").write_text("{}", encoding="utf-8")
     artifacts = ArtifactStore(tmp_path / "api.db", allowed_roots=[storage])
     artifacts.register_root(EXECUTION_ID, root)
 
@@ -269,6 +287,12 @@ def test_share_api_is_private_to_create_but_public_by_capability(share_api):
     assert public.json()["execution_id"] == EXECUTION_ID
     assert "project_id" not in public.json()
     assert "output_reference" not in public.json()
+    for header, value in (
+        ("cache-control", "no-store"),
+        ("referrer-policy", "no-referrer"),
+        ("x-content-type-options", "nosniff"),
+    ):
+        assert public.headers[header] == value
 
     manifest = client.get(f"/v1/shares/{token}/artifacts")
     assert manifest.status_code == 200
@@ -276,12 +300,41 @@ def test_share_api_is_private_to_create_but_public_by_capability(share_api):
     downloaded = client.get(f"/v1/shares/{token}/artifacts/safe.txt")
     assert downloaded.content == b"safe"
     assert downloaded.headers["x-content-sha256"] == hashlib.sha256(b"safe").hexdigest()
+    assert downloaded.headers["cache-control"] == "no-store"
     assert client.get(f"/v1/shares/{token}/artifacts/%2e%2e%2fsafe.txt").status_code != 200
 
     # The token is bound to exactly one execution and is not ambient viewer
     # authority for a different canonical execution URL.
     other = client.get(f"/v1/executions/{OTHER_EXECUTION_ID}/artifacts")
     assert other.status_code == 401
+
+
+def test_private_manifest_defaults_to_deliverables_with_explicit_audit_view(share_api):
+    client, _ = share_api
+    headers = {"X-Viewer-Key": "viewer-secret"}
+    deliverables = client.get(
+        f"/v1/executions/{EXECUTION_ID}/artifacts",
+        headers=headers,
+    )
+    audit = client.get(
+        f"/v1/executions/{EXECUTION_ID}/artifacts?role=audit",
+        headers=headers,
+    )
+    compatibility = client.get(
+        f"/v1/executions/{EXECUTION_ID}/artifacts?role=all",
+        headers=headers,
+    )
+    assert [entry["relative_path"] for entry in deliverables.json()["entries"]] == [
+        "safe.txt"
+    ]
+    assert [entry["relative_path"] for entry in audit.json()["entries"]] == [
+        "plan.json"
+    ]
+    assert compatibility.headers["deprecation"] == "true"
+    assert {entry["relative_path"] for entry in compatibility.json()["entries"]} == {
+        "plan.json",
+        "safe.txt",
+    }
 
 
 def test_revoked_and_expired_share_urls_are_not_disclosed(share_api):
@@ -291,11 +344,15 @@ def test_revoked_and_expired_share_urls_are_not_disclosed(share_api):
         CreateExecutionShareV1(expires_in_seconds=60),
         now=datetime.now(timezone.utc) - timedelta(minutes=2),
     )
-    assert client.get(f"/v1/shares/{expired.token}").status_code == 404
+    expired_response = client.get(f"/v1/shares/{expired.token}")
+    assert expired_response.status_code == 404
+    assert expired_response.headers["cache-control"] == "no-store"
 
     active = shares.create(EXECUTION_ID, CreateExecutionShareV1())
     assert shares.revoke(EXECUTION_ID, active.share_id)
-    assert client.get(f"/v1/shares/{active.token}").status_code == 404
+    revoked_response = client.get(f"/v1/shares/{active.token}")
+    assert revoked_response.status_code == 404
+    assert revoked_response.headers["cache-control"] == "no-store"
 
 
 def test_share_without_artifact_permission_cannot_download(share_api):
@@ -305,5 +362,41 @@ def test_share_without_artifact_permission_cannot_download(share_api):
         CreateExecutionShareV1(allow_artifact_download=False),
     )
     assert client.get(f"/v1/shares/{created.token}").status_code == 200
-    assert client.get(f"/v1/shares/{created.token}/artifacts").status_code == 403
-    assert client.get(f"/v1/shares/{created.token}/download").status_code == 403
+    manifest = client.get(f"/v1/shares/{created.token}/artifacts")
+    download = client.get(f"/v1/shares/{created.token}/download")
+    assert manifest.status_code == 403
+    assert download.status_code == 403
+    assert manifest.headers["cache-control"] == "no-store"
+    assert download.headers["cache-control"] == "no-store"
+
+
+def test_share_admin_routes_list_revoke_one_and_revoke_all(share_api):
+    client, shares = share_api
+    first = shares.create(EXECUTION_ID, CreateExecutionShareV1())
+    second = shares.create(EXECUTION_ID, CreateExecutionShareV1())
+    headers = {"X-Viewer-Key": "viewer-secret"}
+
+    listed = client.get(f"/v1/executions/{EXECUTION_ID}/shares", headers=headers)
+    assert listed.status_code == 200
+    assert {item["share_id"] for item in listed.json()} == {first.share_id, second.share_id}
+    assert first.token not in listed.text
+
+    revoked = client.delete(
+        f"/v1/executions/{EXECUTION_ID}/shares/{first.share_id}",
+        headers=headers,
+    )
+    assert revoked.status_code == 204
+    revoked_all = client.delete(
+        f"/v1/executions/{EXECUTION_ID}/shares",
+        headers=headers,
+    )
+    assert revoked_all.json() == {"execution_id": EXECUTION_ID, "revoked_count": 1}
+
+
+def test_share_token_path_redaction_never_returns_the_capability():
+    token = "top-secret-capability-token"
+    redacted = routes_access.redact_share_token_path(
+        f"/v1/shares/{token}/artifacts/code/app.py?download=1"
+    )
+    assert token not in redacted
+    assert redacted == "/v1/shares/<redacted>/artifacts/code/app.py?download=1"

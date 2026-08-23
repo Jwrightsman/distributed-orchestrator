@@ -51,7 +51,10 @@ def _register(client, node_id="test-node", secret=None, **overrides):
         **overrides,
     }
     headers = {"X-Node-Secret": secret} if secret else {}
-    return client.post("/nodes/register", json=payload, headers=headers)
+    response = client.post("/nodes/register", json=payload, headers=headers)
+    if response.status_code == 200:
+        client.headers["X-Node-Session"] = response.json()["session_token"]
+    return response
 
 
 FAKE_RESULT = {
@@ -85,6 +88,9 @@ def test_register_node_and_list(client):
     resp = _register(client)
     assert resp.status_code == 200
     assert "test-node" in resp.json()["message"]
+    assert resp.json()["node_id"] == "test-node"
+    assert resp.json()["session_id"]
+    assert resp.json()["session_token"]
     # model auto-tag applied
     assert "model:qwen3.5:4b" in resp.json()["capabilities"]
 

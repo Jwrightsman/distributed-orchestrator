@@ -23,6 +23,7 @@ from fastapi.testclient import TestClient
 import server_state as state
 from server import app
 from execution.dispatch import Dispatcher
+from tests._node_session_helpers import enable_auto_node_sessions
 
 
 @pytest.fixture
@@ -32,7 +33,7 @@ def client():
                   state.node_failure_count, state.node_blacklist):
         store.clear()
     with TestClient(app) as c:
-        yield c
+        yield enable_auto_node_sessions(c)
 
 
 def _register(client, node_id):
@@ -273,8 +274,9 @@ def test_late_result_after_reclamation_is_rejected(client):
 
     response = client.post("/tasks/t-v1/result", json=_v1_body(task))
 
-    assert response.status_code == 403
-    assert "reclaimed" in response.json()["detail"]
+    assert response.status_code == 401
+    assert response.json()["detail"]["code"] == "node_session_rejected"
+    assert state.attempt_store.get(task["attempt_id"]).state == "reclaimed"
     assert "t-v1" not in state.task_results
     assert any(item["task_id"] == "t-v1" for item in state.task_queue)
 
@@ -365,7 +367,7 @@ def test_v1_stream_requires_current_node_attempt_nonce_and_unit(client):
 def test_v1_stream_rejects_expired_lease(client):
     _register(client, "worker")
     task = _claim_v1(client, "worker")
-    state.task_inflight["t-v1"]["lease_expires_at"] = time.time() - 1
+    state.attempt_store.expire_due(task["lease_expires_at"] + 1)
     response = client.post("/tasks/t-v1/stream", json={
         "node_id": "worker",
         "tokens": "late",

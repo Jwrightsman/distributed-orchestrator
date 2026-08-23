@@ -18,6 +18,10 @@ COPY templates/ templates/
 # top level, and a missing prompts/ breaks `import prompts` at startup.
 COPY prompts/ prompts/
 COPY execution/ execution/
+# Server startup imports the trusted-alpha preflight, and operators need the
+# matching backup/restore tools in the immutable image. Copy only runtime
+# scripts, not benchmark result fixtures or local bytecode.
+COPY scripts/__init__.py scripts/preflight.py scripts/backup.py scripts/restore.py scripts/
 
 # All state files are resolved relative to the working directory
 WORKDIR /data
@@ -25,4 +29,6 @@ ENV PYTHONPATH=/app \
     PYTHONUNBUFFERED=1
 
 EXPOSE 8000
+# The coordinator intentionally supports one process per /data directory. Do
+# not add Uvicorn workers; the kernel lock also rejects accidental fan-out.
 CMD ["python", "-m", "uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000"]

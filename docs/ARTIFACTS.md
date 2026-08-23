@@ -18,12 +18,16 @@ are not sandboxed, scanned for malware, or guaranteed behaviorally correct.
   "created_at": "2026-08-21T12:00:00+00:00",
   "file_count": 1,
   "aggregate_size_bytes": 1234,
+  "integrity_mode": "sealed",
+  "manifest_hash": "64-lowercase-hex-characters",
+  "sealed_at": "2026-08-21T12:00:05+00:00",
   "entries": [
     {
       "relative_path": "code/index.html",
       "media_type": "text/html",
       "size_bytes": 1234,
       "sha256": "64-lowercase-hex-characters",
+      "role": "deliverable",
       "source_candidate_id": null,
       "source_execution_unit_id": null,
       "created_at": "2026-08-21T12:00:00+00:00"
@@ -34,7 +38,14 @@ are not sandboxed, scanned for malware, or guaranteed behaviorally correct.
 
 The internal artifact root is never part of either public model. Source fields
 are optional; ensemble entries beneath `candidate_N/` are associated with
-`candidate-N` automatically.
+`candidate-N` automatically. Entry `role` is one of `deliverable`,
+`provenance`, `log`, `candidate_source`, or `internal`.
+
+`integrity_mode` is `active`, `sealed`, `legacy_live`, or `invalid`. A sealed
+manifest has `manifest_hash` and `sealed_at`; the hash covers the canonical
+sorted entry baseline, including role, media type, size, content hash, source
+metadata, and entry timestamp. A role-filtered response retains the hash of the
+complete sealed baseline; it is not a new signature over the filtered view.
 
 ## Authenticated APIs
 
@@ -43,9 +54,13 @@ All canonical execution artifact routes require viewer authorization when
 
 | Method and path | Response |
 | --- | --- |
-| `GET /v1/executions/{id}/artifacts` | complete private manifest |
+| `GET /v1/executions/{id}/artifacts` | deliverable-only manifest (default) |
+| `GET /v1/executions/{id}/artifacts?role=audit` | provenance, logs, candidate source, and internal manifest entries |
+| `GET /v1/executions/{id}/artifacts?role=all` | deprecated complete compatibility view |
+| `POST /v1/executions/{id}/artifacts/seal` | idempotently seal the current bounded baseline |
 | `GET /v1/executions/{id}/artifacts/{relative_path}` | one streamed file |
-| `GET /v1/executions/{id}/download` | streamed ZIP of the complete private manifest |
+| `GET /v1/executions/{id}/download` | streamed deliverable-only ZIP |
+| `GET /v1/executions/{id}/audit-download` | streamed non-deliverable audit ZIP |
 
 Example:
 
@@ -58,11 +73,15 @@ curl -H "X-Viewer-Key: $VIEWER_KEY" \
 
 curl -H "X-Viewer-Key: $VIEWER_KEY" \
   -OJ http://localhost:8000/v1/executions/EXECUTION_ID/download
+
+curl -H "X-Viewer-Key: $VIEWER_KEY" \
+  -OJ http://localhost:8000/v1/executions/EXECUTION_ID/audit-download
 ```
 
 Single-file responses use the detected media type and include `ETag` and
 `X-Content-SHA256` with the manifest hash. The private route also sends the
-known content length.
+known content length. The headers contain the entry's content hash, not the
+whole-manifest hash.
 
 The normalized execution result may use the historical `output_reference`
 field to point to `/v1/executions/{id}/artifacts`. It does not expose the server
@@ -84,11 +103,14 @@ The token binds the request to one execution. Supplying a path from another
 execution cannot cross the registered root, and the token cannot authorize a
 private execution route.
 
-Share manifests exclude internal run records such as `full_log.json`,
-`plan.json`, `review.md`, builder records, and transcripts. When candidate
-detail is disabled, raw `candidate.md` files are excluded and artifacts tagged
-to non-winning candidates are excluded. Enabling candidate detail permits the
-candidate-scoped entries; it does not expose an absolute path.
+Share manifests allow `deliverable` entries only by default and also exclude
+internal run records such as `full_log.json`, `plan.json`, `review.md`, builder
+records, and transcripts. When candidate detail is disabled, raw
+`candidate.md` files are excluded and entries tagged to non-winning candidates
+are excluded; if there is no winner, candidate-scoped entries are not exposed.
+Enabling candidate detail also permits `candidate_source` entries. It never
+permits `provenance`, `log`, or `internal` roles and does not expose an absolute
+path.
 
 ## Root registration
 
@@ -105,12 +127,48 @@ deleted as an execution root.
 
 DAG registers its run root through the artifact-ready callback. Ensemble
 registers `execution_artifacts/{execution_id}` before candidate work and marks
-it active. Terminal finalization refreshes the manifest and clears the active
+it active. Terminal finalization seals the final baseline and clears the active
 marker. Active markers are durable so both the modern registry pruner and the
-legacy `output/` pruner can avoid live roots.
+legacy `output/` pruner can avoid live roots, including while final hashing is
+still in progress.
 
 There is no public artifact-upload API. The execution service registers output
 produced by its own strategy paths.
+
+## Roles, winner scope, and sealing
+
+Role classification separates the requester-facing deliverable from audit
+material. Known output/code paths are deliverables; plan, review, builder, and
+revision records are provenance; logs/transcripts are logs; `candidate.md` is
+candidate source; dotfiles and manifest/metadata records are internal. Strategy
+code can supply explicit source/role metadata when path inference would be
+ambiguous.
+
+For ensemble/direct execution, candidate subtrees are validated independently.
+Once a winner exists, the execution manifest prefix is set to that winner's
+subtree before final sealing, so a losing candidate cannot appear in the
+primary deliverable merely because it was produced in the same root. Candidate
+audit exposure remains explicit and role-scoped.
+
+New roots begin `active`. Terminal finalization performs one final bounded scan,
+atomically stores immutable entry rows and the canonical manifest hash, clears
+the active marker, and changes the state to `sealed`. Repeating seal returns the
+same stored baseline. A sealed manifest is never refreshed from later directory
+contents. Every file or ZIP retrieval still resolves the live path and hashes
+its bytes against the sealed entry; missing, changed, symlinked, or escaped
+content fails closed.
+
+If the final tree cannot be safely scanned, sealing marks it `invalid` and
+retrieval returns an integrity failure. Historical registrations without the
+new seal have `legacy_live` mode and are rescanned on access; they must not be
+labeled sealed. The normalized execution exposes `primary_deliverables`,
+`artifact_manifest_url`, `audit_manifest_url`, `artifact_integrity_mode`, and
+`sealed_manifest_hash` so clients do not infer these states from filenames.
+
+Sealing is local integrity evidence only. It is not a digital signature,
+external timestamp, content-safety verdict, model provenance attestation, or
+defense against a host administrator able to alter both SQLite and files. See
+[ADR 0007](adr/0007-sealed-artifact-manifests.md).
 
 ## Path policy
 
@@ -131,11 +189,11 @@ The URL router may decode a path before application code receives it. The
 normalizer performs bounded repeated decoding as a second line of defense so a
 later decoding layer cannot make traversal meaningful.
 
-Every manifest refresh walks with symlink following disabled and then resolves
-each file strictly beneath the root. Every individual download refreshes the
-manifest, resolves the requested file again, rejects symlinks again, and
-recomputes its SHA-256. A file changed between manifest refresh and open is
-rejected.
+Every active or legacy manifest refresh walks with symlink following disabled
+and then resolves each file strictly beneath the root. Sealed manifests load
+the immutable stored entry baseline. Every individual download resolves the
+requested live file again, rejects symlinks again, and recomputes SHA-256. A
+file changed after a refresh or seal is rejected.
 
 These checks are performed on the server after filesystem resolution; a string
 prefix check alone is never treated as confinement.
@@ -220,20 +278,23 @@ share remains readable.
 - Artifact registration or manifest failure is represented as a structured
   `artifact_manifest_failed` execution error; it does not cause an unsafe path
   to be published.
-- A manifest always reflects a fresh bounded disk scan rather than trusting
-  stale database rows.
+- An active or legacy-live manifest reflects a fresh bounded disk scan. A sealed
+  manifest uses its immutable SQLite baseline and re-hashes every requested live
+  file before delivery.
 - The root record stores an absolute path internally. That field must never be
   serialized into canonical or share responses.
 - Share validator diagnostics are generic because raw failure text may contain
   internal filesystem paths.
-- The private manifest can include internal logs because the viewer is the
-  trusted operator role. Public shares apply an additional allowlist filter.
+- The explicit private `role=audit` and deprecated `role=all` views can include
+  internal records because the viewer is the trusted operator role. The default
+  private view and public shares apply narrower role allowlists.
 
 ## Residual limitations
 
 Artifact controls do not provide content moderation, antivirus scanning,
-provenance signatures, immutable content addressing, encryption at rest,
-per-user ownership, backup policy, or generated-code isolation. A compromised
-orchestrator host can change artifacts and their SQLite metadata. Hash
-recomputation detects ordinary drift at read time; it does not defend against a
-host attacker who can change both file and database.
+provenance signatures, externally anchored content addressing, encryption at
+rest, per-user ownership, or generated-code isolation. The backup tools preserve
+the local sealed baseline but do not turn it into an independent attestation. A
+compromised orchestrator host can change artifacts and their SQLite metadata.
+Hash recomputation detects ordinary drift at read time; it does not defend
+against a host attacker who can change both file and database.

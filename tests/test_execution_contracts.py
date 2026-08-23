@@ -9,6 +9,8 @@ from execution.contracts import (
     ExecutionRequestV1,
 )
 from execution.registry import StrategySelector
+from execution.persistence import ExecutionStore
+from execution.service import ExecutionService
 
 
 def test_valid_v1_request_uses_bounded_defaults():
@@ -170,3 +172,24 @@ def test_remote_capable_canonical_request_requires_explicit_consent():
 def test_remote_consent_cannot_be_recorded_for_a_local_only_request():
     with pytest.raises(ValidationError, match="remote_dispatch_consent"):
         ExecutionRequestV1(task="x", remote_dispatch_consent=True)
+
+
+def test_trusted_alpha_reports_sampled_posthoc_verification_as_disabled(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "execution.service.get_config",
+        lambda: {"deployment_mode": "trusted_alpha"},
+    )
+    service = ExecutionService(store=ExecutionStore(tmp_path / "events.db"))
+    result = service._new_result(
+        ExecutionRequestV1(task="x"),
+        "a" * 32,
+        None,
+        "queued",
+    )
+    assert result.posthoc_verification_status == "disabled"
+    assert "durable post-hoc semantics" in result.posthoc_reason
+    assert result.validation_outcome == "not_run"
+    assert result.assurance_level == "unverified"

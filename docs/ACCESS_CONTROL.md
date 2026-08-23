@@ -11,16 +11,20 @@ able to read every task, result, event, project, and machine record.
 | --- | --- | --- | --- |
 | Viewer | `viewer_key` | `X-Viewer-Key`, exact Bearer token, or signed session cookie | private reads and trusted operator actions |
 | Pitcher | `pitch_key` | `X-Pitch-Key` | canonical and compatibility task submission |
-| Worker | `node_secret` | `X-Node-Secret` | node registration, polling, streams, and result submission |
+| Worker admission | `node_secret` | `X-Node-Secret` | instance-wide permission to register and use the worker protocol |
+| Node session | server-issued bearer token | `X-Node-Session` | one current normalized node registration; required in addition to admission after registration |
 | Share holder | generated share token | token in `/v1/shares/{token}` URL | one redacted execution and optional filtered artifacts |
 
 These authorities are deliberately not interchangeable. A worker does not gain
 private history access. A pitcher does not gain artifact access. A viewer does
 not automatically know the node or pitch secret.
 
-All three configured static secrets default to empty for local-development
-compatibility. An empty secret disables its corresponding check. Do not expose
-that configuration to an untrusted network.
+All three configured static secrets default to empty in `deployment_mode:
+local` for compatibility. An empty static secret disables its corresponding
+check. `trusted_alpha` startup requires all three, at least 32 characters each,
+and pairwise distinct. The deployment generator preserves valid independent
+values and writes them atomically without printing them. Do not expose local
+fail-open configuration to an untrusted network.
 
 ## Viewer credentials
 
@@ -58,9 +62,11 @@ hours and the implementation clamps it between one minute and seven days.
 Rotating `viewer_key` invalidates every existing cookie.
 
 The cookie is marked Secure when the request is HTTPS or
-`viewer_cookie_secure` is true. A reverse proxy must pass the correct scheme if
-the application is expected to infer HTTPS. Prefer setting
-`viewer_cookie_secure=true` in an HTTPS deployment.
+`viewer_cookie_secure` is true. Set `https_enabled=true` and
+`viewer_cookie_secure=true` explicitly for a TLS reverse-proxy deployment.
+Trusted-alpha RC1 does not consume trusted proxy headers, so
+`trust_proxy_headers=true` fails preflight; do not rely on a forwarded scheme
+to repair an incoherent cookie configuration.
 
 Log out with:
 
@@ -105,26 +111,56 @@ them:
 | POST | `/v1/executions` | `pitch_key` + pitch rate limit |
 | POST | `/pitch`, `/pitch/async`, `/pitch/distributed` | `pitch_key` + pitch rate limit |
 | POST | `/nodes/register` | `node_secret` |
-| GET | `/tasks/next` | `node_secret` |
-| POST | `/tasks/{id}/result`, `/tasks/{id}/stream` | `node_secret` + active-attempt binding |
+| GET | `/tasks/next` | `node_secret` + current node session |
+| POST | `/tasks/{id}/result`, `/tasks/{id}/stream`, `/tasks/{id}/tokens` | `node_secret` + current node session + active-attempt binding |
+| POST | `/nodes/{id}/heartbeat`, `/nodes/{id}/drain` | `node_secret` + current node session |
 
-If the corresponding pitch or node secret is empty, that route is open even
-when viewer protection is enabled. Viewer authentication is not a substitute
-for configuring the protocol credential.
+If the corresponding pitch or node secret is empty in local mode, its static
+admission check is open even when viewer protection is enabled; node-session
+requirements after registration still apply. Viewer authentication is not a
+substitute for configuring the protocol credential.
 
 ### Viewer-protected
 
 Every other method/path requires viewer authorization, including:
 
 - canonical execution reads, cancellation, artifact manifests/files/ZIPs,
-  share creation, and share revocation;
+  artifact sealing, share creation/listing, and single/all share revocation;
 - `/jobs*`, `/events`, and `/ws/events`;
 - `/nodes`, `/status`, `/node/*`, `/metrics`, `/ledger`, and `/standings`;
 - `/history*`, `/gallery`, `/run/*`, and legacy `/share/*` redirects;
-- `/projects*` and dashboard/operator pages.
+- `/projects*`, `/v1/operator/health`, and dashboard/operator pages.
 
 An unauthorized HTTP request returns `401` with `WWW-Authenticate: Bearer`.
 An unauthorized event WebSocket is closed before acceptance with code `4401`.
+
+## Node registration sessions
+
+`node_secret` answers only “may this client join this coordinator?” Successful
+`POST /nodes/register` also returns normalized `node_id`, non-secret
+`session_id`, one-time plaintext `session_token`, `session_started_at`, and
+`session_expires_at`. The coordinator retains only the token's SHA-256 digest;
+the stock worker keeps plaintext in memory and never writes it to config.
+
+Sessions last at most 24 hours and are process-local. Registration presenting
+the exact live `X-Node-Session` is idempotent. A different live claimant for
+the same normalized ID receives `409 node_id_in_use`; an expired or 90-second
+stale session can be reclaimed, invalidating its old token and closing/requeuing
+work bound to that session. Coordinator restart invalidates all sessions, and
+the stock worker automatically re-registers after a machine-readable `401`
+with `action=register_again`.
+
+Every handout records `assigned_session_id` in the durable attempt. Session
+authorization supplements attempt ID, nonce, node, execution, unit, kind,
+contract, state, and lease binding; it never replaces those checks. A session
+token is still a bearer credential, not public-key identity or proof of a
+physical machine. Any `node_secret` holder can register another available ID.
+
+Private node views expose `session_id`, start/expiry, draining/current-task
+state, session counters, and durable lifetime contribution counters. They MUST
+NOT expose `session_token`. Compatibility `tasks_completed` and
+`credits_earned` are session projections; new clients use the explicit session
+and lifetime fields.
 
 ## Share capabilities
 
@@ -168,6 +204,23 @@ Revoke with viewer authorization:
 DELETE /v1/executions/{execution_id}/shares/{share_id}
 ```
 
+List active metadata or revoke every share for the execution without returning
+plaintext tokens:
+
+```http
+GET /v1/executions/{execution_id}/shares
+DELETE /v1/executions/{execution_id}/shares
+```
+
+List records include share ID, creation/expiry/revocation/last-access times and
+the artifact, node-redaction, and candidate-detail flags. The token exists only
+in the create response. Public capability responses set `Cache-Control:
+no-store`, `Referrer-Policy: no-referrer`, and `X-Content-Type-Options:
+nosniff`. Server unhandled-error logging applies `redact_share_token_path()`.
+Uvicorn and reverse-proxy access-log configuration remains an operator
+responsibility; both must avoid raw token paths because the URL itself is a
+credential.
+
 The public execution projection is allowlist-based. It omits job/project ids,
 absolute paths, raw output references, attempt ids, nonces, credit records,
 private telemetry, raw logs, and unbounded validator diagnostics. It includes
@@ -181,7 +234,9 @@ files while the execution share itself remains valid.
 
 ## Keyless public pitching
 
-`public_pitch` is off by default. When enabled, `POST /public/pitch` accepts a
+`public_pitch` is off by default. In trusted-alpha mode it is rejected unless
+`public_pitch_acknowledged=true` records the operator's explicit abuse-risk
+acceptance. When enabled, `POST /public/pitch` accepts a
 body containing only `task`. Any supplied strategy, candidate, placement,
 project, validator, requirements, or confidentiality field is rejected rather
 than silently honored.
@@ -237,16 +292,21 @@ for backwards-compatible local development. The server logs a warning and
 
 Before binding beyond localhost:
 
-1. Configure long, independent `viewer_key`, `pitch_key`, and `node_secret`
-   values for the authorities you intend to expose.
+1. Set `deployment_mode=trusted_alpha` and configure independent 32+-character
+   `viewer_key`, `pitch_key`, and `node_secret` values.
 2. Put TLS in front of the app or use a private overlay network. The application
    does not provide HTTPS itself.
-3. Set `viewer_cookie_secure=true` behind HTTPS.
-4. Keep `public_pitch=false` unless you intentionally accept public compute use.
-5. Verify `/health` reports `private_routes_protected: true`.
-6. Confirm unauthenticated private HTTP returns `401` and unauthenticated
+3. Set `https_enabled=true` and `viewer_cookie_secure=true` behind HTTPS; leave
+   unsupported proxy-header trust off.
+4. Run `scripts/preflight.py`; exactly one coordinator must own the state
+   directory.
+5. Keep `public_pitch=false` unless you set its acknowledgement and intentionally
+   accept public compute use.
+6. Require both `/health.status == "ok"` and
+   `/health.private_routes_protected == true`.
+7. Confirm unauthenticated private HTTP returns `401` and unauthenticated
    `/ws/events` closes with `4401`.
-7. Rotate any shared key after suspected disclosure. Node and pitch keys do not
+8. Rotate any shared key after suspected disclosure. Node and pitch keys do not
    currently have individual-holder revocation.
 
 ## Residual limitations
@@ -256,4 +316,7 @@ There is no password hashing flow, account recovery, MFA, audit identity,
 per-project ACL, per-execution owner, session list, or individual viewer
 revocation. Static secrets and share tokens are bearer credentials. TLS,
 secret distribution, rotation procedures, proxy trust, and host security remain
-operator responsibilities.
+operator responsibilities. Node sessions reduce active-label collision but do
+not add durable or cryptographic machine identity. Share revocation cannot
+recall copied content, and one coordinator process remains the only supported
+owner of a state directory.

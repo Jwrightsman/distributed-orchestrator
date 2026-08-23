@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from execution.artifacts import (
+    ArtifactIntegrityError,
     ArtifactLimitError,
     ArtifactNotFound,
     ArtifactSecurityError,
@@ -153,6 +154,85 @@ def test_archive_is_prepared_on_disk_with_normalized_names(tmp_path):
             assert archive.read("nested/one.txt") == b"one"
     finally:
         prepared.path.unlink(missing_ok=True)
+
+
+def test_terminal_seal_is_stable_and_mutation_never_rewrites_baseline(tmp_path):
+    store, root = _store(tmp_path)
+    artifact = root / "code" / "main.py"
+    artifact.parent.mkdir()
+    artifact.write_text("print('baseline')", encoding="utf-8")
+
+    sealed = store.seal_manifest(EXECUTION_ID)
+    assert sealed.integrity_mode == "sealed"
+    assert sealed.sealed_at
+    assert sealed.manifest_hash
+    baseline_entry = sealed.entries[0]
+
+    artifact.write_text("print('mutated')", encoding="utf-8")
+    reread = store.get_manifest(EXECUTION_ID)
+    assert reread.manifest_hash == sealed.manifest_hash
+    assert reread.entries[0].sha256 == baseline_entry.sha256
+    with pytest.raises(ArtifactIntegrityError, match="integrity baseline"):
+        store.resolve_entry(EXECUTION_ID, "code/main.py")
+    assert store.get_manifest(EXECUTION_ID).manifest_hash == sealed.manifest_hash
+
+
+def test_archive_uses_one_sealed_manifest_snapshot(tmp_path, monkeypatch):
+    store, root = _store(tmp_path)
+    (root / "one.txt").write_text("one", encoding="utf-8")
+    (root / "two.txt").write_text("two", encoding="utf-8")
+    store.seal_manifest(EXECUTION_ID)
+    original = store.get_manifest
+    calls = 0
+
+    def counted(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(store, "get_manifest", counted)
+    prepared = store.prepare_archive(EXECUTION_ID)
+    try:
+        assert calls == 1
+        with zipfile.ZipFile(prepared.path) as archive:
+            assert archive.namelist() == ["one.txt", "two.txt"]
+    finally:
+        prepared.path.unlink(missing_ok=True)
+
+
+def test_artifact_roles_separate_deliverables_from_audit_records(tmp_path):
+    store, root = _store(tmp_path)
+    (root / "code").mkdir()
+    (root / "code" / "app.py").write_text("print('ok')", encoding="utf-8")
+    (root / "plan.json").write_text("{}", encoding="utf-8")
+    (root / "review.md").write_text("review", encoding="utf-8")
+    (root / "full_log.json").write_text("{}", encoding="utf-8")
+    manifest = store.seal_manifest(EXECUTION_ID)
+
+    by_path = {entry.relative_path: entry.role for entry in manifest.entries}
+    assert by_path == {
+        "code/app.py": "deliverable",
+        "full_log.json": "log",
+        "plan.json": "provenance",
+        "review.md": "provenance",
+    }
+    deliverables = store.get_manifest(EXECUTION_ID, roles={"deliverable"})
+    audit = store.get_manifest(
+        EXECUTION_ID,
+        roles={"provenance", "log", "candidate_source", "internal"},
+    )
+    assert [entry.relative_path for entry in deliverables.entries] == ["code/app.py"]
+    assert {entry.relative_path for entry in audit.entries} == {
+        "full_log.json",
+        "plan.json",
+        "review.md",
+    }
+
+
+def test_unsealed_existing_manifest_is_explicitly_legacy_live(tmp_path):
+    store, root = _store(tmp_path)
+    (root / "result.txt").write_text("result", encoding="utf-8")
+    assert store.refresh_manifest(EXECUTION_ID).integrity_mode == "legacy_live"
 
 
 def test_active_execution_is_never_pruned(tmp_path):

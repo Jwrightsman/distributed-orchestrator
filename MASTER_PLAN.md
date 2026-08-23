@@ -1,6 +1,6 @@
 # MASTER PLAN — Mycelium
 
-_Last updated: August 22, 2026._
+_Last updated: August 23, 2026._
 _This file is the single source of truth for project direction. Any AI assistant working in this repo (Claude Code, etc.) must read this fully before making changes. It overrides older priority lists in CLAUDE.md._
 
 ---
@@ -24,13 +24,19 @@ deadlines, cancellation, and restart reconciliation; server-authoritative
 durable worker attempts and accepted receipts; validator contract floors and
 honest assurance; authenticated artifact delivery; explicit redacted shares;
 viewer/pitch/node credential separation; privacy-safe canonical defaults;
-persistent DAG project memory; REST, CLI, MCP, events, dashboard, contribution
-records, LAN discovery, demo modes, and deployment guides.
+persistent DAG project memory; digest-only node sessions; bounded worker output,
+streams, and event fanout; one-coordinator state ownership; common SQLite policy;
+role-scoped sealed artifact manifests; verified backup/restore; operational
+preflight/harnesses; REST, CLI, MCP, events, dashboard, contribution records,
+LAN discovery, demo modes, and deployment guides.
 
 **Current trust tier:** a small private trusted alpha. Worker identity still
-uses a shared secret, the queue is process-local, `network_policy` is not
-enforced, generated code is not sandboxed, and there is no permissionless
-network defense. Ensemble/direct reject project memory rather than ignoring it.
+starts with a shared admission secret; node sessions are process-local bearer
+credentials rather than cryptographic identity; the queue is process-local;
+`network_policy` is not enforced; generated code is not sandboxed; sealed
+manifests are not host-independent attestations; post-hoc duplicate verification
+is disabled; and there is no permissionless-network defense. Ensemble/direct
+reject project memory rather than ignoring it.
 
 **Not established by the current repository record:** a published demo video,
 repeat external users, or sustained outside adoption. Check current external
@@ -42,7 +48,7 @@ state before making a launch-status claim.
 
 - **Technical feasibility:** proven by our own Phase 0. The pipeline works and distributed execution works on LAN. Anonymous or hostile-node operation remains explicitly unsupported; WAN behavior and small-model output quality remain measurable rather than reasons to weaken the trust boundary.
 - **The lane is still open.** SwarmHarness (arXiv 2605.28764, May 2026) academically validates this exact niche — decentralized, incentive-aligned agent networks *without* blockchain — and explicitly notes no existing system ships the combination. It is a protocol paper, not a product. This repo is a working implementation in the same design space. Reference it in the README for credibility.
-- **Non-competitors:** DePIN GPU networks (Render, Spheron, etc.) are token-based compute marketplaces — a different lane we deliberately avoid. Kimi "Agent Swarm" and similar are centralized cloud products — they normalize swarm UX without touching volunteer hardware or collective ownership. OpenClaw remains the single-machine personal-agent king; we are the multi-machine collective, a different animal.
+- **Non-competitors:** DePIN GPU networks (Render, Spheron, etc.) are token-based compute marketplaces — a different lane we deliberately avoid. Kimi "Agent Swarm" and similar are centralized cloud products — they normalize swarm UX without coordinating an invited set of locally operated machines. OpenClaw remains the single-machine personal-agent king; we are the trusted multi-machine collective, a different animal.
 - **Model tailwind:** Qwen3.5 small series (March 2026) — `qwen3.5:4b` is ~2.5GB, a major quality jump for 8GB CPU-only nodes. Gemma 4 E2B/E4B and Phi-4 Mini are the other strong 8GB picks. Our default model and auto-detect ladder must be refreshed.
 - **Ecosystem tailwind:** MCP is now a Linux Foundation standard adopted broadly across agent tooling. Mycelium's shipped MCP adapter lets an authorized client submit and inspect canonical-backed work; private reads need the viewer credential.
 - **Outcome tiers (calibrated):** (a) launch + small tester community — very achievable; (b) niche traction, 100+ stars, recurring contributors — plausible with a good video; (c) the full guild/marketplace vision — multi-year, requires collaborators, only reachable through (a) and (b).
@@ -50,10 +56,11 @@ state before making a launch-status claim.
 ## 4. The Prime Directive
 
 **No unbounded feature expansion until the demo video is public.** The bounded
-Execution Strategy Protocol v1 sprint and Trusted-Alpha Integrity sprint are
-the only authorized exceptions. Their records are
-`SPRINT_STRATEGY_PROTOCOL.md` and `SPRINT_TRUSTED_ALPHA_INTEGRITY.md`. Normal
-freeze discipline resumes after handoff. Do not infer authorization for map,
+Execution Strategy Protocol v1, Trusted-Alpha Integrity, and Trusted-Alpha RC1
+sprints are the only authorized exceptions. Their records are
+`SPRINT_STRATEGY_PROTOCOL.md`, `SPRINT_TRUSTED_ALPHA_INTEGRITY.md`, and
+`SPRINT_TRUSTED_ALPHA_RC1.md`. Normal freeze discipline resumes after RC1
+handoff. Do not infer authorization for map,
 research, debate, consensus, marketplace, token, blockchain, federation,
 accounts, major UI, sandbox, or model-sharding work.
 
@@ -68,6 +75,11 @@ accounts, major UI, sandbox, or model-sharding work.
 - Non-resumable executions/jobs become retryable `interrupted` after restart.
 - Complete artifacts use authenticated, path-confined APIs; public result access uses explicit hashed share tokens.
 - Viewer, pitch, and node credentials are separate; empty viewer auth is a warned local-development mode.
+- Trusted-alpha deployment fails closed on missing/weak credentials and one OS lock permits exactly one coordinator per state directory.
+- Worker calls require server-issued digest-only sessions; attempt/session output and streaming budgets are bounded.
+- Terminal artifacts have winner/role scope and a sealed local manifest baseline; deliverable and audit downloads are distinct.
+- SQLite access has one policy and backup/restore has validated archives; process-local queues and sessions are not recoverable.
+- Post-hoc duplicate-verification fields are explicit, but trusted-alpha reports them disabled.
 - The worker scheduler remains in memory and node admission still uses a shared secret.
 - Normative behavior is in `docs/PROTOCOL.md`; security boundaries are in `docs/THREAT_MODEL.md`.
 
@@ -93,7 +105,7 @@ accounts, major UI, sandbox, or model-sharding work.
 
 ### Phase D — First external nodes (Days 10–30)
 1. Private testers first: Tailscale (free). Testers install Tailscale, join the tailnet by invite, run `python join.py http://<tailscale-ip>:8000`. Zero public port exposure; laptop stays the orchestrator.
-2. Internet-reachable **private** alpha (if demand): a 24/7 orchestrator may be used only after independent `node_secret`, `pitch_key`, and `viewer_key` configuration; TLS or a private overlay; verified route denial and WebSocket auth; rate/admission and artifact caps; share expiry/revocation; restart reconciliation; and a current branch verification run. This is still not anonymous-node or permissionless readiness.
+2. Internet-reachable **private** alpha (if demand): a 24/7 orchestrator may be used only in `trusted_alpha` mode after preflight; independent strong `node_secret`, `pitch_key`, and `viewer_key` configuration; TLS or a private overlay; exactly one coordinator; verified route denial and WebSocket auth; rate/admission, worker-output, and artifact caps; access-log share-token hygiene; share expiry/revocation; sealed-artifact drift checks; tested backup/restore; restart reconciliation; and a current branch verification run. This is still not anonymous-node or permissionless readiness.
 3. Turn on GitHub Discussions for coordination. A Discord server only when there are ≥10 active people to talk to.
 4. Goal: 3–5 invited external node owners, 10 real pitches from testers, every rough edge they hit logged as an issue.
 
@@ -111,24 +123,47 @@ accounts, major UI, sandbox, or model-sharding work.
 
 The WAN-era node/pitch checks, rate limits, disk cap, deployment guide, Docker
 packaging, model refresh, MCP interface, and structured planner are already in
-the repository. Trusted-alpha integrity adds the required private-read,
-attempt-authority, lifecycle, validation, artifact, share, privacy-default, and
-interface contracts. Do not recreate those systems from the older worklist.
+the repository. Trusted-alpha integrity added private-read, attempt-authority,
+lifecycle, validation, share, privacy-default, and interface contracts. RC1
+adds deploy-mode preflight, session-bound workers, bounded worker I/O, one
+coordinator, shared SQLite policy, role-scoped sealed manifests, verified
+backup/restore, and bounded live/nightly harnesses. Do not recreate those
+systems from older worklists.
 
 Before any deployment or demo:
 
-1. Run the current full suite, Ruff, server import, and Compose configuration;
-   record exact results rather than copying a historical count.
-2. Configure independent `node_secret`, `pitch_key`, and `viewer_key`; use TLS
-   or Tailscale and verify `/health` reports private routes protected.
+1. Run trusted-alpha preflight, the bounded live multi-node harness, the current
+   full suite, Ruff, server import, and Compose configuration; record exact
+   results rather than copying a historical count.
+2. Use `deployment_mode=trusted_alpha`; configure independent strong
+   `node_secret`, `pitch_key`, and `viewer_key`; use TLS or Tailscale; allow one
+   coordinator; and verify public/private health reports protection and lock.
 3. Keep keyless public pitch off unless its fixed local profile and compute caps
    are intentionally wanted.
 4. Review generated artifacts before execution; validation is not a sandbox.
-5. Verify the deployed build fingerprint and exercise viewer denial, share
-   expiry/revocation, artifact download, cancellation, and worker rejection.
-6. Keep the standing rules: no money/tokens/blockchain, no permissionless-node
+5. Verify the deployed build fingerprint and exercise viewer/session denial,
+   share scope/expiry/revocation, artifact role/seal/drift/download, worker I/O
+   limits, cancellation/restart, attempt replay/rejection, and backup/restore.
+6. Configure application-server and reverse-proxy access logs not to retain raw
+   share capability URLs.
+7. Keep the standing rules: no money/tokens/blockchain, no permissionless-node
    claims, no major UI work without Claude's handoff, and no new strategy without
    a new explicit sprint.
+
+### Product language baseline
+
+Lead with: **“Run auditable local-AI jobs across computers you trust.”** Support
+it with: **“Break work into coordinated components or generate multiple complete
+attempts. Mycelium dispatches work to local models, applies explicit checks, and
+records how each result was produced.”**
+
+Do not say every request is split, every result is working code, or every result
+is tested to run. Do not use absolute “no cloud” wording while an optional
+external OpenAI-compatible provider exists. Do not describe the current network
+as anonymous/permissionless/volunteer admission, and do not use a generic
+“verified” badge. Interfaces must expose lifecycle, validation, assurance,
+artifact integrity, and post-hoc state separately. See `HANDOFF.md` for the full
+frontend field and assurance-label contract.
 
 ## 8. After launch — see ROADMAP.md
 
@@ -140,10 +175,12 @@ Two lists of future work drift apart, so there is only one. **ROADMAP.md is refe
 queue** — every item there is gated on a trigger, and nothing moves into a sprint file until its
 trigger fires. The active work is always in `SPRINT_*.md`.
 
-Of the five items this section used to list, two are done: the **MCP server interface shipped**
-(five tools; rerun its current checks before deployment) and **verification and reputation is wired** (sampled
-duplicate execution, `verify_rate`, per-node routing weight — off by default). Layer sharding,
-agent specialization and the guild charter carried over to ROADMAP §10, §9 and §8 respectively.
+Of the five items this section used to list, the **MCP server interface shipped**
+(five tools; rerun its current checks before deployment). Trusted-alpha exposes
+post-hoc verification state but intentionally reports duplicate verification
+`disabled` until its durable semantics exist; do not describe the historical
+`verify_rate` path as current assurance. Layer sharding, agent specialization,
+reputation experiments, and the guild charter remain gated in ROADMAP.
 
 ## 9. Success metrics
 

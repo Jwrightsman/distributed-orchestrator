@@ -18,7 +18,11 @@ Usage:
 """
 
 import asyncio
-from contextlib import asynccontextmanager
+import logging
+import os
+import sys
+from contextlib import asynccontextmanager, suppress
+from typing import Mapping, Sequence
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
@@ -35,9 +39,12 @@ import routes_status
 import routes_try
 from dashboard import router as dashboard_router
 from access_control import ViewerAccessMiddleware, warn_if_viewer_auth_unconfigured
+from config import CONFIG_FILE, get as get_config
+from coordinator_lock import CoordinatorLock, validate_single_worker
 from execution.artifacts import get_artifact_store
 from execution.service import get_execution_service
 from execution.sharing import get_share_store
+from scripts.preflight import run_preflight
 from server_state import _cleanup_stale_nodes, _db_load_jobs, _init_db
 
 # Re-exported for back-compat: tests and scripts reach server state through
@@ -62,28 +69,114 @@ from server_state import (  # noqa: F401
     ws_manager,
 )
 
+_LOG = logging.getLogger("mycelium.startup")
+
+
+def _runtime_bind_host(
+    settings: Mapping[str, object],
+    *,
+    argv: Sequence[str] | None = None,
+) -> str:
+    """Resolve the interface the running ASGI server actually requested.
+
+    Uvicorn's host is a process-launch option, so it can differ from the
+    compatibility value in config.json. Embedders can declare it explicitly;
+    normal Uvicorn and Docker launches expose it in their process arguments.
+    """
+    explicit = os.environ.get("MYCELIUM_BIND_HOST", "").strip()
+    if explicit:
+        return explicit
+
+    arguments = tuple(sys.argv[1:] if argv is None else argv)
+    resolved: str | None = None
+    for index, argument in enumerate(arguments):
+        if argument == "--host" and index + 1 < len(arguments):
+            candidate = arguments[index + 1].strip()
+            if candidate:
+                resolved = candidate
+        elif argument.startswith("--host="):
+            candidate = argument.partition("=")[2].strip()
+            if candidate:
+                resolved = candidate
+    if resolved is not None:
+        return resolved
+    return str(settings.get("bind_host", "127.0.0.1"))
+
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    _init_db()
-    _db_load_jobs()
-    get_artifact_store().migrate()
-    get_share_store().migrate()
-    reconcile_executions = getattr(get_execution_service(), "reconcile_after_restart", None)
-    if reconcile_executions:
-        reconcile_executions()
-    # ``_db_load_jobs`` above reconciles legacy queued/running rows before
-    # exposing them; canonical reconciliation follows the same fail-closed rule.
-    warn_if_viewer_auth_unconfigured()
-    cleanup_task = asyncio.create_task(_cleanup_stale_nodes())
+    settings = get_config()
+    deployment_mode = str(settings.get("deployment_mode", "local"))
+    validate_single_worker()
+    coordinator_lock = CoordinatorLock(deployment_mode=deployment_mode)
+    identity = coordinator_lock.acquire()
     try:
-        yield
+        # The OS lock is deliberately held before any migration, reconciliation,
+        # or background task can mutate shared state.
+        preflight = run_preflight(
+            CONFIG_FILE,
+            state_dir=coordinator_lock.state_dir,
+            requested_mode=deployment_mode,
+            bind_host=_runtime_bind_host(settings),
+            check_lock=False,
+        )
+        errors = [check for check in preflight.checks if check.status == "error"]
+        if errors:
+            details = "; ".join(f"{check.name}: {check.message}" for check in errors)
+            raise RuntimeError(f"deployment preflight failed: {details}")
+        warnings = [
+            check
+            for check in preflight.checks
+            if check.status == "warning" and check.name != "coordinator_lock"
+        ]
+        for check in warnings:
+            _LOG.warning("Preflight warning [%s]: %s", check.name, check.message)
+
+        app.state.coordinator_identity = identity
+        app.state.deployment_mode = deployment_mode
+        app.state.preflight_warnings = tuple(check.message for check in warnings)
+        _LOG.info(
+            "Coordinator instance %s started in %s mode with the single-process lock held",
+            identity.instance_id,
+            deployment_mode,
+        )
+
+        _init_db()
+        _db_load_jobs()
+        get_artifact_store().migrate()
+        get_share_store().migrate()
+        reconcile_executions = getattr(get_execution_service(), "reconcile_after_restart", None)
+        if reconcile_executions:
+            reconcile_executions()
+        # ``_db_load_jobs`` above reconciles legacy queued/running rows before
+        # exposing them; canonical reconciliation follows the same fail-closed rule.
+        warn_if_viewer_auth_unconfigured()
+        cleanup_task = asyncio.create_task(_cleanup_stale_nodes())
+        try:
+            yield
+        finally:
+            cleanup_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await cleanup_task
     finally:
-        cleanup_task.cancel()
+        coordinator_lock.release()
 
 
 app = FastAPI(title="Mycelium", version="0.3.0", lifespan=_lifespan)
 app.add_middleware(ViewerAccessMiddleware)
+
+
+@app.get("/v1/operator/health")
+async def operator_health():
+    """Private process identity and deployment-mode health for operators."""
+    identity = getattr(app.state, "coordinator_identity", None)
+    return {
+        "status": "ok" if identity is not None else "starting",
+        "instance_id": identity.instance_id if identity is not None else None,
+        "deployment_mode": getattr(app.state, "deployment_mode", "unknown"),
+        "single_coordinator_lock": identity is not None,
+        "preflight_warnings": list(getattr(app.state, "preflight_warnings", ())),
+    }
 
 
 @app.exception_handler(Exception)
@@ -96,7 +189,8 @@ async def unhandled_exception_handler(request, exc):
     """
     import logging
 
-    logging.getLogger("mycelium").exception("unhandled error on %s", request.url.path)
+    safe_path = routes_access.redact_share_token_path(request.url.path)
+    logging.getLogger("mycelium").exception("unhandled error on %s", safe_path)
     return JSONResponse(status_code=500, content={"detail": "internal server error"})
 
 

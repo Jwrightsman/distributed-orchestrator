@@ -3,9 +3,9 @@
 #   docker compose up -d
 #   docker compose exec ollama ollama pull qwen3.5:4b
 #
-# The orchestrator reads its settings from ./data/config.json (created on
-# first edit — see docs/DEPLOY.md). At minimum, point it at the Ollama
-# container:  {"ollama_url": "http://ollama:11434"}
+# The orchestrator reads settings and all recoverable state from ./data. The
+# trusted-alpha preflight validates this mount before any migration runs.
+# See docs/DEPLOY.md; do not run two compose projects against the same folder.
 #
 # To run a worker node against a remote orchestrator instead:
 #   docker compose run --rm orchestrator python /app/node.py --server http://ORCHESTRATOR:8000
@@ -20,11 +20,19 @@ services:
   orchestrator:
     build: .
     ports:
-      - "8000:8000"
+      # Loopback is the safe default. Set MYCELIUM_PUBLISH_ADDRESS to a private
+      # overlay address (or a restricted reverse-proxy interface), never an
+      # unrestricted public interface without TLS and network policy.
+      - "${MYCELIUM_PUBLISH_ADDRESS:-127.0.0.1}:8000:8000"
     volumes:
       - ./data:/data
+    environment:
+      MYCELIUM_STATE_DIR: /data
+      MYCELIUM_CONFIG_FILE: /data/config.json
     depends_on:
       - ollama
+    init: true
+    stop_grace_period: 30s
     restart: unless-stopped
 
 volumes:

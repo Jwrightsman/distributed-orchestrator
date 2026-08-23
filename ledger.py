@@ -20,6 +20,9 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from sqlite_store import connect as sqlite_connect
+from sqlite_store import migration_lock
+
 
 LEDGER_FILE = Path("ledger.json")
 LEDGER_DB_FILE = Path("events.db")
@@ -136,13 +139,16 @@ def _import_legacy_entries(con: sqlite3.Connection) -> None:
 
 
 def _connect() -> sqlite3.Connection:
-    con = sqlite3.connect(LEDGER_DB_FILE, timeout=30)
-    con.row_factory = sqlite3.Row
-    con.execute("PRAGMA busy_timeout = 30000")
-    ensure_contribution_schema(con)
-    _import_legacy_entries(con)
-    con.commit()
-    return con
+    con = sqlite_connect(LEDGER_DB_FILE, row_factory=sqlite3.Row)
+    try:
+        with migration_lock(LEDGER_DB_FILE):
+            ensure_contribution_schema(con)
+            _import_legacy_entries(con)
+            con.commit()
+        return con
+    except Exception:
+        con.close()
+        raise
 
 
 def _entry_from_row(row: sqlite3.Row) -> dict:

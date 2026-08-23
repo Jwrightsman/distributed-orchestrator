@@ -21,6 +21,7 @@ import routes_pitch
 import server
 import server_state
 from verification import MIN_SAMPLES_FOR_ROUTING, VerificationPool
+from tests._node_session_helpers import enable_auto_node_sessions
 
 _CODE_A = "```python\nprint('hello world from a')\n```"
 _CODE_B = "```python\nprint('hello world from b')\n```"
@@ -50,7 +51,7 @@ def clean_server_state():
 @pytest.fixture
 def client():
     with TestClient(server.app) as c:
-        yield c
+        yield enable_auto_node_sessions(c)
 
 
 def _register(client, node_id: str):
@@ -86,6 +87,20 @@ def test_refresh_clamps_nonsense_config(monkeypatch):
         monkeypatch.setattr(config, "get", lambda _raw=raw: {"verify_rate": _raw})
         monkeypatch.setattr(server_state, "get_config", lambda _raw=raw: {"verify_rate": _raw})
         assert server_state._refresh_verify_rate() == expected
+
+
+def test_trusted_alpha_disables_process_local_sampled_verification(monkeypatch):
+    """Detached samples stay off until their post-hoc state is durable."""
+
+    monkeypatch.setattr(
+        server_state,
+        "get_config",
+        lambda: {"deployment_mode": "trusted_alpha", "verify_rate": 1.0},
+    )
+    server_state.verification_pool.verify_rate = 1.0
+
+    assert server_state._refresh_verify_rate() == 0.0
+    assert server_state.verification_pool.should_verify(available_nodes=25) is False
 
 
 def test_single_node_never_verifies():

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+import re
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from fastapi.responses import FileResponse
@@ -19,6 +21,7 @@ from access_control import (
 from config import get as get_config
 from execution.artifacts import (
     ArtifactLimitError,
+    ArtifactIntegrityError,
     ArtifactManifestV1,
     ArtifactNotFound,
     ArtifactSecurityError,
@@ -29,6 +32,7 @@ from execution.service import get_execution_service
 from execution.sharing import (
     CreateExecutionShareV1,
     CreatedExecutionShareV1,
+    ExecutionShareRecordV1,
     PublicExecutionShareV1,
     artifact_manifest_for_share,
     get_share_store,
@@ -36,6 +40,13 @@ from execution.sharing import (
 )
 
 router = APIRouter(prefix="/v1")
+
+SHARE_SECURITY_HEADERS = {
+    "Cache-Control": "no-store",
+    "Referrer-Policy": "no-referrer",
+    "X-Content-Type-Options": "nosniff",
+}
+_SHARE_TOKEN_PATH = re.compile(r"(/v1/shares/)[^/?#]+")
 
 
 class _StrictModel(BaseModel):
@@ -51,10 +62,31 @@ class ViewerSessionResponse(_StrictModel):
     expires_at: str
 
 
+class RevokedSharesResponse(_StrictModel):
+    execution_id: str
+    revoked_count: int = Field(ge=0)
+
+
+def redact_share_token_path(path: str) -> str:
+    """Return a log-safe share route without its bearer capability."""
+    return _SHARE_TOKEN_PATH.sub(r"\1<redacted>", path)
+
+
 def _execution_or_404(execution_id: str):
     execution = get_execution_service().get(execution_id)
     if execution is None:
         raise HTTPException(status_code=404, detail="Execution not found")
+    return execution
+
+
+def _public_execution_or_404(execution_id: str):
+    execution = get_execution_service().get(execution_id)
+    if execution is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Share not found",
+            headers=SHARE_SECURITY_HEADERS,
+        )
     return execution
 
 
@@ -63,28 +95,52 @@ def _artifact_http_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=404, detail="Artifact not found")
     if isinstance(exc, ArtifactLimitError):
         return HTTPException(status_code=413, detail=str(exc))
+    if isinstance(exc, ArtifactIntegrityError):
+        return HTTPException(status_code=409, detail="Artifact integrity check failed")
     return HTTPException(status_code=400, detail="Invalid artifact path or artifact tree")
+
+
+def _public_artifact_http_error(exc: Exception) -> HTTPException:
+    error = _artifact_http_error(exc)
+    error.headers = {**SHARE_SECURITY_HEADERS, **(error.headers or {})}
+    return error
+
+
+def _artifact_roles(view: Literal["deliverable", "audit", "all"]):
+    if view == "deliverable":
+        return {"deliverable"}
+    if view == "audit":
+        return {"provenance", "log", "candidate_source", "internal"}
+    return None
 
 
 def _share_or_404(token: str):
     share = get_share_store().get_active(token)
     if share is None:
         # Invalid, revoked, and expired capabilities deliberately look alike.
-        raise HTTPException(status_code=404, detail="Share not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Share not found",
+            headers=SHARE_SECURITY_HEADERS,
+        )
     return share
 
 
 def _share_with_artifacts_or_403(token: str):
     share = _share_or_404(token)
     if not share.allow_artifact_download:
-        raise HTTPException(status_code=403, detail="This share does not permit artifact access")
+        raise HTTPException(
+            status_code=403,
+            detail="This share does not permit artifact access",
+            headers=SHARE_SECURITY_HEADERS,
+        )
     return share
 
 
 def _public_share_manifest(token: str):
     share = _share_with_artifacts_or_403(token)
-    execution = _execution_or_404(share.execution_id)
-    manifest = get_artifact_store().refresh_manifest(share.execution_id)
+    execution = _public_execution_or_404(share.execution_id)
+    manifest = get_artifact_store().get_manifest(share.execution_id)
     return share, artifact_manifest_for_share(manifest, share, execution)
 
 
@@ -126,10 +182,31 @@ async def delete_viewer_session(response: Response):
 
 
 @router.get("/executions/{execution_id}/artifacts", response_model=ArtifactManifestV1)
-async def execution_artifacts(execution_id: str):
+async def execution_artifacts(
+    execution_id: str,
+    response: Response,
+    role: Literal["deliverable", "audit", "all"] = "deliverable",
+):
     _execution_or_404(execution_id)
     try:
-        return get_artifact_store().refresh_manifest(execution_id)
+        if role == "all":
+            response.headers["Deprecation"] = "true"
+            response.headers["Warning"] = (
+                '299 Mycelium "role=all is a deprecated compatibility view"'
+            )
+        return get_artifact_store().get_manifest(
+            execution_id,
+            roles=_artifact_roles(role),
+        )
+    except (ArtifactNotFound, ArtifactLimitError, ArtifactSecurityError) as exc:
+        raise _artifact_http_error(exc) from exc
+
+
+@router.post("/executions/{execution_id}/artifacts/seal", response_model=ArtifactManifestV1)
+async def seal_execution_artifacts(execution_id: str):
+    _execution_or_404(execution_id)
+    try:
+        return get_artifact_store().seal_manifest(execution_id)
     except (ArtifactNotFound, ArtifactLimitError, ArtifactSecurityError) as exc:
         raise _artifact_http_error(exc) from exc
 
@@ -157,13 +234,35 @@ async def execution_artifact(execution_id: str, relative_path: str):
 async def download_execution_artifacts(execution_id: str):
     _execution_or_404(execution_id)
     try:
-        prepared = get_artifact_store().prepare_archive(execution_id)
+        prepared = get_artifact_store().prepare_archive(
+            execution_id,
+            roles={"deliverable"},
+        )
     except (ArtifactNotFound, ArtifactLimitError, ArtifactSecurityError) as exc:
         raise _artifact_http_error(exc) from exc
     return FileResponse(
         prepared.path,
         media_type="application/zip",
         filename=prepared.download_name,
+        headers={"Content-Length": str(prepared.size_bytes)},
+        background=BackgroundTask(prepared.path.unlink, missing_ok=True),
+    )
+
+
+@router.get("/executions/{execution_id}/audit-download")
+async def download_execution_audit(execution_id: str):
+    _execution_or_404(execution_id)
+    try:
+        prepared = get_artifact_store().prepare_archive(
+            execution_id,
+            roles={"provenance", "log", "candidate_source", "internal"},
+        )
+    except (ArtifactNotFound, ArtifactLimitError, ArtifactSecurityError) as exc:
+        raise _artifact_http_error(exc) from exc
+    return FileResponse(
+        prepared.path,
+        media_type="application/zip",
+        filename=prepared.download_name.replace("_artifacts.zip", "_audit.zip"),
         headers={"Content-Length": str(prepared.size_bytes)},
         background=BackgroundTask(prepared.path.unlink, missing_ok=True),
     )
@@ -179,6 +278,15 @@ async def create_execution_share(execution_id: str, body: CreateExecutionShareV1
     return get_share_store().create(execution_id, body)
 
 
+@router.get(
+    "/executions/{execution_id}/shares",
+    response_model=list[ExecutionShareRecordV1],
+)
+async def list_execution_shares(execution_id: str):
+    _execution_or_404(execution_id)
+    return get_share_store().list_active(execution_id)
+
+
 @router.delete(
     "/executions/{execution_id}/shares/{share_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -190,28 +298,40 @@ async def revoke_execution_share(execution_id: str, share_id: str):
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+@router.delete(
+    "/executions/{execution_id}/shares",
+    response_model=RevokedSharesResponse,
+)
+async def revoke_all_execution_shares(execution_id: str):
+    _execution_or_404(execution_id)
+    count = get_share_store().revoke_all(execution_id)
+    return RevokedSharesResponse(execution_id=execution_id, revoked_count=count)
+
+
 @router.get("/shares/{token}", response_model=PublicExecutionShareV1)
-async def public_execution_share(token: str):
+async def public_execution_share(token: str, response: Response):
+    response.headers.update(SHARE_SECURITY_HEADERS)
     share = _share_or_404(token)
-    execution = _execution_or_404(share.execution_id)
+    execution = _public_execution_or_404(share.execution_id)
     manifest = None
     try:
-        complete_manifest = get_artifact_store().refresh_manifest(share.execution_id)
+        complete_manifest = get_artifact_store().get_manifest(share.execution_id)
         manifest = artifact_manifest_for_share(complete_manifest, share, execution)
     except ArtifactNotFound:
         pass
     except (ArtifactLimitError, ArtifactSecurityError) as exc:
-        raise _artifact_http_error(exc) from exc
+        raise _public_artifact_http_error(exc) from exc
     return redact_execution_for_share(execution, share, manifest=manifest, token=token)
 
 
 @router.get("/shares/{token}/artifacts", response_model=ArtifactManifestV1)
-async def public_share_artifacts(token: str):
+async def public_share_artifacts(token: str, response: Response):
+    response.headers.update(SHARE_SECURITY_HEADERS)
     try:
         _, manifest = _public_share_manifest(token)
         return manifest
     except (ArtifactNotFound, ArtifactLimitError, ArtifactSecurityError) as exc:
-        raise _artifact_http_error(exc) from exc
+        raise _public_artifact_http_error(exc) from exc
 
 
 @router.get("/shares/{token}/artifacts/{relative_path:path}")
@@ -223,12 +343,16 @@ async def public_share_artifact(token: str, relative_path: str):
             raise ArtifactNotFound("artifact was not found")
         path, entry = get_artifact_store().resolve_entry(share.execution_id, relative_path)
     except (ArtifactNotFound, ArtifactLimitError, ArtifactSecurityError) as exc:
-        raise _artifact_http_error(exc) from exc
+        raise _public_artifact_http_error(exc) from exc
     return FileResponse(
         path,
         media_type=entry.media_type,
         filename=Path(entry.relative_path).name,
-        headers={"ETag": f'"{entry.sha256}"', "X-Content-SHA256": entry.sha256},
+        headers={
+            **SHARE_SECURITY_HEADERS,
+            "ETag": f'"{entry.sha256}"',
+            "X-Content-SHA256": entry.sha256,
+        },
     )
 
 
@@ -241,11 +365,11 @@ async def download_public_share_artifacts(token: str):
             relative_paths={entry.relative_path for entry in manifest.entries},
         )
     except (ArtifactNotFound, ArtifactLimitError, ArtifactSecurityError) as exc:
-        raise _artifact_http_error(exc) from exc
+        raise _public_artifact_http_error(exc) from exc
     return FileResponse(
         prepared.path,
         media_type="application/zip",
         filename=prepared.download_name,
-        headers={"Content-Length": str(prepared.size_bytes)},
+        headers={**SHARE_SECURITY_HEADERS, "Content-Length": str(prepared.size_bytes)},
         background=BackgroundTask(prepared.path.unlink, missing_ok=True),
     )

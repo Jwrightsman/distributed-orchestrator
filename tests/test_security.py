@@ -5,8 +5,11 @@ gate on every pitch endpoint, the /pitch/distributed rate limit, and the
 output/ directory size cap.
 """
 
+import asyncio
 import json
+import logging
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -60,6 +63,22 @@ async def _fake_pipeline(task, **kwargs):
         "code_files": [],
         "project_id": "",
     }
+
+
+def test_unhandled_error_log_redacts_share_capability(caplog):
+    token = "plaintext-share-capability"
+    request = SimpleNamespace(
+        url=SimpleNamespace(path=f"/v1/shares/{token}/artifacts/result.txt")
+    )
+
+    with caplog.at_level(logging.ERROR, logger="mycelium"):
+        response = asyncio.run(
+            server.unhandled_exception_handler(request, RuntimeError("failed"))
+        )
+
+    assert response.status_code == 500
+    assert token not in caplog.text
+    assert "/v1/shares/<redacted>/artifacts/result.txt" in caplog.text
 
 
 async def _fake_plan(task, max_retries=None, memory_context=""):

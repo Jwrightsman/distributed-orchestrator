@@ -44,7 +44,11 @@ from rich.markdown import Markdown
 from rich.table import Table
 
 from orchestrator import run_pipeline, OUTPUT_DIR
-from execution.contracts import EnsembleOptionsV1, ExecutionRequestV1
+from execution.contracts import (
+    EnsembleOptionsV1,
+    ExecutionRequestV1,
+    ExecutionRequirementsV1,
+)
 from execution.service import get_execution_service
 from ollama_client import check_ollama, auto_detect_model, DEFAULT_MODEL
 from ledger import get_standings
@@ -107,6 +111,9 @@ async def run_task(
     strategy: str = "auto",
     candidates: int | None = None,
     placement: str = "local",
+    allow_remote: bool = False,
+    confidentiality: str = "local_only",
+    approved_node_ids: list[str] | None = None,
 ):
     """Run a single task through the pipeline with live output."""
     # Show project context if continuing
@@ -170,21 +177,21 @@ async def run_task(
         console.print("[bold yellow]PLANNER[/bold yellow] Decomposing task into subtasks...\n")
 
     try:
-        strategy_options = None
-        if strategy == "direct":
-            strategy_options = EnsembleOptionsV1(candidates=1, concurrency=1)
-        elif candidates is not None:
-            strategy_options = EnsembleOptionsV1(
-                candidates=candidates,
-                concurrency=candidates if placement == "distributed" else 1,
-            )
-        request = ExecutionRequestV1(
-            task=task,
+        request = build_execution_request(
+            task,
             project_id=project_id,
             strategy=strategy,
-            strategy_options=strategy_options,
+            candidates=candidates,
             placement=placement,
+            allow_remote=allow_remote,
+            confidentiality=confidentiality,
+            approved_node_ids=approved_node_ids,
         )
+        if request.remote_dispatch_consent:
+            console.print(
+                "[yellow]Remote execution enabled:[/yellow] invited contributor nodes "
+                "can read the unit prompts assigned to them."
+            )
         execution = await get_execution_service().execute(
             request,
             callbacks={
@@ -348,6 +355,9 @@ async def interactive(
     strategy: str = "auto",
     candidates: int | None = None,
     placement: str = "local",
+    allow_remote: bool = False,
+    confidentiality: str = "local_only",
+    approved_node_ids: list[str] | None = None,
 ):
     """Interactive mode — keep pitching tasks."""
     console.print(Panel(
@@ -382,6 +392,9 @@ async def interactive(
                 strategy=strategy,
                 candidates=candidates,
                 placement=placement,
+                allow_remote=allow_remote,
+                confidentiality=confidentiality,
+                approved_node_ids=approved_node_ids,
             )
             console.print()
         except (KeyboardInterrupt, EOFError):
@@ -404,12 +417,89 @@ def parse_execution_args(argv: list[str]):
     parser.add_argument("--strategy", choices=("auto", "dag", "ensemble", "direct"), default="auto")
     parser.add_argument("--candidates", type=int, choices=range(1, 6))
     parser.add_argument("--placement", choices=("auto", "local", "distributed"), default="local")
+    parser.add_argument(
+        "--allow-remote",
+        action="store_true",
+        help="consent to sending assigned unit prompts to invited contributor nodes",
+    )
+    parser.add_argument(
+        "--confidentiality",
+        choices=("local_only", "trusted_guild", "approved_nodes"),
+    )
+    parser.add_argument(
+        "--approved-node",
+        action="append",
+        default=[],
+        dest="approved_node_ids",
+        metavar="NODE_ID",
+    )
     options, remaining = parser.parse_known_args(argv)
     if options.strategy == "dag" and options.candidates is not None:
         parser.error("--candidates cannot be used with --strategy dag")
     if options.strategy == "direct" and options.candidates not in (None, 1):
         parser.error("--strategy direct is ensemble with exactly one candidate")
+
+    if options.confidentiality is None:
+        options.confidentiality = (
+            "trusted_guild"
+            if options.allow_remote and options.placement in ("auto", "distributed")
+            else "local_only"
+        )
+
+    remote_capable = (
+        options.placement in ("auto", "distributed")
+        and options.confidentiality != "local_only"
+    )
+    if options.placement == "distributed" and not options.allow_remote:
+        parser.error("--placement distributed requires --allow-remote")
+    if remote_capable and not options.allow_remote:
+        parser.error("remote-capable placement requires --allow-remote")
+    if options.allow_remote and not remote_capable:
+        parser.error(
+            "--allow-remote requires --placement auto|distributed and non-local confidentiality"
+        )
+    if options.placement == "distributed" and options.confidentiality == "local_only":
+        parser.error("--confidentiality local_only cannot use distributed placement")
+    if options.confidentiality == "approved_nodes" and not options.approved_node_ids:
+        parser.error("--confidentiality approved_nodes requires at least one --approved-node")
+    if options.approved_node_ids and options.confidentiality != "approved_nodes":
+        parser.error("--approved-node requires --confidentiality approved_nodes")
     return options, remaining
+
+
+def build_execution_request(
+    task: str,
+    project_id: str | None = None,
+    *,
+    strategy: str = "auto",
+    candidates: int | None = None,
+    placement: str = "local",
+    allow_remote: bool = False,
+    confidentiality: str = "local_only",
+    approved_node_ids: list[str] | None = None,
+) -> ExecutionRequestV1:
+    """Build the canonical request represented by validated CLI flags."""
+    strategy_options = None
+    if strategy == "direct":
+        strategy_options = EnsembleOptionsV1(candidates=1, concurrency=1)
+    elif candidates is not None:
+        remote_concurrency = allow_remote and placement in ("auto", "distributed")
+        strategy_options = EnsembleOptionsV1(
+            candidates=candidates,
+            concurrency=candidates if remote_concurrency else 1,
+        )
+    return ExecutionRequestV1(
+        task=task,
+        project_id=project_id,
+        strategy=strategy,
+        strategy_options=strategy_options,
+        placement=placement,
+        remote_dispatch_consent=allow_remote,
+        confidentiality=confidentiality,
+        requirements=ExecutionRequirementsV1(
+            approved_node_ids=list(approved_node_ids or []),
+        ),
+    )
 
 
 # The showcase pitches live in showcase.py so that cli.py and the reliability
@@ -856,6 +946,9 @@ async def main():
             strategy=execution_options.strategy,
             candidates=execution_options.candidates,
             placement=execution_options.placement,
+            allow_remote=execution_options.allow_remote,
+            confidentiality=execution_options.confidentiality,
+            approved_node_ids=execution_options.approved_node_ids,
         )
 
     # ── Flags that don't need Ollama ──
@@ -947,6 +1040,9 @@ async def main():
             strategy=execution_options.strategy,
             candidates=execution_options.candidates,
             placement=execution_options.placement,
+            allow_remote=execution_options.allow_remote,
+            confidentiality=execution_options.confidentiality,
+            approved_node_ids=execution_options.approved_node_ids,
         )
 
 

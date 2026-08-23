@@ -21,6 +21,8 @@ from pathlib import Path
 from typing import Any, Literal
 
 from ledger import ensure_contribution_schema, insert_contribution_in_transaction
+from sqlite_store import connect as sqlite_connect
+from sqlite_store import connection, migration_lock
 
 
 AttemptState = Literal[
@@ -43,6 +45,15 @@ _TERMINAL_STATES = {
 }
 _MAX_QUARANTINE_ROWS = 500
 _MAX_QUARANTINE_PREVIEW_BYTES = 4096
+DEFAULT_MAX_OUTPUT_BYTES = 1_048_576
+MAX_OUTPUT_BYTES = 10_485_760
+MAX_ERROR_BYTES = 2048
+# The reference worker flushes roughly every 20 model tokens.  This ceiling is
+# high enough for the maximum 10 MiB output at that cadence while still bounding a
+# malicious attempt independently of its byte and event-rate limits.
+MAX_STREAM_BATCHES = 250_000
+MAX_STREAM_BATCHES_PER_WINDOW = 120
+STREAM_RATE_WINDOW_SECONDS = 1.0
 
 
 class AttemptConflict(RuntimeError):
@@ -58,6 +69,21 @@ class AttemptRejected(RuntimeError):
         self.state = state
 
 
+class WorkerPayloadLimitExceeded(AttemptRejected):
+    """A worker-controlled payload exceeded its server-issued byte limit."""
+
+    def __init__(self, field: str, *, limit: int, observed: int):
+        self.field = field
+        self.limit = int(limit)
+        self.observed = int(observed)
+        code = "output_limit_exceeded" if field == "output" else f"{field}_limit_exceeded"
+        self.code = code
+        super().__init__(
+            f"{field} is {observed} UTF-8 bytes; server limit is {limit} bytes",
+            state="cancelled",
+        )
+
+
 class ReceiptBindingError(RuntimeError):
     """A durable receipt does not belong to the dispatch wait consuming it."""
 
@@ -70,11 +96,21 @@ class AttemptRecord:
     execution_unit_id: str | None
     execution_unit_kind: str | None
     assigned_node_id: str
+    assigned_session_id: str | None
     contract_version: str | None
     nonce_digest: str
     state: str
     issued_at: float
     lease_expires_at: float
+    max_output_bytes: int
+    streamed_bytes: int
+    stream_batch_count: int
+    first_stream_at: float | None
+    last_stream_at: float | None
+    stream_closed: int
+    stream_limit_event_emitted: int
+    stream_rate_window_started_at: float | None
+    stream_rate_window_batch_count: int
     settled_at: float | None = None
     result_hash: str | None = None
     response_json: str | None = None
@@ -130,6 +166,18 @@ class SettlementOutcome:
     replayed: bool
 
 
+@dataclass(frozen=True)
+class StreamBatchOutcome:
+    accepted: bool
+    attempt_id: str
+    max_output_bytes: int
+    streamed_bytes: int
+    stream_batch_count: int
+    error_code: str | None = None
+    detail: str | None = None
+    emit_limit_event: bool = False
+
+
 def nonce_digest(nonce: str) -> str:
     """One-way digest for a high-entropy server nonce."""
     return hashlib.sha256(nonce.encode("utf-8")).hexdigest()
@@ -173,11 +221,7 @@ class AttemptStore:
         self._lock = threading.RLock()
 
     def _connect(self) -> sqlite3.Connection:
-        con = sqlite3.connect(self.path, timeout=30)
-        con.row_factory = sqlite3.Row
-        con.execute("PRAGMA busy_timeout = 30000")
-        con.execute("PRAGMA foreign_keys = ON")
-        return con
+        return sqlite_connect(self.path, row_factory=sqlite3.Row)
 
     @staticmethod
     def _migrate_connection(con: sqlite3.Connection) -> None:
@@ -190,6 +234,7 @@ class AttemptStore:
                 execution_unit_id      TEXT,
                 execution_unit_kind    TEXT,
                 assigned_node_id       TEXT NOT NULL,
+                assigned_session_id    TEXT,
                 contract_version       TEXT,
                 nonce_digest           TEXT NOT NULL,
                 state                  TEXT NOT NULL CHECK(state IN (
@@ -198,6 +243,15 @@ class AttemptStore:
                 )),
                 issued_at              REAL NOT NULL,
                 lease_expires_at       REAL NOT NULL,
+                max_output_bytes       INTEGER NOT NULL DEFAULT 1048576,
+                streamed_bytes         INTEGER NOT NULL DEFAULT 0,
+                stream_batch_count     INTEGER NOT NULL DEFAULT 0,
+                first_stream_at        REAL,
+                last_stream_at         REAL,
+                stream_closed          INTEGER NOT NULL DEFAULT 0,
+                stream_limit_event_emitted INTEGER NOT NULL DEFAULT 0,
+                stream_rate_window_started_at REAL,
+                stream_rate_window_batch_count INTEGER NOT NULL DEFAULT 0,
                 settled_at             REAL,
                 result_hash            TEXT,
                 response_json          TEXT,
@@ -205,6 +259,23 @@ class AttemptStore:
             )
             """
         )
+        attempt_columns = {
+            str(row[1]) for row in con.execute("PRAGMA table_info(attempts)").fetchall()
+        }
+        for name, declaration in {
+            "assigned_session_id": "TEXT",
+            "max_output_bytes": "INTEGER NOT NULL DEFAULT 1048576",
+            "streamed_bytes": "INTEGER NOT NULL DEFAULT 0",
+            "stream_batch_count": "INTEGER NOT NULL DEFAULT 0",
+            "first_stream_at": "REAL",
+            "last_stream_at": "REAL",
+            "stream_closed": "INTEGER NOT NULL DEFAULT 0",
+            "stream_limit_event_emitted": "INTEGER NOT NULL DEFAULT 0",
+            "stream_rate_window_started_at": "REAL",
+            "stream_rate_window_batch_count": "INTEGER NOT NULL DEFAULT 0",
+        }.items():
+            if name not in attempt_columns:
+                con.execute(f"ALTER TABLE attempts ADD COLUMN {name} {declaration}")
         con.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_attempts_one_active_task "
             "ON attempts(task_id) WHERE state = 'active'"
@@ -260,9 +331,17 @@ class AttemptStore:
         )
         ensure_contribution_schema(con)
 
-    def migrate(self) -> None:
-        with self._lock, self._connect() as con:
+    def _ensure_schema(self, con: sqlite3.Connection) -> None:
+        """Serialize idempotent additive migrations across store objects."""
+
+        with migration_lock(self.path):
             self._migrate_connection(con)
+
+    def migrate(self) -> None:
+        with self._lock, migration_lock(self.path), connection(
+            self.path, row_factory=sqlite3.Row
+        ) as con:
+            self._ensure_schema(con)
             con.commit()
 
     def issue(
@@ -274,11 +353,25 @@ class AttemptStore:
         nonce: str,
         issued_at: float,
         lease_expires_at: float,
+        assigned_session_id: str | None = None,
     ) -> AttemptRecord:
         if not attempt_id or not nonce:
             raise ValueError("attempt id and nonce are required")
         if lease_expires_at <= issued_at:
             raise ValueError("attempt lease must expire after issuance")
+        try:
+            max_output_bytes = int(
+                task.get("max_output_bytes", DEFAULT_MAX_OUTPUT_BYTES)
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("max_output_bytes must be an integer") from exc
+        if not 1 <= max_output_bytes <= MAX_OUTPUT_BYTES:
+            raise ValueError(
+                f"max_output_bytes must be between 1 and {MAX_OUTPUT_BYTES}"
+            )
+        # The returned handout and the durable attempt must carry the exact same
+        # server-issued value.  A worker submission never supplies this budget.
+        task["max_output_bytes"] = max_output_bytes
         if task.get("contract_version") == "1":
             missing = [
                 name
@@ -294,22 +387,27 @@ class AttemptStore:
             task.get("execution_unit_id"),
             task.get("execution_unit_kind"),
             assigned_node_id,
+            assigned_session_id,
             task.get("contract_version"),
             nonce_digest(nonce),
             issued_at,
             lease_expires_at,
+            max_output_bytes,
         )
         try:
-            with self._lock, self._connect() as con:
-                self._migrate_connection(con)
+            with self._lock, connection(
+                self.path, row_factory=sqlite3.Row
+            ) as con:
+                self._ensure_schema(con)
                 con.execute("BEGIN IMMEDIATE")
                 con.execute(
                     """
                     INSERT INTO attempts (
                         attempt_id, task_id, execution_id, execution_unit_id,
-                        execution_unit_kind, assigned_node_id, contract_version,
-                        nonce_digest, state, issued_at, lease_expires_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+                        execution_unit_kind, assigned_node_id,
+                        assigned_session_id, contract_version, nonce_digest,
+                        state, issued_at, lease_expires_at, max_output_bytes
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
                     """,
                     values,
                 )
@@ -344,11 +442,12 @@ class AttemptStore:
             nonce=str(nonce),
             issued_at=issued,
             lease_expires_at=float(expires),
+            assigned_session_id=task.get("assigned_session_id"),
         )
 
     def get(self, attempt_id: str) -> AttemptRecord | None:
         self.migrate()
-        with self._lock, self._connect() as con:
+        with self._lock, connection(self.path, row_factory=sqlite3.Row) as con:
             row = con.execute(
                 "SELECT * FROM attempts WHERE attempt_id = ?", (attempt_id,)
             ).fetchone()
@@ -356,7 +455,7 @@ class AttemptStore:
 
     def active_for_task(self, task_id: str) -> AttemptRecord | None:
         self.migrate()
-        with self._lock, self._connect() as con:
+        with self._lock, connection(self.path, row_factory=sqlite3.Row) as con:
             row = con.execute(
                 "SELECT * FROM attempts WHERE task_id = ? AND state = 'active'",
                 (task_id,),
@@ -375,11 +474,21 @@ class AttemptStore:
         execution_id: str | None,
         execution_unit_id: str | None,
         execution_unit_kind: str | None,
+        session_id: str | None = None,
     ) -> None:
         if task_id != record.task_id:
             raise AttemptRejected("attempt belongs to another task", state=record.state)
         if node_id != record.assigned_node_id:
             raise AttemptRejected("submitting node is not the assigned node", state=record.state)
+        if record.assigned_session_id is not None:
+            if not session_id:
+                raise AttemptRejected("missing assigned node session", state=record.state)
+            if not hmac.compare_digest(
+                str(session_id), str(record.assigned_session_id)
+            ):
+                raise AttemptRejected(
+                    "node session does not own this attempt", state=record.state
+                )
         if record.contract_version == "1":
             if not contract_version:
                 raise AttemptRejected("missing contract version", state=record.state)
@@ -421,6 +530,7 @@ class AttemptStore:
         execution_id: str | None,
         execution_unit_id: str | None,
         execution_unit_kind: str | None,
+        session_id: str | None = None,
         now: float | None = None,
     ) -> SettlementOutcome:
         """Atomically settle one active attempt or replay its exact response."""
@@ -441,7 +551,7 @@ class AttemptStore:
         with self._lock:
             con = self._connect()
             try:
-                self._migrate_connection(con)
+                self._ensure_schema(con)
                 con.execute("BEGIN IMMEDIATE")
                 # The active attempt for the task is authoritative even when a
                 # submitter supplies an older/different attempt identifier.
@@ -467,6 +577,7 @@ class AttemptStore:
                     execution_id=execution_id,
                     execution_unit_id=execution_unit_id,
                     execution_unit_kind=execution_unit_kind,
+                    session_id=session_id,
                 )
 
                 if record.state == "settled":
@@ -503,13 +614,43 @@ class AttemptStore:
                     con.execute(
                         """
                         UPDATE attempts
-                        SET state = 'expired', settled_at = ?, reason = 'lease expired'
+                        SET state = 'expired', settled_at = ?,
+                            reason = 'lease expired', stream_closed = 1
                         WHERE attempt_id = ? AND state = 'active'
                         """,
                         (accepted_at, record.attempt_id),
                     )
                     con.commit()
                     raise AttemptRejected("lease expired", state="expired")
+
+                output_bytes = (
+                    len(output.encode("utf-8")) if output is not None else 0
+                )
+                error_bytes = len(error.encode("utf-8")) if error is not None else 0
+                exceeded: tuple[str, int, int] | None = None
+                if output_bytes > record.max_output_bytes:
+                    exceeded = ("output", record.max_output_bytes, output_bytes)
+                elif error_bytes > MAX_ERROR_BYTES:
+                    exceeded = ("error", MAX_ERROR_BYTES, error_bytes)
+                if exceeded is not None:
+                    field, limit, observed = exceeded
+                    reason = (
+                        f"{field} payload exceeded server byte limit "
+                        f"({observed}>{limit})"
+                    )
+                    con.execute(
+                        """
+                        UPDATE attempts
+                        SET state = 'cancelled', settled_at = ?, reason = ?,
+                            stream_closed = 1
+                        WHERE attempt_id = ? AND state = 'active'
+                        """,
+                        (accepted_at, reason, record.attempt_id),
+                    )
+                    con.commit()
+                    raise WorkerPayloadLimitExceeded(
+                        field, limit=limit, observed=observed
+                    )
 
                 points = 5 if output and not error else 0
                 response = {"status": "accepted", "credits_earned": points}
@@ -518,7 +659,7 @@ class AttemptStore:
                     """
                     UPDATE attempts
                     SET state = 'settled', settled_at = ?, result_hash = ?,
-                        response_json = ?, reason = NULL
+                        response_json = ?, reason = NULL, stream_closed = 1
                     WHERE attempt_id = ? AND state = 'active'
                     """,
                     (accepted_at, result_hash, response_json, record.attempt_id),
@@ -548,22 +689,21 @@ class AttemptStore:
                         elapsed_seconds,
                     ),
                 )
-                if points:
-                    insert_contribution_in_transaction(
-                        con,
-                        contribution_id=f"attempt:{record.attempt_id}",
-                        contributor=record.assigned_node_id,
-                        contribution_type="compute",
-                        points=points,
-                        task=record.task_id,
-                        details=(
-                            "Compute contribution for an accepted bound attempt; "
-                            "this does not imply candidate selection or validated correctness."
-                        ),
-                        basis="compute_contribution",
-                        attempt_id=record.attempt_id,
-                        created_at=accepted_at,
-                    )
+                insert_contribution_in_transaction(
+                    con,
+                    contribution_id=f"attempt:{record.attempt_id}",
+                    contributor=record.assigned_node_id,
+                    contribution_type="compute",
+                    points=points,
+                    task=record.task_id,
+                    details=(
+                        "Compute contribution for an accepted bound attempt; "
+                        "this does not imply candidate selection or validated correctness."
+                    ),
+                    basis="compute_contribution",
+                    attempt_id=record.attempt_id,
+                    created_at=accepted_at,
+                )
                 con.commit()
                 receipt_row = con.execute(
                     "SELECT * FROM accepted_result_receipts WHERE attempt_id = ?",
@@ -583,9 +723,176 @@ class AttemptStore:
             finally:
                 con.close()
 
+    def record_stream_batch(
+        self,
+        *,
+        task_id: str,
+        node_id: str,
+        tokens: str,
+        contract_version: str | None,
+        attempt_id: str | None,
+        nonce: str | None,
+        execution_id: str | None,
+        execution_unit_id: str | None,
+        execution_unit_kind: str | None,
+        session_id: str | None = None,
+        now: float | None = None,
+    ) -> StreamBatchOutcome:
+        """Atomically validate and account for one worker token batch.
+
+        Stream accounting is durable with the attempt so per-request checks can
+        never reset the byte or event budget.  Limit breaches terminally cancel
+        the attempt before a later result can be mistaken for a normal success.
+        """
+
+        streamed_at = time.time() if now is None else float(now)
+        batch_bytes = len(tokens.encode("utf-8"))
+        with self._lock:
+            con = self._connect()
+            try:
+                self._ensure_schema(con)
+                con.execute("BEGIN IMMEDIATE")
+                row = con.execute(
+                    "SELECT * FROM attempts WHERE task_id = ? AND state = 'active'",
+                    (task_id,),
+                ).fetchone()
+                if row is None and attempt_id:
+                    row = con.execute(
+                        "SELECT * FROM attempts WHERE attempt_id = ?", (attempt_id,)
+                    ).fetchone()
+                if row is None:
+                    raise AttemptRejected("no active server-issued attempt")
+                record = AttemptRecord.from_row(row)
+                self._validate_binding(
+                    record,
+                    task_id=task_id,
+                    node_id=node_id,
+                    contract_version=contract_version,
+                    attempt_id=attempt_id,
+                    nonce=nonce,
+                    execution_id=execution_id,
+                    execution_unit_id=execution_unit_id,
+                    execution_unit_kind=execution_unit_kind,
+                    session_id=session_id,
+                )
+                if record.state != "active":
+                    reason = (
+                        "lease expired"
+                        if record.state == "expired"
+                        else f"attempt is {record.state}, not active"
+                    )
+                    raise AttemptRejected(reason, state=record.state)
+                if streamed_at > record.lease_expires_at:
+                    con.execute(
+                        """
+                        UPDATE attempts
+                        SET state = 'expired', settled_at = ?,
+                            reason = 'lease expired', stream_closed = 1
+                        WHERE attempt_id = ? AND state = 'active'
+                        """,
+                        (streamed_at, record.attempt_id),
+                    )
+                    con.commit()
+                    raise AttemptRejected("lease expired", state="expired")
+                if record.stream_closed:
+                    raise AttemptRejected("attempt stream is closed", state=record.state)
+
+                next_bytes = int(record.streamed_bytes) + batch_bytes
+                next_batch_count = int(record.stream_batch_count) + 1
+                window_started = record.stream_rate_window_started_at
+                if (
+                    window_started is None
+                    or streamed_at - float(window_started) >= STREAM_RATE_WINDOW_SECONDS
+                ):
+                    window_started = streamed_at
+                    window_count = 1
+                else:
+                    window_count = int(record.stream_rate_window_batch_count) + 1
+
+                error_code: str | None = None
+                detail: str | None = None
+                if next_bytes > record.max_output_bytes:
+                    error_code = "output_limit_exceeded"
+                    detail = (
+                        f"cumulative stream would be {next_bytes} UTF-8 bytes; "
+                        f"server limit is {record.max_output_bytes} bytes"
+                    )
+                elif next_batch_count > MAX_STREAM_BATCHES:
+                    error_code = "stream_batch_limit_exceeded"
+                    detail = f"stream batch limit is {MAX_STREAM_BATCHES}"
+                elif window_count > MAX_STREAM_BATCHES_PER_WINDOW:
+                    error_code = "stream_rate_limit_exceeded"
+                    detail = (
+                        f"stream event-rate limit is "
+                        f"{MAX_STREAM_BATCHES_PER_WINDOW} batches per "
+                        f"{STREAM_RATE_WINDOW_SECONDS:g} second"
+                    )
+
+                if error_code is not None:
+                    emit_limit_event = not bool(record.stream_limit_event_emitted)
+                    changed = con.execute(
+                        """
+                        UPDATE attempts
+                        SET state = 'cancelled', settled_at = ?, reason = ?,
+                            stream_closed = 1, stream_limit_event_emitted = 1
+                        WHERE attempt_id = ? AND state = 'active'
+                        """,
+                        (streamed_at, detail, record.attempt_id),
+                    ).rowcount
+                    if changed != 1:
+                        raise AttemptRejected("attempt changed while streaming")
+                    con.commit()
+                    return StreamBatchOutcome(
+                        accepted=False,
+                        attempt_id=record.attempt_id,
+                        max_output_bytes=record.max_output_bytes,
+                        streamed_bytes=int(record.streamed_bytes),
+                        stream_batch_count=int(record.stream_batch_count),
+                        error_code=error_code,
+                        detail=detail,
+                        emit_limit_event=emit_limit_event,
+                    )
+
+                changed = con.execute(
+                    """
+                    UPDATE attempts
+                    SET streamed_bytes = ?, stream_batch_count = ?,
+                        first_stream_at = COALESCE(first_stream_at, ?),
+                        last_stream_at = ?,
+                        stream_rate_window_started_at = ?,
+                        stream_rate_window_batch_count = ?
+                    WHERE attempt_id = ? AND state = 'active' AND stream_closed = 0
+                    """,
+                    (
+                        next_bytes,
+                        next_batch_count,
+                        streamed_at,
+                        streamed_at,
+                        window_started,
+                        window_count,
+                        record.attempt_id,
+                    ),
+                ).rowcount
+                if changed != 1:
+                    raise AttemptRejected("attempt changed while streaming")
+                con.commit()
+                return StreamBatchOutcome(
+                    accepted=True,
+                    attempt_id=record.attempt_id,
+                    max_output_bytes=record.max_output_bytes,
+                    streamed_bytes=next_bytes,
+                    stream_batch_count=next_batch_count,
+                )
+            except Exception:
+                if con.in_transaction:
+                    con.rollback()
+                raise
+            finally:
+                con.close()
+
     def get_receipt_for_task(self, task_id: str) -> AcceptedResultReceipt | None:
         self.migrate()
-        with self._lock, self._connect() as con:
+        with self._lock, connection(self.path, row_factory=sqlite3.Row) as con:
             row = con.execute(
                 "SELECT * FROM accepted_result_receipts WHERE task_id = ?", (task_id,)
             ).fetchone()
@@ -593,16 +900,34 @@ class AttemptStore:
 
     def count_attempts(self, task_id: str) -> int:
         self.migrate()
-        with self._lock, self._connect() as con:
+        with self._lock, connection(self.path, row_factory=sqlite3.Row) as con:
             row = con.execute(
                 "SELECT COUNT(*) FROM attempts WHERE task_id = ?", (task_id,)
             ).fetchone()
         return int(row[0]) if row else 0
 
+    def lifetime_contribution_summary(self, node_id: str) -> dict[str, int | float]:
+        """Read lifetime task/point counters from durable contribution rows."""
+
+        self.migrate()
+        with self._lock, connection(self.path, row_factory=sqlite3.Row) as con:
+            row = con.execute(
+                """
+                SELECT COUNT(*) AS tasks, COALESCE(SUM(points), 0) AS points
+                FROM contributions
+                WHERE contributor = ? AND contribution_type = 'compute'
+                """,
+                (node_id,),
+            ).fetchone()
+        return {
+            "lifetime_tasks_completed": int(row["tasks"] if row else 0),
+            "lifetime_contribution_points": float(row["points"] if row else 0),
+        }
+
     def execution_attempt_summary(self, execution_id: str) -> dict[str, int]:
         """Return durable attempt/retry counts for terminal telemetry."""
         self.migrate()
-        with self._lock, self._connect() as con:
+        with self._lock, connection(self.path, row_factory=sqlite3.Row) as con:
             rows = con.execute(
                 "SELECT task_id, state FROM attempts WHERE execution_id = ?",
                 (execution_id,),
@@ -635,11 +960,12 @@ class AttemptStore:
         if not task_id and not attempt_id:
             raise ValueError("task_id or attempt_id is required")
         column, value = ("attempt_id", attempt_id) if attempt_id else ("task_id", task_id)
-        with self._lock, self._connect() as con:
-            self._migrate_connection(con)
+        with self._lock, connection(self.path, row_factory=sqlite3.Row) as con:
+            self._ensure_schema(con)
             con.execute("BEGIN IMMEDIATE")
             changed = con.execute(
-                f"UPDATE attempts SET state = ?, settled_at = ?, reason = ? "
+                f"UPDATE attempts SET state = ?, settled_at = ?, reason = ?, "
+                f"stream_closed = 1 "
                 f"WHERE {column} = ? AND state = 'active'",
                 (state, now if now is not None else time.time(), reason, value),
             ).rowcount
@@ -649,8 +975,8 @@ class AttemptStore:
     def cancel_execution(self, execution_id: str, reason: str) -> list[str]:
         """Cancel every active attempt and return its task identifiers."""
         now = time.time()
-        with self._lock, self._connect() as con:
-            self._migrate_connection(con)
+        with self._lock, connection(self.path, row_factory=sqlite3.Row) as con:
+            self._ensure_schema(con)
             con.execute("BEGIN IMMEDIATE")
             rows = con.execute(
                 "SELECT task_id FROM attempts WHERE execution_id = ? AND state = 'active'",
@@ -658,7 +984,8 @@ class AttemptStore:
             ).fetchall()
             con.execute(
                 """
-                UPDATE attempts SET state = 'cancelled', settled_at = ?, reason = ?
+                UPDATE attempts SET state = 'cancelled', settled_at = ?, reason = ?,
+                    stream_closed = 1
                 WHERE execution_id = ? AND state = 'active'
                 """,
                 (now, reason, execution_id),
@@ -669,13 +996,14 @@ class AttemptStore:
     def expire_due(self, now: float | None = None) -> int:
         """Durably close active leases whose wall-clock deadline has elapsed."""
         cutoff = now if now is not None else time.time()
-        with self._lock, self._connect() as con:
-            self._migrate_connection(con)
+        with self._lock, connection(self.path, row_factory=sqlite3.Row) as con:
+            self._ensure_schema(con)
             con.execute("BEGIN IMMEDIATE")
             changed = con.execute(
                 """
                 UPDATE attempts
-                SET state = 'expired', settled_at = ?, reason = 'lease expired'
+                SET state = 'expired', settled_at = ?, reason = 'lease expired',
+                    stream_closed = 1
                 WHERE state = 'active' AND lease_expires_at < ?
                 """,
                 (cutoff, cutoff),
@@ -685,12 +1013,13 @@ class AttemptStore:
 
     def interrupt_active(self, reason: str) -> int:
         """Fail closed after restart because the queue itself is process-local."""
-        with self._lock, self._connect() as con:
-            self._migrate_connection(con)
+        with self._lock, connection(self.path, row_factory=sqlite3.Row) as con:
+            self._ensure_schema(con)
             con.execute("BEGIN IMMEDIATE")
             changed = con.execute(
                 """
-                UPDATE attempts SET state = 'interrupted', settled_at = ?, reason = ?
+                UPDATE attempts SET state = 'interrupted', settled_at = ?, reason = ?,
+                    stream_closed = 1
                 WHERE state = 'active'
                 """,
                 (time.time(), reason),
@@ -699,11 +1028,14 @@ class AttemptStore:
         return int(changed)
 
     @staticmethod
-    def _bounded_preview(output: str | None) -> str | None:
-        if output is None:
+    def _bounded_preview(value: str | None, max_bytes: int = _MAX_QUARANTINE_PREVIEW_BYTES) -> str | None:
+        if value is None:
             return None
-        raw = output.encode("utf-8")[:_MAX_QUARANTINE_PREVIEW_BYTES]
-        return raw.decode("utf-8", errors="replace")
+        # ``ignore`` only affects a code point split by the byte boundary.  It
+        # keeps the stored UTF-8 representation at or below the promised cap;
+        # replacement characters could expand it beyond the cap.
+        raw = value.encode("utf-8")[:max_bytes]
+        return raw.decode("utf-8", errors="ignore")
 
     def quarantine(
         self,
@@ -721,10 +1053,14 @@ class AttemptStore:
     ) -> str:
         """Retain bounded diagnostics outside the operational receipt channel."""
         quarantine_id = uuid.uuid4().hex
-        output_hash = hashlib.sha256(output.encode("utf-8")).hexdigest() if output is not None else None
+        output_hash = (
+            hashlib.sha256(output.encode("utf-8")).hexdigest()
+            if output is not None
+            else None
+        )
         received_at = time.time()
-        with self._lock, self._connect() as con:
-            self._migrate_connection(con)
+        with self._lock, connection(self.path, row_factory=sqlite3.Row) as con:
+            self._ensure_schema(con)
             con.execute(
                 """
                 INSERT INTO result_quarantine (
@@ -743,10 +1079,10 @@ class AttemptStore:
                     claimed_unit_id,
                     claimed_unit_kind,
                     claimed_contract_version,
-                    reason,
+                    self._bounded_preview(reason, 500) or "result rejected",
                     output_hash,
                     self._bounded_preview(output),
-                    error,
+                    self._bounded_preview(error, MAX_ERROR_BYTES),
                     received_at,
                 ),
             )
@@ -765,7 +1101,7 @@ class AttemptStore:
 
     def quarantine_count(self) -> int:
         self.migrate()
-        with self._lock, self._connect() as con:
+        with self._lock, connection(self.path, row_factory=sqlite3.Row) as con:
             row = con.execute("SELECT COUNT(*) FROM result_quarantine").fetchone()
         return int(row[0]) if row else 0
 

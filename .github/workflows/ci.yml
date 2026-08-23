@@ -26,6 +26,33 @@ jobs:
       - name: Tests (pytest — no Ollama needed)
         run: pytest -q
 
+  trusted-alpha:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Deployment and one-coordinator contracts
+        run: >-
+          python -m pytest -q
+          tests/test_deployment_config.py
+          tests/test_preflight.py
+          tests/test_deployment_assets.py
+          tests/test_coordinator_lock.py
+          tests/test_cli_execution_args.py
+
+      - name: Bounded trusted-alpha operational harness (fake workers, no Ollama)
+        run: python scripts/trusted_alpha_harness.py --profile bounded
+
   docker:
     runs-on: ubuntu-latest
     steps:
@@ -37,6 +64,29 @@ jobs:
       - name: Server imports inside container
         run: docker run --rm distributed-orchestrator python -c "from server import app; print('ok:', len(app.routes), 'routes')"
 
+      - name: Image starts one coordinator process
+        shell: bash
+        run: |
+          container_id="$(docker run -d distributed-orchestrator)"
+          cleanup() { docker rm -f "$container_id" >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          ready=0
+          for _attempt in $(seq 1 30); do
+            if docker exec "$container_id" python -c "import json,urllib.request; response=json.load(urllib.request.urlopen('http://127.0.0.1:8000/v1/operator/health', timeout=2)); assert response['single_coordinator_lock'] is True"; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then
+            docker logs "$container_id"
+            exit 1
+          fi
+          image_command="$(docker inspect --format '{{json .Config.Cmd}}' "$container_id")"
+          case "$image_command" in
+            *--workers*) echo "multi-worker image command is forbidden"; exit 1 ;;
+          esac
+
       - name: Dashboard templates present in image
         run: docker run --rm distributed-orchestrator python -c "import dashboard; print(sorted(p.name for p in dashboard._TEMPLATES_DIR.iterdir()))"
 
@@ -44,6 +94,9 @@ jobs:
         # `COPY *.py` misses package directories, and a missing prompts/ breaks
         # startup. Assert the sets load rather than discovering it on deploy.
         run: docker run --rm distributed-orchestrator python -c "import prompts, orchestrator; print('prompt sets:', [p.name for p in prompts.list_prompt_sets()], '| active:', orchestrator.active_prompt_set().name)"
+
+      - name: Operations tools present in image
+        run: docker run --rm distributed-orchestrator python -c "from scripts.preflight import deployment_health_ready; import scripts.backup, scripts.restore; assert deployment_health_ready({'status':'ok','private_routes_protected':True})"
 
       - name: Compose file is valid
         run: docker compose config --quiet

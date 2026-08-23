@@ -1,186 +1,259 @@
-# Handoff — Mycelium trusted-alpha integrity
+# Handoff — Mycelium trusted-alpha RC1
 
-_Updated August 22, 2026._
+_Updated August 23, 2026._
 
 ## Read these first
 
-1. `MASTER_PLAN.md` — current direction and scope boundaries
-2. `SPRINT_TRUSTED_ALPHA_INTEGRITY.md` — sprint delivery map and verification
-   requirements
-3. `docs/PROTOCOL.md` — normative client and worker contract
-4. `docs/ARCHITECTURE.md`, `docs/ACCESS_CONTROL.md`, and
-   `docs/ARTIFACTS.md` — backend boundaries and APIs
-5. `docs/THREAT_MODEL.md` — what is and is not defended
-6. `docs/adr/0003-attempt-authority.md` and
-   `docs/adr/0004-lifecycle-vs-assurance.md` — integrity decisions
-7. `CLAUDE.md` — repository working rules
-8. `ROADMAP.md` — reference only, not a work queue
+1. `SPRINT_TRUSTED_ALPHA_RC1.md` — delivered RC1 scope, evidence, and residuals
+2. `MASTER_PLAN.md` — current direction and freeze boundary
+3. `docs/PROTOCOL.md` — normative execution/client/worker contract
+4. `docs/ACCESS_CONTROL.md` and `docs/ARTIFACTS.md` — authority and delivery APIs
+5. `docs/THREAT_MODEL.md` — defended and undefended boundaries
+6. `docs/DEPLOY.md`, `docs/TRUSTED_ALPHA_RUNBOOK.md`, and
+   `docs/OPERATIONS.md` — deployment and recovery procedure
+7. `docs/adr/0005-node-registration-sessions.md`,
+   `docs/adr/0006-single-coordinator-invariant.md`, and
+   `docs/adr/0007-sealed-artifact-manifests.md` — RC1 decisions
+8. `CLAUDE.md` and `AGENTS.md` — repository and consent rules
 
-`SPRINT_STRATEGY_PROTOCOL.md` and `SPRINT_PHASE2.md` are historical records.
-Do not copy their old test counts or priority lists into a current claim.
+`SPRINT_STRATEGY_PROTOCOL.md`, `SPRINT_TRUSTED_ALPHA_INTEGRITY.md`, and
+`SPRINT_PHASE2.md` are historical records. Do not copy their old test counts,
+status lists, or interface assumptions into a current claim.
 
-## Human context
+## Human and scope context
 
-Jett has no programming background. Make technical calls, explain the decisions
-he must act on, and warn before anything network-facing. Do not install or join
-Mycelium on a machine without that machine owner's explicit informed consent.
+Jett has no programming background. Make technical calls, explain the choices
+he must act on, and warn before anything network-facing. Never install, join, or
+run Mycelium on a machine without that machine owner's explicit informed
+consent.
 
-The trusted-alpha sprint is a bounded backend exception to the feature freeze.
-It does not authorize more strategies, visual UI work, marketplace or token
-features, federation, model sharding, accounts, or a generated-code sandbox.
+RC1 is a bounded trusted-alpha backend and operations release. It does not
+authorize a permissionless network, new execution strategies, accounts,
+marketplace/token features, federation, model sharding, generated-code sandbox,
+or unrelated UI redesign. Frontend work may consume the contract below without
+changing its meanings.
 
-## Branch
+## Branch and review
 
-- Branch: `codex/trusted-alpha-integrity-v1`
-- Base: `origin/master` at `e6d6888`
+- Branch: `codex/trusted-alpha-rc1`
+- Base: `origin/master` at `fd6fa29`
 - Merge: review explicitly; do not auto-merge
+- Current sprint record: `SPRINT_TRUSTED_ALPHA_RC1.md`
 
-The final commit list, test results, Ruff result, server import, Compose result,
-and conditional Docker result belong in the parent task's final report after all
-concurrent implementation commits are integrated. Do not freeze a transient
-test count in this handoff.
+The final integrator must record the current commit range and current full-suite,
+Ruff, import, preflight, and deployment checks. Historical counts in sprint
+records are evidence for those exact revisions, not a substitute for the final
+branch run.
 
-## Delivered architecture
+## Delivered RC1 architecture
 
-### Worker result authority
+### Deployment and single ownership
 
-- The server persists an active SQLite attempt before handing a unit to a
-  worker.
-- Attempt authority binds task, execution, unit, kind, assigned node, contract,
-  nonce digest, state, and lease. Strictness never comes from the worker's
-  submitted version.
-- V1 omissions and mismatches reject; there is no downgrade to a legacy path.
-- Settlement atomically records the terminal attempt, immutable accepted
-  receipt, replay response/hash, and unique compute contribution.
-- Exact replay survives restart without paying twice. Changed replay fails.
-- The dispatcher consumes only a receipt matching its execution and unit.
-- Unknown, unleased, expired, reclaimed, cancelled, interrupted, and wrong-bound
-  output goes only to bounded diagnostic quarantine, never operational results.
+- `deployment_mode=local` preserves developer compatibility.
+- `deployment_mode=trusted_alpha` fails preflight/startup unless viewer, pitch,
+  and node secrets are pairwise distinct and at least 32 characters; state and
+  config paths are coherent; secure-cookie/TLS intent is coherent; and enabled
+  public pitching has an explicit acknowledgement.
+- One operating-system lock is acquired before state migrations or background
+  work. A second coordinator for the same state directory fails closed.
+- `/health` publishes a safe protection bit and warnings. Viewer-authorized
+  `/v1/operator/health` publishes instance ID, deployment mode, lock state, and
+  preflight warnings.
+- Docker remains one Uvicorn worker and includes the preflight scripts. Backup
+  and restore cover durable state with online SQLite snapshotting, a versioned
+  checksum manifest, validate-before-mutate restore, and rollback.
 
-### Lifecycle and assurance
+### SQLite, attempt authority, and contribution
 
-- `timeout_seconds` is one total deadline beginning at canonical queueing.
-- Cancellation removes queued work, cancels active attempts, signals local
-  execution, persists terminal cancellation, and rejects late results.
-- Startup makes non-resumable canonical executions, legacy jobs, and active
-  attempts truthfully interrupted/retryable.
-- Lifecycle, validation outcome, and assurance are separate fields. The old
-  `status` is a compatibility projection.
-- Validation summaries name checks run, passed, failed, and not run. Structural
-  checks are not marketed as behavioral proof.
+- Production `events.db` access uses the common WAL, foreign-key, 10-second busy
+  timeout, `synchronous=NORMAL`, bounded retry, and migration-lock policy.
+- The coordinator persists an active attempt before handing out worker work.
+  Authority binds task, execution, unit, kind, node, node session, contract,
+  nonce digest, lease, state, and output cap.
+- Result settlement atomically records the terminal attempt, immutable accepted
+  receipt, exact-replay response/hash, and unique compute contribution.
+- Exact replay state survives database reopen without paying twice; changed
+  replay fails. Coordinator restart separately invalidates process-local node
+  sessions, so it does not authorize reuse of an old session. Dispatch consumes
+  only a receipt matching its expected execution and unit.
+- Unknown, unleased, expired, reclaimed, cancelled, interrupted, wrong-bound,
+  oversized, and changed-replay output remains outside operational results in a
+  bounded diagnostic quarantine.
+- Compute points mean accepted, bound compute. They do not mean candidate
+  selection, validated correctness, money, a token, or future value.
 
-### Validation and ensemble
+### Node sessions and bounded worker traffic
 
-- Output contracts impose validator floors explicit policy cannot remove.
-- `require_all` has defined semantics for explicit required validators.
-- JSON Schema draft 2020-12 is validated at request time.
-- Manifest paths, exact counts, supported formats, and parser coverage are
-  checked honestly.
-- Candidate generation, materialization, extraction, and validation failures are
-  isolated. Winner ordering does not use output length.
+- `X-Node-Secret` remains shared network admission. Registration returns a
+  normalized node ID, non-secret session ID, one-time plaintext session token,
+  and start/expiry timestamps; the server retains only a SHA-256 digest.
+- Poll, heartbeat, drain, result, stream, and token-stream routes require the
+  current `X-Node-Session` in addition to admission. Attempts bind the assigned
+  session.
+- Exact-token registration is idempotent. A different live claimant for the
+  same node ID gets `409`; stale/expired IDs can be reclaimed; restart
+  invalidates sessions; and the stock worker automatically re-registers after a
+  machine-readable rejection.
+- Sessions are process-local, last at most 24 hours, and are not public-key
+  machine identity. Any `node_secret` holder can register another free label.
+- Node/registration/error fields, output bytes, cumulative stream bytes, batch
+  count/rate, event fanout, and quarantine preview/count are bounded. Crossing a
+  worker stream/output limit cannot be bypassed through reconnect or final
+  settlement.
+- Private node APIs distinguish current-session counters from durable lifetime
+  contribution totals. They never return the session token.
 
-### Privacy, artifacts, and sharing
+### Lifecycle, validation, and post-hoc state
 
-- Canonical defaults are local, local-only, and no remote consent. Remote-
-  capable canonical calls require explicit recorded consent.
-- Ensemble/direct reject `project_id`; DAG remains the supported memory path.
-- `viewer_key` is separate from `pitch_key` and `node_secret`, and works as a
-  header, Bearer token, or signed expiring HttpOnly session.
-- Middleware is deny-by-default when configured. Empty viewer auth is a warned
-  fail-open local-development mode.
-- Complete artifacts use authenticated relative-path manifest/file/ZIP APIs with
-  root confinement, symlink rejection, SHA-256, quotas, streaming, and
-  active-aware retention across both storage roots.
-- Explicit shares use durable token hashes, expiry, revocation, node redaction,
-  candidate-detail scope, and independent artifact permission.
-- The public share representation is allowlist-based and contains no server
-  path, project/job id, attempt secret, credit detail, or private telemetry.
+- One total deadline covers queueing, planning, generation, worker waits,
+  validation, review/revision, and artifact finalization.
+- Cancellation removes queued work, cancels active attempts, persists terminal
+  cancellation, and rejects late results.
+- Startup truthfully marks non-resumable queued/running executions, legacy jobs,
+  and active attempts `interrupted`/retryable.
+- Lifecycle, validation outcome, and assurance are separate. Compatibility
+  `status` must not drive trust UI.
+- Output contracts impose validator floors; JSON Schema and supported parsers
+  produce explicitly scoped evidence. Structural evidence is not behavioral
+  correctness.
+- Post-hoc duplicate-verification fields exist, but trusted-alpha RC1 reports
+  `posthoc_verification_status=disabled`. Do not imply that duplicate execution
+  is running or that this field upgrades original validation.
 
-### Public profile, telemetry, contribution, and interfaces
+### Role-scoped, sealed artifacts
 
-- Keyless public pitch is off by default and accepts only task text. The server
-  forces one local direct candidate, short deadline/output cap, no project, and
-  compute-aware admission limits.
-- Results record requested, planned, and observed placement, unit counts,
-  fallback, attempts, retries, reassignments, and consent.
-- SQLite contribution records are concurrent-safe and idempotent. Compute
-  points mean accepted compute, not selected output, correctness, or money.
-- `/health` uses `nodes_online: integer`; `/events` is flat; jobs pass through
-  running; worker rejection is reported as failure; error-report failure does
-  not hide the original exception.
+- Entries are classified as `deliverable`, `provenance`, `log`,
+  `candidate_source`, or `internal`. Private manifest/download defaults to
+  deliverables; audit material has explicit manifest/download access.
+- Terminal finalization applies winner scope and seals immutable entry rows plus
+  a canonical manifest hash. Active roots remain protected through final scan.
+- Every file/ZIP retrieval still confines, resolves, and re-hashes live bytes
+  against the sealed baseline. Drift, missing content, symlinks, and traversal
+  fail closed. Historical `legacy_live` roots remain honestly labeled/rescanned.
+- `sealed_manifest_hash` is local integrity evidence, not a signature,
+  independent timestamp, malware verdict, provenance attestation, or defense
+  against a host able to change SQLite and files together.
+
+### Explicit shares and public profile
+
+- Share tokens are returned once and stored only by digest. Viewer APIs create,
+  list metadata, revoke one, or revoke all. Invalid/expired/revoked capabilities
+  deliberately have one public `404` shape.
+- Public execution JSON is allowlist-based. It excludes private IDs/telemetry,
+  filesystem paths, attempt/session credentials, credit detail, and unbounded
+  diagnostics.
+- Share artifacts are deliverables by default. Candidate source needs explicit
+  candidate-detail scope; logs, provenance, and internal roles are never shared;
+  no-winner candidate entries are excluded.
+- Public share responses are no-store/no-referrer/nosniff. Application
+  unhandled-error logging redacts token path segments. Uvicorn and reverse-proxy
+  access-log redaction is still the operator's responsibility.
+- Public pitch remains off by default. Trusted-alpha mode requires explicit
+  acknowledgement and forces the bounded local/direct/no-project profile.
 
 ## Durability boundary
 
-| Durable | Process-local |
+| Durable | Process-local or operator-owned |
 | --- | --- |
-| canonical execution snapshots | worker queue |
-| legacy job records | connected-node registry |
-| active/terminal attempts | breaker and waiting-node state |
-| accepted receipts and replay responses | running coroutines and dispatcher waits |
-| contribution records | in-memory receipt cache |
-| share records/token hashes | live WebSocket connections |
-| artifact root/manifest metadata plus retained files | active model call process state |
+| canonical execution and legacy-job snapshots | worker queue and dispatcher waits |
+| attempts, accepted receipts, replay responses | node sessions and connected-node registry |
+| contribution records and compatibility projection | running coroutines and model-call process state |
+| share metadata/token hashes | live WebSocket connections and event fanout |
+| artifact registrations, sealed rows/hashes, retained files | breaker/waiting-node state |
+| SQLite and file state captured by an explicit backup | archive scheduling, off-site copies, TLS/proxy configuration |
 
-Restart reconciliation makes process-local loss truthful. It does not resume
-lost work or provide failover.
+Restart reconciliation makes process-local loss truthful; it does not resume
+work. Restore recovers captured durable state; it cannot recover node sessions,
+in-flight calls, or queue ownership.
 
-## Claude visual handoff
+## Claude Code frontend/API handoff
 
-This branch intentionally does not modify templates, CSS, page layout,
-dashboard components, animations, or visual marketing design. Claude may safely
-build against:
+The RC1 backend intentionally does not prescribe visual layout. A frontend must
+represent these fields directly instead of inferring them from legacy status,
+filenames, or generic “verified” badges:
 
-- `ExecutionRequestV1` and `ExecutionResultV1`;
-- `lifecycle_status`, `validation_outcome`, `assurance_level`, and
-  `validation_summary`;
-- `ArtifactManifestV1` and the canonical artifact routes;
-- `CreateExecutionShareV1`, `PublicExecutionShareV1`, and the share routes;
-- `POST/DELETE /v1/viewer/session`;
-- public `/health.private_routes_protected` and `warnings`;
-- requested/planned/observed placement and remote-consent fields.
+| Frontend-visible concept | Backend source and required presentation |
+| --- | --- |
+| Node session state | Private node fields: session ID/start/expiry, draining/current task, session counters, and lifetime counters. Never request or display a session token. |
+| Deployment protection status | Public `/health.private_routes_protected` and warnings; private `/v1/operator/health` mode, instance ID, coordinator-lock state, and preflight warnings. Make fail-open local mode visibly unsafe for reachable deployment. |
+| Artifact role | `ArtifactEntryV1.role`: Deliverable, Provenance, Log, Candidate source, or Internal. Default requester download is deliverable-only. |
+| Manifest integrity mode | `artifact_integrity_mode` / manifest `integrity_mode`: None, Active, Sealed, Legacy live, or Invalid. Do not show legacy live as sealed. |
+| Sealed manifest hash | `sealed_manifest_hash` / `manifest_hash`. Label it local sealed-baseline integrity, not signature or external attestation. |
+| Deliverable vs audit download | `artifact_manifest_url` and `/download` for deliverables; `audit_manifest_url`, `role=audit`, and `/audit-download` for non-deliverable audit material. Keep the separation explicit. |
+| Lifecycle status | `lifecycle_status`: queued, running, completed, failed, cancelled, interrupted. Use it for control flow. |
+| Validation outcome | `validation_outcome`: passed, failed, partial, not run. Present separately from lifecycle. |
+| Assurance level | `assurance_level` plus validation summary/evidence. Describe the exact checks; never collapse it to a generic verified badge. |
+| Post-hoc verification | `posthoc_verification_status`, timestamps, agreement, and reason. RC1 trusted-alpha is disabled; show that plainly without changing original assurance. |
+| Share metadata | Create returns plaintext token once. List shows share ID, create/expiry/revocation/last-access times and artifact/node/candidate flags without token. Support revoke-one/revoke-all and explain that copied content cannot be recalled. |
 
-Safe UI language:
+The client must handle `401` private HTTP, `4401` event WebSocket, `409`
+artifact-integrity/session conflicts, `413` worker/artifact limits, `429` rate
+limits, and uniform public-share `404`. Events are flat; `/health.nodes_online`
+is an integer; private node/session detail is not public status.
 
-- “Accepted from an active server-issued attempt,” not “worker identity
-  cryptographically verified.”
-- “Lifecycle completed” separately from “validation passed.”
-- “Structural checks passed” or “JSON Schema conformance passed,” not “working
-  code” without actual behavioral evidence.
-- “Private when viewer auth is configured,” and show the health warning when it
-  is not.
-- “Shared with an explicit expiring/revocable link,” not an old public run id.
-- “Artifact available through authenticated download,” never a filesystem path.
-- “Compute contribution points,” never payment or proof of correctness.
+Use these assurance labels only, mapped to actual evidence:
 
-The visual client must handle `401` on old dashboard/history/run routes and
-`4401` on the event WebSocket. It must not assume `/nodes` is part of public
-health; public health carries only the node count.
+| UI label | Meaning |
+| --- | --- |
+| Not checked | no applicable check ran or no evidence passed |
+| Structure checked | bounded extraction/manifest/parser-level evidence only |
+| Contract validated | deterministic contract/schema conformance for the stated contract |
+| Behavior tested | an explicit behavioral validator actually ran and passed |
+| AI reviewed | model-judged review evidence, not deterministic proof |
 
-## Operational checklist before a reachable deployment
+## Approved and prohibited product language
 
-1. Configure independent `node_secret`, `pitch_key`, and `viewer_key`.
-2. Use Tailscale or TLS; the application does not provide HTTPS.
-3. Set `viewer_cookie_secure=true` behind HTTPS.
-4. Verify `/health` reports `private_routes_protected: true`.
-5. Verify private HTTP returns `401` without a viewer credential and
-   `/ws/events` closes with `4401`.
-6. Exercise canonical local submission, explicit remote-consent rejection and
-   acceptance, cancellation, restart reconciliation, artifact download, share
-   expiry/revocation, and rejected worker settlement.
-7. Keep public pitch disabled unless its fixed local profile and resource budget
-   are intentionally accepted.
-8. Review generated artifacts before execution. No validator is a sandbox.
-9. Verify the deployed build fingerprint rather than assuming a rebuild landed.
+Recommended primary statement:
 
-## Claims that remain prohibited
+> Run auditable local-AI jobs across computers you trust.
 
-Do not claim public-network readiness, trustlessness, permissionless nodes,
-cryptographic worker identity, confidential compute, enforced no-network
-execution, sandboxed generated code, Sybil resistance, durable queue resume,
-multi-user authorization, monetary credits, or proof that arbitrary generated
-output is correct.
+Recommended supporting statement:
 
-The intended handoff state is a **small private trusted alpha** with honest
-integrity and access boundaries. Historical operational detail removed from this
-file remains available in Git history if needed; it must not override the
-current protocol documents.
+> Break work into coordinated components or generate multiple complete attempts.
+> Mycelium dispatches work to local models, applies explicit checks, and records
+> how each result was produced.
+
+Revise or remove these claims wherever they appear:
+
+- “Every request is split into pieces.” Direct and ensemble generate complete
+  attempts; only DAG decomposes work.
+- “Every result is working code.” Measured outputs are fallible and unstable.
+- “Every result is tested to see whether it runs.” Checks depend on contract,
+  format, and configured validator support.
+- Absolute “no cloud.” Local Ollama is the default, but optional external
+  OpenAI-compatible model providers exist.
+- “Volunteer” or “anonymous” network as the current security model. RC1 is an
+  invited group of computers/operators you trust.
+- A generic “verified” badge. Show lifecycle, validation, assurance, integrity,
+  and post-hoc dimensions separately with evidence-scoped labels.
+
+Also prohibited: trustless/permissionless readiness, cryptographic worker
+identity, confidential compute, enforced no-network execution, sandboxed
+generated code, Sybil resistance, durable queue resume, multi-coordinator
+operation, multi-user authorization, monetary credits, host-independent artifact
+attestation, or proof that arbitrary generated output is correct.
+
+## Release/operator checklist
+
+1. Run `python scripts/preflight.py` against the intended config/state paths.
+2. Use trusted-alpha mode, three independent strong secrets, TLS or a private
+   overlay, secure cookies, and exactly one coordinator process.
+3. Confirm public `/health` is `ok` and private routes are protected; confirm
+   viewer-less private HTTP and WebSocket access is rejected.
+4. Configure Uvicorn/reverse-proxy logs not to retain share capability paths.
+5. Exercise node register/idempotence/conflict/reclaim/restart, session-bound
+   poll/result/stream, and output/stream limits.
+6. Exercise lifecycle timeout/cancel/restart, artifact seal/drift/role downloads,
+   share scope/expiry/revocation, and exact/changed attempt replay.
+7. Create and verify a backup; rehearse restore into an empty staging state
+   directory before relying on it.
+8. Run the bounded live multi-node harness and current focused/full test suite;
+   record exact revision and results.
+9. Keep public pitch disabled unless the operator explicitly accepts the bounded
+   demo endpoint's abuse and compute risk.
+10. Review generated artifacts before execution. Validation and sealing are not
+    a sandbox or content-safety verdict.
+
+The intended release state is a **small private trusted alpha**: auditable work
+across computers whose operators are known and trusted, with explicit evidence
+and honest recovery boundaries—not an anonymous compute network.

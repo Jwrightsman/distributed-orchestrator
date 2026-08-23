@@ -13,6 +13,7 @@ from typing import Any, Callable
 
 import orchestrator
 import server_state
+from config import get as get_config
 from execution.contracts import (
     CandidateSummaryV1,
     ExecutionRequestV1,
@@ -103,6 +104,7 @@ class ExecutionService:
             deadline_at = (datetime.fromisoformat(created) + timedelta(seconds=request.timeout_seconds)).isoformat()
         except ValueError:
             deadline_at = None
+        trusted_alpha = get_config().get("deployment_mode", "local") == "trusted_alpha"
         return ExecutionResultV1(
             execution_id=execution_id,
             job_id=job_id,
@@ -119,11 +121,23 @@ class ExecutionService:
             created_at=created,
             deadline_at=deadline_at,
             remote_dispatch_consent=getattr(request, "remote_dispatch_consent", False),
+            posthoc_verification_status=("disabled" if trusted_alpha else "not_requested"),
+            posthoc_reason=(
+                "sampled duplicate verification is disabled in trusted-alpha mode "
+                "until it has durable post-hoc semantics"
+                if trusted_alpha
+                else None
+            ),
         )
 
     def _remember(self, request: ExecutionRequestV1, result: ExecutionResultV1) -> None:
         self._requests[result.execution_id] = request
-        self._live_results[result.execution_id] = result
+        # Never expose the mutable result object that a running strategy is
+        # still assembling.  In particular, terminal lifecycle fields are set
+        # before artifact sealing and result normalization finish.  Publishing
+        # a deep snapshot keeps readers on the last completed persistence
+        # boundary until the terminal event is ready.
+        self._live_results[result.execution_id] = result.model_copy(deep=True)
 
     def _save(self, request: ExecutionRequestV1, result: ExecutionResultV1, *, required: bool = False) -> None:
         self._remember(request, result)
@@ -140,7 +154,6 @@ class ExecutionService:
 
     def _persist_terminal(self, request: ExecutionRequestV1, result: ExecutionResultV1) -> bool:
         """Retry terminal persistence so a transient write cannot strand running state."""
-        self._remember(request, result)
         for attempt in range(1, 4):
             try:
                 self.store.save(request, result)
@@ -317,6 +330,15 @@ class ExecutionService:
             result = ExecutionResultV1.model_validate(dict(result.__dict__))
             control.result = result
             self._persist_terminal(request, result)
+            self._emit(
+                "execution_interrupted",
+                {
+                    "execution_id": execution_id,
+                    "reason": "running_persistence_failed",
+                    "retryable": True,
+                },
+            )
+            self._remember(request, result)
             self._controls.pop(execution_id, None)
             if registered_current_task:
                 self._background.pop(execution_id, None)
@@ -433,13 +455,26 @@ class ExecutionService:
                                 execution_id,
                                 f"candidate_{candidate_number}",
                             )
-                        return self.artifacts.refresh_manifest(execution_id)
+                        return self.artifacts.seal_manifest(execution_id)
 
                     remaining = control.deadline_monotonic - time.monotonic()
                     if remaining <= 0:
                         raise asyncio.TimeoutError
                     manifest = await asyncio.wait_for(asyncio.to_thread(build_manifest), timeout=remaining)
                     result.produced_files = [entry.relative_path for entry in manifest.entries]
+                    result.primary_deliverables = [
+                        entry.relative_path
+                        for entry in manifest.entries
+                        if entry.role == "deliverable"
+                    ]
+                    result.artifact_manifest_url = (
+                        f"/v1/executions/{execution_id}/artifacts?role=deliverable"
+                    )
+                    result.audit_manifest_url = (
+                        f"/v1/executions/{execution_id}/artifacts?role=audit"
+                    )
+                    result.sealed_manifest_hash = manifest.manifest_hash
+                    result.artifact_integrity_mode = manifest.integrity_mode
                     result.output_reference = f"/v1/executions/{execution_id}/artifacts"
                     for candidate in result.candidates:
                         candidate.produced_files = [
@@ -609,10 +644,31 @@ class ExecutionService:
         )
         if should_clear_artifact_marker:
             try:
-                self.artifacts.set_active(execution_id, False)
+                terminal_manifest = await asyncio.to_thread(
+                    self.artifacts.seal_manifest,
+                    execution_id,
+                )
+                result.produced_files = [
+                    entry.relative_path for entry in terminal_manifest.entries
+                ]
+                result.primary_deliverables = [
+                    entry.relative_path
+                    for entry in terminal_manifest.entries
+                    if entry.role == "deliverable"
+                ]
+                result.artifact_manifest_url = (
+                    f"/v1/executions/{execution_id}/artifacts?role=deliverable"
+                )
+                result.audit_manifest_url = (
+                    f"/v1/executions/{execution_id}/artifacts?role=audit"
+                )
+                result.sealed_manifest_hash = terminal_manifest.manifest_hash
+                result.artifact_integrity_mode = terminal_manifest.integrity_mode
+                result.output_reference = f"/v1/executions/{execution_id}/artifacts"
             except ArtifactError as exc:
+                result.artifact_integrity_mode = "invalid"
                 logger.warning(
-                    "could not clear artifact active marker for %s: %s",
+                    "could not seal terminal artifacts for %s: %s",
                     execution_id,
                     exc,
                 )
@@ -664,6 +720,7 @@ class ExecutionService:
                 "assurance_level": result.assurance_level,
             },
         )
+        self._remember(request, result)
         self._controls.pop(execution_id, None)
         if registered_current_task:
             self._background.pop(execution_id, None)
@@ -746,6 +803,7 @@ class ExecutionService:
                     "execution_interrupted",
                     {"execution_id": execution_id, "reason": "background_crash"},
                 )
+                self._remember(request, crashed)
                 completed = ServiceExecution(result=crashed, legacy_payload={})
             if on_complete:
                 try:
@@ -767,6 +825,7 @@ class ExecutionService:
                         "execution_callback_failed",
                         {"execution_id": execution_id, "stage": "completion", "error": type(exc).__name__},
                     )
+                    self._remember(request, completed.result)
 
         task = asyncio.get_running_loop().create_task(run())
         self._background[execution_id] = task
@@ -784,7 +843,8 @@ class ExecutionService:
         return queued
 
     def get(self, execution_id: str) -> ExecutionResultV1 | None:
-        return self._live_results.get(execution_id) or self.store.get(execution_id)
+        result = self._live_results.get(execution_id) or self.store.get(execution_id)
+        return result.model_copy(deep=True) if result is not None else None
 
     async def cancel(self, execution_id: str, reason: str = "cancelled by caller") -> ExecutionResultV1 | None:
         result = self.get(execution_id)
@@ -795,15 +855,21 @@ class ExecutionService:
         control = self._controls.get(execution_id)
         if control:
             control.cancel_event.set()
-        result.cancellation_requested = True
-        result.cancellation_requested_at = _now()
-        result.cancellation_reason = reason[:500]
-        result.lifecycle_status = "cancelled"
-        result.status = "cancelled"
-        result.completed_at = _now()
-        result.cancelled_at = result.completed_at
-        result.validation_outcome = "not_run"
-        result.assurance_level = "unverified"
+
+        def mark_cancelled(target: ExecutionResultV1) -> None:
+            target.cancellation_requested = True
+            target.cancellation_requested_at = _now()
+            target.cancellation_reason = reason[:500]
+            target.lifecycle_status = "cancelled"
+            target.status = "cancelled"
+            target.completed_at = _now()
+            target.cancelled_at = target.completed_at
+            target.validation_outcome = "not_run"
+            target.assurance_level = "unverified"
+
+        mark_cancelled(result)
+        if control is not None:
+            mark_cancelled(control.result)
         request = self._requests.get(execution_id) or (control.request if control else None)
         if request:
             self._persist_terminal(request, result)
@@ -815,7 +881,12 @@ class ExecutionService:
                 await asyncio.shield(task)
             except asyncio.CancelledError:
                 pass
+        published = self.get(execution_id)
+        if published is not None and published.lifecycle_status == "cancelled":
+            return published
         self._emit("execution_cancelled", {"execution_id": execution_id, "reason": reason[:500]})
+        if request:
+            self._remember(request, result)
         return self.get(execution_id) or result
 
     def reconcile_after_restart(self, restart_marker: str | None = None) -> list[str]:

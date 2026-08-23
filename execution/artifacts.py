@@ -9,6 +9,7 @@ and re-checks confinement and symlinks every time a file is opened.
 from __future__ import annotations
 
 import hashlib
+import json
 import mimetypes
 import os
 import re
@@ -21,12 +22,22 @@ import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping
 from urllib.parse import unquote
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from config import get as get_config
+from sqlite_store import connection, migration_lock, transaction
+
+ArtifactRoleV1 = Literal[
+    "deliverable",
+    "provenance",
+    "log",
+    "candidate_source",
+    "internal",
+]
+ArtifactIntegrityModeV1 = Literal["active", "sealed", "legacy_live", "invalid"]
 
 
 class ArtifactModel(BaseModel):
@@ -38,6 +49,7 @@ class ArtifactEntryV1(ArtifactModel):
     media_type: str = Field(min_length=1, max_length=200)
     size_bytes: int = Field(ge=0)
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    role: ArtifactRoleV1 = "deliverable"
     source_candidate_id: str | None = Field(default=None, max_length=128)
     source_execution_unit_id: str | None = Field(default=None, max_length=128)
     created_at: str
@@ -49,6 +61,9 @@ class ArtifactManifestV1(ArtifactModel):
     created_at: str
     file_count: int = Field(ge=0)
     aggregate_size_bytes: int = Field(ge=0)
+    integrity_mode: ArtifactIntegrityModeV1 = "legacy_live"
+    manifest_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    sealed_at: str | None = None
     entries: list[ArtifactEntryV1]
 
 
@@ -68,10 +83,15 @@ class ArtifactLimitError(ArtifactError):
     pass
 
 
+class ArtifactIntegrityError(ArtifactSecurityError):
+    """A current file no longer matches its sealed local baseline."""
+
+
 @dataclass(frozen=True)
 class ArtifactSource:
     candidate_id: str | None = None
     execution_unit_id: str | None = None
+    role: ArtifactRoleV1 | None = None
 
 
 @dataclass(frozen=True)
@@ -175,7 +195,7 @@ class ArtifactStore:
         return max_files, max_file, max_total
 
     def migrate(self) -> None:
-        with self._lock, sqlite3.connect(self.db_path) as con:
+        with self._lock, migration_lock(self.db_path), connection(self.db_path) as con:
             con.execute(
                 """
                 CREATE TABLE IF NOT EXISTS artifact_roots (
@@ -184,6 +204,9 @@ class ArtifactStore:
                     strategy TEXT,
                     active INTEGER NOT NULL DEFAULT 0,
                     manifest_prefix TEXT,
+                    manifest_state TEXT NOT NULL DEFAULT 'legacy_live',
+                    manifest_hash TEXT,
+                    sealed_at TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )
@@ -197,6 +220,7 @@ class ArtifactStore:
                     media_type TEXT NOT NULL,
                     size_bytes INTEGER NOT NULL,
                     sha256 TEXT NOT NULL,
+                    role TEXT NOT NULL DEFAULT 'deliverable',
                     source_candidate_id TEXT,
                     source_execution_unit_id TEXT,
                     created_at TEXT NOT NULL,
@@ -217,6 +241,24 @@ class ArtifactStore:
             }
             if "manifest_prefix" not in root_columns:
                 con.execute("ALTER TABLE artifact_roots ADD COLUMN manifest_prefix TEXT")
+            root_additions = {
+                "manifest_state": "TEXT NOT NULL DEFAULT 'legacy_live'",
+                "manifest_hash": "TEXT",
+                "sealed_at": "TEXT",
+            }
+            for name, declaration in root_additions.items():
+                if name not in root_columns:
+                    con.execute(
+                        f"ALTER TABLE artifact_roots ADD COLUMN {name} {declaration}"
+                    )
+            entry_columns = {
+                row[1] for row in con.execute("PRAGMA table_info(artifact_entries)")
+            }
+            if "role" not in entry_columns:
+                con.execute(
+                    "ALTER TABLE artifact_entries "
+                    "ADD COLUMN role TEXT NOT NULL DEFAULT 'deliverable'"
+                )
             con.commit()
 
     @staticmethod
@@ -276,24 +318,34 @@ class ArtifactStore:
         resolved = self._validated_existing_root(root)
         now = _utc_iso()
         self.migrate()
-        with self._lock, sqlite3.connect(self.db_path) as con:
+        with self._lock, connection(self.db_path) as con:
             existing = con.execute(
-                "SELECT root_path FROM artifact_roots WHERE execution_id = ?", (execution_id,)
+                "SELECT root_path, manifest_state FROM artifact_roots WHERE execution_id = ?",
+                (execution_id,),
             ).fetchone()
             if existing and Path(existing[0]) != resolved:
                 raise ArtifactSecurityError("an execution cannot change artifact roots")
+            if existing and existing[1] == "sealed" and active:
+                raise ArtifactIntegrityError("a sealed artifact baseline cannot become active")
+            state: ArtifactIntegrityModeV1 = "active" if active else "legacy_live"
             try:
                 con.execute(
                     """
                     INSERT INTO artifact_roots
-                        (execution_id, root_path, strategy, active, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                        (execution_id, root_path, strategy, active, manifest_state,
+                         created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(execution_id) DO UPDATE SET
                         strategy=COALESCE(excluded.strategy, artifact_roots.strategy),
                         active=excluded.active,
+                        manifest_state=CASE
+                            WHEN artifact_roots.manifest_state='sealed' THEN 'sealed'
+                            WHEN excluded.active=1 THEN 'active'
+                            ELSE artifact_roots.manifest_state
+                        END,
                         updated_at=excluded.updated_at
                     """,
-                    (execution_id, str(resolved), strategy, int(active), now, now),
+                    (execution_id, str(resolved), strategy, int(active), state, now, now),
                 )
             except sqlite3.IntegrityError as exc:
                 raise ArtifactSecurityError(
@@ -304,10 +356,21 @@ class ArtifactStore:
     def set_active(self, execution_id: str, active: bool) -> None:
         execution_id = self._validate_execution_id(execution_id)
         self.migrate()
-        with self._lock, sqlite3.connect(self.db_path) as con:
+        with self._lock, connection(self.db_path) as con:
             cursor = con.execute(
-                "UPDATE artifact_roots SET active = ?, updated_at = ? WHERE execution_id = ?",
-                (int(active), _utc_iso(), execution_id),
+                """
+                UPDATE artifact_roots
+                SET active = ?,
+                    manifest_state = CASE
+                        WHEN manifest_state='sealed' THEN 'sealed'
+                        WHEN ?=1 THEN 'active'
+                        WHEN manifest_state='active' THEN 'legacy_live'
+                        ELSE manifest_state
+                    END,
+                    updated_at = ?
+                WHERE execution_id = ?
+                """,
+                (int(active), int(active), _utc_iso(), execution_id),
             )
             con.commit()
         if cursor.rowcount == 0:
@@ -329,7 +392,13 @@ class ArtifactStore:
         execution_id = self._validate_execution_id(execution_id)
         root, _, _ = self._root_record(execution_id)
         normalized, _ = self._validated_subtree(root, prefix)
-        with self._lock, sqlite3.connect(self.db_path) as con:
+        with self._lock, connection(self.db_path) as con:
+            state_row = con.execute(
+                "SELECT manifest_state FROM artifact_roots WHERE execution_id = ?",
+                (execution_id,),
+            ).fetchone()
+            if state_row and state_row[0] == "sealed":
+                raise ArtifactIntegrityError("a sealed artifact baseline cannot change")
             cursor = con.execute(
                 "UPDATE artifact_roots SET manifest_prefix = ?, updated_at = ? "
                 "WHERE execution_id = ?",
@@ -342,7 +411,7 @@ class ArtifactStore:
     def active_root_paths(self) -> set[Path]:
         """Internal resolved roots that retention code must never prune."""
         self.migrate()
-        with self._lock, sqlite3.connect(self.db_path) as con:
+        with self._lock, connection(self.db_path) as con:
             rows = con.execute(
                 "SELECT root_path FROM artifact_roots WHERE active = 1"
             ).fetchall()
@@ -359,7 +428,7 @@ class ArtifactStore:
     def _root_record(self, execution_id: str) -> tuple[Path, str, bool]:
         execution_id = self._validate_execution_id(execution_id)
         self.migrate()
-        with self._lock, sqlite3.connect(self.db_path) as con:
+        with self._lock, connection(self.db_path) as con:
             row = con.execute(
                 "SELECT root_path, created_at, active FROM artifact_roots WHERE execution_id = ?",
                 (execution_id,),
@@ -369,11 +438,57 @@ class ArtifactStore:
         root = self._validated_existing_root(row[0])
         return root, str(row[1]), bool(row[2])
 
+    def _manifest_metadata(
+        self,
+        execution_id: str,
+    ) -> tuple[ArtifactIntegrityModeV1, str | None, str | None, str | None]:
+        execution_id = self._validate_execution_id(execution_id)
+        self.migrate()
+        with self._lock, connection(self.db_path) as con:
+            row = con.execute(
+                """
+                SELECT manifest_state, manifest_hash, sealed_at, manifest_prefix
+                FROM artifact_roots WHERE execution_id = ?
+                """,
+                (execution_id,),
+            ).fetchone()
+        if not row:
+            raise ArtifactNotFound("artifacts are not registered for this execution")
+        state = str(row[0] or "legacy_live")
+        if state not in {"active", "sealed", "legacy_live", "invalid"}:
+            state = "invalid"
+        return state, row[1], row[2], row[3]  # type: ignore[return-value]
+
     @staticmethod
     def _infer_source(relative_path: str) -> ArtifactSource:
         first = PurePosixPath(relative_path).parts[0]
         match = re.fullmatch(r"candidate_(\d+)", first)
         return ArtifactSource(candidate_id=f"candidate-{match.group(1)}") if match else ArtifactSource()
+
+    @staticmethod
+    def _classify_role(relative_path: str, source: ArtifactSource) -> ArtifactRoleV1:
+        if source.role:
+            return source.role
+        path = PurePosixPath(relative_path)
+        name = path.name.lower()
+        parts = {part.lower() for part in path.parts}
+        if name == "candidate.md":
+            return "candidate_source"
+        if name.endswith(".log") or name == "full_log.json" or "transcript" in parts:
+            return "log"
+        if (
+            name in {"plan.json", "review.md"}
+            or name.startswith("builder_")
+            or name.startswith("revision")
+        ):
+            return "provenance"
+        if name == "output.md" or "code" in parts:
+            return "deliverable"
+        if name.startswith(".") or name in {"manifest.json", "metadata.json"}:
+            return "internal"
+        # Unknown generated files are user output unless a known audit role
+        # classifies them more narrowly above.
+        return "deliverable"
 
     def _scan_entries(
         self,
@@ -422,6 +537,7 @@ class ArtifactStore:
                         media_type=media_type,
                         size_bytes=stat.st_size,
                         sha256=_sha256_file(resolved),
+                        role=self._classify_role(relative_path, source),
                         source_candidate_id=source.candidate_id,
                         source_execution_unit_id=source.execution_unit_id,
                         created_at=_utc_iso(stat.st_mtime),
@@ -444,70 +560,249 @@ class ArtifactStore:
         *,
         sources: Mapping[str, ArtifactSource] | None = None,
     ) -> ArtifactManifestV1:
-        """Rebuild a manifest from disk after enforcing all configured quotas."""
+        """Refresh an active/legacy manifest; sealed baselines are immutable."""
         root, manifest_created_at, _ = self._root_record(execution_id)
-        with self._lock, sqlite3.connect(self.db_path) as con:
-            prefix_row = con.execute(
-                "SELECT manifest_prefix FROM artifact_roots WHERE execution_id = ?",
-                (execution_id,),
-            ).fetchone()
-        prefix = prefix_row[0] if prefix_row else None
+        state, manifest_hash, sealed_at, prefix = self._manifest_metadata(execution_id)
+        if state == "sealed":
+            return self._load_manifest(execution_id)
+        if state == "invalid":
+            raise ArtifactIntegrityError("artifact manifest is marked invalid")
         scan_root = root
         if prefix:
             _, scan_root = self._validated_subtree(root, prefix)
         entries, aggregate = self._scan_entries(root, scan_root, sources=sources)
-        with self._lock, sqlite3.connect(self.db_path) as con:
-            con.execute("DELETE FROM artifact_entries WHERE execution_id = ?", (execution_id,))
-            con.executemany(
-                """
-                INSERT INTO artifact_entries
-                    (execution_id, relative_path, media_type, size_bytes, sha256,
-                     source_candidate_id, source_execution_unit_id, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                [
-                    (
-                        execution_id,
-                        item.relative_path,
-                        item.media_type,
-                        item.size_bytes,
-                        item.sha256,
-                        item.source_candidate_id,
-                        item.source_execution_unit_id,
-                        item.created_at,
-                    )
-                    for item in entries
-                ],
-            )
-            con.execute(
-                "UPDATE artifact_roots SET updated_at = ? WHERE execution_id = ?",
-                (_utc_iso(), execution_id),
-            )
-            con.commit()
+        self._replace_entries(execution_id, entries)
         return ArtifactManifestV1(
             execution_id=execution_id,
             created_at=manifest_created_at,
             file_count=len(entries),
             aggregate_size_bytes=aggregate,
+            integrity_mode=state,
+            manifest_hash=manifest_hash,
+            sealed_at=sealed_at,
             entries=entries,
         )
 
-    def resolve_entry(self, execution_id: str, relative_path: str) -> tuple[Path, ArtifactEntryV1]:
+    @staticmethod
+    def _entry_values(execution_id: str, item: ArtifactEntryV1) -> tuple[Any, ...]:
+        return (
+            execution_id,
+            item.relative_path,
+            item.media_type,
+            item.size_bytes,
+            item.sha256,
+            item.role,
+            item.source_candidate_id,
+            item.source_execution_unit_id,
+            item.created_at,
+        )
+
+    def _replace_entries(self, execution_id: str, entries: list[ArtifactEntryV1]) -> None:
+        self.migrate()
+        with self._lock, transaction(self.db_path) as con:
+            con.execute("DELETE FROM artifact_entries WHERE execution_id = ?", (execution_id,))
+            con.executemany(
+                """
+                INSERT INTO artifact_entries
+                    (execution_id, relative_path, media_type, size_bytes, sha256, role,
+                     source_candidate_id, source_execution_unit_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [self._entry_values(execution_id, item) for item in entries],
+            )
+            con.execute(
+                "UPDATE artifact_roots SET updated_at = ? WHERE execution_id = ?",
+                (_utc_iso(), execution_id),
+            )
+
+    @staticmethod
+    def _canonical_manifest_hash(entries: list[ArtifactEntryV1]) -> str:
+        canonical = [
+            {
+                "relative_path": item.relative_path,
+                "role": item.role,
+                "media_type": item.media_type,
+                "size_bytes": item.size_bytes,
+                "sha256": item.sha256,
+                "source_candidate_id": item.source_candidate_id,
+                "source_execution_unit_id": item.source_execution_unit_id,
+                "created_at": item.created_at,
+            }
+            for item in sorted(entries, key=lambda entry: entry.relative_path)
+        ]
+        raw = json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    def _load_manifest(self, execution_id: str) -> ArtifactManifestV1:
+        self.migrate()
+        with self._lock, connection(self.db_path) as con:
+            root_row = con.execute(
+                """
+                SELECT created_at, manifest_state, manifest_hash, sealed_at
+                FROM artifact_roots WHERE execution_id = ?
+                """,
+                (execution_id,),
+            ).fetchone()
+            rows = con.execute(
+                """
+                SELECT relative_path, media_type, size_bytes, sha256, role,
+                       source_candidate_id, source_execution_unit_id, created_at
+                FROM artifact_entries WHERE execution_id = ? ORDER BY relative_path
+                """,
+                (execution_id,),
+            ).fetchall()
+        if not root_row:
+            raise ArtifactNotFound("artifacts are not registered for this execution")
+        entries = [
+            ArtifactEntryV1(
+                relative_path=row[0],
+                media_type=row[1],
+                size_bytes=row[2],
+                sha256=row[3],
+                role=row[4],
+                source_candidate_id=row[5],
+                source_execution_unit_id=row[6],
+                created_at=row[7],
+            )
+            for row in rows
+        ]
+        return ArtifactManifestV1(
+            execution_id=execution_id,
+            created_at=root_row[0],
+            file_count=len(entries),
+            aggregate_size_bytes=sum(item.size_bytes for item in entries),
+            integrity_mode=root_row[1] or "legacy_live",
+            manifest_hash=root_row[2],
+            sealed_at=root_row[3],
+            entries=entries,
+        )
+
+    def seal_manifest(
+        self,
+        execution_id: str,
+        *,
+        sources: Mapping[str, ArtifactSource] | None = None,
+    ) -> ArtifactManifestV1:
+        """Persist one immutable terminal baseline and its canonical hash."""
+        root, created_at, _ = self._root_record(execution_id)
+        state, _, _, prefix = self._manifest_metadata(execution_id)
+        if state == "sealed":
+            return self._load_manifest(execution_id)
+        if state == "invalid":
+            raise ArtifactIntegrityError("artifact manifest is marked invalid")
+        scan_root = root
+        if prefix:
+            _, scan_root = self._validated_subtree(root, prefix)
+        try:
+            entries, aggregate = self._scan_entries(root, scan_root, sources=sources)
+        except (ArtifactError, OSError) as exc:
+            with self._lock, connection(self.db_path) as con:
+                con.execute(
+                    "UPDATE artifact_roots SET active=0, manifest_state='invalid', "
+                    "updated_at=? WHERE execution_id=? AND manifest_state!='sealed'",
+                    (_utc_iso(), execution_id),
+                )
+                con.commit()
+            if isinstance(exc, ArtifactError):
+                raise
+            raise ArtifactSecurityError("artifact tree could not be sealed") from exc
+        manifest_hash = self._canonical_manifest_hash(entries)
+        sealed_at = _utc_iso()
+        self.migrate()
+        with self._lock, transaction(self.db_path) as con:
+            current = con.execute(
+                "SELECT manifest_state FROM artifact_roots WHERE execution_id = ?",
+                (execution_id,),
+            ).fetchone()
+            if not current:
+                raise ArtifactNotFound("artifact root is not registered")
+            if current[0] == "sealed":
+                return self._load_manifest(execution_id)
+            con.execute("DELETE FROM artifact_entries WHERE execution_id = ?", (execution_id,))
+            con.executemany(
+                """
+                INSERT INTO artifact_entries
+                    (execution_id, relative_path, media_type, size_bytes, sha256, role,
+                     source_candidate_id, source_execution_unit_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [self._entry_values(execution_id, item) for item in entries],
+            )
+            con.execute(
+                """
+                UPDATE artifact_roots
+                SET active=0, manifest_state='sealed', manifest_hash=?, sealed_at=?, updated_at=?
+                WHERE execution_id=?
+                """,
+                (manifest_hash, sealed_at, sealed_at, execution_id),
+            )
+        return ArtifactManifestV1(
+            execution_id=execution_id,
+            created_at=created_at,
+            file_count=len(entries),
+            aggregate_size_bytes=aggregate,
+            integrity_mode="sealed",
+            manifest_hash=manifest_hash,
+            sealed_at=sealed_at,
+            entries=entries,
+        )
+
+    @staticmethod
+    def _filter_manifest(
+        manifest: ArtifactManifestV1,
+        roles: set[ArtifactRoleV1] | None,
+    ) -> ArtifactManifestV1:
+        if roles is None:
+            return manifest
+        entries = [entry for entry in manifest.entries if entry.role in roles]
+        return manifest.model_copy(
+            update={
+                "entries": entries,
+                "file_count": len(entries),
+                "aggregate_size_bytes": sum(entry.size_bytes for entry in entries),
+            }
+        )
+
+    def get_manifest(
+        self,
+        execution_id: str,
+        *,
+        roles: set[ArtifactRoleV1] | None = None,
+    ) -> ArtifactManifestV1:
+        state, _, _, _ = self._manifest_metadata(execution_id)
+        if state == "invalid":
+            raise ArtifactIntegrityError("artifact manifest is marked invalid")
+        manifest = (
+            self._load_manifest(execution_id)
+            if state == "sealed"
+            else self.refresh_manifest(execution_id)
+        )
+        return self._filter_manifest(manifest, roles)
+
+    def _resolve_path(self, execution_id: str, relative_path: str) -> Path:
         normalized = normalize_relative_path(relative_path)
-        manifest = self.refresh_manifest(execution_id)
-        entry = next((item for item in manifest.entries if item.relative_path == normalized), None)
-        if entry is None:
-            raise ArtifactNotFound("artifact was not found")
         root, _, _ = self._root_record(execution_id)
         candidate = root.joinpath(*PurePosixPath(normalized).parts)
         self._reject_symlink_components(candidate, root)
         if candidate.is_symlink():
             raise ArtifactSecurityError("symlink artifacts are not allowed")
-        resolved = candidate.resolve(strict=True)
+        try:
+            resolved = candidate.resolve(strict=True)
+        except FileNotFoundError as exc:
+            raise ArtifactNotFound("artifact was not found") from exc
         if not resolved.is_relative_to(root) or not resolved.is_file():
             raise ArtifactSecurityError("artifact escaped its registered root")
+        return resolved
+
+    def resolve_entry(self, execution_id: str, relative_path: str) -> tuple[Path, ArtifactEntryV1]:
+        normalized = normalize_relative_path(relative_path)
+        manifest = self.get_manifest(execution_id)
+        entry = next((item for item in manifest.entries if item.relative_path == normalized), None)
+        if entry is None:
+            raise ArtifactNotFound("artifact was not found")
+        resolved = self._resolve_path(execution_id, normalized)
         if _sha256_file(resolved) != entry.sha256:
-            raise ArtifactSecurityError("artifact changed while it was being resolved")
+            raise ArtifactIntegrityError("artifact differs from its recorded integrity baseline")
         return resolved, entry
 
     def prepare_archive(
@@ -515,26 +810,42 @@ class ArtifactStore:
         execution_id: str,
         *,
         relative_paths: set[str] | None = None,
+        roles: set[ArtifactRoleV1] | None = None,
     ) -> PreparedArtifactArchive:
-        """Write a bounded ZIP to a temporary file for FileResponse streaming."""
-        manifest = self.refresh_manifest(execution_id)
+        """Write one manifest snapshot to a temporary ZIP without rescanning."""
+        manifest = self.get_manifest(execution_id, roles=roles)
         if relative_paths is not None:
             normalized_paths = {normalize_relative_path(path) for path in relative_paths}
-            manifest.entries = [
+            manifest = self._filter_manifest(
+                manifest,
+                {entry.role for entry in manifest.entries if entry.relative_path in normalized_paths},
+            )
+            selected = [
                 entry for entry in manifest.entries if entry.relative_path in normalized_paths
             ]
-            manifest.file_count = len(manifest.entries)
-            manifest.aggregate_size_bytes = sum(entry.size_bytes for entry in manifest.entries)
+            manifest = manifest.model_copy(
+                update={
+                    "entries": selected,
+                    "file_count": len(selected),
+                    "aggregate_size_bytes": sum(entry.size_bytes for entry in selected),
+                }
+            )
         descriptor, temp_name = tempfile.mkstemp(prefix="mycelium-artifacts-", suffix=".zip")
         os.close(descriptor)
         archive_path = Path(temp_name)
         try:
             with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
                 for entry in manifest.entries:
-                    path, resolved_entry = self.resolve_entry(execution_id, entry.relative_path)
-                    if resolved_entry.sha256 != entry.sha256:
-                        raise ArtifactSecurityError("artifact changed during archive creation")
-                    archive.write(path, arcname=entry.relative_path)
+                    path = self._resolve_path(execution_id, entry.relative_path)
+                    digest = hashlib.sha256()
+                    with path.open("rb") as source, archive.open(entry.relative_path, "w") as target:
+                        while chunk := source.read(1024 * 1024):
+                            digest.update(chunk)
+                            target.write(chunk)
+                    if digest.hexdigest() != entry.sha256:
+                        raise ArtifactIntegrityError(
+                            "artifact differs from its recorded integrity baseline"
+                        )
         except Exception:
             archive_path.unlink(missing_ok=True)
             raise
@@ -572,7 +883,7 @@ class ArtifactStore:
         current = datetime.fromtimestamp(time.time() if now is None else now, timezone.utc)
         active_ids = active_execution_ids or set()
 
-        with self._lock, sqlite3.connect(self.db_path) as con:
+        with self._lock, connection(self.db_path) as con:
             rows = con.execute(
                 "SELECT execution_id, root_path, active, updated_at FROM artifact_roots ORDER BY updated_at"
             ).fetchall()
@@ -601,7 +912,7 @@ class ArtifactStore:
             shutil.rmtree(root)
             total -= size
             deleted.append(execution_id)
-            with self._lock, sqlite3.connect(self.db_path) as con:
+            with self._lock, connection(self.db_path) as con:
                 con.execute("DELETE FROM artifact_entries WHERE execution_id = ?", (execution_id,))
                 con.execute("DELETE FROM artifact_roots WHERE execution_id = ?", (execution_id,))
                 con.commit()

@@ -13,6 +13,7 @@ from typing import Any, Mapping
 from pydantic import BaseModel, ConfigDict, Field
 
 from execution.artifacts import ArtifactManifestV1
+from sqlite_store import connection, migration_lock
 
 
 class ShareModel(BaseModel):
@@ -46,6 +47,7 @@ class ExecutionShareRecordV1(ShareModel):
     allow_artifact_download: bool
     redact_node_identity: bool
     include_candidate_details: bool
+    last_accessed_at: str | None = None
 
 
 class PublicValidationSummaryV1(ShareModel):
@@ -105,7 +107,7 @@ class ShareStore:
         self._lock = threading.RLock()
 
     def migrate(self) -> None:
-        with self._lock, sqlite3.connect(self.db_path) as con:
+        with self._lock, migration_lock(self.db_path), connection(self.db_path) as con:
             con.execute(
                 """
                 CREATE TABLE IF NOT EXISTS execution_shares (
@@ -125,6 +127,11 @@ class ShareStore:
                 "CREATE INDEX IF NOT EXISTS idx_execution_shares_execution "
                 "ON execution_shares(execution_id)"
             )
+            columns = {
+                row[1] for row in con.execute("PRAGMA table_info(execution_shares)")
+            }
+            if "last_accessed_at" not in columns:
+                con.execute("ALTER TABLE execution_shares ADD COLUMN last_accessed_at TEXT")
             con.commit()
 
     @staticmethod
@@ -138,6 +145,7 @@ class ShareStore:
             allow_artifact_download=bool(row[5]),
             redact_node_identity=bool(row[6]),
             include_candidate_details=bool(row[7]),
+            last_accessed_at=row[8] if len(row) > 8 else None,
         )
 
     def create(
@@ -158,7 +166,7 @@ class ShareStore:
             token = secrets.token_urlsafe(32)
             share_id = f"share_{uuid.uuid4().hex}"
             try:
-                with self._lock, sqlite3.connect(self.db_path) as con:
+                with self._lock, connection(self.db_path) as con:
                     con.execute(
                         """
                         INSERT INTO execution_shares
@@ -198,23 +206,31 @@ class ShareStore:
             return None
         digest = _token_hash(token)
         self.migrate()
-        with self._lock, sqlite3.connect(self.db_path) as con:
+        with self._lock, connection(self.db_path) as con:
             row = con.execute(
                 """
                 SELECT share_id, execution_id, created_at, expires_at, revoked_at,
                        allow_artifact_download, redact_node_identity, include_candidate_details,
-                       token_hash
+                       last_accessed_at, token_hash
                 FROM execution_shares WHERE token_hash = ?
                 """,
                 (digest,),
             ).fetchone()
-        if not row or not secrets.compare_digest(str(row[8]), digest):
+        if not row or not secrets.compare_digest(str(row[9]), digest):
             return None
         record = self._record(row)
         if record.revoked_at:
             return None
         if record.expires_at and datetime.fromisoformat(record.expires_at) <= _utc_now(now):
             return None
+        accessed = _utc_now(now).isoformat()
+        with self._lock, connection(self.db_path) as con:
+            con.execute(
+                "UPDATE execution_shares SET last_accessed_at = ? WHERE share_id = ?",
+                (accessed, record.share_id),
+            )
+            con.commit()
+        record.last_accessed_at = accessed
         return record
 
     def revoke(
@@ -226,7 +242,7 @@ class ShareStore:
     ) -> bool:
         self.migrate()
         revoked = _utc_now(now).isoformat()
-        with self._lock, sqlite3.connect(self.db_path) as con:
+        with self._lock, connection(self.db_path) as con:
             cursor = con.execute(
                 """
                 UPDATE execution_shares SET revoked_at = ?
@@ -237,10 +253,49 @@ class ShareStore:
             con.commit()
         return cursor.rowcount == 1
 
+    def revoke_all(self, execution_id: str, *, now: datetime | None = None) -> int:
+        """Revoke every currently active capability for one execution."""
+        self.migrate()
+        revoked = _utc_now(now).isoformat()
+        with self._lock, connection(self.db_path) as con:
+            cursor = con.execute(
+                """
+                UPDATE execution_shares SET revoked_at = ?
+                WHERE execution_id = ? AND revoked_at IS NULL
+                """,
+                (revoked, execution_id),
+            )
+            con.commit()
+        return max(0, cursor.rowcount)
+
+    def list_active(
+        self,
+        execution_id: str,
+        *,
+        now: datetime | None = None,
+    ) -> list[ExecutionShareRecordV1]:
+        """Return active metadata only; plaintext tokens are never recoverable."""
+        self.migrate()
+        current = _utc_now(now).isoformat()
+        with self._lock, connection(self.db_path) as con:
+            rows = con.execute(
+                """
+                SELECT share_id, execution_id, created_at, expires_at, revoked_at,
+                       allow_artifact_download, redact_node_identity,
+                       include_candidate_details, last_accessed_at
+                FROM execution_shares
+                WHERE execution_id = ? AND revoked_at IS NULL
+                  AND (expires_at IS NULL OR expires_at > ?)
+                ORDER BY created_at DESC
+                """,
+                (execution_id, current),
+            ).fetchall()
+        return [self._record(row) for row in rows]
+
     def token_is_stored_plaintext(self, token: str) -> bool:
         """Diagnostic/test helper proving the bearer token never enters SQLite."""
         self.migrate()
-        with self._lock, sqlite3.connect(self.db_path) as con:
+        with self._lock, connection(self.db_path) as con:
             row = con.execute(
                 "SELECT 1 FROM execution_shares WHERE token_hash = ?", (token,)
             ).fetchone()
@@ -281,6 +336,11 @@ def artifact_manifest_for_share(
     for entry in manifest.entries:
         path = entry.relative_path
         name = path.rsplit("/", 1)[-1]
+        allowed_roles = {"deliverable"}
+        if share.include_candidate_details:
+            allowed_roles.add("candidate_source")
+        if entry.role not in allowed_roles:
+            continue
         internal_run_record = (
             name in {"full_log.json", "plan.json", "review.md"}
             or name.startswith("builder_")
@@ -302,6 +362,9 @@ def artifact_manifest_for_share(
         created_at=manifest.created_at,
         file_count=len(entries),
         aggregate_size_bytes=sum(entry.size_bytes for entry in entries),
+        integrity_mode=manifest.integrity_mode,
+        manifest_hash=manifest.manifest_hash,
+        sealed_at=manifest.sealed_at,
         entries=entries,
     )
 

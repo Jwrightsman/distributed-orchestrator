@@ -4,7 +4,9 @@
 #   curl -fsSL https://raw.githubusercontent.com/Jwrightsman/distributed-orchestrator/master/install.sh | bash -s -- http://ORCHESTRATOR_IP:8000
 #
 # Omit the URL to auto-discover an orchestrator on your LAN.
-# Pass "--secret VALUE" after the URL if the orchestrator requires one.
+# Pass "--secret VALUE" after the URL if the orchestrator requires node
+# admission. Use a private overlay or TLS URL; the shared node secret grants
+# instance-wide worker admission and should travel through a secure channel.
 #
 # What it does: checks Python + Ollama (installs Ollama on Linux), downloads
 # the repo to ~/distributed-orchestrator, installs two Python packages
@@ -79,7 +81,12 @@ fi
   || "$PY" -m pip install --quiet --disable-pip-version-check --user --break-system-packages httpx rich
 echo "  Deps:    httpx, rich"
 
-# 5. Join the network (join.py pulls the model and starts polling)
+# 5. Join the network (join.py pulls the model and starts polling).
+# Registration exchanges the shared admission secret for a server-issued,
+# process-local node session. The plaintext session token stays in worker
+# memory, is sent on worker-protocol calls, and is refreshed automatically
+# after a coordinator restart or a machine-readable session rejection. This is
+# collision protection for node labels, not public-key machine identity.
 #
 # Reconnect stdin to the terminal before handing over. In the advertised
 # `curl ... | bash -s -- URL` form, bash's stdin *is* the downloaded script, so

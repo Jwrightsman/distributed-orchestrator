@@ -26,6 +26,7 @@ class _Client:
         self.task = task
         self.reject_result = reject_result
         self.fail_result = fail_result
+        self.posts = []
 
     async def __aenter__(self):
         return self
@@ -37,7 +38,8 @@ class _Client:
         return _Response(200, self.task)
 
     async def post(self, url, *args, **kwargs):
-        if url.endswith("/stream"):
+        self.posts.append((url, kwargs.get("json"), kwargs.get("headers")))
+        if url.endswith(("/stream", "/tokens")):
             return _Response(200, {"ok": True})
         if self.fail_result:
             raise RuntimeError("result endpoint offline")
@@ -107,3 +109,79 @@ async def test_failed_error_report_does_not_hide_generation_exception(monkeypatc
     rendered = "\n".join(messages)
     assert "model exploded" in rendered
     assert "result endpoint offline" in rendered
+
+
+@pytest.mark.asyncio
+async def test_worker_stops_before_byte_budget_and_reports_limit_failure(monkeypatch):
+    task = {**_task(), "max_output_bytes": 5}
+    client = _Client(task)
+    monkeypatch.setattr(node.httpx, "AsyncClient", lambda **kwargs: client)
+
+    async def generated(*args, **kwargs):
+        yield "abc"
+        yield "éé"  # four more UTF-8 bytes would exceed the five-byte budget
+        raise AssertionError("worker continued generating after its output limit")
+
+    monkeypatch.setattr(node, "generate_stream", generated)
+    messages = []
+    monkeypatch.setattr(node.console, "print", lambda value="": messages.append(str(value)))
+    session = {
+        "tasks": 0,
+        "credits": 0,
+        "session_token": "session-token",
+    }
+
+    completed = await node.poll_and_execute(
+        "http://server", "worker", session
+    )
+
+    assert completed is None
+    result_posts = [item for item in client.posts if item[0].endswith("/result")]
+    assert len(result_posts) == 1
+    payload = result_posts[0][1]
+    assert payload["output"] is None
+    assert payload["error"].startswith("output_limit_exceeded:")
+    assert result_posts[0][2]["X-Node-Session"] == "session-token"
+    assert "DONE" not in "\n".join(messages)
+
+
+@pytest.mark.asyncio
+async def test_worker_automatically_reregisters_after_session_rejection(monkeypatch):
+    registrations = []
+
+    async def healthy_ollama():
+        return {"ok": True, "models": [node.DEFAULT_MODEL]}
+
+    async def register(server, node_id, secret="", capabilities=None, session_token=""):
+        registrations.append(session_token)
+        index = len(registrations)
+        return {
+            "message": "registered",
+            "node_id": str(node_id).casefold(),
+            "capabilities": [],
+            "session_id": f"session-{index}",
+            "session_token": f"token-{index}",
+            "session_expires_at": "2099-01-01T00:00:00+00:00",
+        }
+
+    polls = 0
+
+    async def poll(*args, **kwargs):
+        nonlocal polls
+        polls += 1
+        if polls == 1:
+            raise node.NodeSessionRejected("expired")
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(node, "check_ollama", healthy_ollama)
+    monkeypatch.setattr(node, "register", register)
+    monkeypatch.setattr(node, "poll_and_execute", poll)
+    monkeypatch.setattr(node.console, "print", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "sys.argv", ["node.py", "--server", "http://server", "--node-id", "Worker"]
+    )
+
+    await node.main()
+
+    assert registrations == ["", "token-1"]
+    assert polls == 2
