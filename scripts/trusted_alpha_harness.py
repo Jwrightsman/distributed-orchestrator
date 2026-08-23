@@ -332,13 +332,37 @@ def _write_trusted_config(state_dir: Path, fake_model_port: int) -> tuple[Path, 
     return path, stored
 
 
-def _request_graceful_shutdown(process: subprocess.Popen[str]) -> None:
+def _request_graceful_shutdown(process: subprocess.Popen[str]) -> int | None:
+    """Ask Uvicorn to stop and return the signal the harness delivered."""
     if process.poll() is not None:
-        return
+        return None
     if os.name == "nt":
         process.send_signal(signal.CTRL_BREAK_EVENT)
+        return int(signal.CTRL_BREAK_EVENT)
     else:
         process.terminate()
+        return int(signal.SIGTERM)
+
+
+def _shutdown_exit_is_expected(
+    returncode: int | None,
+    requested_signal: int | None,
+    *,
+    platform_name: str,
+) -> bool:
+    """Classify only harness-requested signal exits as clean shutdowns.
+
+    Newer Uvicorn releases perform lifespan teardown, restore the process's
+    original signal handler, and then re-raise the captured signal. POSIX
+    therefore reports ``-SIGTERM`` even though graceful teardown completed.
+    """
+    if returncode in {0, None}:
+        return True
+    if requested_signal is None:
+        return False
+    if platform_name == "nt":
+        return returncode in {3, -1073741510}
+    return returncode == -requested_signal
 
 
 def _wait_for_health(client: httpx.Client, process: subprocess.Popen[str]) -> dict:
@@ -855,7 +879,7 @@ def _exercise_live_coordinator(state_dir: Path) -> None:
     except BaseException as exc:
         failure = exc
     finally:
-        _request_graceful_shutdown(process)
+        requested_shutdown_signal = _request_graceful_shutdown(process)
         try:
             process.wait(timeout=20)
         except subprocess.TimeoutExpired:
@@ -868,14 +892,14 @@ def _exercise_live_coordinator(state_dir: Path) -> None:
         fake_model.server_close()
         fake_thread.join(timeout=5)
 
-    clean_exit_codes = {0, None}
-    if os.name == "nt":
-        # Windows reports a delivered CTRL_BREAK differently across Python
-        # builds even when Uvicorn runs its lifespan teardown and releases the
-        # OS lock.  The lock re-acquisition below is the authoritative cleanup
-        # check; forced-kill paths already set ``failure`` above.
-        clean_exit_codes.update({3, -1073741510})
-    if process.returncode not in clean_exit_codes and failure is None:
+    if (
+        not _shutdown_exit_is_expected(
+            process.returncode,
+            requested_shutdown_signal,
+            platform_name=os.name,
+        )
+        and failure is None
+    ):
         failure = HarnessFailure(f"coordinator exited with status {process.returncode}")
 
     if failure is None:

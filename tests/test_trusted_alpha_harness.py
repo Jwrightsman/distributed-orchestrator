@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import signal
+
 import pytest
 
 import execution.strategies as strategies
@@ -40,6 +42,40 @@ def test_harness_diagnostics_redact_every_static_authority():
 
     assert rendered == "<redacted>/<redacted>/<redacted>"
     assert not any(authority in rendered for authority in authorities)
+
+
+def test_posix_graceful_signal_exit_must_be_requested_by_the_harness():
+    sigterm = int(signal.SIGTERM)
+
+    assert harness._shutdown_exit_is_expected(
+        -sigterm,
+        sigterm,
+        platform_name="posix",
+    )
+    assert not harness._shutdown_exit_is_expected(
+        -sigterm,
+        None,
+        platform_name="posix",
+    )
+    assert not harness._shutdown_exit_is_expected(
+        -int(signal.SIGINT),
+        sigterm,
+        platform_name="posix",
+    )
+
+
+@pytest.mark.parametrize("returncode", (3, -1073741510))
+def test_windows_graceful_break_exit_must_be_requested(returncode):
+    assert harness._shutdown_exit_is_expected(
+        returncode,
+        1,
+        platform_name="nt",
+    )
+    assert not harness._shutdown_exit_is_expected(
+        returncode,
+        None,
+        platform_name="nt",
+    )
 
 
 def test_ci_runs_bounded_harness_and_nightly_runs_repeated_churn():
