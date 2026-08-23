@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import inspect
 import logging
 import time
@@ -24,12 +25,20 @@ from execution.contracts import (
 )
 from execution.artifacts import ArtifactError, ArtifactStore
 from execution.dispatch import Dispatcher, PlacementUnavailable, select_placement
-from execution.persistence import ExecutionStore
+from execution.idempotency import SubmissionIdentity
+from execution.persistence import (
+    ExecutionStore,
+    ExecutionTransitionConflictError,
+    IdempotencyConflictError,
+    SubmissionConsistencyError,
+)
 from execution.registry import StrategyRegistry, StrategySelector
 from execution.strategies import DagStrategy, EnsembleStrategy, StrategyContext
 from execution.validators import ValidatorRegistry
 
 logger = logging.getLogger("mycelium.execution")
+
+_REQUIRED_PERSISTENCE_ATTEMPTS = 3
 
 
 def _now() -> str:
@@ -42,6 +51,26 @@ class ServiceExecution:
     legacy_payload: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class SubmittedExecution:
+    result: ExecutionResultV1
+    replayed: bool
+
+
+class ExecutionPersistenceError(RuntimeError):
+    """Required execution state could not be committed within finite retries."""
+
+    def __init__(self, execution_id: str, phase: str, attempts: int):
+        super().__init__(f"required execution persistence failed during {phase}")
+        self.execution_id = execution_id
+        self.phase = phase
+        self.attempts = attempts
+
+
+class TerminalPersistenceError(ExecutionPersistenceError):
+    """A terminal snapshot was not durably committed."""
+
+
 @dataclass
 class ExecutionControl:
     execution_id: str
@@ -49,6 +78,8 @@ class ExecutionControl:
     deadline_monotonic: float
     cancel_event: asyncio.Event
     result: ExecutionResultV1
+    terminal_committed: bool = False
+    terminal_event_emitted: bool = False
 
 
 class ExecutionService:
@@ -86,8 +117,26 @@ class ExecutionService:
             )
 
     @staticmethod
+    def _snapshot_request(request: ExecutionRequestV1) -> ExecutionRequestV1:
+        """Detach durable work from a caller-owned mutable model instance."""
+
+        return ExecutionRequestV1.model_validate(request.model_dump(mode="python"))
+
+    @staticmethod
     def _emit(event_type: str, data: dict[str, Any]) -> None:
         server_state._emit(event_type, data)
+
+    def _safe_emit(self, event_type: str, data: dict[str, Any]) -> None:
+        """Keep telemetry failure from changing already committed lifecycle truth."""
+
+        try:
+            self._emit(event_type, data)
+        except Exception as exc:
+            logger.error(
+                "event publication failed event_type=%s error_type=%s",
+                event_type,
+                type(exc).__name__,
+            )
 
     def _new_result(
         self,
@@ -139,40 +188,133 @@ class ExecutionService:
         # boundary until the terminal event is ready.
         self._live_results[result.execution_id] = result.model_copy(deep=True)
 
-    def _save(self, request: ExecutionRequestV1, result: ExecutionResultV1, *, required: bool = False) -> None:
-        self._remember(request, result)
-        try:
-            self.store.save(request, result)
-        except Exception:
-            logger.exception("failed to persist execution %s", result.execution_id)
-            self._emit(
-                "execution_persistence_failed",
-                {"execution_id": result.execution_id, "lifecycle_status": getattr(result, "lifecycle_status", result.status)},
-            )
-            if required:
-                raise
+    def _evict_terminal_cache(
+        self,
+        execution_id: str,
+        result: ExecutionResultV1 | None = None,
+    ) -> None:
+        """Drop redundant terminal snapshots after post-commit observers finish.
 
-    def _persist_terminal(self, request: ExecutionRequestV1, result: ExecutionResultV1) -> bool:
-        """Retry terminal persistence so a transient write cannot strand running state."""
-        for attempt in range(1, 4):
+        SQLite is authoritative once a terminal snapshot commits.  Keeping the
+        same request and result in these process-local maps forever makes every
+        completed execution permanent resident memory.  Nonterminal snapshots
+        remain cached so active work and persistence-failure boundaries retain
+        their last published state.
+        """
+
+        terminal = result or self._live_results.get(execution_id)
+        if terminal is None:
             try:
-                self.store.save(request, result)
-                return True
-            except Exception:
-                logger.exception(
-                    "terminal persistence attempt %s failed for %s",
-                    attempt,
-                    result.execution_id,
+                terminal = self.store.get(execution_id)
+            except Exception as exc:
+                logger.error(
+                    "terminal cache inspection failed execution_id=%s error_type=%s",
+                    execution_id,
+                    type(exc).__name__,
                 )
-        self._emit(
-            "execution_terminal_persistence_failed",
-            {
-                "execution_id": result.execution_id,
-                "lifecycle_status": result.lifecycle_status,
-                "attempts": 3,
-            },
-        )
-        return False
+                return
+        if terminal.lifecycle_status not in {
+            "completed",
+            "failed",
+            "cancelled",
+            "interrupted",
+        }:
+            return
+        self._live_results.pop(execution_id, None)
+        self._requests.pop(execution_id, None)
+
+    def _commit_snapshot(
+        self,
+        request: ExecutionRequestV1,
+        result: ExecutionResultV1,
+        *,
+        phase: str,
+        terminal: bool = False,
+        create: bool = False,
+    ) -> ExecutionResultV1:
+        """Validate, commit, and only then publish one authoritative snapshot."""
+
+        snapshot = ExecutionResultV1.model_validate(dict(result.__dict__))
+        last_error: Exception | None = None
+        for attempt in range(1, _REQUIRED_PERSISTENCE_ATTEMPTS + 1):
+            try:
+                if create:
+                    self.store.create(request, snapshot)
+                else:
+                    self.store.save(request, snapshot)
+            except ExecutionTransitionConflictError as exc:
+                logger.error(
+                    "stale execution transition rejected execution_id=%s "
+                    "phase=%s current=%s attempted=%s",
+                    snapshot.execution_id,
+                    phase,
+                    exc.current,
+                    exc.attempted,
+                )
+                error_type = (
+                    TerminalPersistenceError if terminal else ExecutionPersistenceError
+                )
+                raise error_type(snapshot.execution_id, phase, attempt) from exc
+            except Exception as exc:
+                last_error = exc
+                logger.error(
+                    "required execution persistence failed execution_id=%s phase=%s "
+                    "attempt=%s error_type=%s",
+                    snapshot.execution_id,
+                    phase,
+                    attempt,
+                    type(exc).__name__,
+                )
+                continue
+            self._remember(request, snapshot)
+            return snapshot
+
+        error_type = TerminalPersistenceError if terminal else ExecutionPersistenceError
+        raise error_type(
+            snapshot.execution_id,
+            phase,
+            _REQUIRED_PERSISTENCE_ATTEMPTS,
+        ) from last_error
+
+    def _commit_submission(
+        self,
+        request: ExecutionRequestV1,
+        identity: SubmissionIdentity,
+        result_factory: Callable[[], ExecutionResultV1],
+    ):
+        queued_result: ExecutionResultV1 | None = None
+
+        def stable_result_factory() -> ExecutionResultV1:
+            """Allocate at most one candidate identity across persistence retries."""
+
+            nonlocal queued_result
+            if queued_result is None:
+                queued_result = result_factory()
+            return queued_result
+
+        last_error: Exception | None = None
+        for attempt in range(1, _REQUIRED_PERSISTENCE_ATTEMPTS + 1):
+            try:
+                return self.store.create_or_replay_submission(
+                    request,
+                    identity,
+                    stable_result_factory,
+                )
+            except (IdempotencyConflictError, SubmissionConsistencyError):
+                raise
+            except Exception as exc:
+                last_error = exc
+                logger.error(
+                    "required submission persistence failed phase=queued attempt=%s "
+                    "error_type=%s",
+                    attempt,
+                    type(exc).__name__,
+                )
+        raise ExecutionPersistenceError(
+            "unallocated",
+            "queued_submission",
+            _REQUIRED_PERSISTENCE_ATTEMPTS,
+        ) from last_error
 
     @staticmethod
     def _terminal_projection(lifecycle: str, validation_outcome: str) -> str:
@@ -287,13 +429,13 @@ class ExecutionService:
         dag_runner: Callable[..., Any] | None = None,
         control: ExecutionControl | None = None,
         on_running: Callable[[ExecutionResultV1], Any] | None = None,
+        _defer_terminal_cache_eviction: bool = False,
     ) -> ServiceExecution:
+        request = self._snapshot_request(request)
+        self.validate_request(request)
         execution_id = execution_id or uuid.uuid4().hex
         registered_current_task = False
         current_task = asyncio.current_task()
-        if current_task is not None and execution_id not in self._background:
-            self._background[execution_id] = current_task
-            registered_current_task = True
         result = self._new_result(request, execution_id, job_id, "running", created_at)
         result.lifecycle_status = "running"
         result.started_at = _now()
@@ -309,69 +451,66 @@ class ExecutionService:
                 result=result,
             )
         else:
-            control.result = result
-        self._controls[execution_id] = control
+            control.request = request
         try:
-            self._save(request, result, required=True)
-        except Exception as exc:
-            result.lifecycle_status = "interrupted"
-            result.status = "failed"
-            result.interruption_reason = "failed to persist running execution state"
-            result.interrupted_at = _now()
-            result.completed_at = result.interrupted_at
-            result.retryable = True
-            result.errors = [
-                {
-                    "code": "running_persistence_failed",
-                    "message": f"{type(exc).__name__}: failed to persist running state"[:500],
-                    "retryable": True,
-                }
-            ]
-            result = ExecutionResultV1.model_validate(dict(result.__dict__))
-            control.result = result
-            self._persist_terminal(request, result)
-            self._emit(
-                "execution_interrupted",
-                {
-                    "execution_id": execution_id,
-                    "reason": "running_persistence_failed",
-                    "retryable": True,
-                },
+            result = self._commit_snapshot(
+                request,
+                result,
+                phase="running",
             )
-            self._remember(request, result)
+        except ExecutionPersistenceError:
             self._controls.pop(execution_id, None)
-            if registered_current_task:
-                self._background.pop(execution_id, None)
-            return ServiceExecution(result=result, legacy_payload={})
+            raise
+        control.result = result
+        self._controls[execution_id] = control
+        if current_task is not None and execution_id not in self._background:
+            self._background[execution_id] = current_task
+            registered_current_task = True
+        self._safe_emit(
+            "execution_running",
+            {"execution_id": execution_id, "lifecycle_status": "running"},
+        )
 
-        if on_running:
-            try:
-                value = on_running(result)
-                if inspect.isawaitable(value):
-                    await value
-            except Exception as exc:
-                logger.exception("execution start callback failed for %s", execution_id)
-                self._emit(
-                    "execution_callback_failed",
-                    {"execution_id": execution_id, "stage": "start", "error": type(exc).__name__},
-                )
-
-        selection = self.selector.select(request)
-        strategy = self.registry.get(selection.selected)
         try:
-            self.validate_request(request)
+            if on_running:
+                try:
+                    value = on_running(result.model_copy(deep=True))
+                    if inspect.isawaitable(value):
+                        await value
+                except Exception as exc:
+                    logger.error(
+                        "execution start callback failed execution_id=%s error_type=%s",
+                        execution_id,
+                        type(exc).__name__,
+                    )
+                    self._safe_emit(
+                        "execution_callback_failed",
+                        {
+                            "execution_id": execution_id,
+                            "stage": "start",
+                            "error": type(exc).__name__,
+                        },
+                    )
+
+            selection = self.selector.select(request)
+            strategy = self.registry.get(selection.selected)
             placement = select_placement(request)
             result.placement_selected = placement.selected
             result.placement_planned = placement.selected
             result.fallback_reason = placement.fallback_reason
-            self._save(request, result)
+            result = self._commit_snapshot(
+                request,
+                result,
+                phase="placement_progress",
+            )
+            control.result = result
 
             def emit(event_type: str, data: dict[str, Any]) -> None:
                 if event_type == "attempt_started":
                     attempt_starts.append(
                         (str(data.get("unit_id", "unknown")), str(data.get("placement", "local")))
                     )
-                self._emit(event_type, {"execution_id": execution_id, **data})
+                self._safe_emit(event_type, {"execution_id": execution_id, **data})
 
             context = StrategyContext(
                 execution_id=execution_id,
@@ -483,7 +622,11 @@ class ExecutionService:
                             if entry.source_candidate_id == candidate.candidate_id
                         ]
                 except ArtifactError as exc:
-                    logger.warning("artifact registration failed for %s: %s", execution_id, exc)
+                    logger.warning(
+                        "artifact registration failed execution_id=%s error_type=%s",
+                        execution_id,
+                        type(exc).__name__,
+                    )
                     result.errors.append(
                         {
                             "code": "artifact_manifest_failed",
@@ -566,9 +709,25 @@ class ExecutionService:
             result.retry_count = retry_count
             result.reassignment_count = reassignment_count
             progress_accounted = True
+        except ExecutionPersistenceError:
+            self._controls.pop(execution_id, None)
+            if registered_current_task:
+                self._background.pop(execution_id, None)
+            raise
         except asyncio.TimeoutError:
             control.cancel_event.set()
-            Dispatcher.cancel_execution(execution_id, reason="execution deadline exceeded")
+            try:
+                Dispatcher.cancel_execution(
+                    execution_id,
+                    reason="execution deadline exceeded",
+                )
+            except Exception as exc:
+                logger.error(
+                    "deadline dispatcher cancellation failed execution_id=%s "
+                    "error_type=%s",
+                    execution_id,
+                    type(exc).__name__,
+                )
             result.lifecycle_status = "failed"
             result.status = "failed"
             result.validation_outcome = "not_run"
@@ -582,9 +741,24 @@ class ExecutionService:
                 }
             ]
             legacy = {}
-            self._emit("execution_timed_out", {"execution_id": execution_id})
         except asyncio.CancelledError:
-            Dispatcher.cancel_execution(execution_id, reason="execution cancelled")
+            if control.terminal_committed:
+                result = control.result.model_copy(deep=True)
+                self._controls.pop(execution_id, None)
+                if registered_current_task:
+                    self._background.pop(execution_id, None)
+                if not _defer_terminal_cache_eviction:
+                    self._evict_terminal_cache(execution_id, result)
+                return ServiceExecution(result=result, legacy_payload={})
+            try:
+                Dispatcher.cancel_execution(execution_id, reason="execution cancelled")
+            except Exception as exc:
+                logger.error(
+                    "interruption dispatcher cancellation failed execution_id=%s "
+                    "error_type=%s",
+                    execution_id,
+                    type(exc).__name__,
+                )
             if control.cancel_event.is_set():
                 result.lifecycle_status = "cancelled"
                 result.status = "cancelled"
@@ -665,12 +839,59 @@ class ExecutionService:
                 result.sealed_manifest_hash = terminal_manifest.manifest_hash
                 result.artifact_integrity_mode = terminal_manifest.integrity_mode
                 result.output_reference = f"/v1/executions/{execution_id}/artifacts"
+            except asyncio.CancelledError:
+                if control.terminal_committed:
+                    result = control.result.model_copy(deep=True)
+                    self._controls.pop(execution_id, None)
+                    if registered_current_task:
+                        self._background.pop(execution_id, None)
+                    if not _defer_terminal_cache_eviction:
+                        self._evict_terminal_cache(execution_id, result)
+                    return ServiceExecution(result=result, legacy_payload={})
+                try:
+                    Dispatcher.cancel_execution(
+                        execution_id,
+                        reason="execution cancelled during artifact finalization",
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "artifact-finalization cancellation failed execution_id=%s "
+                        "error_type=%s",
+                        execution_id,
+                        type(exc).__name__,
+                    )
+                if control.cancel_event.is_set():
+                    result.lifecycle_status = "cancelled"
+                    result.status = "cancelled"
+                    result.cancellation_requested = True
+                    result.cancellation_reason = (
+                        result.cancellation_reason or "cancelled by caller"
+                    )
+                    result.validation_outcome = "not_run"
+                    result.assurance_level = "unverified"
+                    result.errors = []
+                else:
+                    result.lifecycle_status = "interrupted"
+                    result.status = "failed"
+                    result.interruption_reason = (
+                        "execution task was interrupted during artifact finalization"
+                    )
+                    result.interrupted_at = _now()
+                    result.retryable = True
+                    result.errors = [
+                        {
+                            "code": "execution_interrupted",
+                            "message": "Execution task was interrupted.",
+                            "retryable": True,
+                        }
+                    ]
+                legacy = {}
             except ArtifactError as exc:
                 result.artifact_integrity_mode = "invalid"
                 logger.warning(
-                    "could not seal terminal artifacts for %s: %s",
+                    "could not seal terminal artifacts execution_id=%s error_type=%s",
                     execution_id,
-                    exc,
+                    type(exc).__name__,
                 )
         # Assignment validation is intentionally disabled on the wire models so
         # strategy adapters can assemble results efficiently. Re-validate once
@@ -681,7 +902,11 @@ class ExecutionService:
         try:
             result = ExecutionResultV1.model_validate(dict(result.__dict__))
         except Exception as exc:
-            logger.exception("execution result normalization failed for %s", execution_id)
+            logger.error(
+                "execution result normalization failed execution_id=%s error_type=%s",
+                execution_id,
+                type(exc).__name__,
+            )
             fallback = self._new_result(
                 request,
                 execution_id,
@@ -703,16 +928,34 @@ class ExecutionService:
             ]
             result = ExecutionResultV1.model_validate(dict(fallback.__dict__))
             legacy = {}
+        try:
+            result = self._commit_snapshot(
+                request,
+                result,
+                phase="terminal",
+                terminal=True,
+            )
+        except TerminalPersistenceError:
+            self._controls.pop(execution_id, None)
+            if registered_current_task:
+                self._background.pop(execution_id, None)
+            raise
         control.result = result
-        self._persist_terminal(request, result)
-        self._emit(
+        control.terminal_committed = True
+        error_codes = {error.code for error in result.errors}
+        terminal_event = (
             "execution_completed"
             if result.lifecycle_status == "completed"
             else "execution_cancelled"
             if result.lifecycle_status == "cancelled"
             else "execution_interrupted"
             if result.lifecycle_status == "interrupted"
-            else "execution_failed",
+            else "execution_timed_out"
+            if "execution_timeout" in error_codes
+            else "execution_failed"
+        )
+        self._safe_emit(
+            terminal_event,
             {
                 "execution_id": execution_id,
                 "status": result.status,
@@ -720,29 +963,48 @@ class ExecutionService:
                 "assurance_level": result.assurance_level,
             },
         )
-        self._remember(request, result)
+        control.terminal_event_emitted = True
+        if request.project_id and legacy:
+            # Project memory is a compatibility publication surface. Keep its
+            # task/output/files staged until the canonical terminal snapshot
+            # and normal lifecycle event above are published. The helper is
+            # best-effort and creates no serialized pending payload.
+            try:
+                await orchestrator.commit_project_iteration(
+                    request.project_id,
+                    legacy,
+                    request.task,
+                )
+            except asyncio.CancelledError:
+                # A post-commit mirror cannot unwind canonical completion.
+                pass
+            except Exception as exc:
+                logger.error(
+                    "project memory publication failed execution_id=%s error_type=%s",
+                    execution_id,
+                    type(exc).__name__,
+                )
         self._controls.pop(execution_id, None)
         if registered_current_task:
             self._background.pop(execution_id, None)
+        if not _defer_terminal_cache_eviction:
+            self._evict_terminal_cache(execution_id, result)
         return ServiceExecution(result=result, legacy_payload=legacy)
 
-    def submit(
+    def _activate_committed_submission(
         self,
         request: ExecutionRequestV1,
+        queued: ExecutionResultV1,
         *,
-        job_id: str | None = None,
         callbacks: dict[str, Any] | None = None,
         dag_runner: Callable[..., Any] | None = None,
         on_start: Callable[[ExecutionResultV1], Any] | None = None,
         on_complete: Callable[[ServiceExecution], Any] | None = None,
     ) -> ExecutionResultV1:
-        # Reject unsupported cross-strategy semantics before creating a job or
-        # durable queued row.  All direct callers share this boundary.
-        self.validate_request(request)
-        execution_id = uuid.uuid4().hex
-        created_at = _now()
-        queued = self._new_result(request, execution_id, job_id, "queued", created_at)
-        queued.lifecycle_status = "queued"
+        """Publish and schedule a queued snapshot that SQLite already committed."""
+
+        execution_id = queued.execution_id
+        self._remember(request, queued)
         control = ExecutionControl(
             execution_id=execution_id,
             request=request,
@@ -751,12 +1013,15 @@ class ExecutionService:
             result=queued,
         )
         self._controls[execution_id] = control
-        self._save(request, queued, required=True)
-        self._emit(
+        self._safe_emit(
             "execution_created",
-            {"execution_id": execution_id, "job_id": job_id, "protocol_version": "1"},
+            {
+                "execution_id": execution_id,
+                "job_id": queued.job_id,
+                "protocol_version": "1",
+            },
         )
-        self._emit(
+        self._safe_emit(
             "strategy_selected",
             {
                 "execution_id": execution_id,
@@ -771,76 +1036,239 @@ class ExecutionService:
                 completed = await self.execute(
                     request,
                     execution_id=execution_id,
-                    job_id=job_id,
-                    created_at=created_at,
+                    job_id=queued.job_id,
+                    created_at=queued.created_at,
                     callbacks=callbacks,
                     dag_runner=dag_runner,
                     control=control,
                     on_running=on_start,
+                    _defer_terminal_cache_eviction=True,
                 )
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:
-                logger.exception("background execution %s crashed", execution_id)
-                crashed = control.result
-                crashed.lifecycle_status = "interrupted"
-                crashed.status = "failed"
-                crashed.interruption_reason = f"background execution crashed: {type(exc).__name__}"
-                crashed.interrupted_at = _now()
-                crashed.completed_at = crashed.interrupted_at
-                crashed.retryable = True
-                crashed.errors = [
-                    {
-                        "code": "background_execution_crashed",
-                        "message": f"{type(exc).__name__}: {exc}"[:500],
-                        "retryable": True,
-                    }
-                ]
-                crashed = ExecutionResultV1.model_validate(dict(crashed.__dict__))
-                control.result = crashed
-                self._persist_terminal(request, crashed)
-                self._emit(
-                    "execution_interrupted",
-                    {"execution_id": execution_id, "reason": "background_crash"},
+            except ExecutionPersistenceError as exc:
+                logger.error(
+                    "background execution persistence unavailable execution_id=%s "
+                    "phase=%s attempts=%s",
+                    execution_id,
+                    exc.phase,
+                    exc.attempts,
                 )
-                self._remember(request, crashed)
-                completed = ServiceExecution(result=crashed, legacy_payload={})
+                self._controls.pop(execution_id, None)
+                return
+            except Exception as exc:
+                logger.error(
+                    "background execution crashed execution_id=%s error_type=%s",
+                    execution_id,
+                    type(exc).__name__,
+                )
+                try:
+                    durable = self.store.get(execution_id)
+                except Exception as read_error:
+                    logger.error(
+                        "background crash state read failed execution_id=%s error_type=%s",
+                        execution_id,
+                        type(read_error).__name__,
+                    )
+                    self._controls.pop(execution_id, None)
+                    return
+                if durable is not None and durable.lifecycle_status in {
+                    "completed",
+                    "failed",
+                    "cancelled",
+                    "interrupted",
+                }:
+                    completed = ServiceExecution(result=durable, legacy_payload={})
+                else:
+                    crashed = control.result.model_copy(deep=True)
+                    crashed.lifecycle_status = "interrupted"
+                    crashed.status = "failed"
+                    crashed.interruption_reason = (
+                        f"background execution crashed: {type(exc).__name__}"
+                    )
+                    crashed.interrupted_at = _now()
+                    crashed.completed_at = crashed.interrupted_at
+                    crashed.retryable = True
+                    crashed.errors = [
+                        StructuredErrorV1(
+                            code="background_execution_crashed",
+                            message=(
+                                f"{type(exc).__name__}: background execution crashed"
+                            )[:500],
+                            retryable=True,
+                        )
+                    ]
+                    try:
+                        crashed = self._commit_snapshot(
+                            request,
+                            crashed,
+                            phase="background_crash_terminal",
+                            terminal=True,
+                        )
+                    except ExecutionPersistenceError as persistence_error:
+                        logger.error(
+                            "background crash persistence unavailable execution_id=%s "
+                            "phase=%s attempts=%s",
+                            execution_id,
+                            persistence_error.phase,
+                            persistence_error.attempts,
+                        )
+                        self._controls.pop(execution_id, None)
+                        return
+                    control.result = crashed
+                    control.terminal_committed = True
+                    self._safe_emit(
+                        "execution_interrupted",
+                        {"execution_id": execution_id, "reason": "background_crash"},
+                    )
+                    control.terminal_event_emitted = True
+                    completed = ServiceExecution(result=crashed, legacy_payload={})
+            finally:
+                self._controls.pop(execution_id, None)
+
             if on_complete:
                 try:
-                    value = on_complete(completed)
+                    value = on_complete(
+                        ServiceExecution(
+                            result=completed.result.model_copy(deep=True),
+                            legacy_payload=copy.deepcopy(completed.legacy_payload),
+                        )
+                    )
                     if inspect.isawaitable(value):
                         await value
                 except Exception as exc:
-                    logger.exception("completion callback failed for %s", execution_id)
-                    completed.result.errors.append(
+                    logger.error(
+                        "completion callback failed execution_id=%s error_type=%s",
+                        execution_id,
+                        type(exc).__name__,
+                    )
+                    updated = completed.result.model_copy(deep=True)
+                    updated.errors.append(
                         StructuredErrorV1(
                             code="completion_callback_failed",
-                            message=f"{type(exc).__name__}: {exc}"[:500],
+                            message=f"{type(exc).__name__}: completion callback failed"[:500],
                             retryable=True,
                         )
                     )
-                    completed.result.telemetry["completion_callback_failed"] = True
-                    self._persist_terminal(request, completed.result)
-                    self._emit(
-                        "execution_callback_failed",
-                        {"execution_id": execution_id, "stage": "completion", "error": type(exc).__name__},
+                    updated.telemetry["completion_callback_failed"] = True
+                    try:
+                        updated = self._commit_snapshot(
+                            request,
+                            updated,
+                            phase="completion_callback_metadata",
+                            terminal=True,
+                        )
+                    except ExecutionPersistenceError as persistence_error:
+                        logger.error(
+                            "callback metadata persistence unavailable execution_id=%s "
+                            "phase=%s attempts=%s",
+                            execution_id,
+                            persistence_error.phase,
+                            persistence_error.attempts,
+                        )
+                        return
+                    completed = ServiceExecution(
+                        result=updated,
+                        legacy_payload=completed.legacy_payload,
                     )
-                    self._remember(request, completed.result)
+                    self._safe_emit(
+                        "execution_callback_failed",
+                        {
+                            "execution_id": execution_id,
+                            "stage": "completion",
+                            "error": type(exc).__name__,
+                        },
+                    )
 
         task = asyncio.get_running_loop().create_task(run())
         self._background[execution_id] = task
 
         def done(completed_task: asyncio.Task) -> None:
             self._background.pop(execution_id, None)
-            if completed_task.cancelled():
-                return
-            try:
-                completed_task.result()
-            except Exception:
-                logger.exception("background execution %s crashed", execution_id)
+            if not completed_task.cancelled():
+                try:
+                    completed_task.result()
+                except Exception as exc:
+                    logger.error(
+                        "background task ended unexpectedly execution_id=%s error_type=%s",
+                        execution_id,
+                        type(exc).__name__,
+                    )
+            self._evict_terminal_cache(execution_id)
 
         task.add_done_callback(done)
         return queued
+
+    def submit(
+        self,
+        request: ExecutionRequestV1,
+        *,
+        job_id: str | None = None,
+        callbacks: dict[str, Any] | None = None,
+        dag_runner: Callable[..., Any] | None = None,
+        on_start: Callable[[ExecutionResultV1], Any] | None = None,
+        on_complete: Callable[[ServiceExecution], Any] | None = None,
+    ) -> ExecutionResultV1:
+        request = self._snapshot_request(request)
+        self.validate_request(request)
+        execution_id = uuid.uuid4().hex
+        queued = self._new_result(request, execution_id, job_id, "queued", _now())
+        queued.lifecycle_status = "queued"
+        queued = self._commit_snapshot(
+            request,
+            queued,
+            phase="queued_submission",
+            create=True,
+        )
+        return self._activate_committed_submission(
+            request,
+            queued,
+            callbacks=callbacks,
+            dag_runner=dag_runner,
+            on_start=on_start,
+            on_complete=on_complete,
+        )
+
+    def submit_idempotent(
+        self,
+        request: ExecutionRequestV1,
+        identity: SubmissionIdentity,
+        *,
+        job_id: str | None = None,
+        callbacks: dict[str, Any] | None = None,
+        dag_runner: Callable[..., Any] | None = None,
+        on_start: Callable[[ExecutionResultV1], Any] | None = None,
+        on_complete: Callable[[ServiceExecution], Any] | None = None,
+    ) -> SubmittedExecution:
+        request = self._snapshot_request(request)
+        self.validate_request(request)
+
+        def queued_factory() -> ExecutionResultV1:
+            queued = self._new_result(
+                request,
+                uuid.uuid4().hex,
+                job_id,
+                "queued",
+                _now(),
+            )
+            queued.lifecycle_status = "queued"
+            return queued
+
+        committed = self._commit_submission(request, identity, queued_factory)
+        if committed.replayed:
+            return SubmittedExecution(
+                result=committed.result.model_copy(deep=True),
+                replayed=True,
+            )
+        queued = self._activate_committed_submission(
+            request,
+            committed.result,
+            callbacks=callbacks,
+            dag_runner=dag_runner,
+            on_start=on_start,
+            on_complete=on_complete,
+        )
+        return SubmittedExecution(result=queued, replayed=False)
 
     def get(self, execution_id: str) -> ExecutionResultV1 | None:
         result = self._live_results.get(execution_id) or self.store.get(execution_id)
@@ -851,29 +1279,59 @@ class ExecutionService:
         if result is None:
             return None
         if result.lifecycle_status in ("completed", "failed", "cancelled", "interrupted"):
+            self._evict_terminal_cache(execution_id, result)
             return result
         control = self._controls.get(execution_id)
-        if control:
-            control.cancel_event.set()
+        request = (
+            self._requests.get(execution_id)
+            or (control.request if control else None)
+            or self.store.get_request(execution_id)
+        )
+        if request is None:
+            raise ExecutionPersistenceError(execution_id, "cancellation_request", 0)
 
-        def mark_cancelled(target: ExecutionResultV1) -> None:
-            target.cancellation_requested = True
-            target.cancellation_requested_at = _now()
-            target.cancellation_reason = reason[:500]
-            target.lifecycle_status = "cancelled"
-            target.status = "cancelled"
-            target.completed_at = _now()
-            target.cancelled_at = target.completed_at
-            target.validation_outcome = "not_run"
-            target.assurance_level = "unverified"
-
-        mark_cancelled(result)
+        cancelled = result.model_copy(deep=True)
+        cancelled.cancellation_requested = True
+        cancelled.cancellation_requested_at = _now()
+        cancelled.cancellation_reason = reason[:500]
+        cancelled.lifecycle_status = "cancelled"
+        cancelled.status = "cancelled"
+        cancelled.completed_at = _now()
+        cancelled.cancelled_at = cancelled.completed_at
+        cancelled.validation_outcome = "not_run"
+        cancelled.assurance_level = "unverified"
+        cancelled = self._commit_snapshot(
+            request,
+            cancelled,
+            phase="cancellation_terminal",
+            terminal=True,
+        )
         if control is not None:
-            mark_cancelled(control.result)
-        request = self._requests.get(execution_id) or (control.request if control else None)
-        if request:
-            self._persist_terminal(request, result)
-        Dispatcher.cancel_execution(execution_id, reason=reason)
+            control.result = cancelled
+            control.terminal_committed = True
+        if control is not None:
+            control.cancel_event.set()
+        try:
+            Dispatcher.cancel_execution(execution_id, reason=reason)
+        except Exception as exc:
+            logger.error(
+                "post-commit dispatcher cancellation failed execution_id=%s "
+                "error_type=%s",
+                execution_id,
+                type(exc).__name__,
+            )
+        self._safe_emit(
+            "execution_cancelled",
+            {
+                "execution_id": execution_id,
+                # The authenticated durable result retains the operator's
+                # bounded reason. Persisted lifecycle telemetry uses a fixed
+                # code so caller text cannot become a prompt/output log.
+                "reason": "cancellation_requested",
+            },
+        )
+        if control is not None:
+            control.terminal_event_emitted = True
         task = self._background.get(execution_id)
         if task and not task.done():
             task.cancel()
@@ -881,21 +1339,31 @@ class ExecutionService:
                 await asyncio.shield(task)
             except asyncio.CancelledError:
                 pass
-        published = self.get(execution_id)
-        if published is not None and published.lifecycle_status == "cancelled":
-            return published
-        self._emit("execution_cancelled", {"execution_id": execution_id, "reason": reason[:500]})
-        if request:
-            self._remember(request, result)
-        return self.get(execution_id) or result
+            except Exception as exc:
+                logger.error(
+                    "post-commit task cancellation failed execution_id=%s error_type=%s",
+                    execution_id,
+                    type(exc).__name__,
+                )
+        self._controls.pop(execution_id, None)
+        self._evict_terminal_cache(execution_id, cancelled)
+        return self.get(execution_id) or cancelled
 
     def reconcile_after_restart(self, restart_marker: str | None = None) -> list[str]:
         changed = self.store.reconcile_nonterminal(restart_marker)
         for execution_id in changed:
-            self._emit(
+            result = self.store.get(execution_id)
+            request = self.store.get_request(execution_id)
+            if result is not None:
+                self._live_results[execution_id] = result.model_copy(deep=True)
+            if result is not None and request is not None:
+                self._requests[execution_id] = request
+            self._safe_emit(
                 "execution_interrupted",
                 {"execution_id": execution_id, "reason": "coordinator_restart", "retryable": True},
             )
+            if result is not None:
+                self._evict_terminal_cache(execution_id, result)
         return changed
 
 

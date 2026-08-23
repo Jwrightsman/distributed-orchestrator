@@ -552,6 +552,44 @@ def ratings_for(log: dict, review_text: str = "") -> tuple[str, str]:
     return final, reviewer
 
 
+async def commit_project_iteration(project_id: str, result: dict, task: str) -> None:
+    """Publish one project-memory iteration after canonical terminal commit.
+
+    The caller owns the durability boundary. Task and result data stay in
+    memory until that boundary; this helper creates no second pending prompt
+    or output log.
+    """
+
+    try:
+        from memory import (
+            PROJECTS_DIR as project_memory_dir,
+            SUMMARIZE_THRESHOLD,
+            _summarize_memory,
+            add_iteration,
+        )
+
+        add_iteration(project_id, result, task)
+        memory_file = project_memory_dir / project_id / "memory.md"
+        if not memory_file.exists():
+            return
+        raw = memory_file.read_text(errors="ignore", encoding="utf-8")
+        if len(raw) <= SUMMARIZE_THRESHOLD:
+            return
+        try:
+            compressed = await _summarize_memory(raw)
+        except asyncio.CancelledError:
+            # Optional compression must not unwind a durable completion.
+            return
+        if compressed and compressed != raw:
+            memory_file.write_text(compressed, encoding="utf-8")
+    except asyncio.CancelledError:
+        # Cancellation can race this hook after the terminal commit.
+        return
+    except Exception:
+        # Project memory remains best-effort and cannot invalidate execution.
+        return
+
+
 def new_revision_record(rating: str, issues: str, final_output: str) -> dict:
     """The starting state of the reviser's record for a run.
 
@@ -663,7 +701,12 @@ async def run_pipeline(
         memory_context=memory_context,
         maximum_subtasks=maximum_subtasks,
     )
-    log_contribution(node_id, "pitch", credits=1, task=task[:100])
+    log_contribution(
+        node_id,
+        "pitch",
+        credits=1,
+        task="pipeline_submission",
+    )
     credits.append({"contributor": node_id, "type": "pitch", "credits": 1,
                     "for": "pitching the task"})
     if on_plan:
@@ -703,7 +746,12 @@ async def run_pipeline(
         # Remote worker settlement is written by the worker result endpoint.
         # Local work (including a visible local fallback) is settled here.
         if build_meta.get("placement", "local") == "local":
-            log_contribution(contribution_executor, "compute", credits=5, task=st["title"])
+            log_contribution(
+                contribution_executor,
+                "compute",
+                credits=5,
+                task="pipeline_subtask",
+            )
         credits.append({"contributor": executor, "type": "compute", "credits": 5,
                         "for": "building " + st["title"]})
         subtask_stats[st["id"]] = {
@@ -737,7 +785,12 @@ async def run_pipeline(
         if on_review_start:
             on_review_start()
         review_output = await review(task, subtasks, results, memory_context=memory_context)
-        log_contribution(node_id, "compute", credits=3, task="review", details=task[:100])
+        log_contribution(
+            node_id,
+            "compute",
+            credits=3,
+            task="pipeline_review",
+        )
         credits.append({"contributor": node_id, "type": "review", "credits": 3,
                         "for": "reviewing and assembling the result"})
     else:
@@ -834,6 +887,9 @@ async def run_pipeline(
         "revision": revision,
         "credits": credits,
         "execution_id": execution_id,
+        # Marks runs whose legacy files are staged until their canonical
+        # terminal snapshot commits the matching sealed-manifest hash.
+        "publication_boundary": "canonical_terminal_v1",
         "strategy_requested": strategy_requested,
         "strategy_selected": strategy_selected,
         "selector_reason": selector_reason,
@@ -856,20 +912,5 @@ async def run_pipeline(
         "project_id": project_id or "",
         "mode": execution_mode,
     }
-
-    # Save iteration to project memory, auto-summarize if it's grown too large
-    if project_id:
-        try:
-            from memory import add_iteration, _summarize_memory, SUMMARIZE_THRESHOLD, PROJECTS_DIR as _PROJ_DIR
-            add_iteration(project_id, result, task)
-            memory_file = _PROJ_DIR / project_id / "memory.md"
-            if memory_file.exists():
-                raw = memory_file.read_text(errors="ignore", encoding="utf-8")
-                if len(raw) > SUMMARIZE_THRESHOLD:
-                    compressed = await _summarize_memory(raw)
-                    if compressed and compressed != raw:
-                        memory_file.write_text(compressed, encoding="utf-8")
-        except Exception:
-            pass  # memory write failure never blocks the pipeline
 
     return result

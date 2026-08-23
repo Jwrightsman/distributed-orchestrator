@@ -11,11 +11,17 @@ offers the two real ways in: look at something the swarm already built, or
 run a swarm yourself.
 """
 
+import json
+
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
 from config import get as get_config
 from dashboard import render
+from execution.publication import (
+    LegacyRunNotPublished,
+    require_legacy_run_publication,
+)
 from routes_run import esc
 from server_state import OUTPUT_DIR, _PUBLIC_RATE_MAX, _PUBLIC_TASK_MAX
 
@@ -32,8 +38,15 @@ def _latest_run() -> str:
     if not OUTPUT_DIR.exists():
         return ""
     for d in sorted(OUTPUT_DIR.iterdir(), reverse=True):
-        if d.is_dir() and (d / "full_log.json").exists():
-            return d.name
+        log_file = d / "full_log.json"
+        if not d.is_dir() or not log_file.exists():
+            continue
+        try:
+            log = json.loads(log_file.read_text(encoding="utf-8"))
+            require_legacy_run_publication(d, log)
+        except (json.JSONDecodeError, LegacyRunNotPublished, OSError):
+            continue
+        return d.name
     return ""
 
 

@@ -181,16 +181,15 @@ async def operator_health():
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request, exc):
-    """Return a generic 500 rather than the exception text.
-
-    Tracebacks and exception strings routinely carry filesystem paths, config
-    values and query fragments. The detail still reaches the operator through
-    the server log; it just stops reaching the caller.
-    """
+    """Return a generic 500 and log only a secret-safe error description."""
     import logging
 
     safe_path = routes_access.redact_share_token_path(request.url.path)
-    logging.getLogger("mycelium").exception("unhandled error on %s", safe_path)
+    logging.getLogger("mycelium").error(
+        "unhandled error on %s error_type=%s",
+        safe_path,
+        type(exc).__name__,
+    )
     return JSONResponse(status_code=500, content={"detail": "internal server error"})
 
 

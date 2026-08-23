@@ -33,6 +33,28 @@ _cache: list[dict] | None = None
 _cache_mtime: float = 0.0
 _ledger_lock = threading.RLock()
 
+_SAFE_TASK_LABELS = frozenset(
+    {
+        "pipeline_submission",
+        "pipeline_subtask",
+        "pipeline_review",
+        "compute_contribution",
+        "contribution_record",
+    }
+)
+
+
+def _safe_task_label(contribution_type: str, requested: str = "") -> str:
+    """Reduce free-form contribution metadata to a fixed privacy-safe label."""
+
+    if requested in _SAFE_TASK_LABELS:
+        return requested
+    if contribution_type == "pitch":
+        return "pipeline_submission"
+    if contribution_type == "compute":
+        return "compute_contribution"
+    return "contribution_record"
+
 
 def ensure_contribution_schema(con: sqlite3.Connection) -> None:
     """Create the additive contribution schema on an existing connection."""
@@ -77,6 +99,7 @@ def insert_contribution_in_transaction(
     same compute-contribution points twice, including after coordinator restart.
     """
     ensure_contribution_schema(con)
+    safe_task = _safe_task_label(contribution_type, task)
     cursor = con.execute(
         """
         INSERT OR IGNORE INTO contributions (
@@ -89,14 +112,36 @@ def insert_contribution_in_transaction(
             contributor,
             contribution_type,
             float(points),
-            task,
-            details,
+            safe_task,
+            "",
             basis,
             attempt_id,
             created_at if created_at is not None else time.time(),
         ),
     )
     return cursor.rowcount == 1
+
+
+def redact_contribution_text_in_transaction(con: sqlite3.Connection) -> None:
+    """Idempotently remove historical free-form task and details text."""
+
+    ensure_contribution_schema(con)
+    labels = tuple(sorted(_SAFE_TASK_LABELS))
+    placeholders = ", ".join("?" for _ in labels)
+    con.execute(
+        f"""
+        UPDATE contributions
+        SET task = CASE
+                WHEN task IN ({placeholders}) THEN task
+                WHEN contribution_type = 'pitch' THEN 'pipeline_submission'
+                WHEN contribution_type = 'compute' THEN 'compute_contribution'
+                ELSE 'contribution_record'
+            END,
+            details = ''
+        WHERE details <> '' OR task NOT IN ({placeholders})
+        """,
+        (*labels, *labels),
+    )
 
 
 def _legacy_id(entry: dict[str, Any], index: int) -> str:
@@ -138,12 +183,14 @@ def _import_legacy_entries(con: sqlite3.Connection) -> None:
         )
 
 
-def _connect() -> sqlite3.Connection:
-    con = sqlite_connect(LEDGER_DB_FILE, row_factory=sqlite3.Row)
+def _connect(db_path: str | Path | None = None) -> sqlite3.Connection:
+    path = LEDGER_DB_FILE if db_path is None else Path(db_path)
+    con = sqlite_connect(path, row_factory=sqlite3.Row)
     try:
-        with migration_lock(LEDGER_DB_FILE):
+        with migration_lock(path):
             ensure_contribution_schema(con)
             _import_legacy_entries(con)
+            redact_contribution_text_in_transaction(con)
             con.commit()
         return con
     except Exception:
@@ -201,10 +248,10 @@ def _save(entries: list[dict]) -> None:
         _cache_mtime = 0.0
 
 
-def sync_compatibility_ledger() -> None:
+def sync_compatibility_ledger(*, db_path: str | Path | None = None) -> None:
     """Refresh ``ledger.json`` from the authoritative SQLite records."""
     with _ledger_lock:
-        with _connect() as con:
+        with _connect(db_path) as con:
             entries = _query_entries(con)
         _save(entries)
 

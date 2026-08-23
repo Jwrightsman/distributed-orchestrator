@@ -8,11 +8,29 @@ import json
 import zipfile
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
+from starlette.background import BackgroundTask
 
+from execution.artifacts import ArtifactError
+from execution.publication import (
+    LegacyRunNotPublished,
+    published_file,
+    published_paths,
+    require_legacy_run_publication,
+)
 from server_state import OUTPUT_DIR
 
 router = APIRouter()
+
+
+def _run_dir(timestamp: str):
+    run_dir = OUTPUT_DIR / timestamp
+    try:
+        if run_dir.resolve().parent != OUTPUT_DIR.resolve() or not run_dir.is_dir():
+            raise HTTPException(status_code=404, detail="Run not found")
+    except OSError as exc:
+        raise HTTPException(status_code=404, detail="Run not found") from exc
+    return run_dir
 
 
 @router.get("/history")
@@ -33,13 +51,14 @@ async def history(search: str = "", limit: int = 50):
                 continue
             try:
                 log = json.loads(log_file.read_text(encoding="utf-8"))
+                publication = require_legacy_run_publication(d, log)
                 task = log.get("task", "Unknown")
                 if query and query not in task.lower():
                     continue
                 rating = log.get("rating", "?")
                 if rating == "?":
-                    review_f = d / "review.md"
-                    if review_f.exists():
+                    review_f = published_file(publication, "review.md")
+                    if review_f is not None:
                         for line in review_f.read_text(errors="ignore", encoding="utf-8").splitlines():
                             if line.strip() in ("PASS", "NEEDS_WORK", "FAIL"):
                                 rating = line.strip()
@@ -53,7 +72,7 @@ async def history(search: str = "", limit: int = 50):
                     "mode": log.get("mode", "local"),
                     "dir": str(d),
                 })
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, LegacyRunNotPublished, OSError):
                 pass
             if len(runs) >= limit:
                 break
@@ -63,9 +82,7 @@ async def history(search: str = "", limit: int = 50):
 @router.get("/history/{timestamp}")
 async def history_detail(timestamp: str):
     """Get full details of a past pipeline run."""
-    run_dir = OUTPUT_DIR / timestamp
-    if not run_dir.exists():
-        raise HTTPException(status_code=404, detail="Run not found")
+    run_dir = _run_dir(timestamp)
 
     log_file = run_dir / "full_log.json"
     if not log_file.exists():
@@ -76,21 +93,28 @@ async def history_detail(timestamp: str):
     except json.JSONDecodeError:
         raise HTTPException(status_code=500, detail="Corrupt log file")
 
-    review_file = run_dir / "review.md"
-    review_content = review_file.read_text(encoding="utf-8") if review_file.exists() else ""
+    try:
+        publication = require_legacy_run_publication(run_dir, log)
+    except LegacyRunNotPublished as exc:
+        raise HTTPException(status_code=404, detail="Run not found") from exc
 
-    output_file = run_dir / "output.md"
-    final_output = output_file.read_text(encoding="utf-8") if output_file.exists() else ""
+    try:
+        review_file = published_file(publication, "review.md")
+        review_content = review_file.read_text(encoding="utf-8") if review_file else ""
+        output_file = published_file(publication, "output.md")
+        final_output = output_file.read_text(encoding="utf-8") if output_file else ""
+        code_files = [
+            path.rsplit("/", 1)[-1]
+            for path in published_paths(publication, "code")
+        ]
+    except (LegacyRunNotPublished, OSError) as exc:
+        raise HTTPException(status_code=404, detail="Run not found") from exc
 
     # The final rating, not the reviewer's pre-revision one. Reading it off
     # review.md alone made this endpoint contradict /history and /gallery for
     # the same run — see orchestrator.ratings_for.
     from orchestrator import ratings_for
     rating, reviewer_rating = ratings_for(log, review_content)
-
-    # Build code file list from the code/ subdir
-    code_dir = run_dir / "code"
-    code_files = [f.name for f in sorted(code_dir.iterdir())] if code_dir.exists() else []
 
     return {
         "task": log.get("task"),
@@ -111,15 +135,51 @@ async def history_detail(timestamp: str):
 @router.get("/history/{timestamp}/download")
 async def download_history(timestamp: str):
     """Download all files from a run as a ZIP archive."""
-    run_dir = OUTPUT_DIR / timestamp
-    if not run_dir.exists():
+    run_dir = _run_dir(timestamp)
+    log_file = run_dir / "full_log.json"
+    if not log_file.exists():
         raise HTTPException(status_code=404, detail="Run not found")
+    try:
+        log = json.loads(log_file.read_text(encoding="utf-8"))
+        publication = require_legacy_run_publication(run_dir, log)
+    except (json.JSONDecodeError, LegacyRunNotPublished, OSError) as exc:
+        raise HTTPException(status_code=404, detail="Run not found") from exc
+
+    if publication.sealed:
+        try:
+            assert publication.artifacts is not None
+            assert publication.execution_id is not None
+            prepared = publication.artifacts.prepare_archive(publication.execution_id)
+        except (ArtifactError, OSError) as exc:
+            raise HTTPException(status_code=404, detail="Run not found") from exc
+        return FileResponse(
+            prepared.path,
+            media_type="application/zip",
+            filename=f"output_{timestamp}.zip",
+            headers={"Content-Length": str(prepared.size_bytes)},
+            background=BackgroundTask(prepared.path.unlink, missing_ok=True),
+        )
+
+    try:
+        direct_files = [
+            (resolved, file_path.relative_to(run_dir))
+            for file_path in sorted(run_dir.rglob("*"))
+            if file_path.is_file()
+            and (
+                resolved := published_file(
+                    publication,
+                    file_path.relative_to(run_dir).as_posix(),
+                )
+            )
+            is not None
+        ]
+    except (LegacyRunNotPublished, OSError) as exc:
+        raise HTTPException(status_code=404, detail="Run not found") from exc
 
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-        for file_path in sorted(run_dir.rglob("*")):
-            if file_path.is_file():
-                zf.write(file_path, file_path.relative_to(run_dir))
+        for resolved, relative_path in direct_files:
+            zf.write(resolved, relative_path)
     zip_buffer.seek(0)
 
     return StreamingResponse(
@@ -135,9 +195,7 @@ async def fork_template(timestamp: str):
 
     Contains task.txt, memory.md, fork_config.json, and README.md.
     """
-    run_dir = OUTPUT_DIR / timestamp
-    if not run_dir.exists():
-        raise HTTPException(status_code=404, detail="Run not found")
+    run_dir = _run_dir(timestamp)
 
     log_file = run_dir / "full_log.json"
     if not log_file.exists():
@@ -148,13 +206,25 @@ async def fork_template(timestamp: str):
     except json.JSONDecodeError:
         raise HTTPException(status_code=500, detail="Corrupt log file")
 
+    try:
+        publication = require_legacy_run_publication(run_dir, log)
+    except LegacyRunNotPublished as exc:
+        raise HTTPException(status_code=404, detail="Run not found") from exc
+
     task = log.get("task", "")
     rating = log.get("rating", "?")
     project_id = log.get("project_id") or ""
 
     # Final output for memory summary
-    output_file = run_dir / "output.md"
-    final_output = output_file.read_text(errors="ignore", encoding="utf-8") if output_file.exists() else ""
+    try:
+        output_file = published_file(publication, "output.md")
+        final_output = (
+            output_file.read_text(errors="ignore", encoding="utf-8")
+            if output_file
+            else ""
+        )
+    except (LegacyRunNotPublished, OSError) as exc:
+        raise HTTPException(status_code=404, detail="Run not found") from exc
 
     # memory.md — use project memory if available, else build a starter
     memory_content = ""
@@ -243,19 +313,22 @@ async def gallery(limit: int = 30):
                 continue
             try:
                 log = json.loads(log_file.read_text(encoding="utf-8"))
+                publication = require_legacy_run_publication(d, log)
                 rating = log.get("rating", "?")
                 # Read first 300 chars of final output as preview
                 preview = ""
-                output_file = d / "output.md"
-                if output_file.exists():
+                output_file = published_file(publication, "output.md")
+                if output_file is not None:
                     preview = output_file.read_text(errors="ignore", encoding="utf-8")[:300]
                 elif log.get("review"):
                     from orchestrator import _extract_final_output
                     fo = _extract_final_output(log["review"])
                     preview = (fo or "")[:300]
                 # Code file list
-                code_dir = d / "code"
-                code_files = [f.name for f in sorted(code_dir.iterdir())] if code_dir.exists() else []
+                code_files = [
+                    path.rsplit("/", 1)[-1]
+                    for path in published_paths(publication, "code")
+                ]
                 nodes_used_raw = log.get("nodes_used", [])
                 nodes_used_count = len(nodes_used_raw) if isinstance(nodes_used_raw, list) else 0
                 cards.append({
@@ -269,7 +342,7 @@ async def gallery(limit: int = 30):
                     "mode": log.get("mode", "local"),
                     "nodes_used": nodes_used_count,
                 })
-            except (json.JSONDecodeError, OSError):
+            except (json.JSONDecodeError, LegacyRunNotPublished, OSError):
                 pass
             if len(cards) >= limit:
                 break

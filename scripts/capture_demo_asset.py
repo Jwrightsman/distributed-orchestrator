@@ -32,6 +32,12 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from extract import check_code_files  # noqa: E402
+from execution.publication import (  # noqa: E402
+    LegacyRunNotPublished,
+    published_file,
+    published_paths,
+    require_legacy_run_publication,
+)
 
 ASSETS_DIR = REPO_ROOT / "docs" / "demo-assets"
 OUTPUT_DIR = REPO_ROOT / "output"
@@ -53,9 +59,13 @@ def resolve_run(spec: str) -> Path:
     return run
 
 
-def read_rating(run: Path) -> str:
-    review = run / "review.md"
-    if review.exists():
+def read_rating(run: Path, publication=None) -> str:
+    review = (
+        published_file(publication, "review.md")
+        if publication is not None
+        else run / "review.md"
+    )
+    if review is not None and review.exists():
         for line in review.read_text(errors="replace").splitlines():
             if line.strip() in ("PASS", "NEEDS_WORK", "FAIL"):
                 return line.strip()
@@ -64,15 +74,45 @@ def read_rating(run: Path) -> str:
 
 def capture(run: Path, name: str, force: bool, note: str) -> int:
     log_path = run / "full_log.json"
-    log = {}
-    if log_path.exists():
-        try:
-            log = json.loads(log_path.read_text(errors="replace"))
-        except json.JSONDecodeError:
-            pass
+    try:
+        if not log_path.is_file():
+            raise LegacyRunNotPublished
+        log = json.loads(log_path.read_text(errors="replace"))
+        publication = require_legacy_run_publication(run, log)
+        code_files = [
+            path
+            for relative_path in published_paths(publication, "code")
+            if (path := published_file(publication, relative_path)) is not None
+        ]
+        supplemental = {
+            artifact: path
+            for artifact in ("output.md", "review.md", "plan.json")
+            if (path := published_file(publication, artifact)) is not None
+        }
+        if publication.sealed:
+            assert publication.manifest is not None
+            transcript_names = sorted(
+                entry.relative_path
+                for entry in publication.manifest.entries
+                if "/" not in entry.relative_path
+                and entry.relative_path.startswith("builder_")
+                and entry.relative_path.endswith(".md")
+            )
+        else:
+            transcript_names = sorted(path.name for path in run.glob("builder_*.md"))
+        transcripts = [
+            path
+            for relative_path in transcript_names
+            if (path := published_file(publication, relative_path)) is not None
+        ]
+        rating = log.get("rating") or read_rating(run, publication)
+    except (json.JSONDecodeError, LegacyRunNotPublished, OSError):
+        print(
+            "Refusing to capture — the run has not crossed its durable "
+            "publication boundary."
+        )
+        return 1
 
-    code_dir = run / "code"
-    code_files = sorted(code_dir.iterdir()) if code_dir.is_dir() else []
     problems = check_code_files([str(f) for f in code_files])
 
     if problems and not force:
@@ -93,13 +133,11 @@ def capture(run: Path, name: str, force: bool, note: str) -> int:
 
     for f in code_files:
         shutil.copy2(f, dest / "code" / f.name)
-    for artifact in ("output.md", "review.md", "plan.json"):
-        src = run / artifact
-        if src.exists():
+    for artifact, src in supplemental.items():
+        if src is not None:
             shutil.copy2(src, dest / artifact)
 
     # Builder transcripts — the "several machines really did work on this" proof
-    transcripts = sorted(run.glob("builder_*.md"))
     if transcripts:
         (dest / "transcript").mkdir()
         for t in transcripts:
@@ -125,7 +163,7 @@ def capture(run: Path, name: str, force: bool, note: str) -> int:
         "task": log.get("task", "(unknown — full_log.json missing)"),
         "model": log.get("model", model),
         "prompt_set": prompt_set,
-        "rating": log.get("rating") or read_rating(run),
+        "rating": rating,
         "subtask_count": len(log.get("plan", []) or []),
         "code_files": [f.name for f in code_files],
         "mechanical_check": "clean" if not problems else f"{len(problems)} problem(s)",

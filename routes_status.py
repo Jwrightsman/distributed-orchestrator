@@ -21,6 +21,10 @@ from fastapi.responses import HTMLResponse
 import server_state as state
 from build_info import BUILD
 from dashboard import render
+from execution.publication import (
+    LegacyRunNotPublished,
+    require_legacy_run_publication,
+)
 from ledger import get_history, get_standings
 from ollama_client import OLLAMA_URL
 from routes_run import esc
@@ -69,7 +73,8 @@ def _recent_runs(limit: int = 8) -> list[dict]:
             continue
         try:
             log = json.loads((d / "full_log.json").read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
+            require_legacy_run_publication(d, log)
+        except (json.JSONDecodeError, LegacyRunNotPublished, OSError):
             continue
         runs.append({
             "timestamp": log.get("timestamp", d.name),
@@ -96,14 +101,20 @@ def _built_since(hours: int | None = None) -> int:
     for d in OUTPUT_DIR.iterdir():
         if not d.is_dir() or not (d / "full_log.json").exists():
             continue
-        if cutoff is None:
-            n += 1
-            continue
         try:
-            if datetime.strptime(d.name[:15], "%Y%m%d_%H%M%S").replace(
-                    tzinfo=timezone.utc).timestamp() >= cutoff:
+            log = json.loads((d / "full_log.json").read_text(encoding="utf-8"))
+            require_legacy_run_publication(d, log)
+            if cutoff is None or datetime.strptime(
+                d.name[:15],
+                "%Y%m%d_%H%M%S",
+            ).replace(tzinfo=timezone.utc).timestamp() >= cutoff:
                 n += 1
-        except ValueError:
+        except (
+            json.JSONDecodeError,
+            LegacyRunNotPublished,
+            OSError,
+            ValueError,
+        ):
             continue
     return n
 

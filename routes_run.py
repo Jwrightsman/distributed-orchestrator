@@ -25,6 +25,11 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
 from dashboard import render
+from execution.publication import (
+    LegacyRunNotPublished,
+    published_file,
+    require_legacy_run_publication,
+)
 from server_state import OUTPUT_DIR, jobs
 
 router = APIRouter()
@@ -74,11 +79,22 @@ def load_run(run_id: str) -> dict:
     except json.JSONDecodeError:
         raise HTTPException(status_code=500, detail="Corrupt run log")
 
-    review = (run_dir / "review.md")
-    log["review"] = review.read_text(errors="ignore", encoding="utf-8") if review.exists() else log.get("review", "")
-
-    output = (run_dir / "output.md")
-    log["final_output"] = output.read_text(errors="ignore", encoding="utf-8") if output.exists() else ""
+    try:
+        publication = require_legacy_run_publication(run_dir, log)
+        review = published_file(publication, "review.md")
+        log["review"] = (
+            review.read_text(errors="ignore", encoding="utf-8")
+            if review
+            else log.get("review", "")
+        )
+        output = published_file(publication, "output.md")
+        log["final_output"] = (
+            output.read_text(errors="ignore", encoding="utf-8")
+            if output
+            else ""
+        )
+    except (LegacyRunNotPublished, OSError) as exc:
+        raise HTTPException(status_code=404, detail="Run not found") from exc
 
     # The page shows the final rating at the top and the reviewer's own verdict
     # in the review section — they are not the same thing when the reviser
