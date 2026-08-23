@@ -100,6 +100,9 @@ def test_deliberate_public_get_allowlist(viewer_config, gated_app, path):
         ("GET", "/tasks/next"),
         ("POST", "/tasks/task-1/result"),
         ("POST", "/tasks/task-1/stream"),
+        ("POST", "/tasks/task-1/tokens"),
+        ("POST", "/nodes/worker-1/heartbeat"),
+        ("POST", "/nodes/worker-1/drain"),
     ],
 )
 def test_separately_authenticated_protocol_routes_are_not_viewer_gated(
@@ -108,6 +111,23 @@ def test_separately_authenticated_protocol_routes_are_not_viewer_gated(
     with TestClient(gated_app) as client:
         response = client.request(method, path)
     assert response.status_code != 401
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("GET", "/nodes/worker-1/heartbeat"),
+        ("POST", "/nodes/worker-1/heartbeat/extra"),
+        ("GET", "/tasks/task-1/tokens"),
+        ("POST", "/tasks/task-1/unknown"),
+    ],
+)
+def test_worker_protocol_exemptions_are_method_and_shape_specific(
+    viewer_config, gated_app, method, path
+):
+    with TestClient(gated_app) as client:
+        response = client.request(method, path)
+    assert response.status_code == 401
 
 
 @pytest.mark.parametrize(
@@ -182,4 +202,3 @@ def test_unconfigured_local_development_is_open_but_warns(monkeypatch, caplog):
     with caplog.at_level(logging.WARNING, logger="mycelium.access"):
         access_control.warn_if_viewer_auth_unconfigured()
     assert "private read routes are unprotected" in caplog.text
-

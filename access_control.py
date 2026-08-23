@@ -53,7 +53,8 @@ _PITCH_AUTH_EXACT: set[tuple[str, str]] = {
     ("POST", "/v1/executions"),
 }
 
-_WORKER_RESULT = re.compile(r"^/tasks/[^/]+/(?:result|stream)$")
+_WORKER_TASK_POST = re.compile(r"^/tasks/[^/]+/(?:result|stream|tokens)$")
+_WORKER_NODE_POST = re.compile(r"^/nodes/[^/]+/(?:heartbeat|drain)$")
 
 
 def _viewer_key() -> str:
@@ -198,7 +199,9 @@ def is_public_or_separately_authenticated(method: str, path: str) -> bool:
         return True
     if method == "GET" and path == "/tasks/next":
         return True
-    if method == "POST" and _WORKER_RESULT.fullmatch(path):
+    if method == "POST" and (
+        _WORKER_TASK_POST.fullmatch(path) or _WORKER_NODE_POST.fullmatch(path)
+    ):
         return True
     return False
 

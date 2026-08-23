@@ -7,6 +7,7 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
+import access_control
 import server_state as state
 from server import app
 
@@ -253,6 +254,38 @@ def test_heartbeat_and_drain_require_current_session(client):
         "/tasks/next", params={"node_id": "worker"}, headers=_headers(registration)
     ).status_code == 204
     assert len(state.task_queue) == 1
+
+
+def test_worker_control_routes_bypass_viewer_gate_but_retain_node_auth(
+    client, monkeypatch
+):
+    config = {"viewer_key": "viewer-secret", "node_secret": "node-secret"}
+    monkeypatch.setattr(access_control, "get_config", lambda: config)
+    monkeypatch.setattr(state, "get_config", lambda: config)
+
+    registration = client.post(
+        "/nodes/register",
+        json=_registration(),
+        headers={"X-Node-Secret": "node-secret"},
+    )
+    assert registration.status_code == 200
+    session_headers = _headers(registration)
+
+    # Reaching the route without node admission proves viewer middleware did
+    # not accept the worker session as a viewer credential.
+    missing_admission = client.post(
+        "/nodes/worker/heartbeat", headers=session_headers
+    )
+    assert missing_admission.status_code == 401
+    assert "X-Node-Secret" in missing_admission.json()["detail"]
+
+    worker_headers = {"X-Node-Secret": "node-secret", **session_headers}
+    assert client.post(
+        "/nodes/worker/heartbeat", headers=worker_headers
+    ).status_code == 200
+    assert client.post(
+        "/nodes/worker/drain", headers=worker_headers
+    ).status_code == 200
 
 
 @pytest.mark.parametrize(
