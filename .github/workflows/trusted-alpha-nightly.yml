@@ -1,0 +1,39 @@
+name: Trusted Alpha Nightly
+
+on:
+  schedule:
+    - cron: "17 7 * * *"
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: Repeated restart/contention/churn cycles
+        required: false
+        default: "5"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: trusted-alpha-nightly-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  operational-soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Repeated restarts, SQLite contention, artifact churn, and node reconnects
+        env:
+          HARNESS_ITERATIONS: ${{ github.event.inputs.iterations || '5' }}
+        run: python scripts/trusted_alpha_harness.py --profile nightly --iterations "$HARNESS_ITERATIONS"
