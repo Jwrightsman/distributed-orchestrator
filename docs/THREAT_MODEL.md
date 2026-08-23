@@ -1,16 +1,18 @@
 # Threat model
 
-_Implemented state on August 21, 2026. This describes current controls and
+_Implemented state on August 23, 2026. This describes current controls and
 current gaps, not the intended end state._
 
 **One-sentence version:** Mycelium is suitable for a small private trusted
 alpha whose operators and node holders are known. It is not safe as an open,
 permissionless compute network.
 
-Trusted-alpha hardening changed two important defaults: a worker result must
-settle a server-issued durable attempt before execution can consume it, and
-sensitive read routes can be protected by a viewer credential. It did not add
-per-node cryptographic identity, TLS, sandboxing, or multi-user accounts.
+Trusted-alpha hardening requires a worker result to settle a server-issued
+durable, session-bound attempt before execution can consume it; protects
+sensitive read routes in deployment mode; seals role-scoped artifact manifests;
+and enforces one coordinator per state directory. It did not add per-node
+cryptographic identity, TLS, sandboxing, multi-user accounts, or a hostile-host
+trust boundary.
 
 ## 1. Assets
 
@@ -19,10 +21,12 @@ per-node cryptographic identity, TLS, sandboxing, or multi-user accounts.
 | Task and project text | execution/job SQLite, project files, coordinator memory, assigned worker prompts | disclosure to an unauthorized reader or worker operator |
 | Generated output and artifacts | SQLite previews/receipts, `output/`, `execution_artifacts/` | disclosure, tampering, retention beyond intent, or unsafe code execution by an operator |
 | Attempt authority | SQLite attempt rows and accepted receipts | an unbound, late, or duplicate result entering execution or earning points |
+| Node sessions | process memory plus session identifiers/digests attached to node and attempt state | label collision, stale session use, bearer-token disclosure, or restart invalidation |
 | Viewer, pitch, and node secrets | local config/environment and HTTP headers | private reads, unwanted compute use, or worker admission |
+| Artifact integrity baseline | sealed manifest rows/hash in SQLite plus files on disk | ordinary file drift, database/file loss, or host-level joint tampering |
 | Contribution history | SQLite plus `ledger.json` compatibility projection | misattribution or misleading claims about correctness/value |
 | Contributor hardware | worker machines | sustained model inference, disk use for the model, prompt disclosure |
-| Orchestrator availability | one process and its SQLite/disk | total service interruption or lost process-local queue work |
+| Orchestrator availability and backups | one locked state directory, SQLite/files, and operator-created archives | total service interruption, stale restore, or lost process-local queue/session work |
 
 There are no full user accounts, payment data, wallets, or token balances. A
 deployment may still hold confidential task content, project memory, node
@@ -32,10 +36,11 @@ does not mean "no sensitive data."
 ## 2. Trust boundaries
 
 ```text
-Requester ── pitch_key ──▶ ORCHESTRATOR ── node_secret ──▶ Worker
-                              │                              │
-                              │ viewer_key                  ├─ sees assigned prompt
-                              ▼                              └─ returns model text
+Requester ── pitch_key ──▶ ORCHESTRATOR ── node_secret admission ──▶ Worker
+                              │       │                                 │
+                              │       └─ issues current node session ───┤
+                              │ viewer_key                              ├─ sees assigned prompt
+                              ▼                                         └─ returns model text
                          Private readers
                               │
                               └─ explicit share token ──▶ capability holder
@@ -47,7 +52,8 @@ Requester ── pitch_key ──▶ ORCHESTRATOR ── node_secret ──▶ W
 - The three configured static secrets represent different authority. Possessing
   one must not imply possessing the other two.
 - Every worker holding `node_secret` shares the same admission credential.
-  `node_id` is a claimed label, not a cryptographic identity.
+  A server session protects one current normalized label from accidental/live
+  collision, but `node_id` is still not a cryptographic machine identity.
 - A share token is a bearer capability. Anyone who receives it can use its
   exact redacted scope until expiry or revocation.
 
@@ -57,16 +63,21 @@ Requester ── pitch_key ──▶ ORCHESTRATOR ── node_secret ──▶ W
 | --- | --- | --- |
 | `viewer_key` | private HTTP and WebSocket access via header, Bearer token, or signed expiring HttpOnly cookie | users, roles, per-execution ACLs, TLS |
 | `pitch_key` | canonical and compatibility task submission when configured | private reads or public-share revocation |
-| `node_secret` | registration, polling, result, and token-stream admission when configured | individual node identity or revocation |
-| Server-owned attempts | active lease and exact task/execution/unit/kind/node/version/nonce binding | truthfulness or quality of the returned model output |
-| Atomic settlement | exactly-once attempt transition, receipt, response, and compute contribution; exact replay after restart | durable scheduling or worker resumption |
-| Result quarantine | bounded diagnostics for rejected output outside operational execution | malware analysis or a complete forensic archive |
+| `node_secret` | instance-wide permission to register and enter the worker protocol | individual node identity or revocation |
+| Digest-only node sessions | one current normalized node claimant, stale reclaim, session-bound worker calls and attempts | durable identity, protection after restart, or stopping another secret holder from claiming a free label |
+| Server-owned attempts | active lease and exact task/execution/unit/kind/node/session/version/nonce/output-cap binding | truthfulness or quality of the returned model output |
+| Atomic settlement | exactly-once attempt transition, receipt, response, and compute contribution; durable exact-replay state across database reopen | durable scheduling, worker resumption, or reuse of a restart-invalidated node session |
+| Worker I/O bounds | per-attempt result/stream byte cap, error cap, cumulative stream batch/rate limits, bounded fanout | semantic safety of allowed output or transport-level denial of service |
+| Result quarantine | 500 bounded diagnostics with hash and at most 4 KiB preview outside operational execution | malware analysis or a complete forensic archive |
 | Total execution deadline | shared remaining budget for strategy, local calls, worker waits, validation, and finalization | forcibly stopping an external process that ignores cancellation |
 | Restart reconciliation | truthful `interrupted` state for non-resumable executions/jobs and active attempts | resuming lost process-local work |
-| Artifact registry | root confinement, normalized paths, symlink rejection, hashes, quotas, streaming delivery, retention | content safety, immutability, sandboxing |
-| Explicit shares | unguessable hashed bearer tokens, expiry, revocation, redaction, artifact permission | preventing redistribution by a token holder |
+| Sealed artifact registry | role/winner scope, root confinement, normalized paths, symlink rejection, immutable local baseline, live re-hash, quotas, streaming delivery, retention | content safety, hostile-host tampering, signature, or sandboxing |
+| Explicit shares | unguessable hash-only bearer tokens, expiry, list/revoke, redaction, scoped deliverable/candidate-source permission | preventing redistribution by a token holder or access-log capture |
 | Public-pitch profile | one local candidate with short timeout/output and compute-aware admission | strong abuse prevention or semantic content moderation |
 | SQLite contribution ledger | concurrent-safe, idempotent non-monetary records | tamper evidence against the host operator |
+| SQLite/ownership policy | one OS-locked coordinator, WAL/foreign keys/busy timeout/bounded retry, serialized migrations, transactional boundaries | multi-coordinator operation or failover |
+| Verified backup/restore | SQLite online snapshot plus bounded archive manifest/checksums and validate-before-install restore | live process state, independent attestation, or off-site backup scheduling |
+| Post-hoc status fields | explicit report that trusted-alpha duplicate verification is disabled | duplicate execution or stronger correctness evidence |
 
 Secret comparisons use constant-time comparison where static credentials or
 signatures are checked. This reduces one narrow side channel. It does not make a
@@ -84,13 +95,14 @@ When `viewer_key` is configured, the deliberate unauthenticated surface is:
 - viewer session exchange/logout endpoints.
 
 Pitch and worker protocol routes are exempt from the viewer gate because they
-use their own credentials. If `pitch_key` or `node_secret` is empty, that
-separate control is open.
+use their own credentials. Poll, result/stream/token, heartbeat, and drain also
+require the current node session. If `pitch_key` or `node_secret` is empty in
+local mode, that separate static control is open.
 
 Everything else is viewer-protected, including canonical execution reads and
 cancellation, jobs, events, WebSockets, node details, history, gallery, run
-pages, projects, ledger, standings, metrics, artifact APIs, share creation and
-revocation, and the dashboard.
+pages, projects, ledger, standings, metrics, artifact APIs, share creation/list/
+revocation, private operator health, and the dashboard.
 
 `/status.json` is deliberately narrow: service/inference state, model name,
 counts, uptime, repository, and build fingerprint. It does not include task
@@ -100,10 +112,19 @@ whether private routes are protected. It warns when they are not.
 
 ### Fail-open local-development mode
 
-All three secrets default to empty for local compatibility. Most importantly,
-when `viewer_key` is empty the viewer middleware allows private routes. Startup
-logs and `/health` explicitly say so. Anyone who can reach that deployment can
-then read tasks, results, projects, events, node detail, and artifacts.
+All three secrets default to empty in `deployment_mode=local` for compatibility.
+Most importantly, when `viewer_key` is empty the viewer middleware allows
+private routes. Startup logs and `/health` explicitly say so. Anyone who can
+reach that deployment can then read tasks, results, projects, events, node
+detail, and artifacts.
+
+`deployment_mode=trusted_alpha` changes this posture to fail closed: preflight
+and startup require independent 32+-character viewer, pitch, and node secrets,
+coherent HTTPS/cookie intent, safe config/state paths, and explicit public-pitch
+acknowledgement when that endpoint is enabled. `/health` exposes a safe
+protection bit; viewer-authorized `/v1/operator/health` exposes mode, instance,
+lock, and preflight state. Passing preflight does not supply TLS or secure the
+host.
 
 An operator must not bind such a configuration to an untrusted network. Set all
 three secrets as appropriate, put TLS in front, and prefer a private network
@@ -119,8 +140,9 @@ server-issued attempt. The server record, not the submitted payload, determines
 whether contract-v1 binding is mandatory.
 
 For v1, omission of contract version, attempt id, nonce, execution id, unit id,
-or unit kind is a rejection. The assigned node, URL task, lease, state, and all
-bindings must match. A worker cannot downgrade validation by omitting fields.
+or unit kind is a rejection. The assigned node and session, URL task, lease,
+state, output cap, and all bindings must match. A worker cannot downgrade
+validation by omitting fields or by reconnecting under a new session.
 
 Settlement uses a SQLite write transaction and uniqueness constraints. The
 active attempt becomes settled, an immutable accepted receipt is inserted, and
@@ -130,8 +152,9 @@ returns the stored response; a changed replay fails.
 
 Unknown, queued-but-unleased, expired, reclaimed, cancelled, superseded,
 interrupted, wrong-node, wrong-execution, wrong-unit, wrong-kind, and malformed
-submissions never enter the accepted-result broker. Rejected output may be
-quarantined as a reason, hash, and at most 4 KiB preview, capped at 500 rows. It
+submissions never enter the accepted-result broker. Output over the attempt cap
+is also rejected before settlement. Rejected output may be quarantined as a
+reason, hash, and at most 4 KiB preview, capped at 500 rows. It
 does not satisfy dispatch, update normal success statistics, earn points, or
 emit normal completion.
 
@@ -142,12 +165,15 @@ low-quality text. Attempt binding proves which active lease admitted a byte
 sequence; it does not prove who physically controlled the node or whether the
 bytes satisfy the user's intent.
 
-The shared node secret permits any holder to register any `node_id`, create many
-claimed identities, and impersonate another label on a future registration.
-Attempt binding prevents settlement under the wrong active assignment, but not
-admission-level Sybil behavior. Per-node keypairs, individual revocation,
-rotation, and signed result envelopes remain prerequisites for a less-trusted
-network.
+Registration returns a random session token once and retains only its digest.
+Exact-token registration is idempotent; a different live claimant for the same
+normalized ID receives a conflict; stale/expired sessions can be reclaimed; and
+restart invalidates all sessions. This reduces accidental/colliding label use.
+The shared node secret still permits any holder to register another available
+`node_id` and create many claimed identities. Attempt/session binding prevents
+settlement under the wrong active assignment, but not admission-level Sybil
+behavior. Per-node keypairs, individual revocation, rotation, and signed result
+envelopes remain prerequisites for a less-trusted network.
 
 ## 6. What a malicious admitted worker can do
 
@@ -158,8 +184,9 @@ It can:
 - return arbitrary text that passes structural checks while being behaviorally
   wrong;
 - hold work until its lease expires and waste capacity;
-- register many claimed node labels while holding the shared secret;
+- register many available node labels while holding the shared secret;
 - report misleading hardware/capability metadata;
+- send bounded but high-rate model text up to the enforced protocol limits;
 - consume operator time through repeated failures or plausible bad output.
 
 It cannot, through the worker protocol alone:
@@ -167,6 +194,8 @@ It cannot, through the worker protocol alone:
 - settle a queued-but-unleased or inactive task;
 - downgrade a v1 attempt into legacy settlement;
 - settle with a missing or mismatched nonce, contract, execution, or unit;
+- replace a different live claimant for the same normalized node ID;
+- exceed the assigned cumulative stream/output cap and still settle that output;
 - settle the same attempt twice with changed output;
 - turn a quarantined result into operational output or points;
 - execute generated code on the requester machine.
@@ -190,7 +219,14 @@ tokens all look like `404`. The response is built from an allowlist and omits
 project/job ids, absolute paths, attempt credentials, raw logs, credit records,
 private telemetry, and unbounded validator failures. Node identity is redacted
 by default. Candidate details and artifact downloads require separate share
-flags.
+flags. Share artifact access is deliverable-only by default; candidate source
+requires the candidate-detail flag; provenance, logs, and internal roles are
+never shared. If there is no winner, candidate-scoped entries are excluded.
+
+Public share responses set no-store, no-referrer, and nosniff headers. The
+application's unhandled-error path logging redacts the token segment. Uvicorn
+and reverse-proxy access logs remain operator-controlled and must be configured
+not to retain raw capability URLs.
 
 Share output is not an immutable snapshot. It reflects the current durable
 execution record and currently retained artifacts. Revocation stops future
@@ -209,14 +245,19 @@ Manifest scans and every open reject absolute paths, drives, colons,
 backslashes, NULs, dot segments, parent traversal, encoded traversal, duplicate
 normalized paths, symlink components, and resolved paths outside the root. The
 server enforces file-count, per-file, and aggregate-byte limits and computes a
-SHA-256 for every entry. Downloads re-scan and re-hash. ZIPs are built in a
-bounded temporary file and streamed.
+SHA-256 for every entry. Terminal finalization applies winner prefix/entry
+roles and seals immutable manifest rows plus a canonical hash. Every download
+then resolves and re-hashes the live bytes against that baseline. Active and
+historical `legacy_live` roots are rescanned; legacy roots are not mislabeled
+sealed. ZIPs are built in a bounded temporary file and streamed.
 
-These controls stop path confusion and unbounded artifact delivery. They do not
-make content safe. SHA-256 detects a changed file at access time but is not a
-signature, provenance proof, malware scan, or content-addressed immutable store.
-Private viewers can retrieve internal run files; public shares filter logs,
-plans, transcripts, and hidden candidate detail.
+These controls stop path confusion, ordinary post-seal drift, and unbounded
+artifact delivery. They do not make content safe. SHA-256 is not a signature,
+independent timestamp, provenance proof, malware scan, or protection against a
+host that can alter both file and SQLite baseline. Private delivery defaults to
+the `deliverable` role; explicit audit views may retrieve provenance, logs,
+candidate source, and internal records. Public shares use the narrower role
+policy above.
 
 Retention applies to registered roots in both storage families. Active roots
 and canonical executions still queued/running are skipped. Pruning deletes the
@@ -237,16 +278,25 @@ providers and later operator execution are outside this field's control.
 
 ## 10. Lifecycle and availability
 
-Canonical lifecycle is durable, but the scheduler is not. Queues, connected
-nodes, in-flight coroutines, and breaker state are process-local. On restart,
+Canonical lifecycle is durable, but the scheduler is not. Queues, node sessions,
+connected-node state, in-flight coroutines, and breaker state are process-local. On restart,
 queued/running canonical executions and legacy jobs become retryable
 `interrupted`; active attempts become interrupted and reject late output. This
 prevents false forever-running state but does not resume work.
 
 Deadlines and cancellation remove queued units, signal local tasks, and cancel
 active attempts. External calls may not stop immediately if a dependency ignores
-cancellation, but their late output cannot settle. The orchestrator is still one
-process on one machine with no failover.
+cancellation, but their late output cannot settle. Exactly one coordinator may
+hold a state directory: an OS lock is acquired before migration/background work,
+and a second process fails startup. SQLite uses the common WAL/foreign-key/busy-
+timeout/retry policy and immediate transactions at integrity boundaries. This is
+one-process concurrency, not failover or multi-coordinator safety.
+
+Backup uses SQLite's online backup API and a versioned, checksummed ZIP of
+durable state. Restore validates layout, types, path/collision safety, JSON,
+SQLite, and checksums before same-filesystem installation with rollback. It does
+not capture process-local queues, node sessions, in-flight work, or breaker
+state, and it does not schedule or move archives off-host.
 
 ## 11. Contribution points are not correctness or money
 
@@ -278,26 +328,33 @@ request-count and concurrency cap reduce abuse; they do not eliminate it.
 
 - Shared static secrets with instance-wide authority.
 - No per-node cryptographic identity, rotation, or individual revocation.
+- Node sessions are process-local bearer credentials, not durable identities.
 - No built-in HTTPS; bearer secrets and content require external TLS.
 - No generated-code or model-executor sandbox.
 - `network_policy` is not enforced.
-- Process-local scheduler, connected-node state, and breaker state.
+- Process-local scheduler, node sessions, connected-node state, and breaker state.
 - One orchestrator and no failover.
 - No Sybil resistance or trustworthy worker hardware attestation.
 - Structural/deterministic contract validation does not prove arbitrary
   behavioral correctness.
 - Viewer auth is one role for the whole instance, not multi-user authorization.
 - Share revocation cannot retract already downloaded content.
+- Uvicorn/reverse-proxy access logs can expose share URLs unless configured.
+- Sealed manifests are local baselines, not externally anchored attestations.
+- Trusted-alpha post-hoc duplicate verification is explicitly disabled.
 - The orchestrator host can alter SQLite, artifacts, or configuration.
 
 ## 14. Safe deployment posture
 
 Run Mycelium on hardware you control, or among a small invited group whose node
-operators you trust. Set `node_secret`, `pitch_key`, and `viewer_key` before
-binding beyond localhost; use TLS or a private overlay network; keep keyless
-pitching off unless you intentionally accept the compute cost; review generated
-code; rotate a viewer key after suspected disclosure; and treat shared prompts
-as disclosed to every worker that receives them.
+operators you trust. Use `deployment_mode=trusted_alpha`, run preflight, set
+independent strong `node_secret`, `pitch_key`, and `viewer_key` values, and allow
+exactly one process to own the state directory before binding beyond localhost.
+Use TLS or a private overlay network; configure access logs to redact share
+capabilities; keep keyless pitching off unless you explicitly acknowledge and
+accept its compute risk; take and verify backups; review generated code; rotate
+a viewer key after suspected disclosure; and treat shared prompts as disclosed
+to every worker that receives them.
 
 Do not describe this implementation as trustless, permissionless,
 confidential-compute, sandboxed, behaviorally verified, or safe for anonymous

@@ -256,8 +256,9 @@ requester intended. Unsupported code formats are reported as not checked.
 `ExecutionResultV1` includes stable execution identity; lifecycle, validation,
 and assurance; requested and selected strategy; requested, planned, and
 observed placement; consent; timestamps and deadline; units and candidates;
-winner explanation; validation summaries; artifact API references; bounded
-previews; participation and contribution records; structured errors; and
+winner explanation; validation summaries; role-scoped artifact API references,
+sealed-manifest identity and integrity mode; bounded previews; participation
+and contribution records; post-hoc verification state; structured errors; and
 bounded telemetry.
 
 The older `status` field remains an explicit compatibility projection. The
@@ -271,6 +272,41 @@ Canonical responses do not publish absolute artifact paths. The historical
 artifact root is available. Filesystem paths may remain in authenticated legacy
 adapter payloads for compatibility and must not be copied into public shares.
 
+`posthoc_verification_status` is a separate field, not a replacement for
+terminal validation or assurance. It can be `disabled`, `not_requested`,
+`pending`, `running`, `completed`, or `failed`, with bounded timestamps,
+agreement, and reason fields. Trusted-alpha RC1 reports it as `disabled`
+because durable duplicate-execution semantics are not yet implemented. A UI
+MUST NOT render disabled or failed post-hoc verification as evidence that a
+result passed or failed its original validators.
+
+## Node registration sessions and bounded worker I/O
+
+`X-Node-Secret` is shared admission to the worker protocol. Successful
+`POST /nodes/register` additionally issues normalized `node_id`, a non-secret
+`session_id`, a random plaintext `session_token` returned once, and start and
+expiry timestamps. The coordinator stores only the token's SHA-256 digest.
+The reference worker keeps the token only in memory.
+
+Poll, heartbeat, drain, stream, token-stream, and result routes require the
+current `X-Node-Session` in addition to node admission. Presenting the exact
+live token makes registration idempotent. A distinct live claimant for the same
+normalized ID receives `409`; an expired or stale session can be reclaimed and
+its prior work is closed or requeued. Sessions are process-local, expire after
+at most 24 hours, and become invalid on coordinator restart. The reference
+worker re-registers after the server's machine-readable session rejection.
+
+Registration strings and capabilities are bounded, and the server normalizes
+node IDs to at most 64 ASCII characters. `max_output_bytes` is an execution
+contract limit from 1 KiB through 10 MiB and is copied into each issued
+attempt. Worker result output must fit that attempt-specific UTF-8 byte cap;
+worker error text is capped at 2 KiB. A token-stream batch is bounded, the
+cumulative streamed bytes cannot exceed the same attempt cap, an attempt can
+emit at most 250,000 batches, and the rate is capped at 120 batches per second.
+Crossing the byte/batch or rate boundary closes the stream and returns a
+machine-readable `413` or `429` without allowing settlement to bypass the
+result cap.
+
 ## Server-authoritative worker attempts
 
 ### Active-attempt invariant
@@ -282,17 +318,18 @@ attempt record, never from worker-supplied fields.
 Assignment creates an active attempt with:
 
 - task, execution, execution-unit, and unit-kind bindings;
-- assigned node identifier;
+- assigned node and node-session identifiers;
 - contract version;
 - unguessable attempt identifier;
 - a high-entropy nonce whose digest, not plaintext, is stored;
-- issue time and lease expiry.
+- issue time, lease expiry, and the attempt-specific output cap.
 
 For a v1 attempt, the worker must echo `contract_version`, `attempt_id`, nonce,
 `node_id`, `execution_id`, `execution_unit_id`, and `execution_unit_kind`, and
-the URL task id must match. Missing fields are rejection, not legacy fallback.
-The submitted contract version must equal the server-owned contract version.
-The attempt must still be active and unexpired.
+the URL task id must match. The authenticated session must match the attempt's
+assigned session. Missing fields are rejection, not legacy fallback. The
+submitted contract version must equal the server-owned contract version. The
+attempt must still be active and unexpired.
 
 The accepted flow is:
 
@@ -316,6 +353,9 @@ task, and one compute-contribution record per attempt. `BEGIN IMMEDIATE` plus a
 conditional active-to-settled update makes concurrent settlement exactly once.
 An exact retry of a settled attempt returns its stored response, including after
 database reopen, and does not award points twice. A changed replay is rejected.
+This durable storage property does not make a process-local node session usable
+after coordinator restart; the worker must re-register and old-session protocol
+calls remain rejected.
 
 Unknown, queued-but-unleased, expired, reclaimed, cancelled, superseded,
 interrupted, wrong-node, wrong-execution, wrong-unit, wrong-kind, missing-field,
@@ -327,6 +367,12 @@ result, or emit `attempt_completed`; rejection emits `result_rejected`.
 
 The legacy `task_results` mapping is only a compatibility mirror written after
 settlement. It is not an integrity authority.
+
+Accepted output is bounded by the server-owned attempt cap before the atomic
+transition. Streaming counters and limit state live with the durable attempt,
+so reconnecting or switching protocol endpoints cannot reset the cumulative
+budget. Streaming is progress/liveness telemetry; it is never an accepted
+result and never wakes dispatch by itself.
 
 ## Contribution points
 
@@ -344,12 +390,17 @@ money, a token, payment, transferable value, or a claim on future value.
 | `POST /v1/executions` | Validate and queue a canonical request; returns HTTP 202 |
 | `GET /v1/executions/{id}` | Read durable normalized state/result |
 | `POST /v1/executions/{id}/cancel` | Request idempotent cancellation |
-| `GET /v1/executions/{id}/artifacts` | Read the authenticated artifact manifest |
+| `GET /v1/executions/{id}/artifacts` | Read deliverable entries; `role=audit` selects audit material and deprecated `role=all` selects both |
+| `POST /v1/executions/{id}/artifacts/seal` | Idempotently seal the bounded manifest baseline |
 | `GET /v1/executions/{id}/artifacts/{path}` | Stream one authenticated artifact |
-| `GET /v1/executions/{id}/download` | Stream a temporary ZIP of authenticated artifacts |
+| `GET /v1/executions/{id}/download` | Stream a temporary deliverable ZIP |
+| `GET /v1/executions/{id}/audit-download` | Stream a temporary non-deliverable audit ZIP |
 | `POST /v1/executions/{id}/shares` | Create a public capability share |
+| `GET /v1/executions/{id}/shares` | List active share metadata without plaintext tokens |
 | `DELETE /v1/executions/{id}/shares/{share_id}` | Revoke a share |
+| `DELETE /v1/executions/{id}/shares` | Revoke all shares for an execution |
 | `GET /v1/shares/{token}` | Read one redacted public share |
+| `GET /v1/operator/health` | Read private deployment mode, instance, lock, and preflight state |
 
 Read, artifact, cancellation, and share-management routes require viewer access
 when `viewer_key` is configured. Canonical submission uses the separate
@@ -359,16 +410,28 @@ when `viewer_key` is configured. Canonical submission uses the separate
 ## Artifact delivery
 
 `ArtifactManifestV1` exposes only execution id, timestamps, counts, aggregate
-bytes, and entries containing normalized relative path, media type, size,
-SHA-256, optional source candidate/unit, and creation time. Roots are internal.
+bytes, integrity mode, optional sealed hash/timestamp, and entries containing a
+normalized relative path, role, media type, size, SHA-256, optional source
+candidate/unit, and creation time. Roots are internal. Roles are `deliverable`,
+`provenance`, `log`, `candidate_source`, and `internal`.
 
 The artifact registry accepts strict children of `output/` and
 `execution_artifacts/`, rejects symlinks and traversal (including encoded
 forms), enforces configured file and byte quotas, rehashes on access, and builds
 ZIPs on temporary disk for streaming rather than loading an arbitrary archive
-into memory. Registered active executions are never pruned. Retention covers
-both storage families. Detailed limits and filtering rules are in
+into memory. Terminal finalization seals an immutable SQLite entry baseline and
+canonical manifest hash after applying winner scope. Every later file and ZIP
+read resolves and re-hashes the live file against that baseline; drift fails
+closed. Historical `legacy_live` roots remain rescanned and MUST NOT be labeled
+sealed. Registered active executions, including final manifest refresh, are
+never pruned. Retention covers both storage families. Detailed limits and
+filtering rules are in
 [ARTIFACTS.md](ARTIFACTS.md).
+
+The sealed hash is local integrity evidence, not a signature, independent
+timestamp, malware scan, behavioral verdict, or defense against a host able to
+alter both files and SQLite. Private delivery defaults to deliverables; audit
+material requires its explicit manifest or ZIP route.
 
 ## Viewer access and explicit shares
 
@@ -388,7 +451,15 @@ identity, and include or omit candidate detail. Invalid, expired, and revoked
 tokens all return `404`. Public responses are constructed from an allowlist and
 omit project/job ids, raw filesystem paths, attempt credentials, credit detail,
 private telemetry, and unbounded validator diagnostics. A share token grants no
-ambient access to another execution or to private routes.
+ambient access to another execution or to private routes. Share artifacts are
+deliverables by default; candidate source requires the candidate-detail flag,
+and provenance, logs, and internal roles are never shareable. Without a winner,
+candidate-scoped entries are excluded.
+
+Share responses use `no-store`, `no-referrer`, and `nosniff` headers. Application
+unhandled-error logging redacts token path segments. Uvicorn and reverse-proxy
+access-log redaction remains an operator responsibility because the URL is the
+credential. Revocation prevents future use but cannot recall copied content.
 
 ## Keyless public pitch profile
 
@@ -416,6 +487,30 @@ Worker clients report `DONE` only after the result endpoint accepts settlement.
 A rejected result is shown as failure. If both generation and the subsequent
 error-report POST fail, the original generation error remains the primary error.
 
+Private node records distinguish current session state/counters from durable
+lifetime contribution totals. Compatibility `tasks_completed` and
+`credits_earned` remain session projections. Clients MUST NOT expect a session
+token in node-list or event payloads.
+
+## Deployment, SQLite, and coordinator ownership
+
+`deployment_mode=local` preserves fail-open developer defaults.
+`deployment_mode=trusted_alpha` fails startup/preflight unless viewer, pitch,
+and node secrets are independent and at least 32 characters, cookie/TLS intent
+is coherent, config and state paths pass safety checks, and public pitch has an
+explicit acknowledgement when enabled. `/health` publishes only safe protection
+state; the private `/v1/operator/health` identifies the process, mode, held lock,
+and preflight warnings.
+
+Exactly one coordinator may own a state directory. An operating-system lock is
+acquired before migrations and background work; a second process fails closed.
+All production `events.db` access uses the shared SQLite policy: WAL mode,
+foreign keys on, a 10-second busy timeout, `synchronous=NORMAL`, bounded busy
+retry, per-path migration serialization, and explicit immediate transactions at
+integrity boundaries. This improves one-process concurrency; it is not a
+multi-coordinator protocol. Backup/restore captures durable state, but queues,
+in-flight coroutines, node sessions, and breaker state remain process-local.
+
 ## Compatibility and errors
 
 `POST /pitch`, `/pitch/async`, and `/pitch/distributed` adapt historical bodies
@@ -435,10 +530,13 @@ shape.
 ## Explicit limitations
 
 Protocol v1 does not provide a durable worker queue, automatic execution resume,
-per-node public-key identity, individual node revocation, TLS, multi-user
-accounts, a general network-policy enforcement layer, process isolation,
+durable node sessions, per-node public-key identity, individual node revocation,
+TLS, multi-user accounts, a general network-policy enforcement layer, process
+isolation,
 generated-code sandboxing, malicious-output detection, permissionless
-settlement, Sybil resistance, or proof that arbitrary generated output is
-correct. It is intended for a small private group whose operators and node
+settlement, Sybil resistance, externally anchored artifact attestation, durable
+post-hoc duplicate verification, or proof that arbitrary generated output is
+correct. One coordinator process is the only supported owner of a state
+directory. It is intended for a small private group whose operators and node
 holders are known and trusted. These limitations must not be represented as
 solved by the normalized API.
