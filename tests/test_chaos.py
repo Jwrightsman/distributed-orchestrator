@@ -19,6 +19,7 @@ import routes_events
 import routes_pitch
 import server
 import server_state
+from tests._node_session_helpers import enable_auto_node_sessions
 
 
 def _creds(task: dict) -> dict:
@@ -52,7 +53,7 @@ def clean_server_state():
 @pytest.fixture
 def client():
     with TestClient(server.app) as c:
-        yield c
+        yield enable_auto_node_sessions(c)
 
 
 def register(client, node_id="node-a", model="qwen3.5:4b"):
@@ -66,7 +67,7 @@ def register(client, node_id="node-a", model="qwen3.5:4b"):
             "hostname": node_id,
             "cpu_count": 4,
             "ram_gb": 8.0,
-            "gpu": "",
+            "gpu": None,
             "capabilities": [],
         },
     )
@@ -149,7 +150,7 @@ def test_a_node_streaming_tokens_is_not_evicted_mid_build(client):
     """
     register(client, "builder")
     queue_task("t-long")
-    client.get("/tasks/next", params={"node_id": "builder"})
+    task = client.get("/tasks/next", params={"node_id": "builder"}).json()
 
     # A build that outlives the cutoff: age the node past it, exactly as a
     # slow subtask does when nothing else refreshes last_seen.
@@ -157,7 +158,7 @@ def test_a_node_streaming_tokens_is_not_evicted_mid_build(client):
 
     # …but the node is plainly alive: it is streaming tokens for that task.
     resp = client.post("/tasks/t-long/stream",
-                       json={"node_id": "builder", "tokens": "def dedupe("})
+                       json={"node_id": "builder", "tokens": "def dedupe(", **_creds(task)})
     assert resp.status_code == 200
 
     server_state._cleanup_pass()
@@ -246,7 +247,7 @@ def test_result_for_unknown_task_is_quarantined_not_published(client):
     assert server_state.attempt_store.quarantine_count() == 1
 
 
-def test_stream_from_stale_task_is_ignored_not_fatal(client):
+def test_stream_from_stale_task_is_rejected_not_fatal(client):
     register(client, "streamer")
 
     resp = client.post(
@@ -254,8 +255,8 @@ def test_stream_from_stale_task_is_ignored_not_fatal(client):
         json={"node_id": "streamer", "tokens": "hello"},
     )
 
-    assert resp.status_code == 200
-    assert resp.json()["ok"] is False
+    assert resp.status_code == 403
+    assert "no active server-issued attempt" in resp.json()["detail"]
 
 
 # ── Circuit breaker opens and recovers ──────────────────────────────────────

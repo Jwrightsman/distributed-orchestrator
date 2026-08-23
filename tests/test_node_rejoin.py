@@ -6,12 +6,9 @@ his laptop:
 1. `node.py` long-polls `/tasks/next`, which keeps `last_seen` fresh.
 2. The laptop sleeps. Nothing reaches the server for more than `_NODE_TIMEOUT`
    (90 s), so the janitor evicts the node and reclaims its work — correct so far.
-3. The laptop wakes. The long-poll resumes and **succeeds**, so `node.py` never
-   sees a `ConnectError` and never re-registers.
-4. `/tasks/next` only refreshes `last_seen` `if node_id in nodes` — and it is
-   not. So the node polls forever, absent from `/nodes`, invisible on the
-   dashboard, and receiving no work, because both pitch paths route to nodes
-   only when the registry is non-empty.
+3. The laptop wakes. Its old process-local session is rejected explicitly.
+4. `node.py` automatically registers again and resumes polling with a new
+   server-issued token; an arbitrary session-less poll cannot create a node.
 
 Closing a laptop lid is the single most likely thing to happen to a volunteer
 node, and on camera it shows as an empty swarm while work is running.
@@ -24,6 +21,7 @@ from fastapi.testclient import TestClient
 
 import server_state as state
 from server import app
+from tests._node_session_helpers import enable_auto_node_sessions
 
 
 @pytest.fixture
@@ -33,7 +31,7 @@ def client(monkeypatch):
     state.task_inflight.clear()
     monkeypatch.setattr(state, "_LONG_POLL_TIMEOUT", 0.2)
     with TestClient(app) as c:
-        yield c
+        yield enable_auto_node_sessions(c)
     state.nodes.clear()
     state.task_queue.clear()
 
@@ -69,21 +67,23 @@ def test_in_flight_work_is_reclaimed_when_a_node_disappears(client):
     assert any(t["task_id"] == "t1" for t in state.task_queue), "task was not re-queued"
 
 
-def test_node_reappears_after_waking_up(client):
-    """THE BUG. A woken laptop polls successfully but stays invisible."""
+def test_woken_node_is_told_to_register_again(client):
+    """An evicted laptop cannot silently recreate itself by polling."""
     _register(client)
     _sleep_the_laptop()
     assert client.get("/nodes").json()["count"] == 0
 
-    # The lid opens. node.py's long poll resumes and succeeds — no error, so it
-    # never re-registers on its own.
+    # The lid opens. The old session is invalid and the worker gets an explicit
+    # machine-readable instruction to register again.
     resp = client.get("/tasks/next", params={"node_id": "laptop"})
-    assert resp.status_code in (200, 204)
+    assert resp.status_code == 401
+    assert resp.json()["detail"]["action"] == "register_again"
+    assert client.get("/nodes").json()["count"] == 0
 
+    _register(client)
     count = client.get("/nodes").json()["count"]
     assert count == 1, (
-        "a polling node is still missing from the registry, so the dashboard "
-        "shows an empty swarm and neither pitch path will route work to it"
+        "a worker that follows the register_again response did not recover"
     )
 
 
@@ -91,7 +91,8 @@ def test_a_readmitted_node_can_receive_work(client):
     """Being listed is not enough — it has to actually get tasks again."""
     _register(client)
     _sleep_the_laptop()
-    client.get("/tasks/next", params={"node_id": "laptop"})  # readmit
+    assert client.get("/tasks/next", params={"node_id": "laptop"}).status_code == 401
+    _register(client)
 
     state.task_queue.append({"task_id": "t2", "prompt": "build something", "system": ""})
     resp = client.get("/tasks/next", params={"node_id": "laptop"})
@@ -109,5 +110,5 @@ def test_late_unbound_result_does_not_readmit_evicted_node(client):
     response = client.post("/tasks/t3/result", json={
         "node_id": "laptop", "output": "done", "elapsed_seconds": 1.0,
     })
-    assert response.status_code == 403
+    assert response.status_code == 401
     assert client.get("/nodes").json()["count"] == 0
