@@ -1,5 +1,8 @@
 """The CLI must express the canonical remote-dispatch consent contract."""
 
+import shlex
+from pathlib import Path
+
 import pytest
 
 import cli
@@ -136,3 +139,28 @@ def test_every_existing_strategy_can_be_distributed_with_consent(strategy, extra
     assert request.placement == "distributed"
     assert request.remote_dispatch_consent is True
     assert request.confidentiality == "trusted_guild"
+
+
+def test_readme_execution_examples_parse_and_validate():
+    readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
+    commands = [
+        'python cli.py "Build a Python script that analyzes a CSV of sales data"',
+        'python cli.py "Build one HTML file" --strategy ensemble --candidates 3 --placement local',
+        'python cli.py "Build coordinated API components" --strategy dag --placement distributed --allow-remote',
+        'python cli.py "Make one complete attempt" --strategy direct --placement local',
+        'python cli.py "Use only invited GPU nodes" --strategy ensemble --candidates 3 --placement distributed --allow-remote --confidentiality approved_nodes --approved-node gpu-a',
+    ]
+    for command in commands:
+        assert command in readme
+        words = shlex.split(command)[2:]
+        options, remaining = cli.parse_execution_args(words)
+        request = cli.build_execution_request(
+            " ".join(remaining),
+            strategy=options.strategy,
+            candidates=options.candidates,
+            placement=options.placement,
+            allow_remote=options.allow_remote,
+            confidentiality=options.confidentiality,
+            approved_node_ids=options.approved_node_ids,
+        )
+        assert request.task
