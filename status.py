@@ -39,6 +39,7 @@ async def main():
 
     # Config
     console.print("[bold]Config[/bold]")
+    console.print(f"  Mode:        {config.get('deployment_mode', 'local')}")
     console.print(f"  Model:       {config['model']}")
     console.print(f"  Timeout:     {config['timeout']}s")
     console.print(f"  Retries:     {config['planner_retries']}")
@@ -46,16 +47,22 @@ async def main():
     # Node auth
     secret = config.get("node_secret", "")
     if secret:
-        console.print(f"  Node auth:   [green]enabled[/green] ({secret[:4]}{'*' * max(0, len(secret) - 4)})")
+        console.print("  Node auth:   [green]enabled[/green]")
     else:
         console.print("  Node auth:   [dim]off (any node can join)[/dim]")
 
     # Pitch auth
     pitch_key = config.get("pitch_key", "")
     if pitch_key:
-        console.print(f"  Pitch auth:  [green]enabled[/green] ({pitch_key[:4]}{'*' * max(0, len(pitch_key) - 4)})")
+        console.print("  Pitch auth:  [green]enabled[/green]")
     else:
         console.print("  Pitch auth:  [dim]off (anyone can pitch)[/dim]")
+
+    viewer_key = config.get("viewer_key", "")
+    if viewer_key:
+        console.print("  Viewer auth: [green]enabled[/green]")
+    else:
+        console.print("  Viewer auth: [dim]off (private reads are unprotected)[/dim]")
 
     # Agent specialization
     role_map = config.get("role_model_map", {})
@@ -89,7 +96,10 @@ async def main():
 
                 # Job stats
                 try:
-                    jresp = await client.get(f"{server}/jobs?limit=100")
+                    jresp = await client.get(
+                        f"{server}/jobs?limit=100",
+                        headers={"X-Viewer-Key": viewer_key} if viewer_key else {},
+                    )
                     jdata = jresp.json()
                     running = sum(1 for j in jdata["jobs"] if j["status"] == "running")
                     complete = sum(1 for j in jdata["jobs"] if j["status"] == "complete")
@@ -97,7 +107,10 @@ async def main():
                 except Exception:
                     pass
 
-                resp = await client.get(f"{server}/nodes")
+                resp = await client.get(
+                    f"{server}/nodes",
+                    headers={"X-Viewer-Key": viewer_key} if viewer_key else {},
+                )
                 nodes = resp.json()
                 console.print(f"  Nodes:   {nodes['count']} connected")
 
