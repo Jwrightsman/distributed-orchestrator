@@ -344,11 +344,15 @@ def test_revoked_and_expired_share_urls_are_not_disclosed(share_api):
         CreateExecutionShareV1(expires_in_seconds=60),
         now=datetime.now(timezone.utc) - timedelta(minutes=2),
     )
-    assert client.get(f"/v1/shares/{expired.token}").status_code == 404
+    expired_response = client.get(f"/v1/shares/{expired.token}")
+    assert expired_response.status_code == 404
+    assert expired_response.headers["cache-control"] == "no-store"
 
     active = shares.create(EXECUTION_ID, CreateExecutionShareV1())
     assert shares.revoke(EXECUTION_ID, active.share_id)
-    assert client.get(f"/v1/shares/{active.token}").status_code == 404
+    revoked_response = client.get(f"/v1/shares/{active.token}")
+    assert revoked_response.status_code == 404
+    assert revoked_response.headers["cache-control"] == "no-store"
 
 
 def test_share_without_artifact_permission_cannot_download(share_api):
@@ -358,8 +362,12 @@ def test_share_without_artifact_permission_cannot_download(share_api):
         CreateExecutionShareV1(allow_artifact_download=False),
     )
     assert client.get(f"/v1/shares/{created.token}").status_code == 200
-    assert client.get(f"/v1/shares/{created.token}/artifacts").status_code == 403
-    assert client.get(f"/v1/shares/{created.token}/download").status_code == 403
+    manifest = client.get(f"/v1/shares/{created.token}/artifacts")
+    download = client.get(f"/v1/shares/{created.token}/download")
+    assert manifest.status_code == 403
+    assert download.status_code == 403
+    assert manifest.headers["cache-control"] == "no-store"
+    assert download.headers["cache-control"] == "no-store"
 
 
 def test_share_admin_routes_list_revoke_one_and_revoke_all(share_api):

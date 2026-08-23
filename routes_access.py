@@ -79,6 +79,17 @@ def _execution_or_404(execution_id: str):
     return execution
 
 
+def _public_execution_or_404(execution_id: str):
+    execution = get_execution_service().get(execution_id)
+    if execution is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Share not found",
+            headers=SHARE_SECURITY_HEADERS,
+        )
+    return execution
+
+
 def _artifact_http_error(exc: Exception) -> HTTPException:
     if isinstance(exc, ArtifactNotFound):
         return HTTPException(status_code=404, detail="Artifact not found")
@@ -87,6 +98,12 @@ def _artifact_http_error(exc: Exception) -> HTTPException:
     if isinstance(exc, ArtifactIntegrityError):
         return HTTPException(status_code=409, detail="Artifact integrity check failed")
     return HTTPException(status_code=400, detail="Invalid artifact path or artifact tree")
+
+
+def _public_artifact_http_error(exc: Exception) -> HTTPException:
+    error = _artifact_http_error(exc)
+    error.headers = {**SHARE_SECURITY_HEADERS, **(error.headers or {})}
+    return error
 
 
 def _artifact_roles(view: Literal["deliverable", "audit", "all"]):
@@ -122,7 +139,7 @@ def _share_with_artifacts_or_403(token: str):
 
 def _public_share_manifest(token: str):
     share = _share_with_artifacts_or_403(token)
-    execution = _execution_or_404(share.execution_id)
+    execution = _public_execution_or_404(share.execution_id)
     manifest = get_artifact_store().get_manifest(share.execution_id)
     return share, artifact_manifest_for_share(manifest, share, execution)
 
@@ -174,7 +191,9 @@ async def execution_artifacts(
     try:
         if role == "all":
             response.headers["Deprecation"] = "true"
-            response.headers["Sunset"] = "compatibility-view"
+            response.headers["Warning"] = (
+                '299 Mycelium "role=all is a deprecated compatibility view"'
+            )
         return get_artifact_store().get_manifest(
             execution_id,
             roles=_artifact_roles(role),
@@ -293,7 +312,7 @@ async def revoke_all_execution_shares(execution_id: str):
 async def public_execution_share(token: str, response: Response):
     response.headers.update(SHARE_SECURITY_HEADERS)
     share = _share_or_404(token)
-    execution = _execution_or_404(share.execution_id)
+    execution = _public_execution_or_404(share.execution_id)
     manifest = None
     try:
         complete_manifest = get_artifact_store().get_manifest(share.execution_id)
@@ -301,7 +320,7 @@ async def public_execution_share(token: str, response: Response):
     except ArtifactNotFound:
         pass
     except (ArtifactLimitError, ArtifactSecurityError) as exc:
-        raise _artifact_http_error(exc) from exc
+        raise _public_artifact_http_error(exc) from exc
     return redact_execution_for_share(execution, share, manifest=manifest, token=token)
 
 
@@ -312,7 +331,7 @@ async def public_share_artifacts(token: str, response: Response):
         _, manifest = _public_share_manifest(token)
         return manifest
     except (ArtifactNotFound, ArtifactLimitError, ArtifactSecurityError) as exc:
-        raise _artifact_http_error(exc) from exc
+        raise _public_artifact_http_error(exc) from exc
 
 
 @router.get("/shares/{token}/artifacts/{relative_path:path}")
@@ -324,7 +343,7 @@ async def public_share_artifact(token: str, relative_path: str):
             raise ArtifactNotFound("artifact was not found")
         path, entry = get_artifact_store().resolve_entry(share.execution_id, relative_path)
     except (ArtifactNotFound, ArtifactLimitError, ArtifactSecurityError) as exc:
-        raise _artifact_http_error(exc) from exc
+        raise _public_artifact_http_error(exc) from exc
     return FileResponse(
         path,
         media_type=entry.media_type,
@@ -346,7 +365,7 @@ async def download_public_share_artifacts(token: str):
             relative_paths={entry.relative_path for entry in manifest.entries},
         )
     except (ArtifactNotFound, ArtifactLimitError, ArtifactSecurityError) as exc:
-        raise _artifact_http_error(exc) from exc
+        raise _public_artifact_http_error(exc) from exc
     return FileResponse(
         prepared.path,
         media_type="application/zip",
