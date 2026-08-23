@@ -155,7 +155,8 @@ async def unhandled_exception_handler(request, exc):
     """
     import logging
 
-    logging.getLogger("mycelium").exception("unhandled error on %s", request.url.path)
+    safe_path = routes_access.redact_share_token_path(request.url.path)
+    logging.getLogger("mycelium").exception("unhandled error on %s", safe_path)
     return JSONResponse(status_code=500, content={"detail": "internal server error"})
 
 
