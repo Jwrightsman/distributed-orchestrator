@@ -1,138 +1,156 @@
 #!/usr/bin/env bash
-# Take a fresh Ubuntu VM to a running, secured orchestrator in one command.
+# Take a fresh Ubuntu VM to a trusted-alpha Mycelium coordinator.
 #
 #   ssh ubuntu@YOUR_VM_IP
 #   curl -fsSL https://raw.githubusercontent.com/Jwrightsman/distributed-orchestrator/master/deploy.sh | bash
 #
-# Generates both auth keys, brings up Docker + Ollama + the orchestrator, pulls
-# the model, waits for health, and prints exactly what you need to connect.
-# Safe to re-run: existing keys in data/config.json are preserved.
-#
-# Full walkthrough (accounts, firewall ports, security notes): docs/DEPLOY.md
+# Safe to re-run: valid existing authorities and unrelated configuration are
+# preserved. Credential values are written atomically to data/config.json and
+# are never copied into this script's output.
 
+set +x  # Never expose generated credentials even if a caller used `bash -x`.
 set -euo pipefail
 
 REPO_URL="https://github.com/Jwrightsman/distributed-orchestrator"
 DEST="${SWARM_DIR:-$HOME/distributed-orchestrator}"
-MODEL="${SWARM_MODEL:-qwen3.5:4b}"
+REQUESTED_MODEL="${SWARM_MODEL:-}"
 
 say()  { printf '\n\033[1;36m==> %s\033[0m\n' "$1"; }
 warn() { printf '\033[1;33m    %s\033[0m\n' "$1"; }
 
-# ── 1. Docker ─────────────────────────────────────────────────────────
+# 1. Docker and Python
 if ! command -v docker >/dev/null 2>&1; then
   say "Installing Docker"
   sudo apt-get update -qq
-  sudo apt-get install -y -qq docker.io docker-compose-v2 git
+  sudo apt-get install -y -qq docker.io docker-compose-v2 git python3
   sudo systemctl enable --now docker
   sudo usermod -aG docker "$USER" || true
   NEEDS_RELOGIN=1
 else
   say "Docker already installed"
   command -v git >/dev/null 2>&1 || sudo apt-get install -y -qq git
+  command -v python3 >/dev/null 2>&1 || sudo apt-get install -y -qq python3
 fi
 
-# Use sudo for docker until the group membership takes effect in a new session
 DOCKER="docker"
 docker info >/dev/null 2>&1 || DOCKER="sudo docker"
 
-# ── 2. Repo ───────────────────────────────────────────────────────────
-# Three cases: files already uploaded (private repo — no clone possible), an
-# existing git checkout to refresh, or a clean clone.
+# 2. Repository
 if [ -f "$DEST/docker-compose.yml" ] && [ ! -d "$DEST/.git" ]; then
   say "Using the code already present at $DEST"
 elif [ -d "$DEST/.git" ]; then
   say "Updating existing checkout at $DEST"
-  git -C "$DEST" pull --ff-only || warn "Could not pull (private repo or local changes) — using what is here"
+  git -C "$DEST" pull --ff-only \
+    || warn "Could not fast-forward; preserving the existing checkout"
 else
   say "Cloning to $DEST"
   if ! git clone --depth 1 "$REPO_URL" "$DEST"; then
-    warn "Clone failed. If the repository is private, copy the code up instead:"
-    warn "  git archive --format=tar HEAD | ssh root@THIS_HOST 'mkdir -p ~/distributed-orchestrator && tar -x -C ~/distributed-orchestrator'"
-    warn "then re-run this script."
+    warn "Clone failed. Copy an audited checkout to $DEST and re-run this script."
     exit 1
   fi
 fi
 cd "$DEST"
 mkdir -p data
 
-# ── 3. Config with generated secrets ──────────────────────────────────
+# 3. Trusted-alpha configuration
 CONFIG="data/config.json"
-if [ -f "$CONFIG" ] && grep -q node_secret "$CONFIG"; then
-  say "Keeping existing $CONFIG (secrets preserved)"
-else
-  say "Generating auth keys"
-  NODE_SECRET="$(openssl rand -hex 24)"
-  PITCH_KEY="$(openssl rand -hex 24)"
-  cat > "$CONFIG" <<EOF
-{
-  "ollama_url": "http://ollama:11434",
-  "model": "$MODEL",
-  "node_secret": "$NODE_SECRET",
-  "pitch_key": "$PITCH_KEY",
-  "output_max_mb": 500,
-  "public_pitch": false
-}
-EOF
-  chmod 600 "$CONFIG"
-fi
+say "Creating or validating trusted-alpha configuration"
+python3 - "$CONFIG" "$REQUESTED_MODEL" <<'PY'
+import sys
+from pathlib import Path
 
-NODE_SECRET="$(grep -o '"node_secret"[^,]*' "$CONFIG" | cut -d'"' -f4)"
-PITCH_KEY="$(grep -o '"pitch_key"[^,]*' "$CONFIG" | cut -d'"' -f4)"
+from config import ensure_trusted_alpha_config
 
-# ── 4. Launch ─────────────────────────────────────────────────────────
+path = Path(sys.argv[1])
+requested_model = sys.argv[2] or None
+result = ensure_trusted_alpha_config(
+    path,
+    model=requested_model,
+    ollama_url="http://ollama:11434",
+)
+print(f"  Configuration: {result.path}")
+if result.generated_authorities:
+    print("  Generated authorities: " + ", ".join(result.generated_authorities))
+if result.preserved_authorities:
+    print("  Preserved authorities: " + ", ".join(result.preserved_authorities))
+print("  Credential values were not printed.")
+PY
+
+# Validate configuration first without disturbing an existing coordinator.
+python3 scripts/preflight.py \
+  --config "$CONFIG" \
+  --state-dir data \
+  --mode trusted_alpha \
+  --skip-lock-check
+
+# A full lock probe is possible only after an earlier container releases it.
+$DOCKER compose stop orchestrator >/dev/null 2>&1 || true
+python3 scripts/preflight.py \
+  --config "$CONFIG" \
+  --state-dir data \
+  --mode trusted_alpha
+
+ACTIVE_MODEL="$(python3 - "$CONFIG" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    print(json.load(handle)["model"])
+PY
+)"
+
+# 4. Launch exactly one coordinator process
 say "Building and starting containers"
 $DOCKER compose up -d --build
 
-say "Pulling $MODEL (a few minutes on first run)"
-$DOCKER compose exec -T ollama ollama pull "$MODEL"
+say "Pulling the configured model (this can take several minutes the first time)"
+$DOCKER compose exec -T ollama ollama pull "$ACTIVE_MODEL"
 
-# ── 5. Wait for health ────────────────────────────────────────────────
-say "Waiting for the orchestrator to report healthy"
-for i in $(seq 1 60); do
-  if curl -fsS http://localhost:8000/health 2>/dev/null | grep -q '"status":"ok"'; then
+# 5. Deployment health gate: inference must be ready and private routes must
+# actually be protected. A merely reachable HTTP process is not sufficient.
+say "Waiting for inference and private-route protection"
+for _attempt in $(seq 1 60); do
+  HEALTH_JSON="$(curl -fsS http://127.0.0.1:8000/health 2>/dev/null || true)"
+  if printf '%s' "$HEALTH_JSON" | python3 -c \
+      'import json,sys; from scripts.preflight import deployment_health_ready; raise SystemExit(0 if deployment_health_ready(json.load(sys.stdin)) else 1)' \
+      2>/dev/null; then
     HEALTHY=1
     break
   fi
   sleep 5
 done
 
-PUBLIC_IP="$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || echo YOUR_VM_IP)"
-
 if [ "${HEALTHY:-0}" != "1" ]; then
-  warn "The orchestrator did not report healthy in 5 minutes."
-  warn "Check the logs with:  $DOCKER compose logs --tail 50"
+  warn "The coordinator did not pass the trusted-alpha health gate in 5 minutes."
+  warn "Inspect logs with: $DOCKER compose logs --tail 100 orchestrator ollama"
   exit 1
 fi
 
-# ── 6. What to do next ────────────────────────────────────────────────
+# 6. Handoff. Do not turn deployment output into a credential leak.
+say "Trusted-alpha coordinator is healthy"
 cat <<EOF
 
-$(say "Orchestrator is live")
+  Local health       http://127.0.0.1:8000/health
+  Operator dashboard http://127.0.0.1:8000/dashboard
+  Configuration      $DEST/$CONFIG
 
-  Dashboard   http://$PUBLIC_IP:8000/dashboard
-  Landing     http://$PUBLIC_IP:8000/
+The three separate authorities (viewer_key, pitch_key, and node_secret) are in
+the private configuration file above. Their values were deliberately not
+printed. Move only the authority a person or machine needs through your secret
+manager or another secure channel. Every holder receives that authority across
+the entire coordinator instance; these are not per-user credentials.
 
-  node_secret $NODE_SECRET
-  pitch_key   $PITCH_KEY
+Keep port 8000 off the public Internet. Prefer a private overlay such as
+Tailscale/WireGuard. If browser access crosses an untrusted network, terminate
+TLS at a restricted reverse proxy and follow docs/DEPLOY.md before connecting.
 
-Join a worker node from another machine:
+Next checks:
 
-  python join.py http://$PUBLIC_IP:8000 --secret $NODE_SECRET
-
-Submit a task from anywhere:
-
-  curl -X POST http://$PUBLIC_IP:8000/pitch/async \\
-    -H "Content-Type: application/json" \\
-    -H "X-Pitch-Key: $PITCH_KEY" \\
-    -d '{"task": "Write a haiku about distributed computing"}'
-
-Keep those two keys private — they are the only thing stopping strangers from
-joining nodes or spending your compute. They are stored in $DEST/$CONFIG.
-If port 8000 is not reachable, open it in your cloud firewall (docs/DEPLOY.md).
+  python3 scripts/preflight.py --config "$CONFIG" --state-dir data --mode trusted_alpha
+  $DOCKER compose logs --tail 100 orchestrator
 
 EOF
 
 if [ "${NEEDS_RELOGIN:-0}" = "1" ]; then
-  warn "Log out and back in to use docker without sudo."
+  warn "Log out and back in to use Docker without sudo."
 fi

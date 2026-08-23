@@ -5,9 +5,35 @@ Change settings here instead of digging through code.
 """
 
 import json
+import logging
+import os
+import secrets
+import tempfile
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
-CONFIG_FILE = Path("config.json")
+CONFIG_FILE = Path(os.environ.get("MYCELIUM_CONFIG_FILE", "config.json"))
+TRUSTED_ALPHA_MARKER = ".mycelium-trusted-alpha"
+VALID_DEPLOYMENT_MODES = frozenset({"local", "trusted_alpha"})
+MIN_STATIC_CREDENTIAL_LENGTH = 32
+GENERATED_SECRET_BYTES = 32
+
+_LOG = logging.getLogger("mycelium.config")
+
+
+class ConfigError(RuntimeError):
+    """Configuration could not be loaded without losing operator intent."""
+
+
+@dataclass(frozen=True)
+class DeploymentConfigUpdate:
+    """Secret-free summary of a trusted-alpha configuration migration."""
+
+    path: Path
+    generated_authorities: tuple[str, ...]
+    preserved_authorities: tuple[str, ...]
+
 
 DEFAULTS = {
     # ── Local inference (Ollama) ──────────────────────────────────────
@@ -73,6 +99,17 @@ DEFAULTS = {
     # ── Server ───────────────────────────────────────────────────────
     "port": 8000,
 
+    # "local" preserves the original single-machine development behavior.
+    # "trusted_alpha" opts into strict startup validation and the deployment
+    # safety contract documented in docs/DEPLOY.md.
+    "deployment_mode": "local",
+    "bind_host": "127.0.0.1",
+
+    # Reverse proxies are not trusted by default. Operators terminating TLS at
+    # a proxy must explicitly enable both settings and restrict proxy access.
+    "https_enabled": False,
+    "trust_proxy_headers": False,
+
     # Shared secret for node authentication.
     # Set this to a non-empty string to require worker nodes to present
     # X-Node-Secret: <value> on /nodes/register, /tasks/next, and /tasks/*/result.
@@ -126,6 +163,7 @@ DEFAULTS = {
     # 300-char tasks, and a basic content filter. Off by default; understand
     # the abuse risk (docs/DEPLOY.md) before enabling on a public server.
     "public_pitch": False,
+    "public_pitch_acknowledged": False,
 
     # ── Agent specialization (optional) ──────────────────────────────
     # Route builder tasks to nodes running a specific model.
@@ -156,24 +194,203 @@ DEFAULTS = {
 }
 
 
-def load() -> dict:
-    """Load config from config.json, falling back to defaults."""
+def _config_path(path: Path | str | None = None) -> Path:
+    return Path(path) if path is not None else CONFIG_FILE
+
+
+def deployment_marker_path(path: Path | str | None = None) -> Path:
+    """Return the out-of-band marker used to fail closed on damaged config."""
+    return _config_path(path).parent / TRUSTED_ALPHA_MARKER
+
+
+def trusted_alpha_expected(path: Path | str | None = None) -> bool:
+    """Whether this installation has explicitly opted into strict startup."""
+    requested_mode = os.environ.get("MYCELIUM_DEPLOYMENT_MODE", "").strip().lower()
+    return requested_mode == "trusted_alpha" or deployment_marker_path(path).is_file()
+
+
+def read_overrides(
+    path: Path | str | None = None,
+    *,
+    require_exists: bool = False,
+) -> dict[str, Any]:
+    """Read the operator-owned JSON object without applying defaults."""
+    config_path = _config_path(path)
+    if not config_path.exists():
+        if require_exists:
+            raise ConfigError(f"configuration file is missing: {config_path}")
+        return {}
+
+    try:
+        parsed = json.loads(config_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ConfigError(
+            f"configuration JSON is invalid at line {exc.lineno}, column {exc.colno}"
+        ) from exc
+    except OSError as exc:
+        raise ConfigError(f"configuration file cannot be read: {config_path}") from exc
+
+    if not isinstance(parsed, dict):
+        raise ConfigError("configuration JSON must contain one object")
+    return parsed
+
+
+def load(
+    path: Path | str | None = None,
+    *,
+    strict: bool | None = None,
+) -> dict[str, Any]:
+    """Load configuration, failing closed for trusted-alpha installations.
+
+    Local development retains the historical compatibility behavior: malformed
+    configuration is ignored with a prominent warning. The deployment marker
+    exists so a trusted-alpha installation cannot silently fall back to open
+    local defaults if its JSON is later truncated or damaged.
+    """
+    config_path = _config_path(path)
+    expected = trusted_alpha_expected(config_path)
+    try:
+        overrides = read_overrides(config_path, require_exists=expected)
+    except ConfigError:
+        if strict is True or (strict is None and expected):
+            raise
+        _LOG.warning(
+            "Ignoring malformed local configuration at %s; local defaults are active",
+            config_path,
+        )
+        overrides = {}
+
+    configured_mode = overrides.get("deployment_mode", DEFAULTS["deployment_mode"])
+    if strict is None:
+        effective_strict = expected or configured_mode == "trusted_alpha"
+    else:
+        effective_strict = strict
+    valid_mode = (
+        isinstance(configured_mode, str) and configured_mode in VALID_DEPLOYMENT_MODES
+    )
+    if not valid_mode:
+        if effective_strict:
+            raise ConfigError(
+                "deployment_mode must be one of: "
+                + ", ".join(sorted(VALID_DEPLOYMENT_MODES))
+            )
+        _LOG.warning("Unknown deployment_mode; using local compatibility mode")
+        overrides["deployment_mode"] = "local"
+
     config = DEFAULTS.copy()
-    if CONFIG_FILE.exists():
-        try:
-            overrides = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-            config.update(overrides)
-        except (json.JSONDecodeError, OSError):
-            pass
+    config.update(overrides)
+    if expected:
+        config["deployment_mode"] = "trusted_alpha"
+    elif configured_mode == "trusted_alpha":
+        # Remember the operator's strict intent out of band. If config.json is
+        # truncated later, the next start can still fail closed instead of
+        # mistaking it for a local-development installation.
+        _atomic_write_text(deployment_marker_path(config_path), "trusted_alpha\n")
     return config
 
 
-def save(config: dict):
-    """Save config to config.json."""
-    CONFIG_FILE.write_text(json.dumps(config, indent=2), encoding="utf-8")
+def _atomic_write_text(path: Path, text: str, *, mode: int = 0o600) -> None:
+    """Atomically replace a small operator-owned file with private permissions."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    )
+    temporary = Path(temporary_name)
+    try:
+        try:
+            os.chmod(temporary, mode)
+        except OSError:
+            # Windows ACLs are not represented by POSIX mode bits. The file is
+            # still created for the current user and atomically replaced.
+            pass
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+            descriptor = -1
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        try:
+            os.chmod(path, mode)
+        except OSError:
+            pass
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
-def get() -> dict:
+def save(config: dict[str, Any], path: Path | str | None = None) -> None:
+    """Atomically save configuration without printing credential values."""
+    config_path = _config_path(path)
+    _atomic_write_text(config_path, json.dumps(config, indent=2) + "\n")
+
+
+def credential_meets_policy(value: object) -> bool:
+    """Return whether a static authority has the trusted-alpha minimum size."""
+    return isinstance(value, str) and len(value.strip()) >= MIN_STATIC_CREDENTIAL_LENGTH
+
+
+def _new_credential(disallowed: set[str]) -> str:
+    while True:
+        candidate = secrets.token_urlsafe(GENERATED_SECRET_BYTES)
+        if candidate not in disallowed:
+            return candidate
+
+
+def ensure_trusted_alpha_config(
+    path: Path | str | None = None,
+    *,
+    model: str | None = None,
+    ollama_url: str | None = None,
+) -> DeploymentConfigUpdate:
+    """Create or safely upgrade a trusted-alpha configuration.
+
+    Valid, independent credentials are preserved so repeat deployments do not
+    disconnect operators or workers. Missing, short, or duplicate authorities
+    are replaced. The returned summary intentionally contains names, never
+    values.
+    """
+    config_path = _config_path(path)
+    overrides = read_overrides(config_path) if config_path.exists() else {}
+    config = DEFAULTS.copy()
+    config.update(overrides)
+    config["deployment_mode"] = "trusted_alpha"
+    if "bind_host" not in overrides:
+        config["bind_host"] = "0.0.0.0"
+    if model:
+        config["model"] = model
+    if ollama_url and "ollama_url" not in overrides:
+        config["ollama_url"] = ollama_url
+
+    generated: list[str] = []
+    preserved: list[str] = []
+    used: set[str] = set()
+    for authority in ("node_secret", "pitch_key", "viewer_key"):
+        current = config.get(authority)
+        if credential_meets_policy(current) and current not in used:
+            value = str(current).strip()
+            preserved.append(authority)
+        else:
+            value = _new_credential(used)
+            generated.append(authority)
+        config[authority] = value
+        used.add(value)
+
+    save(config, config_path)
+    _atomic_write_text(deployment_marker_path(config_path), "trusted_alpha\n")
+    return DeploymentConfigUpdate(
+        path=config_path,
+        generated_authorities=tuple(generated),
+        preserved_authorities=tuple(preserved),
+    )
+
+
+def get() -> dict[str, Any]:
     """Get current config (load once, cache)."""
     if not hasattr(get, "_cache"):
         get._cache = load()
