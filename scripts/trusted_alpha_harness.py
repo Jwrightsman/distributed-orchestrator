@@ -153,6 +153,8 @@ SCENARIOS = (
         description="scoped canonical retries create, replay, conflict, and recover without duplicate work",
         nodeids=(
             "tests/test_execution_submission.py::test_same_scoped_key_replays_one_execution_and_conflicts_on_change",
+            "tests/test_execution_submission.py::test_keyed_commit_then_raise_recovers_owned_creation_and_activates_once",
+            "tests/test_execution_submission.py::test_activation_setup_failure_is_durably_interrupted_and_replays_inert",
             "tests/test_execution_submission.py::test_concurrent_http_retries_schedule_and_emit_creation_exactly_once",
             "tests/test_execution_submission.py::test_open_mode_scopes_to_direct_peer_and_ignores_forwarding_headers",
             "tests/test_execution_submission.py::test_only_digests_reach_storage_or_logs",

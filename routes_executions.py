@@ -7,7 +7,11 @@ from config import get as get_config
 from execution.contracts import ExecutionRequestV1, ExecutionResultV1
 from execution.idempotency import InvalidIdempotencyKey, submission_identity
 from execution.persistence import IdempotencyConflictError, SubmissionConsistencyError
-from execution.service import ExecutionPersistenceError, get_execution_service
+from execution.service import (
+    ExecutionPersistenceError,
+    SubmissionActivationError,
+    get_execution_service,
+)
 from server_state import _check_pitch_key, _check_rate_limit
 
 router = APIRouter(prefix="/v1")
@@ -22,6 +26,20 @@ def _persistence_unavailable() -> HTTPException:
                 "Required execution state could not be committed. "
                 "Verify durable state before retrying."
             ),
+        },
+    )
+
+
+def _activation_unavailable(exc: SubmissionActivationError) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail={
+            "code": "submission_activation_failed",
+            "message": (
+                "The execution was recorded but could not be started. "
+                "Inspect its interrupted durable state before retrying."
+            ),
+            "execution_id": exc.execution_id,
         },
     )
 
@@ -88,6 +106,8 @@ async def create_execution(request_body: ExecutionRequestV1, request: Request, r
                 "message": "The existing submission mapping is temporarily unavailable.",
             },
         ) from exc
+    except SubmissionActivationError as exc:
+        raise _activation_unavailable(exc) from exc
     except ExecutionPersistenceError as exc:
         raise _persistence_unavailable() from exc
     return {

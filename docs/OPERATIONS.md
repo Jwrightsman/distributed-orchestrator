@@ -161,6 +161,25 @@ reuse it only when retrying that same validated request. A create response has
 under the same scope and key returns `409` with
 `detail.code=idempotency_conflict` and leaves the original unchanged.
 
+`false` covers both a normal creation and recovery by the still-active request
+of its own preallocated candidate after an unknown commit outcome. `true`
+always means an ordinary concurrent or historical replay and never starts or
+resumes work.
+
+If the initial row commits but activation preflight, live-cache publication,
+control construction, or task registration fails, the canonical request
+returns `503` with
+`detail.code=submission_activation_failed` and the stable execution ID. The
+execution has already been committed as `interrupted` with the same reason and
+is safe to inspect. Retry the identical request with the same key to retrieve
+that interrupted record; the retry returns `Idempotency-Replayed: true` and
+does not schedule it. Investigate coordinator logs for the sanitized exception
+type before submitting replacement work under a new key.
+
+An unkeyed live call can recover only its own exact initial candidate during
+its bounded persistence retries. A later unkeyed HTTP retry still creates a new
+execution, so callers that need transport retry safety must supply a key.
+
 Configured `pitch_key` holders share one requester scope. The mapping stores
 only domain-separated scope and key digests plus the canonical request digest,
 execution ID, and creation time. Never put a raw idempotency key or requester

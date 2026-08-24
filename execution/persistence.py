@@ -14,6 +14,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -44,10 +45,62 @@ class ExecutionTransitionConflictError(RuntimeError):
         self.attempted = attempted
 
 
+class SubmissionDisposition(str, Enum):
+    """Durable outcome of one keyed submission or initial creation attempt."""
+
+    CREATED = "created"
+    RECOVERED_CREATION = "recovered_creation"
+    REPLAYED = "replayed"
+
+
 @dataclass(frozen=True)
 class SubmissionRecord:
     result: ExecutionResultV1
-    replayed: bool
+    disposition: SubmissionDisposition
+
+    @property
+    def replayed(self) -> bool:
+        """Compatibility projection used by the HTTP response contract."""
+
+        return self.disposition is SubmissionDisposition.REPLAYED
+
+    @property
+    def recovered_creation(self) -> bool:
+        return self.disposition is SubmissionDisposition.RECOVERED_CREATION
+
+
+_EXECUTION_COLUMNS = (
+    "execution_id",
+    "job_id",
+    "protocol_version",
+    "request_json",
+    "strategy_requested",
+    "strategy_selected",
+    "strategy_version",
+    "strategy_options",
+    "selector_reason",
+    "selector_version",
+    "placement_requested",
+    "placement_selected",
+    "fallback_reason",
+    "status",
+    "created_at",
+    "started_at",
+    "completed_at",
+    "result_json",
+    "candidate_summaries",
+    "validation_summaries",
+    "error_json",
+    "lifecycle_status",
+    "validation_outcome",
+    "assurance_level",
+    "interruption_reason",
+    "coordinator_restart_marker",
+    "interrupted_at",
+    "retryable",
+    "cancellation_requested",
+    "remote_dispatch_consent",
+)
 
 
 class ExecutionStore:
@@ -195,6 +248,23 @@ class ExecutionStore:
             int(bool(getattr(result, "remote_dispatch_consent", False))),
         )
 
+    def _matches_exact_initial_record(
+        self,
+        row: sqlite3.Row,
+        request: ExecutionRequestV1,
+        result: ExecutionResultV1,
+    ) -> bool:
+        """Require the complete initial row, including projections, to match."""
+
+        expected = dict(
+            zip(
+                _EXECUTION_COLUMNS,
+                self._execution_values(request, result),
+                strict=True,
+            )
+        )
+        return all(row[column] == value for column, value in expected.items())
+
     def _insert_execution(
         self,
         con: sqlite3.Connection,
@@ -226,6 +296,38 @@ class ExecutionStore:
         with self._lock, connection(self.path) as con:
             self._insert_execution(con, request, result)
             con.commit()
+
+    def create_or_recover_initial(
+        self,
+        request: ExecutionRequestV1,
+        result: ExecutionResultV1,
+    ) -> SubmissionDisposition:
+        """Insert once, or recover only this exact initial candidate snapshot.
+
+        This wrapper is intentionally limited to initial creation. General
+        lifecycle writes remain non-idempotent-by-identity and continue through
+        ``save`` with transition checks.
+        """
+
+        try:
+            self.create(request, result)
+            return SubmissionDisposition.CREATED
+        except sqlite3.IntegrityError as exc:
+            original_error = exc
+
+        self.migrate()
+        with self._lock, connection(self.path, row_factory=sqlite3.Row) as con:
+            row = con.execute(
+                "SELECT * FROM executions WHERE execution_id = ?",
+                (result.execution_id,),
+            ).fetchone()
+        if row is None:
+            raise original_error
+        if not self._matches_exact_initial_record(row, request, result):
+            raise SubmissionConsistencyError(
+                "execution identity already exists with inconsistent initial state"
+            ) from original_error
+        return SubmissionDisposition.RECOVERED_CREATION
 
     def save(self, request: ExecutionRequestV1, result: ExecutionResultV1) -> None:
         self.migrate()
@@ -305,6 +407,11 @@ class ExecutionStore:
             raise SubmissionConsistencyError(
                 "submission identity does not match the validated execution request"
             )
+        # The service supplies a factory for compatibility with the original
+        # Theme 1 contract, but it now preallocates the complete candidate before
+        # entering its retry loop. Calling here lets a retry prove that an
+        # existing mapping belongs to that stable candidate.
+        candidate = result_factory()
         self.migrate()
         with self._lock, transaction(
             self.path,
@@ -332,7 +439,7 @@ class ExecutionStore:
                         "submission mapping contains an invalid request digest"
                     )
                 execution = con.execute(
-                    "SELECT request_json, result_json FROM executions WHERE execution_id = ?",
+                    "SELECT * FROM executions WHERE execution_id = ?",
                     (execution_id,),
                 ).fetchone()
                 if execution is None:
@@ -358,9 +465,25 @@ class ExecutionStore:
                     )
                 if mapping["request_hash"] != identity.request_hash:
                     raise IdempotencyConflictError(execution_id)
-                return SubmissionRecord(result=result, replayed=True)
+                if execution_id == candidate.execution_id:
+                    if self._matches_exact_initial_record(
+                        execution,
+                        request,
+                        candidate,
+                    ):
+                        return SubmissionRecord(
+                            result=result,
+                            disposition=SubmissionDisposition.RECOVERED_CREATION,
+                        )
+                    # The identity collision is not this call's recoverable
+                    # initial snapshot. It remains an ordinary replay of the
+                    # valid mapped execution in its current lifecycle state.
+                return SubmissionRecord(
+                    result=result,
+                    disposition=SubmissionDisposition.REPLAYED,
+                )
 
-            result = result_factory()
+            result = candidate
             self._insert_execution(con, request, result)
             con.execute(
                 """
@@ -377,7 +500,10 @@ class ExecutionStore:
                     result.created_at,
                 ),
             )
-            return SubmissionRecord(result=result, replayed=False)
+            return SubmissionRecord(
+                result=result,
+                disposition=SubmissionDisposition.CREATED,
+            )
 
     @staticmethod
     def _now() -> str:
