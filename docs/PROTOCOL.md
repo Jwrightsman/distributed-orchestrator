@@ -111,16 +111,34 @@ schedule work. A keyed request has these responses:
 | Condition | HTTP behavior |
 | --- | --- |
 | No existing mapping | Existing `202` body plus `Idempotency-Replayed: false` |
-| Same scope, key, and canonical request | Existing execution with `202` and `Idempotency-Replayed: true` |
+| The same live call recovers its preallocated candidate after an unknown commit outcome | Existing `202` body plus `Idempotency-Replayed: false` |
+| Same scope, key, and canonical request from another candidate allocation | Existing execution with `202` and `Idempotency-Replayed: true` |
 | Same scope and key, different canonical request | `409` with `detail.code=idempotency_conflict` and the existing execution ID |
 | Mapping does not resolve to a valid execution | Fail-closed `503` with `detail.code=idempotency_consistency_error` |
+| Durable creation succeeds but local activation setup fails | Fail-closed `503` with `detail.code=submission_activation_failed` and the interrupted execution ID |
 
-A replay returns the existing execution whether it is queued, running,
-completed, failed, cancelled, or interrupted. It does not emit another creation
-event, schedule another task, invoke callbacks, recreate artifacts, or create
-contributions. Authentication, request validation, authorization, and rate
-limiting still run. Without the header, every accepted submission continues to
-create a new execution, and the response omits `Idempotency-Replayed`. Mappings
+A recovered creation is proven by the requester/key/request digests and the
+stable execution ID allocated before the live call's bounded persistence retry
+loop, after that call has observed an ambiguous persistence exception. An exact
+candidate match on the first attempt is still an ordinary replay. A proven
+recovered creation is activated once. An ordinary replay returns the existing
+execution whether it is queued, running, completed, failed, cancelled, or
+interrupted. It does not emit another creation event, schedule another task,
+invoke callbacks, recreate artifacts, or create contributions. Authentication,
+request validation, authorization, and rate limiting still run.
+
+If the durable activation preflight, local control construction, live-cache
+publication, or task registration fails after durable creation, the service
+publishes no running state. It first commits the execution as `interrupted` with
+reason and error code `submission_activation_failed`, then returns `503`.
+Reusing the same key later returns that same interrupted execution with
+`Idempotency-Replayed: true` and does not reschedule it.
+
+Without the header, every external submission continues to create a new
+execution, and the response omits `Idempotency-Replayed`. The live service call
+may internally recover an exact initial row after an unknown commit outcome,
+but an exact row found before that call observes a persistence exception fails
+closed, and a later unkeyed HTTP retry has no deduplication identity. Mappings
 are retained indefinitely during trusted alpha.
 
 This is submission deduplication, not workflow resumption or exactly-once
@@ -641,8 +659,10 @@ shape. Invalid idempotency keys return `422` with
 and key returns `409` with `detail.code=idempotency_conflict`. Required
 persistence failure returns `503` with
 `detail.code=execution_persistence_unavailable`; a broken durable mapping uses
-`detail.code=idempotency_consistency_error`. These envelopes contain no raw key,
-requester credential, prompt, or result.
+`detail.code=idempotency_consistency_error`. A durable creation whose local
+activation setup was contained uses `503` with
+`detail.code=submission_activation_failed` and its stable execution ID. These
+envelopes contain no raw key, requester credential, prompt, or result.
 
 ## Explicit limitations
 

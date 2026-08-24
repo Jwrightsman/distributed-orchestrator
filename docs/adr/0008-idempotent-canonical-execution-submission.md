@@ -52,16 +52,29 @@ initial queued execution row are created together in one immediate SQLite
 transaction. Process-local controls, live-cache publication, lifecycle events,
 callbacks, and task scheduling begin only after that transaction commits.
 
-The transaction has three outcomes:
+The service allocates one execution ID and one complete initial queued snapshot
+before entering its bounded persistence retry loop. Every retry for that live
+submission call carries the same candidate. The submission contract has four
+distinct outcomes:
 
 1. **Created.** No mapping exists. The transaction creates one execution ID,
    queued snapshot, and mapping. The HTTP response remains `202 Accepted` and
    includes `Idempotency-Replayed: false`.
-2. **Replayed.** The mapping exists and the canonical request digest matches.
-   The endpoint returns the existing durable execution, in any lifecycle
-   state, with `Idempotency-Replayed: true`. It does not schedule work or
-   repeat events, callbacks, artifacts, or contribution records.
-3. **Conflict.** The mapping exists but the request digest differs. The
+2. **Recovered creation.** A transaction committed that live call's candidate,
+   but the persistence method raised before returning its outcome. A retry may
+   recover creation only when the requester scope digest, key digest, canonical
+   request digest, stable candidate execution ID, and complete initial snapshot
+   all match. The service must also have observed the earlier ambiguous
+   persistence exception in that same call; an exact candidate match on attempt
+   one remains a historical replay. The service activates a proven recovered
+   candidate once and returns `Idempotency-Replayed: false`.
+3. **Replayed.** The mapping exists and the canonical request digest matches,
+   but it belongs to another candidate allocation. This is an ordinary
+   concurrent, earlier-process, or historical replay. The endpoint returns the
+   existing durable execution, in any lifecycle state, with
+   `Idempotency-Replayed: true`. It does not schedule work or repeat events,
+   callbacks, artifacts, or contribution records.
+4. **Conflict.** The mapping exists but the request digest differs. The
    endpoint returns `409 Conflict` with stable code `idempotency_conflict` and
    does not mutate or schedule anything.
 
@@ -73,6 +86,30 @@ Requests without the header retain their previous behavior: every accepted
 request creates a new execution, and the response omits
 `Idempotency-Replayed`. Authentication, canonical validation, authorization,
 and rate limiting still run for replays.
+
+Unkeyed creation uses the same stable candidate within its active bounded retry
+loop. An already-present execution ID is accepted as recovery only when the
+stored canonical request and complete initial row exactly equal that candidate,
+and only after the same call observed an earlier persistence exception. An
+attempt-one match fails closed. This exception is limited to initial creation;
+normal lifecycle writes do not become idempotent merely by execution ID.
+
+Local activation is process-idempotent. A matching active control/task pair
+prevents repeat scheduling, while partial or inconsistent local state fails
+closed. If the activation preflight, control construction, live-cache
+publication, or task registration fails after durable creation, the service
+does not publish running state or invoke lifecycle callbacks. It durably
+transitions the execution to `interrupted` with stable reason and error code
+`submission_activation_failed`, publishes that interruption only after commit,
+and returns `503 Service Unavailable` to the still-active request. A later keyed
+retry is an ordinary replay of that same interrupted execution.
+
+Activation publication and terminal cancellation share the same process-local
+critical section, so cancellation cannot be overwritten by a late queued-cache
+write. If a created task exits before terminal truth can be read or committed,
+the process retains a fail-closed activation claim instead of scheduling a
+replacement task; restart reconciliation remains responsible for converting
+the durable nonterminal row to `interrupted`.
 
 ## Consequences
 
@@ -90,12 +127,14 @@ and rate limiting still run for replays.
 
 ## Recovery boundary
 
-Submission idempotency preserves execution identity; it does not make the
-scheduler durable. A crash after the queued transaction commits but before the
-process-local task is scheduled may leave the execution to become
-`interrupted` during restart reconciliation. Retrying with the same key returns
-that same interrupted execution. Starting replacement work requires a new key
-or an unkeyed submission.
+Ambiguous-commit recovery is bounded to an exception observed by the same live
+submission call and proven by its preallocated candidate identity. It does not
+make activation, scheduling, or workflow state durable. A process crash or an
+abandoned call after the queued transaction commits can still leave the
+execution unscheduled until restart reconciliation marks it `interrupted`.
+Retrying with the same key then returns that same interrupted execution without
+resuming it. Starting replacement work requires a new key or an unkeyed
+submission.
 
 This decision also does not establish exactly-once model calls, worker calls,
 artifact writes, callbacks, or other external side effects. It prevents a

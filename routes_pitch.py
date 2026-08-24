@@ -24,6 +24,7 @@ from execution.contracts import EnsembleOptionsV1, ExecutionRequestV1
 from execution.service import (
     ExecutionPersistenceError,
     ServiceExecution,
+    SubmissionActivationError,
     get_execution_service,
 )
 from execution.sharing import CreateExecutionShareV1, get_share_store
@@ -66,6 +67,17 @@ def _persistence_unavailable() -> HTTPException:
                 "Required execution state could not be committed. "
                 "Verify durable state before retrying."
             ),
+        },
+    )
+
+
+def _activation_unavailable(exc: SubmissionActivationError) -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail={
+            "code": "submission_activation_failed",
+            "message": "The execution was recorded but could not be started.",
+            "execution_id": exc.execution_id,
         },
     )
 
@@ -316,6 +328,8 @@ async def pitch_async(req: PitchRequest, request: Request, response: Response):
     # replace this hook to control background execution in-process.
     try:
         await _run_job(job_id, req.task, req.project_id, trace_id)
+    except SubmissionActivationError as exc:
+        raise _activation_unavailable(exc) from exc
     except ExecutionPersistenceError as exc:
         raise _persistence_unavailable() from exc
     return {
@@ -387,14 +401,42 @@ async def _run_job(
     if jobs.get(job_id, {}).get("source") == "public":
         execution_callbacks["execution_semaphore"] = _PUBLIC_INFERENCE_SEMAPHORE
 
-    queued = get_execution_service().submit(
-        canonical,
-        job_id=job_id,
-        callbacks=execution_callbacks,
-        dag_runner=run_pipeline,
-        on_start=started,
-        on_complete=completed,
-    )
+    try:
+        queued = get_execution_service().submit(
+            canonical,
+            job_id=job_id,
+            callbacks=execution_callbacks,
+            dag_runner=run_pipeline,
+            on_start=started,
+            on_complete=completed,
+        )
+    except SubmissionActivationError as exc:
+        interrupted = exc.result
+        job = jobs.get(job_id)
+        if job is not None:
+            updated = dict(job)
+            updated["execution_id"] = interrupted.execution_id
+            updated["strategy_requested"] = interrupted.strategy_requested
+            updated["strategy_selected"] = interrupted.strategy_selected
+            updated["selector_reason"] = interrupted.selector_reason
+            updated["status"] = "interrupted"
+            updated["error"] = "submission_activation_failed"
+            updated["result"] = None
+            updated["finished_at"] = interrupted.completed_at or datetime.now(
+                timezone.utc
+            ).isoformat()
+            try:
+                _commit_legacy_job(
+                    updated,
+                    phase="submission_activation_failure",
+                )
+            except ExecutionPersistenceError as mirror_error:
+                # Canonical durable state is authoritative. Preserve the
+                # activation exception (and stable execution ID) even when the
+                # compatibility mirror cannot be updated.
+                raise exc from mirror_error
+            jobs[job_id] = updated
+        raise
     updated = dict(jobs[job_id])
     updated["execution_id"] = queued.execution_id
     updated["strategy_requested"] = queued.strategy_requested
@@ -490,6 +532,8 @@ async def public_pitch(req: PitchRequest, request: Request):
     jobs[job_id] = job
     try:
         await _run_job(job_id, req.task, None, trace_id)
+    except SubmissionActivationError as exc:
+        raise _activation_unavailable(exc) from exc
     except ExecutionPersistenceError as exc:
         raise _persistence_unavailable() from exc
     created_share = get_share_store().create(
