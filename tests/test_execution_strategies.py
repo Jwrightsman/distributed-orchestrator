@@ -11,7 +11,12 @@ import execution.strategies as strategies
 import server_state as state
 from execution.contracts import ExecutionRequestV1
 from execution.artifacts import ArtifactSecurityError, ArtifactStore
-from execution.dispatch import DispatchResult, Dispatcher
+from execution.dispatch import (
+    DispatchResult,
+    Dispatcher,
+    ExecutionUnit,
+    PlacementDecision,
+)
 from execution.persistence import ExecutionStore
 from execution.service import ExecutionService
 from execution.validators import ValidatorRegistry
@@ -143,6 +148,61 @@ async def test_dag_no_node_fallback_and_review_options_are_recorded(tmp_path, mo
     assert received["maximum_subtasks"] == 2
     assert received["review_enabled"] is False
     assert received["revision_enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_worker_error_text_is_not_persisted_in_fallback_event(monkeypatch):
+    sentinel = "private prompt/output echoed by worker"
+    emitted = []
+    unit = ExecutionUnit("candidate-1", "candidate", "Candidate", "prompt", "system")
+
+    async def remote(self, unit, request, execution_id, strategy, decision, **kwargs):
+        return DispatchResult(
+            unit=unit,
+            status="failed",
+            placement="distributed",
+            error=sentinel,
+            attempt_count=1,
+        )
+
+    async def local():
+        return "local fallback output"
+
+    monkeypatch.setattr(Dispatcher, "_distributed", remote)
+    result = await Dispatcher(
+        emit=lambda event_type, data: emitted.append((event_type, data))
+    ).execute(
+        unit,
+        ExecutionRequestV1(
+            task="Fallback safely",
+            placement="distributed",
+            confidentiality="trusted_guild",
+            remote_dispatch_consent=True,
+        ),
+        "e" * 32,
+        "ensemble",
+        PlacementDecision(
+            "distributed",
+            "test",
+            qualifying_nodes=("worker",),
+        ),
+        local,
+    )
+
+    assert result.fallback_reason == sentinel
+    assert [event for event in emitted if event[0] == "placement_fallback"] == [
+        (
+            "placement_fallback",
+            {
+                "execution_id": "e" * 32,
+                "unit_id": "candidate-1",
+                "reason": "distributed_execution_failed",
+                "placement_selected": "local",
+            },
+        )
+    ]
+    assert sentinel not in repr(emitted)
+    assert sentinel not in repr(emitted)
 
 
 @pytest.mark.asyncio

@@ -9,6 +9,9 @@ server.py assembles the app.
 
 import asyncio
 import json
+import logging
+import math
+import re
 import secrets
 import sqlite3
 import threading
@@ -40,6 +43,8 @@ from node_sessions import (
     NodeSessionRegistry,
     normalize_node_id,
 )
+
+logger = logging.getLogger("mycelium.diagnostics")
 
 # ── Node staleness threshold (seconds) ───────────────────────────────────
 _NODE_TIMEOUT = 90
@@ -225,6 +230,353 @@ attempt_store = AttemptStore(_DB_PATH)
 accepted_result_broker = AcceptedResultBroker(attempt_store)
 _COORDINATOR_RESTART_MARKER = f"restart-{secrets.token_hex(12)}"
 
+# Persisted events are operational lifecycle metadata, not a second prompt or
+# result log.  Keep this an allowlist: newly introduced payload fields remain
+# private until they are deliberately classified as structural telemetry.
+_GENERIC_SAFE_EVENT_FIELDS = frozenset(
+    {
+        "execution_id",
+        "job_id",
+        "trace_id",
+        "task_id",
+        "attempt_id",
+        "unit_id",
+        "candidate_id",
+        "node_id",
+        "session_id",
+        "status",
+        "lifecycle_status",
+        "phase",
+        "stage",
+        "error_type",
+        "error_code",
+        "retryable",
+    }
+)
+_SAFE_EVENT_FIELDS = {
+    "pitch": frozenset({"trace_id", "job_id", "mode"}),
+    "plan": frozenset({"trace_id", "job_id", "subtask_count"}),
+    "build": frozenset({"trace_id", "job_id", "subtask_id"}),
+    "review_start": frozenset({"trace_id", "job_id"}),
+    "complete": frozenset({"execution_id", "trace_id", "job_id", "project_dir"}),
+    "error": frozenset({"trace_id", "job_id", "error_type"}),
+    "cancelling": frozenset(
+        {"trace_id", "job_id", "dropped", "still_running"}
+    ),
+    "cancelled": frozenset(
+        {"trace_id", "job_id", "stage", "completed", "credits"}
+    ),
+    "node_task_queued": frozenset(
+        {"trace_id", "job_id", "task_id", "verification"}
+    ),
+    "node_readmitted": frozenset({"node_id"}),
+    "verification": frozenset(
+        {"execution_id", "job_id", "trace_id", "unit_id", "agreed", "nodes"}
+    ),
+    "execution_created": frozenset(
+        {"execution_id", "job_id", "protocol_version"}
+    ),
+    "strategy_selected": frozenset(
+        {"execution_id", "strategy_requested", "strategy_selected"}
+    ),
+    "execution_running": frozenset({"execution_id", "lifecycle_status"}),
+    "execution_completed": frozenset(
+        {"execution_id", "status", "lifecycle_status", "assurance_level"}
+    ),
+    "execution_failed": frozenset(
+        {"execution_id", "status", "lifecycle_status", "assurance_level"}
+    ),
+    "execution_timed_out": frozenset(
+        {"execution_id", "status", "lifecycle_status", "assurance_level"}
+    ),
+    "execution_cancelled": frozenset(
+        {"execution_id", "status", "lifecycle_status", "assurance_level"}
+    ),
+    "execution_interrupted": frozenset(
+        {
+            "execution_id",
+            "status",
+            "lifecycle_status",
+            "assurance_level",
+            "retryable",
+        }
+    ),
+    "execution_callback_failed": frozenset({"execution_id", "stage"}),
+    "execution_persistence_failed": frozenset(
+        {"execution_id", "lifecycle_status", "attempts"}
+    ),
+    "execution_terminal_persistence_failed": frozenset(
+        {"execution_id", "lifecycle_status", "attempts"}
+    ),
+    "execution_unit_queued": frozenset(
+        {"execution_id", "unit_id", "task_id", "placement"}
+    ),
+    "placement_fallback": frozenset(
+        {"execution_id", "unit_id", "placement_selected"}
+    ),
+    "attempt_started": frozenset(
+        {
+            "execution_id",
+            "task_id",
+            "attempt_id",
+            "unit_id",
+            "node_id",
+            "placement",
+        }
+    ),
+    "attempt_completed": frozenset(
+        {
+            "execution_id",
+            "task_id",
+            "attempt_id",
+            "unit_id",
+            "unit_kind",
+            "node_id",
+            "placement",
+            "status",
+            "duration_ms",
+        }
+    ),
+    "review_started": frozenset({"execution_id", "strategy"}),
+    "revision_started": frozenset(
+        {"execution_id", "strategy", "revision_pass"}
+    ),
+    "candidate_generated": frozenset(
+        {"execution_id", "candidate_id", "status", "output_bytes"}
+    ),
+    "candidate_validation_completed": frozenset(
+        {"execution_id", "candidate_id", "validator", "status"}
+    ),
+    "candidate_rejected": frozenset({"execution_id", "candidate_id"}),
+    "winner_selected": frozenset(
+        {"execution_id", "candidate_id", "verified"}
+    ),
+    "node_draining": frozenset({"node_id", "session_id"}),
+    "node_busy": frozenset({"node_id", "task_id", "unit_id"}),
+    "node_idle": frozenset(
+        {
+            "node_id",
+            "credits_earned",
+            "contribution_basis",
+            "points_are_monetary",
+            "elapsed_seconds",
+            "success",
+            "trace_id",
+        }
+    ),
+    "node_blacklisted": frozenset(
+        {"node_id", "failure_count", "blacklist_seconds"}
+    ),
+    "task_reclaimed": frozenset({"task_id", "node_id"}),
+    "worker_task_expired": frozenset({"task_id", "execution_id"}),
+    "result_rejected": frozenset(
+        {
+            "task_id",
+            "claimed_by",
+            "assigned_to",
+            "attempt_state",
+            "error_code",
+            "quarantined",
+            "quarantine_id",
+        }
+    ),
+    "stream_limit_exceeded": frozenset(
+        {
+            "task_id",
+            "attempt_id",
+            "node_id",
+            "max_output_bytes",
+            "streamed_bytes",
+            "stream_batch_count",
+        }
+    ),
+    "attempt_expiry_failed": frozenset({"task_id", "phase", "error_type"}),
+    "attempt_reclaim_failed": frozenset(
+        {"task_id", "node_id", "phase", "error_type"}
+    ),
+    "attempt_issue_failed": frozenset(
+        {"task_id", "node_id", "phase", "error_type"}
+    ),
+    "output_pruned": frozenset({"runs_deleted_count", "cap_mb"}),
+    # Generated token text is allowed only for an ephemeral live broadcast.
+    # The durable sanitizer and startup migration never retain ``token``.
+    "token": frozenset(
+        {"job_id", "trace_id", "subtask_id", "source", "node_id"}
+    ),
+    "token_fanout_truncated": frozenset(),
+}
+_SAFE_EVENT_CODE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,159}$")
+_SAFE_EVENT_PATH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/\\-]{0,511}$")
+_SAFE_EVENT_NUMBERS = frozenset(
+    {
+        "subtask_count",
+        "revision_pass",
+        "output_bytes",
+        "duration_ms",
+        "credits_earned",
+        "elapsed_seconds",
+        "failure_count",
+        "blacklist_seconds",
+        "max_output_bytes",
+        "streamed_bytes",
+        "stream_batch_count",
+        "cap_mb",
+        "attempts",
+        "dropped",
+        "still_running",
+        "completed",
+        "credits",
+        "runs_deleted_count",
+    }
+)
+_SAFE_EVENT_BOOLEANS = frozenset(
+    {
+        "agreed",
+        "verified",
+        "verification",
+        "retryable",
+        "points_are_monetary",
+        "success",
+        "quarantined",
+    }
+)
+_SAFE_EVENT_LISTS = frozenset({"nodes"})
+
+
+def _safe_event_value(field: str, value: Any) -> Any:
+    """Return a bounded structural value, or ``None`` when it is unsafe."""
+
+    if value is None:
+        return None
+    if field in _SAFE_EVENT_BOOLEANS:
+        return value if isinstance(value, bool) else None
+    if field in _SAFE_EVENT_NUMBERS:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        return value if math.isfinite(value) else None
+    if field in _SAFE_EVENT_LISTS:
+        if not isinstance(value, list) or len(value) > 100:
+            return None
+        if not all(
+            isinstance(item, str) and _SAFE_EVENT_CODE.fullmatch(item)
+            for item in value
+        ):
+            return None
+        return list(value)
+    if field == "project_dir":
+        return value if isinstance(value, str) and _SAFE_EVENT_PATH.fullmatch(value) else None
+    if field == "subtask_id" and isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if isinstance(value, str) and _SAFE_EVENT_CODE.fullmatch(value):
+        return value
+    return None
+
+
+def _sanitize_event_payload(
+    event_type: str,
+    data: Any,
+    *,
+    allow_ephemeral_token: bool = False,
+) -> dict[str, Any]:
+    """Keep only stable structural telemetry for one event payload."""
+
+    if not isinstance(data, dict):
+        return {}
+    allowed = _SAFE_EVENT_FIELDS.get(event_type, _GENERIC_SAFE_EVENT_FIELDS)
+    sanitized: dict[str, Any] = {}
+    for field in allowed:
+        if field not in data:
+            continue
+        value = _safe_event_value(field, data[field])
+        if value is not None or data[field] is None:
+            sanitized[field] = value
+    if event_type == "plan" and "subtask_count" not in sanitized:
+        subtasks = data.get("subtasks")
+        if isinstance(subtasks, list):
+            sanitized["subtask_count"] = len(subtasks)
+    if event_type == "output_pruned" and "runs_deleted_count" not in sanitized:
+        runs_deleted = data.get("runs_deleted")
+        if isinstance(runs_deleted, list):
+            sanitized["runs_deleted_count"] = len(runs_deleted)
+    if allow_ephemeral_token and event_type == "token":
+        token = data.get("token")
+        if isinstance(token, str):
+            sanitized["token"] = token
+    return sanitized
+
+
+def _sanitize_event_record(
+    event: Any,
+    *,
+    allow_ephemeral_token: bool = False,
+) -> dict[str, Any]:
+    """Sanitize a flattened in-memory/WebSocket event record."""
+
+    if not isinstance(event, dict):
+        return {}
+    event_type = event.get("type")
+    if not isinstance(event_type, str):
+        return {}
+    cleaned = {"type": event_type}
+    if isinstance(event.get("time"), str):
+        cleaned["time"] = event["time"]
+    cleaned.update(
+        _sanitize_event_payload(
+            event_type,
+            event,
+            allow_ephemeral_token=allow_ephemeral_token,
+        )
+    )
+    if isinstance(event.get("id"), int) and not isinstance(event["id"], bool):
+        cleaned["id"] = event["id"]
+    return cleaned
+
+
+def _decode_persisted_event(
+    event_id: int,
+    event_type: str,
+    event_time: str,
+    blob: str,
+) -> dict[str, Any]:
+    """Decode a durable event without trusting legacy JSON payloads."""
+
+    try:
+        data = json.loads(blob)
+    except (TypeError, json.JSONDecodeError):
+        data = {}
+    event = {
+        "id": event_id,
+        "type": event_type,
+        "time": event_time,
+        **_sanitize_event_payload(event_type, data),
+    }
+    return event
+
+
+def _redact_events_in_transaction(con: sqlite3.Connection) -> None:
+    """Idempotently remove prompt/output text from historical event rows."""
+
+    rows = con.execute("SELECT id, type, time, data FROM events ORDER BY id").fetchall()
+    for event_id, event_type, event_time, blob in rows:
+        event = _decode_persisted_event(event_id, event_type, event_time, blob)
+        safe_blob = json.dumps(
+            {key: value for key, value in event.items() if key not in {"id", "type", "time"}},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        if blob != safe_blob:
+            con.execute("UPDATE events SET data = ? WHERE id = ?", (safe_blob, event_id))
+
+
+def _redact_in_memory_events() -> None:
+    """Apply the durable event policy to any same-process compatibility cache."""
+
+    pipeline_events[:] = [
+        cleaned
+        for event in pipeline_events
+        if (cleaned := _sanitize_event_record(event))
+    ]
+
 
 def _init_db() -> None:
     # Registration sessions are intentionally not durable.  Calling startup
@@ -266,8 +618,15 @@ def _init_db() -> None:
         }.items():
             if name not in existing_job_columns:
                 con.execute(f"ALTER TABLE jobs ADD COLUMN {name} {declaration}")
+        _redact_events_in_transaction(con)
         con.commit()
+    _redact_in_memory_events()
     attempt_store.migrate()
+    # Redact legacy free-form contribution metadata and regenerate the JSON
+    # projection before any read route can expose it.
+    from ledger import sync_compatibility_ledger
+
+    sync_compatibility_ledger(db_path=_DB_PATH)
     # A live attempt cannot be resumed after coordinator restart because the
     # worker queue is process-local. Fail it closed instead of accepting a late
     # result into a new process that has no matching dispatcher wait.
@@ -334,34 +693,37 @@ def _db_load_jobs() -> None:
             ).fetchall()
         for row in rows:
             jid = row["job_id"]
-            if jid not in jobs:
-                jobs[jid] = {
-                    "job_id": jid,
-                    "task": row["task"],
-                    "project_id": row["project_id"],
-                    "status": row["status"],
-                    "submitted_at": row["submitted_at"],
-                    "started_at": row["started_at"],
-                    "finished_at": row["finished_at"],
-                    "error": row["error"],
-                    "result": {"project_dir": row["project_dir"], "rating": row["rating"]}
-                             if row["project_dir"] else None,
-                    "trace_id": row["trace_id"],
-                    "interrupted_at": row["interrupted_at"],
-                    "interruption_reason": row["interruption_reason"],
-                    "coordinator_restart_marker": row["coordinator_restart_marker"],
-                    "retryable": bool(row["retryable"]),
-                }
+            # Startup reconciliation has just made this row authoritative.
+            # Replace any stale same-process projection as well as loading
+            # missing rows, so repeated lifespan/test startup cannot leave an
+            # in-memory queued/running mirror ahead of durable interruption.
+            jobs[jid] = {
+                "job_id": jid,
+                "task": row["task"],
+                "project_id": row["project_id"],
+                "status": row["status"],
+                "submitted_at": row["submitted_at"],
+                "started_at": row["started_at"],
+                "finished_at": row["finished_at"],
+                "error": row["error"],
+                "result": {"project_dir": row["project_dir"], "rating": row["rating"]}
+                if row["project_dir"]
+                else None,
+                "trace_id": row["trace_id"],
+                "interrupted_at": row["interrupted_at"],
+                "interruption_reason": row["interruption_reason"],
+                "coordinator_restart_marker": row["coordinator_restart_marker"],
+                "retryable": bool(row["retryable"]),
+            }
     except Exception as exc:
-        import logging
-
-        logging.getLogger("mycelium.jobs").exception(
-            "failed to reconcile/load legacy jobs: %s", exc
+        logging.getLogger("mycelium.jobs").error(
+            "failed to reconcile/load legacy jobs error_type=%s",
+            type(exc).__name__,
         )
 
 
 def _db_write_event(event_type: str, event_time: str, data: dict) -> int:
-    blob = {k: v for k, v in data.items() if k not in ("type", "time")}
+    blob = _sanitize_event_payload(event_type, data)
     with _db_lock, connection(_DB_PATH) as con:
         cur = con.execute(
             "INSERT INTO events (type, time, data) VALUES (?, ?, ?)",
@@ -418,6 +780,10 @@ class _WSManager:
 
     def publish(self, data: dict) -> None:
         """Non-blockingly fan out an event with a bounded slow-viewer policy."""
+
+        data = _sanitize_event_record(data, allow_ephemeral_token=True)
+        if not data:
+            return
 
         for ws, client_state in list(self._connections.items()):
             queue: asyncio.Queue[dict] = client_state["queue"]
@@ -479,7 +845,11 @@ def _emit(event_type: str, data: dict):
     event = {
         "type": event_type,
         "time": datetime.now(timezone.utc).isoformat(),
-        **data,
+        **_sanitize_event_payload(
+            event_type,
+            data,
+            allow_ephemeral_token=True,
+        ),
     }
     # Token events are high-frequency — broadcast only, don't pollute the event log
     if event_type != "token":
@@ -497,6 +867,19 @@ def _emit(event_type: str, data: dict):
     except RuntimeError:
         return
     ws_manager.publish(event)
+
+
+def _safe_diagnostic_emit(event_type: str, data: dict) -> None:
+    """Publish secret-safe diagnostics without masking the original failure."""
+
+    try:
+        _emit(event_type, data)
+    except Exception as exc:
+        logger.error(
+            "diagnostic event publication failed event_type=%s error_type=%s",
+            event_type,
+            type(exc).__name__,
+        )
 
 
 # ── Rate limiting ─────────────────────────────────────────────────────
@@ -815,10 +1198,14 @@ def _cleanup_pass():
                         now=now,
                     )
             except Exception as exc:
-                _emit("attempt_expiry_failed", {
-                    "task_id": tid,
-                    "reason": f"{type(exc).__name__}: {exc}"[:300],
-                })
+                _safe_diagnostic_emit(
+                    "attempt_expiry_failed",
+                    {
+                        "task_id": tid,
+                        "phase": "lease_expiry",
+                        "error_type": type(exc).__name__,
+                    },
+                )
                 continue
             task = task_inflight.pop(tid)
             deadline = task.get("execution_deadline_at")
@@ -882,11 +1269,15 @@ def _cleanup_pass():
                     # Fail closed: without a durable terminal transition, the
                     # old worker could still settle. Leave the task in-flight
                     # for a later cleanup pass instead of reissuing it.
-                    _emit("attempt_reclaim_failed", {
-                        "task_id": tid,
-                        "node_id": nid,
-                        "reason": f"{type(exc).__name__}: {exc}"[:300],
-                    })
+                    _safe_diagnostic_emit(
+                        "attempt_reclaim_failed",
+                        {
+                            "task_id": tid,
+                            "node_id": nid,
+                            "phase": "stale_node_reclaim",
+                            "error_type": type(exc).__name__,
+                        },
+                    )
                     continue
                 task = task_inflight.pop(tid)
                 for field in (

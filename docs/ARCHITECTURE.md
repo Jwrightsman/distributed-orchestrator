@@ -11,6 +11,8 @@ worker result path may bypass durable attempt settlement.
 flowchart TD
     C[REST / CLI / MCP] --> A[Submission auth and request validation]
     A --> R[ExecutionRequestV1]
+    R --> I[Optional scoped idempotency identity]
+    I --> P[(Canonical execution SQLite)]
     R --> S[conservative-v2 selector]
     S --> D[DAG strategy v1]
     S --> E[Ensemble strategy v1]
@@ -24,7 +26,7 @@ flowchart TD
     B --> X
     D --> V[Validator registry]
     E --> V
-    V --> P[(Canonical execution SQLite)]
+    V --> P
     P --> F[Artifact registry]
     F --> G[Viewer-authenticated APIs]
     P --> H[Explicit redacted share capability]
@@ -43,25 +45,53 @@ sequenceDiagram
     participant C as Client
     participant S as ExecutionService
     participant P as ExecutionStore
+    participant L as Live cache + lifecycle consumers
     participant X as Strategy + Dispatcher
     participant V as ValidatorRegistry
     participant A as ArtifactStore
     C->>S: ExecutionRequestV1
-    S->>P: persist queued
-    S->>P: persist running + total deadline
+    S->>P: atomically persist queued + optional key mapping
+    P-->>S: created or durable replay
+    S->>L: publish queued snapshot and creation event if created
+    S->>P: commit running + total deadline
+    S->>L: publish running snapshot, event, and start callback
     S->>X: execute with remaining deadline and cancel signal
     X->>V: validate output/candidates
     V-->>X: evidence + summary
     X-->>S: strategy outcome
     S->>A: register root and build safe manifest
-    S->>P: persist terminal lifecycle + assurance
+    S->>P: commit terminal lifecycle + assurance + manifest identity
+    S->>L: publish terminal snapshot, event, callback, and legacy mirror
     S-->>C: normalized result or async id
 ```
 
 The total deadline starts at queueing, not at the first worker poll. Each stage
 receives only the remaining budget. The execution service owns terminal-state
 projection and persistence; strategies cannot turn validation confidence into a
-lifecycle state.
+lifecycle state. Every authoritative snapshot is committed before its deep live
+copy, normal lifecycle event, callback, compatibility mirror, response, or
+terminal artifact/share publication. Diagnostic publication failure is not a
+lifecycle transition. See [ADR 0009](adr/0009-durable-terminal-commit-before-publication.md).
+
+## Idempotent canonical submission
+
+Only canonical HTTP submission currently accepts `Idempotency-Key`. After
+authentication, rate limiting, and canonical validation, the endpoint computes
+three digests: the validated request including defaults, the key, and its
+requester scope. Configured `pitch_key` material defines the authenticated
+scope; open development mode uses the direct ASGI peer host as a best-effort
+scope and does not trust forwarding headers.
+
+An immediate SQLite transaction either creates the initial queued execution
+and mapping together, returns the existing execution for a matching replay, or
+reports a conflict for a different request. Process-local controls and work are
+created only for the committed create outcome. Replaying a queued, running, or
+terminal execution never schedules it again.
+
+Idempotency preserves one execution identity; it does not resume process-local
+work. A queued commit whose scheduler task is lost at restart becomes
+`interrupted`, and the same key continues to return that execution. See
+[ADR 0008](adr/0008-idempotent-canonical-execution-submission.md).
 
 ## DAG execution
 
@@ -81,15 +111,19 @@ sequenceDiagram
         D-->>P: builder output
     end
     P->>P: optional review and revision
-    P->>P: extract artifacts and update DAG project memory
+    P->>P: extract artifacts into staged run directory
     P-->>D: legacy-compatible result
     D->>V: validate final output and artifacts
     D-->>S: normalized outcome
+    S->>S: commit terminal snapshot, publish live copy and lifecycle event
+    S->>P: publish project-memory iteration after terminal event
 ```
 
 Planning, review, and revision are coordinator work. Builder units may be local
 or distributed. The existing pipeline remains an adapter behind the canonical
-service rather than being copied into routes.
+service rather than being copied into routes. Project memory is a downstream
+compatibility publication: a failed terminal commit leaves the staged run and
+project iteration unpublished.
 
 ## Ensemble execution
 
@@ -210,8 +244,10 @@ flowchart LR
     D[DAG output/] --> A[ArtifactStore]
     E[Ensemble execution_artifacts/] --> A
     A --> M[(Root + manifest metadata in SQLite)]
-    M --> V[Viewer-authenticated manifest/file/ZIP APIs]
-    M --> F[Share allowlist filter]
+    M --> C{Durable terminal execution permits manifest?}
+    C -->|yes| V[Viewer-authenticated manifest/file/ZIP APIs]
+    C -->|yes| F[Share allowlist filter]
+    C -->|no| Z[No terminal publication]
     X[(Execution SQLite)] --> F
     F --> T[Revocable hashed-token capability]
 ```
@@ -226,7 +262,12 @@ A viewer may create an explicit share. The public response is rebuilt through
 an allowlist rather than by subtracting sensitive keys. Token hashes, expiry,
 revocation, node redaction, candidate detail, and artifact permission are
 durable. A share capability grants access only to its redacted execution and,
-when enabled, its filtered artifact set.
+when enabled, its filtered artifact set. A share may exist while an execution
+is nonterminal, but its public view can expose only the last committed snapshot
+and no terminal artifacts. A sealed manifest may be prepared during
+finalization, but artifact access requires the committed terminal execution to
+reference that exact baseline. Historical `legacy_live` manifests keep their
+documented rescan-based compatibility behavior and are never labeled sealed.
 
 ## Access boundary
 
@@ -251,6 +292,7 @@ and cookie behavior are in [ACCESS_CONTROL.md](ACCESS_CONTROL.md).
 | State | Durable | Restart behavior |
 | --- | --- | --- |
 | Canonical execution snapshots | Yes, SQLite | nonterminal rows become retryable `interrupted` |
+| Scoped submission mappings | Yes, SQLite | matching retries return the same execution, including `interrupted` |
 | Legacy jobs | Yes, SQLite | queued/running rows become retryable `interrupted` |
 | Attempt state and exact replay | Yes, SQLite | active rows become `interrupted`; settled replay remains |
 | Accepted receipts | Yes, SQLite | broker can reload a matching receipt |
@@ -261,7 +303,9 @@ and cookie behavior are in [ACCESS_CONTROL.md](ACCESS_CONTROL.md).
 | Connected nodes and breaker state | **No** | workers re-register; operational state resets |
 
 Reconciliation makes non-resumable loss truthful; it is not durable scheduling
-or failover. The coordinator remains a single point of availability.
+or failover. Submission mappings are retained indefinitely during trusted alpha
+and are part of backup/restore. The coordinator remains a single point of
+availability.
 
 ## Public pitch admission
 
@@ -279,4 +323,6 @@ shared `pitch_key`; viewers may use one shared `viewer_key`. Constant-time
 comparisons and attempt binding reduce specific attacks but do not create
 identity, individual revocation, TLS, multi-user authorization, Sybil
 resistance, or sandboxing. The intended deployment is a small private group of
-known operators. See [THREAT_MODEL.md](THREAT_MODEL.md).
+known operators. All pitch-key holders share an idempotency scope; open-mode
+peer scoping is development-grade and is not user identity. See
+[THREAT_MODEL.md](THREAT_MODEL.md).

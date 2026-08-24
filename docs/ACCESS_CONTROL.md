@@ -120,6 +120,28 @@ admission check is open even when viewer protection is enabled; node-session
 requirements after registration still apply. Viewer authentication is not a
 substitute for configuring the protocol credential.
 
+## Canonical submission requester scope
+
+`Idempotency-Key` on `POST /v1/executions` is scoped separately from viewer
+access. The endpoint first performs its ordinary pitch authentication, request
+validation, and rate limiting. When `pitch_key` is configured, a
+domain-separated digest of that configured credential is the requester scope.
+All holders of the shared pitch credential therefore share one scope; the
+system does not infer individual identity among them.
+
+When pitching is open in local development mode, the direct ASGI peer host is
+hashed as a best-effort scope. Mycelium does not consume `X-Forwarded-For`,
+`Forwarded`, or similar headers. NAT, proxying, and address changes make peer
+scoping unsuitable for authorization, accounting, abuse attribution, or
+durable user identity.
+
+Only the domain-separated scope digest, idempotency-key digest, canonical
+request digest, execution ID, and creation time are stored. The raw pitch
+credential and raw idempotency key must not appear in events, application logs,
+diagnostics, or metrics. Requester-scoped idempotency prevents duplicate
+canonical submissions; it grants no read access and does not make model or
+worker side effects exactly once.
+
 ### Viewer-protected
 
 Every other method/path requires viewer authorization, including:
@@ -275,6 +297,12 @@ event, node, and result reads. `/health` uses the stable public
 `nodes_online: integer` schema; detailed `/nodes` output requires the viewer
 key. Events are flat objects, not nested under `data`.
 
+Canonical HTTP clients may also send `Idempotency-Key`. They must retain it
+with the exact logical request, reuse it only for transport retries, and inspect
+`Idempotency-Replayed`. A matching retry returns the existing execution; a
+changed request under the same scope/key returns `409 idempotency_conflict`.
+CLI, MCP, and compatibility endpoints do not adopt this header in Theme 1.
+
 ## Fail-open warning and deployment checklist
 
 When `viewer_key` is empty, the middleware deliberately permits private routes
@@ -308,6 +336,8 @@ Before binding beyond localhost:
    `/ws/events` closes with `4401`.
 8. Rotate any shared key after suspected disclosure. Node and pitch keys do not
    currently have individual-holder revocation.
+9. Confirm application and proxy logs do not capture idempotency, pitch,
+   viewer, node, session, attempt, or share credentials.
 
 ## Residual limitations
 
@@ -319,4 +349,6 @@ secret distribution, rotation procedures, proxy trust, and host security remain
 operator responsibilities. Node sessions reduce active-label collision but do
 not add durable or cryptographic machine identity. Share revocation cannot
 recall copied content, and one coordinator process remains the only supported
-owner of a state directory.
+owner of a state directory. A shared pitch key creates one shared submission
+scope, while open-mode peer scoping is development-grade rather than user
+identity.

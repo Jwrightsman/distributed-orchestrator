@@ -70,11 +70,18 @@ def start_server() -> subprocess.Popen:
             print("SERVER DIED:\n", proc.stdout.read()[:3000])
             raise SystemExit(1)
         try:
-            r = httpx.get(f"{BASE}/health", timeout=2)
+            # `/health` probes Ollama with its own five-second bound. The
+            # harness client must wait longer than the endpoint or a slow
+            # refused connection makes every otherwise-healthy startup probe
+            # abandon its response early (notably on Windows).
+            r = httpx.get(f"{BASE}/health", timeout=7)
             if r.status_code == 200:
                 return proc
         except Exception:
             time.sleep(0.4)
+    stop_server(proc, hard=True)
+    output = proc.stdout.read()[:3000] if proc.stdout is not None else ""
+    print("SERVER STARTUP OUTPUT:\n", output)
     raise SystemExit("server never became healthy")
 
 
@@ -123,7 +130,7 @@ def register_node(node_id: str) -> httpx.Response:
     return httpx.post(f"{BASE}/nodes/register", timeout=10, json={
         "node_id": node_id, "model": "qwen3.5:4b", "platform": "Linux",
         "machine": "x86_64", "hostname": node_id, "cpu_count": 4,
-        "ram_gb": 8.0, "gpu": "", "capabilities": [],
+        "ram_gb": 8.0, "gpu": None, "capabilities": [],
     })
 
 
@@ -154,7 +161,10 @@ async def main() -> int:
 
     print("\n[1] start server")
     proc = start_server()
-    check("server healthy without Ollama", httpx.get(f"{BASE}/health").json()["status"] == "degraded")
+    check(
+        "server healthy without Ollama",
+        httpx.get(f"{BASE}/health", timeout=10).json()["status"] == "degraded",
+    )
 
     stop = asyncio.Event()
     seen: list = []
@@ -205,7 +215,10 @@ async def main() -> int:
     check("server is actually down", dead)
 
     proc = start_server()
-    check("server came back up", httpx.get(f"{BASE}/health").status_code == 200)
+    check(
+        "server came back up",
+        httpx.get(f"{BASE}/health", timeout=10).status_code == 200,
+    )
 
     print("\n[4] verify recovery")
     after = httpx.get(f"{BASE}/jobs/{failed_job}", timeout=10)

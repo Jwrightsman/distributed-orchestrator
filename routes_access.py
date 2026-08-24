@@ -90,6 +90,38 @@ def _public_execution_or_404(execution_id: str):
     return execution
 
 
+def _execution_value(execution, name: str, default=None):
+    if isinstance(execution, dict):
+        return execution.get(name, default)
+    return getattr(execution, name, default)
+
+
+def _committed_artifact_manifest(execution_id: str, *, public: bool = False):
+    """Require a durable terminal snapshot to bind the manifest it publishes."""
+
+    execution = (
+        _public_execution_or_404(execution_id)
+        if public
+        else _execution_or_404(execution_id)
+    )
+    lifecycle = _execution_value(execution, "lifecycle_status") or _execution_value(
+        execution,
+        "status",
+    )
+    if lifecycle not in {"completed", "unverified", "failed", "cancelled", "interrupted"}:
+        raise ArtifactNotFound("terminal artifacts are not published")
+    manifest = get_artifact_store().get_manifest(execution_id)
+    if manifest.integrity_mode == "sealed":
+        expected_hash = _execution_value(execution, "sealed_manifest_hash")
+        if not expected_hash:
+            raise ArtifactNotFound("terminal artifact manifest is not durably published")
+        if manifest.manifest_hash != expected_hash:
+            raise ArtifactIntegrityError("artifact manifest differs from the execution snapshot")
+    elif manifest.integrity_mode != "legacy_live":
+        raise ArtifactNotFound("terminal artifacts are not published")
+    return execution, manifest
+
+
 def _artifact_http_error(exc: Exception) -> HTTPException:
     if isinstance(exc, ArtifactNotFound):
         return HTTPException(status_code=404, detail="Artifact not found")
@@ -139,8 +171,10 @@ def _share_with_artifacts_or_403(token: str):
 
 def _public_share_manifest(token: str):
     share = _share_with_artifacts_or_403(token)
-    execution = _public_execution_or_404(share.execution_id)
-    manifest = get_artifact_store().get_manifest(share.execution_id)
+    execution, manifest = _committed_artifact_manifest(
+        share.execution_id,
+        public=True,
+    )
     return share, artifact_manifest_for_share(manifest, share, execution)
 
 
@@ -187,8 +221,8 @@ async def execution_artifacts(
     response: Response,
     role: Literal["deliverable", "audit", "all"] = "deliverable",
 ):
-    _execution_or_404(execution_id)
     try:
+        _committed_artifact_manifest(execution_id)
         if role == "all":
             response.headers["Deprecation"] = "true"
             response.headers["Warning"] = (
@@ -204,17 +238,21 @@ async def execution_artifacts(
 
 @router.post("/executions/{execution_id}/artifacts/seal", response_model=ArtifactManifestV1)
 async def seal_execution_artifacts(execution_id: str):
-    _execution_or_404(execution_id)
     try:
-        return get_artifact_store().seal_manifest(execution_id)
+        _, manifest = _committed_artifact_manifest(execution_id)
+        if manifest.integrity_mode != "sealed":
+            raise ArtifactIntegrityError(
+                "legacy artifacts cannot be sealed without updating execution state"
+            )
+        return manifest
     except (ArtifactNotFound, ArtifactLimitError, ArtifactSecurityError) as exc:
         raise _artifact_http_error(exc) from exc
 
 
 @router.get("/executions/{execution_id}/artifacts/{relative_path:path}")
 async def execution_artifact(execution_id: str, relative_path: str):
-    _execution_or_404(execution_id)
     try:
+        _committed_artifact_manifest(execution_id)
         path, entry = get_artifact_store().resolve_entry(execution_id, relative_path)
     except (ArtifactNotFound, ArtifactLimitError, ArtifactSecurityError) as exc:
         raise _artifact_http_error(exc) from exc
@@ -232,8 +270,8 @@ async def execution_artifact(execution_id: str, relative_path: str):
 
 @router.get("/executions/{execution_id}/download")
 async def download_execution_artifacts(execution_id: str):
-    _execution_or_404(execution_id)
     try:
+        _committed_artifact_manifest(execution_id)
         prepared = get_artifact_store().prepare_archive(
             execution_id,
             roles={"deliverable"},
@@ -251,8 +289,8 @@ async def download_execution_artifacts(execution_id: str):
 
 @router.get("/executions/{execution_id}/audit-download")
 async def download_execution_audit(execution_id: str):
-    _execution_or_404(execution_id)
     try:
+        _committed_artifact_manifest(execution_id)
         prepared = get_artifact_store().prepare_archive(
             execution_id,
             roles={"provenance", "log", "candidate_source", "internal"},
@@ -315,7 +353,10 @@ async def public_execution_share(token: str, response: Response):
     execution = _public_execution_or_404(share.execution_id)
     manifest = None
     try:
-        complete_manifest = get_artifact_store().get_manifest(share.execution_id)
+        _, complete_manifest = _committed_artifact_manifest(
+            share.execution_id,
+            public=True,
+        )
         manifest = artifact_manifest_for_share(complete_manifest, share, execution)
     except ArtifactNotFound:
         pass

@@ -1,8 +1,8 @@
 # Operations and Failure Boundaries
 
-This document describes what the RC1 coordinator actually preserves and what an
-operator must not infer from it. The supported target is one coordinator on a
-local filesystem serving a small private trusted alpha.
+This document describes what the trusted-alpha coordinator actually preserves
+and what an operator must not infer from it. The supported target is one
+coordinator on a local filesystem serving a small private trusted alpha.
 
 ## Non-negotiable operating limits
 
@@ -10,6 +10,11 @@ local filesystem serving a small private trusted alpha.
 - Scheduler queues, connected workers, dispatcher waits, and node sessions are
   process-local.
 - Restart interrupts queued/running work; it does not resume scheduling.
+- Required execution snapshots commit before live-cache, lifecycle-event,
+  callback, compatibility-mirror, response, or terminal artifact/share
+  publication.
+- Canonical idempotency preserves one submission identity; it does not restart
+  lost work or make external side effects exactly once.
 - `node_secret` is shared admission, not public-key machine identity.
 - Workers can read every prompt assigned to them.
 - Placement, confidentiality, and network policy are recorded intent, not an
@@ -25,11 +30,12 @@ local filesystem serving a small private trusted alpha.
 | State | Durable | Restart behavior |
 | --- | --- | --- |
 | Canonical executions, lifecycle, validation, telemetry | SQLite | Retained; queued/running become `interrupted` and retryable |
+| Scoped canonical submission mappings | SQLite | Retained indefinitely; replay resolves to the same execution, including after interruption |
 | Attempt authority, nonce digests, settlement receipts, quarantine | SQLite | Retained; active attempts become `interrupted`; exact settled replay remains durable |
 | Shares and revocation metadata | SQLite | Retained; plaintext share token is never stored |
 | Contribution records | SQLite | Authoritative; JSON ledger is only a compatibility projection |
 | Artifact roots, entries, hashes, roles, seal state | SQLite plus files | Retained if both database and artifact trees are restored together |
-| Projects and compatibility output | Files | Retained by state directory/backup |
+| Projects and compatibility output | Files, gated by canonical SQLite authority for current runs | Retained by state directory/backup; staged current output is not completion truth |
 | Pending worker queue and dispatcher waits | Memory | Lost; corresponding work is marked interrupted where durable identity exists |
 | Connected node registry and node sessions | Memory | Lost; workers must register again |
 | Plaintext attempt nonce or node session token | Client memory only | Not recoverable by the coordinator |
@@ -82,6 +88,13 @@ split-brain; WAL and retry policy manage ordinary alpha-level concurrency among
 threads/coroutines inside that process. They do not make arbitrary numbers of
 writers safe, and finite retry can still surface a persistent storage fault.
 
+Keyed canonical submission has a separate immediate transaction that creates
+the queued execution and its `execution_submissions` mapping together. Mapping
+lookup occurs under the same write boundary, so concurrent matching requests
+have one create outcome and one replay outcome. A mapping is never overwritten
+with `INSERT OR REPLACE`; a changed request conflicts and a missing mapped
+execution fails closed.
+
 For diagnosis, run `PRAGMA quick_check` through preflight or a read-only SQLite
 tool only after considering the sensitivity of the database. Use the online
 backup tool while the service is active rather than filesystem-copying
@@ -92,6 +105,33 @@ backup tool while the service is active rather than filesystem-copying
 Canonical lifecycle values are `queued`, `running`, `completed`, `failed`,
 `cancelled`, and `interrupted`. `status` remains a compatibility projection and
 must not drive new lifecycle UI or automation.
+
+SQLite is the lifecycle authority. The service constructs and validates a
+snapshot, commits it with finite retry, then updates the deep live snapshot,
+emits its normal lifecycle event, invokes callbacks/legacy mirrors, and returns
+or exposes it. A failed progress write leaves readers at the last durable
+boundary. A failed terminal write emits no normal terminal event, invokes no
+completion callback, publishes no terminal live snapshot, and exposes no
+terminal artifact/share as authoritative.
+
+Required-persistence exhaustion raises a typed operational error. Active HTTP
+operations return `503` with
+`detail.code=execution_persistence_unavailable`; they do not claim completion
+or cancellation. Asynchronous work logs only execution identity, phase, attempt
+count, and safe error type, cleans up safe process-local resources, and leaves
+the durable row unchanged. A diagnostic event about that failure is not a
+lifecycle event.
+
+After a terminal snapshot commits, a later event, callback, or
+callback-metadata failure cannot undo or reclassify it. Operators should
+investigate the diagnostic while continuing to treat the committed terminal row
+as authority.
+
+After terminal events, project-memory publication, and completion-callback
+handling finish, redundant process-local terminal request/result snapshots are
+evicted. `GET` and idempotent replay continue to load the same authoritative
+terminal row from SQLite. Queued/running snapshots and failed-persistence
+boundaries remain cached while active.
 
 One total deadline begins at canonical submission and covers semaphore wait,
 planning, execution, review, revision, validation, and final manifest work.
@@ -105,9 +145,38 @@ interrupted results cannot enter the operational broker. A bounded quarantine
 may retain reason, output hash, and at most a small preview for diagnosis. It
 does not wake dispatch, update normal success/liveness, or earn points.
 
-Retry means submit a new execution after reading the original terminal record.
-Do not rewrite an interrupted record to queued or start a second coordinator in
-an attempt to recover its in-memory work.
+Retrying a transport operation and retrying lost work are different actions. A
+matching `Idempotency-Key` retrieves the original execution; if it is
+`interrupted`, that replay does not schedule it again. After reading the
+original terminal record and deciding to run replacement work, submit with a
+new key or without a key. Do not rewrite an interrupted record to queued or
+start a second coordinator in an attempt to recover its in-memory work.
+
+## Canonical submission idempotency
+
+Callers may attach `Idempotency-Key` only to `POST /v1/executions`. Use a random
+or otherwise collision-resistant value, retain it with the logical request, and
+reuse it only when retrying that same validated request. A create response has
+`Idempotency-Replayed: false`; a matching replay has `true`. A different request
+under the same scope and key returns `409` with
+`detail.code=idempotency_conflict` and leaves the original unchanged.
+
+Configured `pitch_key` holders share one requester scope. The mapping stores
+only domain-separated scope and key digests plus the canonical request digest,
+execution ID, and creation time. Never put a raw idempotency key or requester
+credential in application logs, diagnostics, issue reports, metrics, or event
+data.
+
+When pitching is open, the direct ASGI peer address supplies a best-effort
+development scope. Mycelium ignores forwarding headers; NAT, proxies, address
+changes, and multiple local callers make this unsuitable as user identity.
+Trusted-alpha mappings have no TTL and are included in SQLite backup/restore.
+
+An `idempotency_consistency_error` response means a mapping did not resolve to
+a valid execution. Treat it as storage corruption or incomplete recovery: stop
+submitting under that key, collect sanitized diagnostics, run integrity checks,
+and do not delete or replace the mapping manually while the coordinator is
+active.
 
 ## Node registration and identity boundary
 
@@ -191,6 +260,13 @@ source, and internal artifacts. A viewer asking for `role=all` receives a
 deprecated compatibility view; new clients must keep deliverable and audit
 surfaces distinct.
 
+Legacy history, gallery, run, status/try, CLI-history, archive, and demo-capture
+paths also enforce terminal publication. For current registered roots, the
+durable execution must be terminal and bind the exact sealed manifest. Do not
+copy a staged `output/` directory or interpret `full_log.json` as completion
+authority. Unmarked historical runs retain the documented live-rescan
+compatibility path; restart-reconciled staged runs remain hidden.
+
 Manifest integrity modes mean:
 
 | Mode | Meaning |
@@ -235,6 +311,19 @@ owed money. `ledger.json` and historical credits are compatibility projections
 of SQLite data, not an independent payment ledger, token, blockchain, or
 fundraising mechanism.
 
+Contribution `task` metadata is restricted to fixed non-sensitive labels and
+free-form `details` are discarded. Startup idempotently redacts older SQLite
+rows and regenerates `ledger.json` before ledger routes are served. Backups or
+copied ledgers made before that upgrade may still retain the historical text;
+operators must rotate or separately sanitize those copies.
+
+The event log follows the same upgrade boundary. New persisted and replayed
+events contain only allowlisted structural telemetry. Startup idempotently
+redacts historical `events.data` payloads before event routes are served;
+generated tokens remain live-stream-only. Offline database backups or exports
+created before this upgrade may still contain historical prompt or output text
+and require operator-managed rotation or sanitization.
+
 ## Generated artifact safety
 
 Parsing, browser loading, structural checks, contract validation, deterministic
@@ -269,6 +358,10 @@ node sessions, or plaintext session/attempt credentials. A restored coordinator
 reconciles durable active state to interrupted and workers register again. See
 the exact commands in [Trusted Alpha Runbook](TRUSTED_ALPHA_RUNBOOK.md).
 
+Keyed submission mappings are ordinary SQLite state and are restored with the
+database. Replaying a restored key therefore returns the captured execution;
+it does not recreate post-backup work or resume a captured nonterminal task.
+
 ## Frontend-visible contract (Claude Code handoff)
 
 Do not infer UI state from prose or compatibility aliases. Consume these API
@@ -282,6 +375,7 @@ fields directly:
 | Manifest integrity | Execution `artifact_integrity_mode`, `sealed_manifest_hash`; manifest `integrity_mode`, `manifest_hash`, `sealed_at` | Say “sealed local hash baseline,” not signed/verified; explain legacy/active/invalid states |
 | Deliverable vs audit | `primary_deliverables`, `artifact_manifest_url`, `audit_manifest_url`; `/download` vs `/audit-download` | Default user download is deliverable-only; audit is an explicit secondary action |
 | Lifecycle | `lifecycle_status`, timestamps, cancellation/interruption fields, `retryable` | Never derive lifecycle from assurance or the legacy `status` projection |
+| Submission replay | `Idempotency-Replayed` response header; structured 409/422/503 `detail.code` values | Preserve the key only with its logical request; never display it as a user identity or an exactly-once guarantee |
 | Validation | `validation_outcome`, `validation_summary`, `validation_evidence` | Show passed, failed, skipped, and not-run checks; “partial” is not “correct” |
 | Assurance | `assurance_level` plus each evidence item's level and `proves_behavioral_correctness` | Suggested labels: Not checked, Structure checked, Contract validated, Behavior tested, AI reviewed; avoid a generic badge |
 | Post-hoc verification | `posthoc_verification_status`, `_started_at`, `_completed_at`, `_agreement`, `_reason` | Separate from terminal validation; trusted-alpha currently reports `disabled`, not silently pending |
@@ -294,9 +388,11 @@ change.
 
 ## Residual limitations
 
-The RC1 controls make private invited operation reviewable; they do not provide
-public-network readiness. Remaining structural limits include shared
+The trusted-alpha controls make private invited operation reviewable; they do
+not provide public-network readiness. Remaining structural limits include shared
 instance-wide keys, process-local scheduling and node sessions, no public-key
 node identity, no coordinator HA, no generated-code sandbox, no remote
 attestation, no signed artifact provenance, and provisional model quality with
-high run-to-run variance.
+high run-to-run variance. Open-mode peer scoping is not durable identity, and
+idempotent submission does not make model, worker, callback, or filesystem side
+effects exactly once.

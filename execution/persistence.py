@@ -11,12 +11,43 @@ import json
 import sqlite3
 import threading
 import uuid
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from execution.contracts import ExecutionRequestV1, ExecutionResultV1
-from sqlite_store import connection, migration_lock
+from execution.idempotency import SubmissionIdentity, canonical_request_digest
+from sqlite_store import connection, migration_lock, transaction
+
+
+class IdempotencyConflictError(RuntimeError):
+    """One requester scope/key is already bound to a different request."""
+
+    def __init__(self, execution_id: str):
+        super().__init__("idempotency key is already bound to another request")
+        self.execution_id = execution_id
+
+
+class SubmissionConsistencyError(RuntimeError):
+    """A durable idempotency mapping has lost its execution row."""
+
+
+class ExecutionTransitionConflictError(RuntimeError):
+    """A stale snapshot attempted to replace a different terminal lifecycle."""
+
+    def __init__(self, execution_id: str, current: str, attempted: str):
+        super().__init__("a terminal execution cannot be reclassified")
+        self.execution_id = execution_id
+        self.current = current
+        self.attempted = attempted
+
+
+@dataclass(frozen=True)
+class SubmissionRecord:
+    result: ExecutionResultV1
+    replayed: bool
 
 
 class ExecutionStore:
@@ -86,6 +117,26 @@ class ExecutionStore:
             con.execute(
                 "CREATE INDEX IF NOT EXISTS idx_executions_created_at ON executions(created_at)"
             )
+            con.execute(
+                """
+                CREATE TABLE IF NOT EXISTS execution_submissions (
+                    requester_scope_hash TEXT NOT NULL,
+                    idempotency_key_hash TEXT NOT NULL,
+                    request_hash TEXT NOT NULL,
+                    execution_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY (requester_scope_hash, idempotency_key_hash),
+                    FOREIGN KEY (execution_id) REFERENCES executions(execution_id)
+                        ON DELETE RESTRICT
+                )
+                """
+            )
+            con.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_execution_submissions_execution_id
+                ON execution_submissions(execution_id)
+                """
+            )
             con.commit()
 
     @staticmethod
@@ -95,12 +146,91 @@ class ExecutionStore:
             raise ValueError(f"persisted execution JSON exceeds {limit} bytes")
         return raw
 
-    def save(self, request: ExecutionRequestV1, result: ExecutionResultV1) -> None:
-        self.migrate()
+    def _execution_values(
+        self,
+        request: ExecutionRequestV1,
+        result: ExecutionResultV1,
+    ) -> tuple[Any, ...]:
         request_json = self._bounded_json(request.model_dump(mode="json"), 65_536)
         result_json = self._bounded_json(result.model_dump(mode="json"))
+        return (
+            result.execution_id,
+            result.job_id,
+            result.protocol_version,
+            request_json,
+            result.strategy_requested,
+            result.strategy_selected,
+            result.strategy_version,
+            self._bounded_json(result.strategy_options, 16_384),
+            result.selector_reason,
+            result.selector_version,
+            result.placement_requested,
+            result.placement_selected,
+            result.fallback_reason,
+            result.status,
+            result.created_at,
+            result.started_at,
+            result.completed_at,
+            result_json,
+            self._bounded_json(
+                [candidate.model_dump(mode="json") for candidate in result.candidates],
+                65_536,
+            ),
+            self._bounded_json(
+                [evidence.model_dump(mode="json") for evidence in result.validation_evidence],
+                65_536,
+            ),
+            self._bounded_json(
+                [error.model_dump(mode="json") for error in result.errors],
+                16_384,
+            ),
+            getattr(result, "lifecycle_status", result.status),
+            getattr(result, "validation_outcome", "not_run"),
+            getattr(result, "assurance_level", "unverified"),
+            getattr(result, "interruption_reason", None),
+            getattr(result, "coordinator_restart_marker", None),
+            getattr(result, "interrupted_at", None),
+            int(bool(getattr(result, "retryable", False))),
+            int(bool(getattr(result, "cancellation_requested", False))),
+            int(bool(getattr(result, "remote_dispatch_consent", False))),
+        )
+
+    def _insert_execution(
+        self,
+        con: sqlite3.Connection,
+        request: ExecutionRequestV1,
+        result: ExecutionResultV1,
+    ) -> None:
+        con.execute(
+            """
+            INSERT INTO executions (
+                execution_id, job_id, protocol_version, request_json,
+                strategy_requested, strategy_selected, strategy_version,
+                strategy_options, selector_reason, selector_version,
+                placement_requested, placement_selected, fallback_reason,
+                status, created_at, started_at, completed_at, result_json,
+                candidate_summaries, validation_summaries, error_json,
+                lifecycle_status, validation_outcome, assurance_level,
+                interruption_reason, coordinator_restart_marker,
+                interrupted_at, retryable, cancellation_requested,
+                remote_dispatch_consent
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            self._execution_values(request, result),
+        )
+
+    def create(self, request: ExecutionRequestV1, result: ExecutionResultV1) -> None:
+        """Strictly insert an initial snapshot without overwriting an identity."""
+
+        self.migrate()
         with self._lock, connection(self.path) as con:
-            con.execute(
+            self._insert_execution(con, request, result)
+            con.commit()
+
+    def save(self, request: ExecutionRequestV1, result: ExecutionResultV1) -> None:
+        self.migrate()
+        with self._lock, connection(self.path) as con:
+            cursor = con.execute(
                 """
                 INSERT INTO executions (
                     execution_id, job_id, protocol_version, request_json,
@@ -142,43 +272,112 @@ class ExecutionStore:
                     retryable=excluded.retryable,
                     cancellation_requested=excluded.cancellation_requested,
                     remote_dispatch_consent=excluded.remote_dispatch_consent
+                WHERE COALESCE(executions.lifecycle_status, executions.status)
+                          NOT IN ('completed', 'unverified', 'failed', 'cancelled', 'interrupted')
+                   OR COALESCE(executions.lifecycle_status, executions.status)
+                          = COALESCE(excluded.lifecycle_status, excluded.status)
+                """,
+                self._execution_values(request, result),
+            )
+            if cursor.rowcount == 0:
+                row = con.execute(
+                    "SELECT COALESCE(lifecycle_status, status) FROM executions "
+                    "WHERE execution_id = ?",
+                    (result.execution_id,),
+                ).fetchone()
+                current = str(row[0]) if row else "missing"
+                raise ExecutionTransitionConflictError(
+                    result.execution_id,
+                    current,
+                    str(getattr(result, "lifecycle_status", result.status)),
+                )
+            con.commit()
+
+    def create_or_replay_submission(
+        self,
+        request: ExecutionRequestV1,
+        identity: SubmissionIdentity,
+        result_factory: Callable[[], ExecutionResultV1],
+    ) -> SubmissionRecord:
+        """Atomically bind one scoped key to one initial queued execution."""
+
+        if canonical_request_digest(request) != identity.request_hash:
+            raise SubmissionConsistencyError(
+                "submission identity does not match the validated execution request"
+            )
+        self.migrate()
+        with self._lock, transaction(
+            self.path,
+            immediate=True,
+            row_factory=sqlite3.Row,
+        ) as con:
+            mapping = con.execute(
+                """
+                SELECT request_hash, execution_id
+                FROM execution_submissions
+                WHERE requester_scope_hash = ? AND idempotency_key_hash = ?
                 """,
                 (
+                    identity.requester_scope_hash,
+                    identity.idempotency_key_hash,
+                ),
+            ).fetchone()
+            if mapping is not None:
+                execution_id = str(mapping["execution_id"])
+                if not isinstance(mapping["request_hash"], str) or not isinstance(
+                    identity.request_hash,
+                    str,
+                ):
+                    raise SubmissionConsistencyError(
+                        "submission mapping contains an invalid request digest"
+                    )
+                execution = con.execute(
+                    "SELECT request_json, result_json FROM executions WHERE execution_id = ?",
+                    (execution_id,),
+                ).fetchone()
+                if execution is None:
+                    raise SubmissionConsistencyError(
+                        "submission mapping references a missing execution"
+                    )
+                try:
+                    stored_request = ExecutionRequestV1.model_validate_json(
+                        execution["request_json"]
+                    )
+                    result = ExecutionResultV1.model_validate_json(execution["result_json"])
+                except Exception as exc:
+                    raise SubmissionConsistencyError(
+                        "submission mapping references an invalid execution"
+                    ) from exc
+                if result.execution_id != execution_id:
+                    raise SubmissionConsistencyError(
+                        "submission mapping references a mismatched execution identity"
+                    )
+                if canonical_request_digest(stored_request) != mapping["request_hash"]:
+                    raise SubmissionConsistencyError(
+                        "submission mapping references a mismatched execution request"
+                    )
+                if mapping["request_hash"] != identity.request_hash:
+                    raise IdempotencyConflictError(execution_id)
+                return SubmissionRecord(result=result, replayed=True)
+
+            result = result_factory()
+            self._insert_execution(con, request, result)
+            con.execute(
+                """
+                INSERT INTO execution_submissions (
+                    requester_scope_hash, idempotency_key_hash, request_hash,
+                    execution_id, created_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    identity.requester_scope_hash,
+                    identity.idempotency_key_hash,
+                    identity.request_hash,
                     result.execution_id,
-                    result.job_id,
-                    result.protocol_version,
-                    request_json,
-                    result.strategy_requested,
-                    result.strategy_selected,
-                    result.strategy_version,
-                    self._bounded_json(result.strategy_options, 16_384),
-                    result.selector_reason,
-                    result.selector_version,
-                    result.placement_requested,
-                    result.placement_selected,
-                    result.fallback_reason,
-                    result.status,
                     result.created_at,
-                    result.started_at,
-                    result.completed_at,
-                    result_json,
-                    self._bounded_json([c.model_dump(mode="json") for c in result.candidates], 65_536),
-                    self._bounded_json(
-                        [v.model_dump(mode="json") for v in result.validation_evidence], 65_536
-                    ),
-                    self._bounded_json([e.model_dump(mode="json") for e in result.errors], 16_384),
-                    getattr(result, "lifecycle_status", result.status),
-                    getattr(result, "validation_outcome", "not_run"),
-                    getattr(result, "assurance_level", "unverified"),
-                    getattr(result, "interruption_reason", None),
-                    getattr(result, "coordinator_restart_marker", None),
-                    getattr(result, "interrupted_at", None),
-                    int(bool(getattr(result, "retryable", False))),
-                    int(bool(getattr(result, "cancellation_requested", False))),
-                    int(bool(getattr(result, "remote_dispatch_consent", False))),
                 ),
             )
-            con.commit()
+            return SubmissionRecord(result=result, replayed=False)
 
     @staticmethod
     def _now() -> str:
@@ -262,6 +461,17 @@ class ExecutionStore:
             return None
         return ExecutionResultV1.model_validate_json(row[0])
 
+    def get_request(self, execution_id: str) -> ExecutionRequestV1 | None:
+        self.migrate()
+        with self._lock, connection(self.path) as con:
+            row = con.execute(
+                "SELECT request_json FROM executions WHERE execution_id = ?",
+                (execution_id,),
+            ).fetchone()
+        if not row:
+            return None
+        return ExecutionRequestV1.model_validate_json(row[0])
+
     def get_by_job_id(self, job_id: str) -> ExecutionResultV1 | None:
         self.migrate()
         with self._lock, connection(self.path) as con:
@@ -281,5 +491,25 @@ class ExecutionStore:
             row = con.execute(
                 "SELECT * FROM executions WHERE execution_id = ?",
                 (execution_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def raw_submission(
+        self,
+        requester_scope_hash: str,
+        idempotency_key_hash: str,
+    ) -> dict[str, Any] | None:
+        """Return one digest-only mapping for diagnostics and migration tests."""
+
+        self.migrate()
+        with self._lock, connection(self.path, row_factory=sqlite3.Row) as con:
+            row = con.execute(
+                """
+                SELECT requester_scope_hash, idempotency_key_hash, request_hash,
+                       execution_id, created_at
+                FROM execution_submissions
+                WHERE requester_scope_hash = ? AND idempotency_key_hash = ?
+                """,
+                (requester_scope_hash, idempotency_key_hash),
             ).fetchone()
         return dict(row) if row else None

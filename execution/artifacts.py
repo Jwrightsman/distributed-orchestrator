@@ -95,6 +95,13 @@ class ArtifactSource:
 
 
 @dataclass(frozen=True)
+class ArtifactRootBinding:
+    execution_id: str
+    manifest_state: ArtifactIntegrityModeV1
+    active: bool
+
+
+@dataclass(frozen=True)
 class PreparedArtifactArchive:
     path: Path
     download_name: str
@@ -437,6 +444,44 @@ class ArtifactStore:
             raise ArtifactNotFound("artifacts are not registered for this execution")
         root = self._validated_existing_root(row[0])
         return root, str(row[1]), bool(row[2])
+
+    def root_path(self, execution_id: str) -> Path:
+        """Return the validated internal root for an execution.
+
+        The path remains an internal authorization input; callers must never
+        serialize it into an API response. Publication adapters use it to
+        prove that a legacy run directory is the root bound to the canonical
+        execution rather than a second directory that copied its identifier.
+        """
+
+        root, _, _ = self._root_record(execution_id)
+        return root
+
+    def binding_for_root(self, root: str | Path) -> ArtifactRootBinding | None:
+        """Resolve and validate canonical artifact authority for one run root."""
+
+        candidate = Path(root)
+        try:
+            resolved = candidate.resolve(strict=True)
+        except OSError as exc:
+            raise ArtifactSecurityError("artifact root does not exist") from exc
+        self.migrate()
+        with self._lock, connection(self.db_path) as con:
+            row = con.execute(
+                "SELECT execution_id, manifest_state, active "
+                "FROM artifact_roots WHERE root_path = ?",
+                (str(resolved),),
+            ).fetchone()
+        if row is None:
+            return None
+        validated = self._validated_existing_root(root)
+        if validated != resolved:
+            raise ArtifactSecurityError("artifact root identity changed")
+        return ArtifactRootBinding(
+            execution_id=str(row[0]),
+            manifest_state=str(row[1]),
+            active=bool(row[2]),
+        )
 
     def _manifest_metadata(
         self,

@@ -25,10 +25,12 @@ durable worker attempts and accepted receipts; validator contract floors and
 honest assurance; authenticated artifact delivery; explicit redacted shares;
 viewer/pitch/node credential separation; privacy-safe canonical defaults;
 persistent DAG project memory; digest-only node sessions; bounded worker output,
-streams, and event fanout; one-coordinator state ownership; common SQLite policy;
-role-scoped sealed artifact manifests; verified backup/restore; operational
-preflight/harnesses; REST, CLI, MCP, events, dashboard, contribution records,
-LAN discovery, demo modes, and deployment guides.
+streams, and event fanout; one-coordinator state ownership; common SQLite
+policy; role-scoped sealed artifact manifests; required execution commit before
+publication; requester-scoped canonical HTTP submission idempotency; verified
+backup/restore; operational preflight/harnesses; REST, CLI, MCP, events,
+dashboard, contribution records, LAN discovery, demo modes, and deployment
+guides.
 
 **Current trust tier:** a small private trusted alpha. Worker identity still
 starts with a shared admission secret; node sessions are process-local bearer
@@ -56,10 +58,12 @@ state before making a launch-status claim.
 ## 4. The Prime Directive
 
 **No unbounded feature expansion until the demo video is public.** The bounded
-Execution Strategy Protocol v1, Trusted-Alpha Integrity, and Trusted-Alpha RC1
-sprints are the only authorized exceptions. Their records are
+Execution Strategy Protocol v1, Trusted-Alpha Integrity, Trusted-Alpha RC1, and
+the explicitly authorized Durable Execution Truth implementation are the only
+authorized exceptions. Their records are
 `SPRINT_STRATEGY_PROTOCOL.md`, `SPRINT_TRUSTED_ALPHA_INTEGRITY.md`, and
-`SPRINT_TRUSTED_ALPHA_RC1.md`. Normal freeze discipline resumes after RC1
+`SPRINT_TRUSTED_ALPHA_RC1.md`, plus
+`SPRINT_DURABLE_EXECUTION_TRUTH.md`. Normal freeze discipline resumes after its
 handoff. Do not infer authorization for map,
 research, debate, consensus, marketplace, token, blockchain, federation,
 accounts, major UI, sandbox, or model-sharding work.
@@ -70,6 +74,14 @@ accounts, major UI, sandbox, or model-sharding work.
 - DAG and ensemble are the only registered production strategies; direct normalizes to ensemble.
 - Canonical placement defaults local/local-only; remote-capable requests require recorded consent.
 - Lifecycle, validation outcome, and assurance are separate and persisted.
+- Required queued, running, terminal, cancellation, and metadata snapshots
+  commit before live-cache, normal-event, callback, compatibility-mirror,
+  response, or terminal artifact/share publication.
+- Terminal process-local request/result snapshots are evicted after their
+  post-commit observers; durable reads continue from SQLite.
+- Optional requester-scoped `Idempotency-Key` on canonical HTTP submission
+  atomically binds one queued execution to one canonical request; matching
+  replays never schedule duplicate work.
 - Server-owned attempts, exact replay, accepted receipts, and compute contributions settle durably and atomically.
 - Rejected or late output is quarantined outside the operational broker.
 - Non-resumable executions/jobs become retryable `interrupted` after restart.
@@ -79,8 +91,13 @@ accounts, major UI, sandbox, or model-sharding work.
 - Worker calls require server-issued digest-only sessions; attempt/session output and streaming budgets are bounded.
 - Terminal artifacts have winner/role scope and a sealed local manifest baseline; deliverable and audit downloads are distinct.
 - SQLite access has one policy and backup/restore has validated archives; process-local queues and sessions are not recoverable.
+- Persisted event history is allowlisted structural telemetry; startup redacts
+  historical free-form event payloads before replay.
 - Post-hoc duplicate-verification fields are explicit, but trusted-alpha reports them disabled.
 - The worker scheduler remains in memory and node admission still uses a shared secret.
+- Submission idempotency preserves identity, not workflow resumption or
+  exactly-once external side effects; open-mode peer scoping is not user
+  identity.
 - Normative behavior is in `docs/PROTOCOL.md`; security boundaries are in `docs/THREAT_MODEL.md`.
 
 ## 5. The 30-day launch plan
@@ -127,8 +144,10 @@ the repository. Trusted-alpha integrity added private-read, attempt-authority,
 lifecycle, validation, share, privacy-default, and interface contracts. RC1
 adds deploy-mode preflight, session-bound workers, bounded worker I/O, one
 coordinator, shared SQLite policy, role-scoped sealed manifests, verified
-backup/restore, and bounded live/nightly harnesses. Do not recreate those
-systems from older worklists.
+backup/restore, and bounded live/nightly harnesses. Durable Execution Truth adds
+commit-before-publication lifecycle authority and requester-scoped canonical
+retry idempotency without changing the process-local scheduler. Do not recreate
+those systems from older worklists.
 
 Before any deployment or demo:
 
@@ -143,7 +162,8 @@ Before any deployment or demo:
 4. Review generated artifacts before execution; validation is not a sandbox.
 5. Verify the deployed build fingerprint and exercise viewer/session denial,
    share scope/expiry/revocation, artifact role/seal/drift/download, worker I/O
-   limits, cancellation/restart, attempt replay/rejection, and backup/restore.
+   limits, cancellation/restart, attempt replay/rejection, canonical submission
+   replay/conflict, terminal publication failure, and backup/restore.
 6. Configure application-server and reverse-proxy access logs not to retain raw
    share capability URLs.
 7. Keep the standing rules: no money/tokens/blockchain, no permissionless-node
@@ -178,9 +198,11 @@ trigger fires. The active work is always in `SPRINT_*.md`.
 Of the five items this section used to list, the **MCP server interface shipped**
 (five tools; rerun its current checks before deployment). Trusted-alpha exposes
 post-hoc verification state but intentionally reports duplicate verification
-`disabled` until its durable semantics exist; do not describe the historical
-`verify_rate` path as current assurance. Layer sharding, agent specialization,
-reputation experiments, and the guild charter remain gated in ROADMAP.
+`disabled`; canonical submission idempotency does not create accepted durable
+post-hoc evidence or authorize duplicate verification. Do not describe the
+historical `verify_rate` path as current assurance. Layer sharding, agent
+specialization, reputation experiments, and the guild charter remain gated in
+ROADMAP.
 
 ## 9. Success metrics
 

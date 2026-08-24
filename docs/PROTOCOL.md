@@ -82,6 +82,52 @@ selection policy of `validated_score` or `first_valid`.
 The option discriminator may be inferred only when the supplied fields are
 unambiguous. A conflicting strategy and option family is invalid.
 
+## Idempotent canonical submission
+
+`POST /v1/executions` accepts an optional `Idempotency-Key` request header. A
+valid value contains 1–128 printable ASCII characters, contains no control
+characters, and is not empty or whitespace-only. The coordinator does not
+normalize an otherwise valid value and never stores or logs its plaintext.
+
+After the body is parsed and validated as `ExecutionRequestV1`, the coordinator
+serializes the model with explicit and defaulted values, sorted JSON keys,
+compact separators, and UTF-8 encoding. SHA-256 of those canonical bytes is the
+request digest. Original HTTP byte layout and JSON object-key order do not
+affect it.
+
+The key is scoped to the requester. When `pitch_key` is configured, a
+domain-separated SHA-256 digest of that configured credential defines the
+scope. Otherwise, open development mode uses a domain-separated digest of the
+direct ASGI peer address from `request.client.host`. Mycelium does not trust
+`X-Forwarded-For` or related headers, and open-mode peer scoping is not durable
+user identity. The key itself is stored only as a separately domain-separated
+SHA-256 digest.
+
+The initial queued execution and its `execution_submissions` mapping commit in
+one immediate SQLite transaction. Only after commit may the service create
+process-local controls, publish its live snapshot and creation event, or
+schedule work. A keyed request has these responses:
+
+| Condition | HTTP behavior |
+| --- | --- |
+| No existing mapping | Existing `202` body plus `Idempotency-Replayed: false` |
+| Same scope, key, and canonical request | Existing execution with `202` and `Idempotency-Replayed: true` |
+| Same scope and key, different canonical request | `409` with `detail.code=idempotency_conflict` and the existing execution ID |
+| Mapping does not resolve to a valid execution | Fail-closed `503` with `detail.code=idempotency_consistency_error` |
+
+A replay returns the existing execution whether it is queued, running,
+completed, failed, cancelled, or interrupted. It does not emit another creation
+event, schedule another task, invoke callbacks, recreate artifacts, or create
+contributions. Authentication, request validation, authorization, and rate
+limiting still run. Without the header, every accepted submission continues to
+create a new execution, and the response omits `Idempotency-Replayed`. Mappings
+are retained indefinitely during trusted alpha.
+
+This is submission deduplication, not workflow resumption or exactly-once
+external side-effect execution. A replay after restart returns the same
+interrupted execution; starting replacement work requires a new key or no key.
+See [ADR 0008](adr/0008-idempotent-canonical-execution-submission.md).
+
 ## Strategy semantics
 
 ### DAG version 1
@@ -170,7 +216,10 @@ the field as a security boundary.
 DAG supports bounded project memory through its existing project pipeline.
 Ensemble and direct reject `project_id` with a validation error. They do not
 silently accept an identifier while ignoring its memory. Selected-result-only
-memory updates are a prerequisite for adding parity later.
+memory updates are a prerequisite for adding parity later. A DAG iteration is
+added only after the canonical terminal snapshot and its normal lifecycle event
+are published; terminal-persistence failure therefore leaves project memory at
+its previous committed iteration.
 
 ## Lifecycle, deadlines, cancellation, and restart
 
@@ -184,6 +233,14 @@ Canonical lifecycle and assurance are separate dimensions.
 - `failed`
 - `cancelled`
 - `interrupted`
+
+Durable storage is authoritative for each lifecycle snapshot. Required state
+follows this order: construct and validate, commit to SQLite, publish a deep
+process-local live snapshot, emit the normal lifecycle event, invoke callbacks
+or legacy mirrors, and return or otherwise expose the state. A failed progress
+write cannot advance the live snapshot. Normal terminal events, completion
+callbacks, compatibility terminal mirrors, and terminal artifact/share
+publication require a committed terminal snapshot.
 
 `timeout_seconds` is a total deadline beginning when the canonical execution is
 queued. Planning, local generation, worker waits, validation, review, revision,
@@ -199,16 +256,35 @@ terminal `cancelled`, and emits an `execution_cancelled` event. Cooperative
 cancellation cannot forcibly stop work inside an external service that ignores
 task cancellation; its result is nevertheless no longer admissible.
 
+Required persistence uses finite retries and raises a typed error after they
+are exhausted. An active HTTP cancellation or synchronous compatibility
+request then returns a sanitized `503` and does not claim the transition.
+Permanent asynchronous terminal-persistence failure leaves the last durable
+state intact, suppresses the normal terminal event and completion callback,
+does not publish an uncommitted live snapshot or terminal artifact/share, and
+cleans up safe process-local resources without recursively constructing another
+unpersisted terminal result.
+
 At coordinator startup, persisted canonical executions and legacy jobs left in
 `queued` or `running` are not resumable because the scheduler and background
 coroutines are process-local. Reconciliation transactionally moves them to
 `interrupted`, records a restart marker, reason and timestamp, marks them
 retryable, and is idempotent. Active worker attempts are durably interrupted so
-late results fail closed. Completion callback failures are logged, emitted, and
-added to the persisted result rather than disappearing silently.
+late results fail closed. Once terminal state is committed, later event,
+callback, or callback-metadata failure does not undo or reclassify it. A
+secret-safe persistence diagnostic is telemetry, not authoritative lifecycle
+truth.
+
+Legacy `output/` consumers (`/history`, `/gallery`, `/run`, status/try views,
+CLI history, downloads, and demo capture) use the same terminal publication
+gate. Current execution-linked runs require artifact-root ownership plus the
+sealed manifest hash committed in the terminal execution. Unmarked historical
+records retain bounded live-file compatibility, but a restart-reconciled row is
+never treated as proof that its previously staged terminal files committed.
 
 The queue itself is still not durable. Restart reconciliation makes its loss
-truthful; it does not resume the lost work.
+truthful; it does not resume the lost work. See
+[ADR 0009](adr/0009-durable-terminal-commit-before-publication.md).
 
 ## Validation outcome and assurance
 
@@ -276,9 +352,11 @@ adapter payloads for compatibility and must not be copied into public shares.
 terminal validation or assurance. It can be `disabled`, `not_requested`,
 `pending`, `running`, `completed`, or `failed`, with bounded timestamps,
 agreement, and reason fields. Trusted-alpha RC1 reports it as `disabled`
-because durable duplicate-execution semantics are not yet implemented. A UI
-MUST NOT render disabled or failed post-hoc verification as evidence that a
-result passed or failed its original validators.
+because its detached duplicate-verification path does not have accepted durable
+post-hoc evidence semantics. Canonical submission idempotency does not run or
+authorize duplicate verification. A UI MUST NOT render disabled or failed
+post-hoc verification as evidence that a result passed or failed its original
+validators.
 
 ## Node registration sessions and bounded worker I/O
 
@@ -387,11 +465,11 @@ money, a token, payment, transferable value, or a claim on future value.
 
 | Method and path | Meaning |
 | --- | --- |
-| `POST /v1/executions` | Validate and queue a canonical request; returns HTTP 202 |
+| `POST /v1/executions` | Validate and queue a canonical request; optional scoped `Idempotency-Key`; returns HTTP 202 |
 | `GET /v1/executions/{id}` | Read durable normalized state/result |
 | `POST /v1/executions/{id}/cancel` | Request idempotent cancellation |
 | `GET /v1/executions/{id}/artifacts` | Read deliverable entries; `role=audit` selects audit material and deprecated `role=all` selects both |
-| `POST /v1/executions/{id}/artifacts/seal` | Idempotently seal the bounded manifest baseline |
+| `POST /v1/executions/{id}/artifacts/seal` | Return the committed sealed baseline; active/legacy state is not promoted through this route |
 | `GET /v1/executions/{id}/artifacts/{path}` | Stream one authenticated artifact |
 | `GET /v1/executions/{id}/download` | Stream a temporary deliverable ZIP |
 | `GET /v1/executions/{id}/audit-download` | Stream a temporary non-deliverable audit ZIP |
@@ -427,6 +505,16 @@ sealed. Registered active executions, including final manifest refresh, are
 never pruned. Retention covers both storage families. Detailed limits and
 filtering rules are in
 [ARTIFACTS.md](ARTIFACTS.md).
+
+Terminal manifest, file, and ZIP publication, whether private or reached
+through a share, additionally requires a durable terminal execution snapshot.
+For a sealed root, the manifest hash must match the hash bound into that
+snapshot. Historical `legacy_live` roots retain their labeled, freshly
+rescanned compatibility behavior. Finalization may prepare files and a seal
+before the terminal commit, but those materials are not authoritative or
+retrievable through terminal APIs until the commit succeeds. A share record
+may exist earlier and show the last committed nonterminal execution state; it
+does not bypass the terminal artifact gate.
 
 The sealed hash is local integrity evidence, not a signature, independent
 timestamp, malware scan, behavioral verdict, or defense against a host able to
@@ -483,6 +571,21 @@ event names. `/health` exposes `nodes_online` as an integer, not a detailed node
 list. Detailed node records require viewer access. CLI and MCP may send
 `VIEWER_KEY` for private reads and `PITCH_KEY` for submission.
 
+Normal execution lifecycle events are post-commit notifications. If a
+persistence-failure diagnostic event is emitted, it may describe the phase and
+bounded attempt count, but it is not a queued, running, or terminal transition
+and must contain no prompt, result, credential, token, nonce, key, or artifact
+content. Failure to persist or emit diagnostics does not change the last
+durable lifecycle.
+
+Persisted events are structural telemetry, not a prompt or output log. A
+central per-event allowlist is applied before the bounded in-memory cache,
+SQLite, and WebSocket publication; HTTP and WebSocket replay apply the same
+policy defensively. Startup idempotently rewrites historical event payloads to
+remove free-form task, output, error, reason, and message fields while retaining
+row identity, type, time, and safe structural fields. Generated token text is
+available only on the live WebSocket path and is never added to SQLite or replay.
+
 Worker clients report `DONE` only after the result endpoint accepts settlement.
 A rejected result is shown as failure. If both generation and the subsequent
 error-report POST fail, the original generation error remains the primary error.
@@ -511,6 +614,12 @@ integrity boundaries. This improves one-process concurrency; it is not a
 multi-coordinator protocol. Backup/restore captures durable state, but queues,
 in-flight coroutines, node sessions, and breaker state remain process-local.
 
+`execution_submissions` is an additive, indefinitely retained trusted-alpha
+table containing only requester-scope, idempotency-key, and canonical-request
+digests plus execution identity and creation time. An immediate transaction
+creates its mapping and the queued execution together. The table is included in
+ordinary SQLite backup/restore; it does not make queued work resumable.
+
 ## Compatibility and errors
 
 `POST /pitch`, `/pitch/async`, and `/pitch/distributed` adapt historical bodies
@@ -519,13 +628,21 @@ to the canonical service. Bodies containing only `task` and optional
 local, `/pitch/async` preserves historical auto placement, and
 `/pitch/distributed` preserves documented distributed intent and fallback.
 Legacy job status now passes through `running` and can finish as `complete`,
-`failed`, `cancelled`, or `interrupted`.
+`failed`, `cancelled`, or `interrupted`. The idempotency header applies only to
+canonical `POST /v1/executions`; legacy HTTP, CLI, and MCP interfaces are
+unchanged.
 
 Invalid canonical requests return `422`; missing private resources return
 `404`; missing viewer, pitch, or node credentials return `401`; invalid worker
 attempt settlement returns `403`; configured limits may return `413`, `429`, or
 `503`. Invalid, expired, and revoked share tokens deliberately share one `404`
-shape.
+shape. Invalid idempotency keys return `422` with
+`detail.code=invalid_idempotency_key`; a changed request under an existing scope
+and key returns `409` with `detail.code=idempotency_conflict`. Required
+persistence failure returns `503` with
+`detail.code=execution_persistence_unavailable`; a broken durable mapping uses
+`detail.code=idempotency_consistency_error`. These envelopes contain no raw key,
+requester credential, prompt, or result.
 
 ## Explicit limitations
 
@@ -539,4 +656,6 @@ post-hoc duplicate verification, or proof that arbitrary generated output is
 correct. One coordinator process is the only supported owner of a state
 directory. It is intended for a small private group whose operators and node
 holders are known and trusted. These limitations must not be represented as
-solved by the normalized API.
+solved by the normalized API. Idempotent canonical submission is not durable
+scheduling, user identity, workflow resumption, or exactly-once execution of
+external effects.

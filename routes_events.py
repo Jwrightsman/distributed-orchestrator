@@ -3,7 +3,6 @@ Observability routes — health, event stream (polling + WebSocket),
 standings, metrics, and the raw contribution ledger.
 """
 
-import json
 import platform
 import sqlite3
 import time
@@ -71,11 +70,11 @@ async def get_events(since: int = 0):
 
     events = []
     for row in rows:
-        blob = json.loads(row["data"])
-        blob["id"]   = row["id"]
-        blob["type"] = row["type"]
-        blob["time"] = row["time"]
-        events.append(blob)
+        events.append(
+            state._decode_persisted_event(
+                row["id"], row["type"], row["time"], row["data"]
+            )
+        )
     return {"events": events}
 
 
@@ -93,9 +92,11 @@ async def ws_events(websocket: WebSocket):
                     "SELECT id, type, time, data FROM events ORDER BY id DESC LIMIT 20"
                 ).fetchall()
         for row in reversed(rows):
-            blob = json.loads(row["data"])
-            blob.update({"id": row["id"], "type": row["type"], "time": row["time"]})
-            await websocket.send_json(blob)
+            await websocket.send_json(
+                state._decode_persisted_event(
+                    row["id"], row["type"], row["time"], row["data"]
+                )
+            )
     except Exception:
         pass
     try:

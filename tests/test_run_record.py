@@ -139,9 +139,8 @@ def test_a_reviser_that_fixed_it_flips_the_rating(tmp_path, monkeypatch):
     assert rev["chars_after"] != rev["chars_before"], "no change was recorded"
 
 
-def test_the_run_page_renders_a_freshly_recorded_run(tmp_path, monkeypatch):
-    """The whole chain: pipeline writes the record, the page reads it back and
-    shows real numbers instead of 'not recorded'."""
+def test_a_fresh_run_without_canonical_identity_is_not_published(tmp_path, monkeypatch):
+    """Materialization alone is not a durable publication boundary."""
     from fastapi.testclient import TestClient
     from server import app
 
@@ -149,12 +148,8 @@ def test_the_run_page_renders_a_freshly_recorded_run(tmp_path, monkeypatch):
     monkeypatch.setattr("server_state.OUTPUT_DIR", tmp_path / "output")
 
     with TestClient(app) as c:
-        body = c.get(f"/run/{log['timestamp']}").text
-    assert "not recorded" not in body.lower(), "a fresh run should have everything"
-    assert "not itemised" not in body.lower()
-    for title in ("First", "Second"):
-        assert title in body
-    assert ">14<" in body, "the settlement total is missing"
+        response = c.get(f"/run/{log['timestamp']}")
+    assert response.status_code == 404
 
 
 @pytest.mark.parametrize("field", ["subtask_stats", "revision", "credits",

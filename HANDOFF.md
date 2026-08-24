@@ -1,24 +1,26 @@
-# Handoff — Mycelium trusted-alpha RC1
+# Handoff — Mycelium Durable Execution Truth
 
 _Updated August 23, 2026._
 
 ## Read these first
 
-1. `SPRINT_TRUSTED_ALPHA_RC1.md` — delivered RC1 scope, evidence, and residuals
+1. `SPRINT_DURABLE_EXECUTION_TRUTH.md` — current Theme 1 scope, evidence, and residuals
 2. `MASTER_PLAN.md` — current direction and freeze boundary
 3. `docs/PROTOCOL.md` — normative execution/client/worker contract
 4. `docs/ACCESS_CONTROL.md` and `docs/ARTIFACTS.md` — authority and delivery APIs
 5. `docs/THREAT_MODEL.md` — defended and undefended boundaries
 6. `docs/DEPLOY.md`, `docs/TRUSTED_ALPHA_RUNBOOK.md`, and
    `docs/OPERATIONS.md` — deployment and recovery procedure
-7. `docs/adr/0005-node-registration-sessions.md`,
-   `docs/adr/0006-single-coordinator-invariant.md`, and
-   `docs/adr/0007-sealed-artifact-manifests.md` — RC1 decisions
-8. `CLAUDE.md` and `AGENTS.md` — repository and consent rules
+7. `docs/adr/0008-idempotent-canonical-execution-submission.md` and
+   `docs/adr/0009-durable-terminal-commit-before-publication.md` — Theme 1 decisions
+8. `docs/audits/2026-08-23-comparative-architecture-audit.md` — historical,
+   non-normative architecture research
+9. `CLAUDE.md` and `AGENTS.md` — repository and consent rules
 
-`SPRINT_STRATEGY_PROTOCOL.md`, `SPRINT_TRUSTED_ALPHA_INTEGRITY.md`, and
-`SPRINT_PHASE2.md` are historical records. Do not copy their old test counts,
-status lists, or interface assumptions into a current claim.
+`SPRINT_TRUSTED_ALPHA_RC1.md`, `SPRINT_STRATEGY_PROTOCOL.md`,
+`SPRINT_TRUSTED_ALPHA_INTEGRITY.md`, and `SPRINT_PHASE2.md` are historical
+records. Do not copy their old test counts, status lists, or interface
+assumptions into a current claim.
 
 ## Human and scope context
 
@@ -27,25 +29,77 @@ he must act on, and warn before anything network-facing. Never install, join, or
 run Mycelium on a machine without that machine owner's explicit informed
 consent.
 
-RC1 is a bounded trusted-alpha backend and operations release. It does not
-authorize a permissionless network, new execution strategies, accounts,
-marketplace/token features, federation, model sharding, generated-code sandbox,
-or unrelated UI redesign. Frontend work may consume the contract below without
-changing its meanings.
+Theme 1 is a bounded execution-truth change on the trusted-alpha backend. It
+does not authorize a permissionless network, workflow engine, durable scheduler,
+coordinator HA, new execution strategies, accounts, marketplace/token features,
+federation, model sharding, generated-code sandbox, or unrelated UI redesign.
+Frontend work may consume the contract below without changing its meanings.
 
 ## Branch and review
 
-- Branch: `codex/trusted-alpha-rc1`
-- Base: `origin/master` at `fd6fa29`
+- Branch: `codex/theme-1-durable-execution-truth`
+- Base: `origin/master` at `8a9a09a2920dc376c60b7e63064df61e5c0602d3`
 - Merge: review explicitly; do not auto-merge
-- Current sprint record: `SPRINT_TRUSTED_ALPHA_RC1.md`
+- Current sprint record: `SPRINT_DURABLE_EXECUTION_TRUTH.md`
 
 The final integrator must record the current commit range and current full-suite,
 Ruff, import, preflight, and deployment checks. Historical counts in sprint
 records are evidence for those exact revisions, not a substitute for the final
 branch run.
 
-## Delivered RC1 architecture
+## Theme 1 architecture
+
+### Durable execution publication
+
+- SQLite is authoritative for queued, running, and terminal canonical
+  snapshots. Required snapshots commit with finite retry before a deep live
+  copy, normal lifecycle event, callback, compatibility mirror, response, or
+  terminal artifact/share publication.
+- Permanent required-persistence failure raises `ExecutionPersistenceError`
+  (terminal failures use `TerminalPersistenceError`). Active HTTP operations
+  return `503` with `detail.code=execution_persistence_unavailable` and do not
+  claim the transition.
+- Asynchronous terminal-persistence failure leaves the last durable snapshot
+  visible, suppresses normal terminal events and completion callbacks, and
+  cannot be reclassified recursively as another unpersisted terminal result.
+- Diagnostic events are non-authoritative and secret-safe. Once terminal state
+  commits, later event, callback, or metadata failure does not undo it.
+- Persisted events retain allowlisted structural telemetry only. Startup
+  idempotently redacts historical payloads before HTTP/WebSocket replay;
+  generated token text remains live-stream-only.
+- Terminal artifact delivery, including through a share, requires a durable
+  terminal snapshot. Current sealed roots must match the manifest hash bound
+  into that snapshot; historical `legacy_live` roots remain an explicitly
+  labeled, freshly rescanned compatibility path.
+- Legacy run/history/gallery/status/try/CLI/download/demo publication resolves
+  artifact-root ownership before mutable log fields and applies the same
+  terminal/hash boundary. Restart-reconciled staged output remains hidden.
+- DAG project-memory iterations publish after the normal terminal event and
+  before the completion callback. Failed terminal persistence leaves memory at
+  its prior committed iteration.
+- Redundant terminal request/result snapshots are evicted after terminal
+  observers finish. `GET` and replay reload the authoritative SQLite row;
+  queued/running and failed-persistence boundaries remain cached.
+
+Decision: [ADR 0009](docs/adr/0009-durable-terminal-commit-before-publication.md).
+
+### Idempotent canonical submission
+
+- Optional `Idempotency-Key` on `POST /v1/executions` validates 1–128 printable
+  ASCII characters and is never stored or logged in plaintext.
+- Validated requests, keys, and requester scopes use deterministic/digest-only
+  identity. A configured pitch credential defines the trusted-alpha scope;
+  open mode uses the direct peer host as best-effort development scoping.
+- One immediate transaction creates the queued execution and mapping. Matching
+  retries return the existing execution and `Idempotency-Replayed: true` without
+  scheduling; changed requests return `409 idempotency_conflict`.
+- Mappings persist through restart and backup. Replaying an interrupted
+  execution returns it; it does not resume lost work.
+- Compatibility HTTP, CLI, and MCP idempotency remain deferred.
+
+Decision: [ADR 0008](docs/adr/0008-idempotent-canonical-execution-submission.md).
+
+## Trusted-alpha foundation retained from RC1
 
 ### Deployment and single ownership
 
@@ -156,6 +210,7 @@ branch run.
 | Durable | Process-local or operator-owned |
 | --- | --- |
 | canonical execution and legacy-job snapshots | worker queue and dispatcher waits |
+| scoped canonical submission mappings and request digests | submission scheduling and resumption |
 | attempts, accepted receipts, replay responses | node sessions and connected-node registry |
 | contribution records and compatibility projection | running coroutines and model-call process state |
 | share metadata/token hashes | live WebSocket connections and event fanout |
@@ -164,11 +219,16 @@ branch run.
 
 Restart reconciliation makes process-local loss truthful; it does not resume
 work. Restore recovers captured durable state; it cannot recover node sessions,
-in-flight calls, or queue ownership.
+in-flight calls, or queue ownership. Matching idempotency replay returns the
+same captured execution; it does not recreate or resume it.
+
+Durable snapshot commit precedes its live copy, normal event, callback, mirror,
+response, and terminal artifact/share access. Diagnostic failure telemetry is
+not another lifecycle authority.
 
 ## Claude Code frontend/API handoff
 
-The RC1 backend intentionally does not prescribe visual layout. A frontend must
+The backend intentionally does not prescribe visual layout. A frontend must
 represent these fields directly instead of inferring them from legacy status,
 filenames, or generic “verified” badges:
 
@@ -184,12 +244,15 @@ filenames, or generic “verified” badges:
 | Validation outcome | `validation_outcome`: passed, failed, partial, not run. Present separately from lifecycle. |
 | Assurance level | `assurance_level` plus validation summary/evidence. Describe the exact checks; never collapse it to a generic verified badge. |
 | Post-hoc verification | `posthoc_verification_status`, timestamps, agreement, and reason. RC1 trusted-alpha is disabled; show that plainly without changing original assurance. |
+| Canonical submission replay | `Idempotency-Replayed` appears only on keyed canonical POST responses. `false` means created; `true` means an existing execution was returned. Never label it exactly-once execution or workflow resumption. |
 | Share metadata | Create returns plaintext token once. List shows share ID, create/expiry/revocation/last-access times and artifact/node/candidate flags without token. Support revoke-one/revoke-all and explain that copied content cannot be recalled. |
 
 The client must handle `401` private HTTP, `4401` event WebSocket, `409`
-artifact-integrity/session conflicts, `413` worker/artifact limits, `429` rate
-limits, and uniform public-share `404`. Events are flat; `/health.nodes_online`
-is an integer; private node/session detail is not public status.
+artifact-integrity/session conflicts or `idempotency_conflict`, `413`
+worker/artifact limits, `422 invalid_idempotency_key`, `429` rate limits,
+`503 execution_persistence_unavailable` or `idempotency_consistency_error`, and
+uniform public-share `404`. Events are flat; `/health.nodes_online` is an
+integer; private node/session detail is not public status.
 
 Use these assurance labels only, mapped to actual evidence:
 
@@ -222,7 +285,7 @@ Revise or remove these claims wherever they appear:
   format, and configured validator support.
 - Absolute “no cloud.” Local Ollama is the default, but optional external
   OpenAI-compatible model providers exist.
-- “Volunteer” or “anonymous” network as the current security model. RC1 is an
+- “Volunteer” or “anonymous” network as the current security model. The trusted alpha is an
   invited group of computers/operators you trust.
 - A generic “verified” badge. Show lifecycle, validation, assurance, integrity,
   and post-hoc dimensions separately with evidence-scoped labels.
@@ -231,7 +294,8 @@ Also prohibited: trustless/permissionless readiness, cryptographic worker
 identity, confidential compute, enforced no-network execution, sandboxed
 generated code, Sybil resistance, durable queue resume, multi-coordinator
 operation, multi-user authorization, monetary credits, host-independent artifact
-attestation, or proof that arbitrary generated output is correct.
+attestation, exactly-once external side effects, open-mode peer identity, or
+proof that arbitrary generated output is correct.
 
 ## Release/operator checklist
 
@@ -240,18 +304,25 @@ attestation, or proof that arbitrary generated output is correct.
    overlay, secure cookies, and exactly one coordinator process.
 3. Confirm public `/health` is `ok` and private routes are protected; confirm
    viewer-less private HTTP and WebSocket access is rejected.
-4. Configure Uvicorn/reverse-proxy logs not to retain share capability paths.
+4. Configure Uvicorn/reverse-proxy logs not to retain share capability paths,
+   idempotency keys, or static/session/attempt credentials.
 5. Exercise node register/idempotence/conflict/reclaim/restart, session-bound
    poll/result/stream, and output/stream limits.
 6. Exercise lifecycle timeout/cancel/restart, artifact seal/drift/role downloads,
-   share scope/expiry/revocation, and exact/changed attempt replay.
-7. Create and verify a backup; rehearse restore into an empty staging state
+   share scope/expiry/revocation, exact/changed attempt replay, transient and
+   permanent terminal persistence failure, and callback/event failure after a
+   committed terminal result.
+7. Exercise canonical keyed create/replay/conflict, concurrent duplicate
+   submission, requester-scope separation, restart replay, and invalid-key
+   rejection.
+8. Create and verify a backup; rehearse restore into an empty staging state
    directory before relying on it.
-8. Run the bounded live multi-node harness and current focused/full test suite;
-   record exact revision and results.
-9. Keep public pitch disabled unless the operator explicitly accepts the bounded
+9. Run the bounded live multi-node harness, including `terminal_publication` and
+   `submission_idempotency`, and the current focused/full test suite; record
+   exact revision and results.
+10. Keep public pitch disabled unless the operator explicitly accepts the bounded
    demo endpoint's abuse and compute risk.
-10. Review generated artifacts before execution. Validation and sealing are not
+11. Review generated artifacts before execution. Validation and sealing are not
     a sandbox or content-safety verdict.
 
 The intended release state is a **small private trusted alpha**: auditable work

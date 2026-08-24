@@ -8,6 +8,7 @@ validation, and persistence do not live in this routing module.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 import uuid
 from datetime import datetime, timezone
@@ -20,7 +21,11 @@ import orchestrator
 import server_state as state
 from config import get as get_config
 from execution.contracts import EnsembleOptionsV1, ExecutionRequestV1
-from execution.service import ServiceExecution, get_execution_service
+from execution.service import (
+    ExecutionPersistenceError,
+    ServiceExecution,
+    get_execution_service,
+)
 from execution.sharing import CreateExecutionShareV1, get_share_store
 from ollama_client import generate as _generate
 from server_state import (
@@ -48,6 +53,59 @@ router = APIRouter()
 # separate registry under execution/validators.py.
 _verify_tasks: set = set()
 _PUBLIC_INFERENCE_SEMAPHORE = asyncio.Semaphore(1)
+_LEGACY_MIRROR_PERSISTENCE_ATTEMPTS = 3
+logger = logging.getLogger("mycelium.execution.legacy")
+
+
+def _persistence_unavailable() -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail={
+            "code": "execution_persistence_unavailable",
+            "message": (
+                "Required execution state could not be committed. "
+                "Verify durable state before retrying."
+            ),
+        },
+    )
+
+
+def _commit_legacy_job(job: dict[str, Any], *, phase: str) -> None:
+    """Persist a legacy mirror before replacing its process-local projection."""
+
+    last_error: Exception | None = None
+    for attempt in range(1, _LEGACY_MIRROR_PERSISTENCE_ATTEMPTS + 1):
+        try:
+            _db_write_job(job)
+            return
+        except Exception as exc:
+            last_error = exc
+            logger.error(
+                "required legacy mirror persistence failed job_id=%s phase=%s "
+                "attempt=%s error_type=%s",
+                job.get("job_id", "unknown"),
+                phase,
+                attempt,
+                type(exc).__name__,
+            )
+    raise ExecutionPersistenceError(
+        str(job.get("execution_id") or job.get("job_id") or "unknown"),
+        f"legacy_mirror_{phase}",
+        _LEGACY_MIRROR_PERSISTENCE_ATTEMPTS,
+    ) from last_error
+
+
+def _safe_legacy_emit(event_type: str, data: dict[str, Any]) -> None:
+    """Keep compatibility telemetry failure from changing execution truth."""
+
+    try:
+        _emit(event_type, data)
+    except Exception as exc:
+        logger.error(
+            "legacy event publication failed event_type=%s error_type=%s",
+            event_type,
+            type(exc).__name__,
+        )
 
 
 def _spawn_comparison(dup_id, subtask_title, job_id, trace_id,
@@ -62,8 +120,7 @@ def _spawn_comparison(dup_id, subtask_title, job_id, trace_id,
                 primary_node, primary_output,
                 dup.get("node_id", "unknown"), dup["output"],
             )
-            _emit("verification", {
-                "subtask": subtask_title,
+            _safe_legacy_emit("verification", {
                 "job_id": job_id,
                 "trace_id": trace_id,
                 **verdict,
@@ -162,21 +219,24 @@ def _raise_sync_failure(run: ServiceExecution) -> None:
 
 
 def _callbacks(task: str, trace_id: str, job_id: str | None = None) -> dict[str, Any]:
-    common = {"task": task, "trace_id": trace_id}
+    # Task, subtask, and generated-token text intentionally stay out of the
+    # persisted pipeline event log. Token events remain ephemeral WebSocket
+    # output because server_state._emit does not persist that event type.
+    common = {"trace_id": trace_id}
     if job_id:
         common["job_id"] = job_id
 
     def on_plan(subtasks):
-        _emit("plan", {**common, "subtasks": [item["title"] for item in subtasks]})
+        _safe_legacy_emit("plan", {**common, "subtask_count": len(subtasks)})
 
     def on_build(subtask, output):
-        _emit("build", {**common, "subtask": subtask["title"], "subtask_id": subtask["id"]})
+        _safe_legacy_emit("build", {**common, "subtask_id": subtask["id"]})
 
     def on_review_start():
-        _emit("review_start", common)
+        _safe_legacy_emit("review_start", common)
 
     def on_token(token, subtask):
-        _emit("token", {**common, "token": token, "subtask_id": subtask["id"]})
+        _safe_legacy_emit("token", {**common, "token": token, "subtask_id": subtask["id"]})
 
     return {
         "on_plan": on_plan,
@@ -194,7 +254,6 @@ async def pitch(req: PitchRequest, request: Request, response: Response):
     response.headers["X-RateLimit-Limit"] = str(state._rate_limits()[0])
     response.headers["X-RateLimit-Remaining"] = str(remaining)
     trace_id = str(uuid.uuid4())
-    _emit("pitch", {"task": req.task, "trace_id": trace_id})
 
     canonical = _execution_request(req, default_placement="local")
     service = get_execution_service()
@@ -202,14 +261,20 @@ async def pitch(req: PitchRequest, request: Request, response: Response):
         service.validate_request(canonical)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    run = await service.execute(
-        canonical,
-        callbacks=_callbacks(req.task, trace_id),
-        dag_runner=run_pipeline,
-    )
+    try:
+        run = await service.execute(
+            canonical,
+            callbacks=_callbacks(req.task, trace_id),
+            dag_runner=run_pipeline,
+            on_running=lambda _result: _safe_legacy_emit(
+                "pitch",
+                {"trace_id": trace_id},
+            ),
+        )
+    except ExecutionPersistenceError as exc:
+        raise _persistence_unavailable() from exc
     _raise_sync_failure(run)
-    _emit("complete", {
-        "task": req.task,
+    _safe_legacy_emit("complete", {
         "project_dir": run.legacy_payload.get("project_dir"),
         "execution_id": run.result.execution_id,
         "trace_id": trace_id,
@@ -226,7 +291,7 @@ async def pitch_async(req: PitchRequest, request: Request, response: Response):
     response.headers["X-RateLimit-Remaining"] = str(remaining)
     job_id = f"job_{uuid.uuid4().hex}"
     trace_id = str(uuid.uuid4())
-    jobs[job_id] = {
+    job = {
         "job_id": job_id,
         "task": req.task,
         "project_id": req.project_id,
@@ -240,13 +305,19 @@ async def pitch_async(req: PitchRequest, request: Request, response: Response):
     try:
         get_execution_service().validate_request(canonical)
     except ValueError as exc:
-        jobs.pop(job_id, None)
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    jobs[job_id]["execution_request"] = canonical.model_dump(mode="json")
-    _db_write_job(jobs[job_id])
+    job["execution_request"] = canonical.model_dump(mode="json")
+    try:
+        _commit_legacy_job(job, phase="queued")
+    except ExecutionPersistenceError as exc:
+        raise _persistence_unavailable() from exc
+    jobs[job_id] = job
     # Keep the legacy helper's four-argument call contract: a few integrations
     # replace this hook to control background execution in-process.
-    await _run_job(job_id, req.task, req.project_id, trace_id)
+    try:
+        await _run_job(job_id, req.task, req.project_id, trace_id)
+    except ExecutionPersistenceError as exc:
+        raise _persistence_unavailable() from exc
     return {
         "job_id": job_id,
         "execution_id": jobs[job_id].get("execution_id"),
@@ -282,31 +353,35 @@ async def _run_job(
         job = jobs.get(job_id)
         if not job:
             return
-        job["status"] = "running"
-        job["started_at"] = datetime.now(timezone.utc).isoformat()
-        _db_write_job(job)
+        updated = dict(job)
+        updated["status"] = "running"
+        updated["started_at"] = datetime.now(timezone.utc).isoformat()
+        _commit_legacy_job(updated, phase="running")
+        jobs[job_id] = updated
 
     async def completed(run: ServiceExecution):
         job = jobs.get(job_id)
         if not job:
             return
+        updated = dict(job)
         if run.result.lifecycle_status == "failed":
-            job["status"] = "failed"
-            job["error"] = run.result.errors[0].message if run.result.errors else "execution failed"
-            job["result"] = None
+            updated["status"] = "failed"
+            updated["error"] = run.result.errors[0].message if run.result.errors else "execution failed"
+            updated["result"] = None
         elif run.result.lifecycle_status == "cancelled":
-            job["status"] = "cancelled"
-            job["error"] = run.result.cancellation_reason
-            job["result"] = None
+            updated["status"] = "cancelled"
+            updated["error"] = run.result.cancellation_reason
+            updated["result"] = None
         elif run.result.lifecycle_status == "interrupted":
-            job["status"] = "interrupted"
-            job["error"] = run.result.interruption_reason
-            job["result"] = None
+            updated["status"] = "interrupted"
+            updated["error"] = run.result.interruption_reason
+            updated["result"] = None
         else:
-            job["status"] = "complete"
-            job["result"] = _compat_payload(run)
-        job["finished_at"] = datetime.now(timezone.utc).isoformat()
-        _db_write_job(job)
+            updated["status"] = "complete"
+            updated["result"] = _compat_payload(run)
+        updated["finished_at"] = datetime.now(timezone.utc).isoformat()
+        _commit_legacy_job(updated, phase="terminal")
+        jobs[job_id] = updated
 
     execution_callbacks = _callbacks(task, trace_id, job_id)
     if jobs.get(job_id, {}).get("source") == "public":
@@ -320,11 +395,13 @@ async def _run_job(
         on_start=started,
         on_complete=completed,
     )
-    jobs[job_id]["execution_id"] = queued.execution_id
-    jobs[job_id]["strategy_requested"] = queued.strategy_requested
-    jobs[job_id]["strategy_selected"] = queued.strategy_selected
-    jobs[job_id]["selector_reason"] = queued.selector_reason
-    _db_write_job(jobs[job_id])
+    updated = dict(jobs[job_id])
+    updated["execution_id"] = queued.execution_id
+    updated["strategy_requested"] = queued.strategy_requested
+    updated["strategy_selected"] = queued.strategy_selected
+    updated["selector_reason"] = queued.selector_reason
+    _commit_legacy_job(updated, phase="execution_binding")
+    jobs[job_id] = updated
 
 
 @router.post("/public/pitch")
@@ -380,7 +457,7 @@ async def public_pitch(req: PitchRequest, request: Request):
     state._public_pitch_timestamps[ip] = stamps
     job_id = f"job_{uuid.uuid4().hex}"
     trace_id = str(uuid.uuid4())
-    jobs[job_id] = {
+    job = {
         "job_id": job_id,
         "task": req.task,
         "project_id": None,
@@ -405,9 +482,16 @@ async def public_pitch(req: PitchRequest, request: Request):
         max_output_bytes=65_536,
         network_policy="disabled",
     )
-    jobs[job_id]["execution_request"] = canonical.model_dump(mode="json")
-    _db_write_job(jobs[job_id])
-    await _run_job(job_id, req.task, None, trace_id)
+    job["execution_request"] = canonical.model_dump(mode="json")
+    try:
+        _commit_legacy_job(job, phase="queued")
+    except ExecutionPersistenceError as exc:
+        raise _persistence_unavailable() from exc
+    jobs[job_id] = job
+    try:
+        await _run_job(job_id, req.task, None, trace_id)
+    except ExecutionPersistenceError as exc:
+        raise _persistence_unavailable() from exc
     created_share = get_share_store().create(
         jobs[job_id]["execution_id"],
         CreateExecutionShareV1(
@@ -454,9 +538,14 @@ async def get_job(job_id: str):
 
     job = jobs[job_id]
     result = job.get("result") or {}
+    normalized = None
+    if not job.get("execution_id") or not job.get("strategy_selected"):
+        normalized = get_execution_service().store.get_by_job_id(job_id)
     return {
         "job_id": job["job_id"],
-        "execution_id": job.get("execution_id"),
+        "execution_id": job.get("execution_id") or (
+            normalized.execution_id if normalized else None
+        ),
         "task": job["task"],
         "status": job["status"],
         "submitted_at": job["submitted_at"],
@@ -466,29 +555,52 @@ async def get_job(job_id: str):
         "project_dir": result.get("project_dir"),
         "plan": result.get("plan"),
         "rating": result.get("rating"),
-        "strategy_requested": job.get("strategy_requested") or result.get("strategy_requested"),
-        "strategy_selected": job.get("strategy_selected") or result.get("strategy_selected"),
-        "selector_reason": job.get("selector_reason") or result.get("selector_reason"),
-        "placement_selected": result.get("placement_selected"),
+        "strategy_requested": (
+            job.get("strategy_requested")
+            or result.get("strategy_requested")
+            or (normalized.strategy_requested if normalized else None)
+        ),
+        "strategy_selected": (
+            job.get("strategy_selected")
+            or result.get("strategy_selected")
+            or (normalized.strategy_selected if normalized else None)
+        ),
+        "selector_reason": (
+            job.get("selector_reason")
+            or result.get("selector_reason")
+            or (normalized.selector_reason if normalized else None)
+        ),
+        "placement_selected": result.get("placement_selected") or (
+            normalized.placement_selected if normalized else None
+        ),
     }
 
 
 @router.get("/jobs")
 async def list_jobs(limit: int = 20):
     recent = list(jobs.values())[-max(1, min(limit, 100)):]
-    return {
-        "jobs": [
+    summaries = []
+    for job in reversed(recent):
+        normalized = None
+        if not job.get("execution_id") or not job.get("strategy_selected"):
+            normalized = get_execution_service().store.get_by_job_id(job["job_id"])
+        summaries.append(
             {
                 "job_id": job["job_id"],
-                "execution_id": job.get("execution_id"),
+                "execution_id": job.get("execution_id") or (
+                    normalized.execution_id if normalized else None
+                ),
                 "task": job["task"],
                 "status": job["status"],
                 "submitted_at": job["submitted_at"],
                 "finished_at": job.get("finished_at"),
-                "strategy_selected": job.get("strategy_selected"),
+                "strategy_selected": job.get("strategy_selected") or (
+                    normalized.strategy_selected if normalized else None
+                ),
             }
-            for job in reversed(recent)
-        ],
+        )
+    return {
+        "jobs": summaries,
         "count": len(recent),
     }
 
@@ -499,17 +611,23 @@ async def pitch_distributed(req: PitchRequest, request: Request):
     _check_pitch_key(request)
     _check_rate_limit(request)
     trace_id = str(uuid.uuid4())
-    _emit("pitch", {"task": req.task, "trace_id": trace_id, "mode": "distributed"})
     canonical = _execution_request(req, default_placement="distributed")
     service = get_execution_service()
     try:
         service.validate_request(canonical)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    run = await service.execute(
-        canonical,
-        callbacks=_callbacks(req.task, trace_id),
-        dag_runner=run_pipeline,
-    )
+    try:
+        run = await service.execute(
+            canonical,
+            callbacks=_callbacks(req.task, trace_id),
+            dag_runner=run_pipeline,
+            on_running=lambda _result: _safe_legacy_emit(
+                "pitch",
+                {"trace_id": trace_id, "mode": "distributed"},
+            ),
+        )
+    except ExecutionPersistenceError as exc:
+        raise _persistence_unavailable() from exc
     _raise_sync_failure(run)
     return _compat_payload(run)

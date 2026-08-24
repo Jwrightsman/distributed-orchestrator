@@ -49,6 +49,11 @@ from execution.contracts import (
     ExecutionRequestV1,
     ExecutionRequirementsV1,
 )
+from execution.publication import (
+    LegacyRunNotPublished,
+    published_file,
+    require_legacy_run_publication,
+)
 from execution.service import get_execution_service
 from ollama_client import check_ollama, auto_detect_model, DEFAULT_MODEL
 from ledger import get_standings
@@ -290,6 +295,7 @@ def show_history():
             continue
         try:
             log = json.loads(log_file.read_text(encoding="utf-8"))
+            publication = require_legacy_run_publication(d, log)
             task = log.get("task", "?")
             if len(task) > 60:
                 task = task[:57] + "..."
@@ -303,8 +309,12 @@ def show_history():
             # run the reviser rescued still reported the reviewer's original
             # complaint. See orchestrator.ratings_for.
             from orchestrator import ratings_for
-            review_file = d / "review.md"
-            review_text = review_file.read_text(errors="ignore", encoding="utf-8") if review_file.exists() else ""
+            review_file = published_file(publication, "review.md")
+            review_text = (
+                review_file.read_text(errors="ignore", encoding="utf-8")
+                if review_file
+                else ""
+            )
             final, _reviewer = ratings_for(log, review_text)
             rating = {
                 "PASS": "[green]PASS[/green]",
@@ -313,7 +323,7 @@ def show_history():
             }.get(final, "?")
             table.add_row(when, task, subtask_count, rating)
             count += 1
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, LegacyRunNotPublished, OSError):
             pass
         if count >= 20:
             break
@@ -848,9 +858,13 @@ def _render_event(ev: dict, seen_subtasks: set):
 
     if etype == "plan":
         subtasks = data.get("subtasks", [])
+        subtask_count = data.get("subtask_count", len(subtasks))
         console.print("[bold yellow]PLAN[/bold yellow]")
-        for i, s in enumerate(subtasks, 1):
-            console.print(f"  [{i}] {s}")
+        if subtasks:
+            for i, s in enumerate(subtasks, 1):
+                console.print(f"  [{i}] {s}")
+        else:
+            console.print(f"  {subtask_count} subtasks planned")
         console.print()
 
     elif etype == "build":

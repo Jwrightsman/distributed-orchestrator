@@ -19,3 +19,38 @@ def test_cli_renders_the_flattened_event_schema(monkeypatch):
     )
 
     assert any("Build API" in line for line in rendered)
+
+
+def test_cli_renders_sanitized_plan_and_build_events(monkeypatch):
+    rendered = []
+    monkeypatch.setattr(
+        cli.console,
+        "print",
+        lambda *parts, **kwargs: rendered.append(" ".join(map(str, parts))),
+    )
+    seen = set()
+
+    cli._render_event(
+        {
+            "id": 2,
+            "type": "plan",
+            "time": "now",
+            "job_id": "job-1",
+            "subtask_count": 2,
+        },
+        seen,
+    )
+    cli._render_event(
+        {
+            "id": 3,
+            "type": "build",
+            "time": "now",
+            "job_id": "job-1",
+            "subtask_id": 1,
+        },
+        seen,
+    )
+
+    output = "\n".join(rendered)
+    assert "2 subtasks planned" in output
+    assert "BUILDER 1" in output

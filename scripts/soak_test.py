@@ -1,4 +1,4 @@
-"""Soak test — 20 consecutive pitches in one server session (SPRINT_PHASE2 §2).
+"""Soak test — 20 measured pitches in one server session (SPRINT_PHASE2 §2).
 
 Watches for what a long launch day actually does to the process: memory growth,
 SQLite bloat, event-buffer leaks, orphaned in-flight tasks, and latency drift.
@@ -6,8 +6,8 @@ The model is stubbed (scripts/_soak_app.py) because none of those are model
 behavior — this is an infrastructure test, and stubbing keeps the numbers
 readable instead of drowning them in generation time.
 
-    python scripts/soak_test.py            # 20 pitches
-    python scripts/soak_test.py --pitches 50
+    python scripts/soak_test.py            # 1 warmup + 20 measured pitches
+    python scripts/soak_test.py --pitches 50  # 1 warmup + 50 measured
 
 Needs no Ollama. Exits non-zero if a leak threshold is crossed.
 """
@@ -16,6 +16,7 @@ import argparse
 import json
 import os
 import shutil
+import socket
 import statistics
 import subprocess
 import sys
@@ -28,6 +29,16 @@ import httpx
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PORT = 8078
 BASE = f"http://127.0.0.1:{PORT}"
+
+
+def _port_is_free() -> bool:
+    with socket.socket() as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind(("127.0.0.1", PORT))
+            return True
+        except OSError:
+            return False
 
 
 def rss_mb(pid: int) -> float:
@@ -54,6 +65,10 @@ def rss_mb(pid: int) -> float:
 
 
 def start_server(workdir: Path) -> subprocess.Popen:
+    if not _port_is_free():
+        raise SystemExit(
+            f"Port {PORT} is already in use; refusing an ambiguous soak run."
+        )
     proc = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "scripts._soak_app:app",
          "--host", "127.0.0.1", "--port", str(PORT), "--log-level", "warning"],
@@ -67,10 +82,21 @@ def start_server(workdir: Path) -> subprocess.Popen:
             print("SERVER DIED:\n", proc.stdout.read()[:3000])
             raise SystemExit(1)
         try:
-            if httpx.get(f"{BASE}/health", timeout=2).status_code == 200:
+            # Readiness must not depend on Ollama. The public ``/health``
+            # endpoint intentionally spends up to five seconds probing it, so
+            # a shorter client timeout can abandon every otherwise-healthy
+            # response and leak the subprocess on startup failure.
+            if httpx.get(f"{BASE}/v1/operator/health", timeout=5).status_code == 200:
                 return proc
         except Exception:
             time.sleep(0.4)
+    proc.terminate()
+    try:
+        proc.wait(timeout=15)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+    output = proc.stdout.read()[:3000] if proc.stdout is not None else ""
+    print("SERVER STARTUP OUTPUT:\n", output)
     raise SystemExit("server never became healthy")
 
 
@@ -90,6 +116,20 @@ def run_pitch(i: int, timeout: int = 120) -> tuple[bool, float, str]:
             return False, time.time() - start, str(job.get("error"))[:120]
         time.sleep(0.25)
     return False, time.time() - start, "timed out waiting for job"
+
+
+def settle_collectable_cycles() -> dict:
+    """Run full GC inside the isolated server before comparing its RSS.
+
+    Completed asyncio/ASGI request graphs can remain unreachable until Python's
+    cyclic collector happens to run.  Sampling one arbitrary side of that
+    collection makes a sawtooth look like linear retained growth.  A real leak
+    remains reachable and therefore still contributes to the post-GC RSS.
+    """
+
+    response = httpx.post(f"{BASE}/_soak/collect", timeout=20)
+    response.raise_for_status()
+    return response.json()
 
 
 def main() -> int:
@@ -112,6 +152,19 @@ def main() -> int:
     samples = []
     failures = []
 
+    # Establish one complete request's import/validator/allocator high-water
+    # mark before measuring steady-state retention.  A genuine per-pitch leak
+    # still grows across every measured pitch; one-time lazy initialization
+    # does not get mislabelled as a leak merely because the default run is
+    # short.
+    warmup_ok, warmup_secs, warmup_detail = run_pitch(0)
+    print(
+        f"warmup: {'ok' if warmup_ok else 'FAILED'} in {warmup_secs:.2f}s"
+        + (f" ({warmup_detail})" if warmup_detail else "")
+    )
+    if not warmup_ok:
+        failures.append((0, f"warmup: {warmup_detail}"))
+    settle_collectable_cycles()
     baseline_rss = rss_mb(pid)
     print(f"\nbaseline RSS: {baseline_rss:.1f} MB\n")
     print(f"{'#':>3}  {'ok':>3}  {'secs':>6}  {'RSS MB':>7}  {'db KB':>7}  "
@@ -139,7 +192,8 @@ def main() -> int:
               f"{sample['db_kb']:>7.1f}  {sample['events']:>6}  "
               f"{sample['inflight']:>8}  {len(events):>5}")
 
-    final_rss = samples[-1]["rss"]
+    final_state = settle_collectable_cycles()
+    final_rss = rss_mb(pid)
     growth = final_rss - baseline_rss
     first_half = [s["secs"] for s in samples[: len(samples) // 2] if s["ok"]]
     second_half = [s["secs"] for s in samples[len(samples) // 2:] if s["ok"]]
@@ -148,7 +202,11 @@ def main() -> int:
     print(f"pitches:        {args.pitches}  ({len(failures)} failed)")
     rss_measured = baseline_rss >= 0 and final_rss >= 0
     if rss_measured:
-        print(f"RSS:            {baseline_rss:.1f} -> {final_rss:.1f} MB  (growth {growth:+.1f} MB)")
+        print(f"RSS (post-GC):  {baseline_rss:.1f} -> {final_rss:.1f} MB  (growth {growth:+.1f} MB)")
+        print(
+            f"GC settled:     {final_state['collected']} unreachable object(s) "
+            "before final sample"
+        )
     else:
         print("RSS:            NOT MEASURED on this platform — pip install psutil")
     print(f"events.db:      {samples[-1]['db_kb']:.1f} KB")
@@ -160,7 +218,16 @@ def main() -> int:
               f"({(m2 / m1 - 1) * 100:+.0f}%)")
 
     outputs = list((workdir / "output").glob("*")) if (workdir / "output").exists() else []
-    print(f"output dirs:    {len(outputs)} (expect one per successful pitch)")
+    expected_outputs = args.pitches + 1 - len(failures)
+    print(f"output dirs:    {len(outputs)} (expect {expected_outputs}, including warmup)")
+    print(
+        "execution maps: "
+        f"live={final_state['service_live_results']}, "
+        f"requests={final_state['service_requests']}, "
+        f"controls={final_state['service_controls']}, "
+        f"background={final_state['service_background']} "
+        f"(legacy jobs retained={final_state['jobs']})"
+    )
 
     proc.terminate()
     try:
@@ -184,6 +251,20 @@ def main() -> int:
         )
     if samples[-1]["inflight"] != 0:
         problems.append(f"{samples[-1]['inflight']} orphaned in-flight task(s)")
+    retained_execution_state = {
+        name: final_state[name]
+        for name in (
+            "service_live_results",
+            "service_requests",
+            "service_controls",
+            "service_background",
+        )
+        if final_state[name] != 0
+    }
+    if retained_execution_state:
+        problems.append(
+            f"terminal execution state retained in process maps: {retained_execution_state}"
+        )
     if first_half and second_half and statistics.mean(second_half) > 3 * statistics.mean(first_half):
         problems.append("latency more than tripled across the run")
 

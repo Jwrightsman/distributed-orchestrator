@@ -10,9 +10,10 @@ permissionless compute network.
 Trusted-alpha hardening requires a worker result to settle a server-issued
 durable, session-bound attempt before execution can consume it; protects
 sensitive read routes in deployment mode; seals role-scoped artifact manifests;
-and enforces one coordinator per state directory. It did not add per-node
-cryptographic identity, TLS, sandboxing, multi-user accounts, or a hostile-host
-trust boundary.
+enforces one coordinator per state directory; commits lifecycle truth before
+publication; and deduplicates requester-scoped canonical retries. It did not
+add per-node cryptographic identity, TLS, sandboxing, multi-user accounts,
+durable scheduling, or a hostile-host trust boundary.
 
 ## 1. Assets
 
@@ -23,6 +24,7 @@ trust boundary.
 | Attempt authority | SQLite attempt rows and accepted receipts | an unbound, late, or duplicate result entering execution or earning points |
 | Node sessions | process memory plus session identifiers/digests attached to node and attempt state | label collision, stale session use, bearer-token disclosure, or restart invalidation |
 | Viewer, pitch, and node secrets | local config/environment and HTTP headers | private reads, unwanted compute use, or worker admission |
+| Canonical submission identity | digest-only SQLite mapping to an execution | duplicate execution after retry, key conflict, or a mapping whose execution is missing |
 | Artifact integrity baseline | sealed manifest rows/hash in SQLite plus files on disk | ordinary file drift, database/file loss, or host-level joint tampering |
 | Contribution history | SQLite plus `ledger.json` compatibility projection | misattribution or misleading claims about correctness/value |
 | Contributor hardware | worker machines | sustained model inference, disk use for the model, prompt disclosure |
@@ -36,7 +38,9 @@ does not mean "no sensitive data."
 ## 2. Trust boundaries
 
 ```text
-Requester ── pitch_key ──▶ ORCHESTRATOR ── node_secret admission ──▶ Worker
+Requester ── pitch_key + optional scoped retry key ──▶ ORCHESTRATOR
+                                                       │
+                                                       └─ node_secret admission ──▶ Worker
                               │       │                                 │
                               │       └─ issues current node session ───┤
                               │ viewer_key                              ├─ sees assigned prompt
@@ -63,14 +67,17 @@ Requester ── pitch_key ──▶ ORCHESTRATOR ── node_secret admission �
 | --- | --- | --- |
 | `viewer_key` | private HTTP and WebSocket access via header, Bearer token, or signed expiring HttpOnly cookie | users, roles, per-execution ACLs, TLS |
 | `pitch_key` | canonical and compatibility task submission when configured | private reads or public-share revocation |
+| Scoped canonical idempotency | one queued execution per requester-scope/key/canonical-request mapping, with digest-only storage | user identity, workflow resumption, or exactly-once external side effects |
 | `node_secret` | instance-wide permission to register and enter the worker protocol | individual node identity or revocation |
 | Digest-only node sessions | one current normalized node claimant, stale reclaim, session-bound worker calls and attempts | durable identity, protection after restart, or stopping another secret holder from claiming a free label |
 | Server-owned attempts | active lease and exact task/execution/unit/kind/node/session/version/nonce/output-cap binding | truthfulness or quality of the returned model output |
-| Atomic settlement | exactly-once attempt transition, receipt, response, and compute contribution; durable exact-replay state across database reopen | durable scheduling, worker resumption, or reuse of a restart-invalidated node session |
+| Atomic settlement | one accepted attempt transition, receipt, response, and compute contribution; durable exact-replay state across database reopen | durable scheduling, worker resumption, or reuse of a restart-invalidated node session |
 | Worker I/O bounds | per-attempt result/stream byte cap, error cap, cumulative stream batch/rate limits, bounded fanout | semantic safety of allowed output or transport-level denial of service |
 | Result quarantine | 500 bounded diagnostics with hash and at most 4 KiB preview outside operational execution | malware analysis or a complete forensic archive |
 | Total execution deadline | shared remaining budget for strategy, local calls, worker waits, validation, and finalization | forcibly stopping an external process that ignores cancellation |
 | Restart reconciliation | truthful `interrupted` state for non-resumable executions/jobs and active attempts | resuming lost process-local work |
+| Durable-before-publication lifecycle | required commit before live snapshot, normal event, project-memory/legacy mirror, callback, response, or terminal state/artifact publication through canonical shares and legacy run/history/demo surfaces | durable event delivery, external transactionality, or coordinator HA |
+| Structural event retention | per-event allowlists before memory, SQLite, broadcast, and replay; startup redaction of historical payloads; generated tokens live-stream-only | removing sensitive text from pre-upgrade backups, proxy logs, or already copied event data |
 | Sealed artifact registry | role/winner scope, root confinement, normalized paths, symlink rejection, immutable local baseline, live re-hash, quotas, streaming delivery, retention | content safety, hostile-host tampering, signature, or sandboxing |
 | Explicit shares | unguessable hash-only bearer tokens, expiry, list/revoke, redaction, scoped deliverable/candidate-source permission | preventing redistribution by a token holder or access-log capture |
 | Public-pitch profile | one local candidate with short timeout/output and compute-aware admission | strong abuse prevention or semantic content moderation |
@@ -82,6 +89,16 @@ Requester ── pitch_key ──▶ ORCHESTRATOR ── node_secret admission �
 Secret comparisons use constant-time comparison where static credentials or
 signatures are checked. This reduces one narrow side channel. It does not make a
 shared secret equivalent to cryptographic identity.
+
+Contribution rows use fixed task labels and omit free-form details. Startup
+redacts historical live SQLite/`ledger.json` projections, but backups or copies
+created before the upgrade can retain their earlier contents and require
+operator-managed rotation.
+
+Event persistence retains only allowlisted identifiers, states, counts, and
+other bounded structural fields. Startup rewrites historical live event rows
+before HTTP or WebSocket replay, but pre-upgrade backups and exports remain an
+operator-controlled historical-retention risk.
 
 ## 4. Public and private reachability
 
@@ -98,6 +115,12 @@ Pitch and worker protocol routes are exempt from the viewer gate because they
 use their own credentials. Poll, result/stream/token, heartbeat, and drain also
 require the current node session. If `pitch_key` or `node_secret` is empty in
 local mode, that separate static control is open.
+
+Canonical `Idempotency-Key` does not bypass pitch authentication, canonical
+validation, or rate limiting. Configured pitch-key holders share one requester
+scope. Open mode hashes the direct peer host and ignores forwarding headers;
+that address is a best-effort duplicate boundary, not authorization or user
+identity.
 
 Everything else is viewer-protected, including canonical execution reads and
 cancellation, jobs, events, WebSockets, node details, history, gallery, run
@@ -117,6 +140,11 @@ Most importantly, when `viewer_key` is empty the viewer middleware allows
 private routes. Startup logs and `/health` explicitly say so. Anyone who can
 reach that deployment can then read tasks, results, projects, events, node
 detail, and artifacts.
+
+In this mode, keyed canonical submissions are scoped to the direct ASGI peer
+host. NAT can merge callers, address changes can split one caller, and proxies
+can hide the original peer. The scope must not be used for ownership,
+attribution, or security policy.
 
 `deployment_mode=trusted_alpha` changes this posture to fail closed: preflight
 and startup require independent 32+-character viewer, pitch, and node secrets,
@@ -284,6 +312,21 @@ queued/running canonical executions and legacy jobs become retryable
 `interrupted`; active attempts become interrupted and reject late output. This
 prevents false forever-running state but does not resume work.
 
+Required queued, running, and terminal snapshots commit before their public
+live copy, normal lifecycle event, callback, compatibility mirror, response, or
+terminal state/artifact publication through a share. Permanent persistence
+failure leaves the last durable snapshot authoritative and suppresses normal
+publication. A diagnostic event
+can report a safe phase and attempt count, but it is not lifecycle truth. Once
+a terminal snapshot commits, later telemetry or callback failure does not undo
+it.
+
+Requester-scoped submission mappings survive restart and backup. A replay
+returns the same execution, including an interrupted one, without scheduling
+replacement work. This closes duplicate creation by canonical client retry; it
+does not make model calls, worker calls, callbacks, or filesystem effects
+exactly once.
+
 Deadlines and cancellation remove queued units, signal local tasks, and cancel
 active attempts. External calls may not stop immediately if a dependency ignores
 cancellation, but their late output cannot settle. Exactly one coordinator may
@@ -338,6 +381,10 @@ request-count and concurrency cap reduce abuse; they do not eliminate it.
 - Structural/deterministic contract validation does not prove arbitrary
   behavioral correctness.
 - Viewer auth is one role for the whole instance, not multi-user authorization.
+- All holders of one pitch key share an idempotency scope; open peer scoping is
+  not durable identity.
+- Idempotent submission does not resume work or make external effects exactly
+  once.
 - Share revocation cannot retract already downloaded content.
 - Uvicorn/reverse-proxy access logs can expose share URLs unless configured.
 - Sealed manifests are local baselines, not externally anchored attestations.
@@ -351,7 +398,8 @@ operators you trust. Use `deployment_mode=trusted_alpha`, run preflight, set
 independent strong `node_secret`, `pitch_key`, and `viewer_key` values, and allow
 exactly one process to own the state directory before binding beyond localhost.
 Use TLS or a private overlay network; configure access logs to redact share
-capabilities; keep keyless pitching off unless you explicitly acknowledge and
+capabilities and never capture idempotency or static/session/attempt
+credentials; keep keyless pitching off unless you explicitly acknowledge and
 accept its compute risk; take and verify backups; review generated code; rotate
 a viewer key after suspected disclosure; and treat shared prompts as disclosed
 to every worker that receives them.

@@ -363,7 +363,9 @@ async function pitchTask() {
       d.events.forEach(ev => {
         if (ev.type === 'plan') {
           planDone = true;
-          totalSubtasks = ev.subtasks ? ev.subtasks.length : 0;
+          totalSubtasks = Number.isInteger(ev.subtask_count)
+            ? ev.subtask_count
+            : (Array.isArray(ev.subtasks) ? ev.subtasks.length : 0);
         }
         if (ev.type === 'build') buildCount++;
         if (ev.type === 'review_start') buildDone = true;
@@ -622,7 +624,10 @@ function _appendToken(ev) {
 function appendEvent(ev) {
   // Token events — route to the live stream display, never to the log
   if (ev.type === 'token') { _appendToken(ev); return; }
-  if (ev.type === 'node_busy') { _setNodeBusy(ev.node_id, ev.task_title); return; }
+  if (ev.type === 'node_busy') {
+    _setNodeBusy(ev.node_id, ev.unit_id || ev.task_id || ev.task_title || 'working');
+    return;
+  }
   if (ev.type === 'node_idle') {
     _setNodeIdle(ev.node_id, ev.credits_earned);
     if (ev.credits_earned > 0) loadStandings();
@@ -634,10 +639,17 @@ function appendEvent(ev) {
   if (!label) return;  // skip unknown events
   const t = new Date(ev.time).toLocaleTimeString();
   let msg = '';
-  if (ev.type === 'pitch') msg = `Task pitched: "${escHtml(ev.task)}"`;
-  else if (ev.type === 'plan') msg = `Decomposed into ${ev.subtasks.length} subtasks: ${ev.subtasks.map(escHtml).join(', ')}`;
-  else if (ev.type === 'build') msg = `Subtask ${ev.subtask_id} complete: ${escHtml(ev.subtask)}`;
-  else if (ev.type === 'review_start') msg = 'Reviewing combined output...';
+  if (ev.type === 'pitch') {
+    msg = ev.task ? `Task pitched: "${escHtml(ev.task)}"` : 'Task accepted';
+  } else if (ev.type === 'plan') {
+    const legacySubtasks = Array.isArray(ev.subtasks) ? ev.subtasks : [];
+    const count = Number.isInteger(ev.subtask_count) ? ev.subtask_count : legacySubtasks.length;
+    msg = `Decomposed into ${count} subtasks`;
+    if (legacySubtasks.length) msg += `: ${legacySubtasks.map(escHtml).join(', ')}`;
+  } else if (ev.type === 'build') {
+    msg = `Subtask ${ev.subtask_id} complete`;
+    if (ev.subtask) msg += `: ${escHtml(ev.subtask)}`;
+  } else if (ev.type === 'review_start') msg = 'Reviewing combined output...';
   else if (ev.type === 'complete') msg = `Pipeline complete → ${escHtml(ev.project_dir)}`;
   else if (ev.type === 'error') msg = `Error: ${escHtml(ev.message || '')}`;
 

@@ -352,7 +352,9 @@
           const ev = JSON.parse(e.data);
           if (ev.job_id !== jobId) return;
           if (ev.type === 'plan') {
-            subtasksTotal = (ev.subtasks || []).length;
+            subtasksTotal = Number.isInteger(ev.subtask_count)
+              ? ev.subtask_count
+              : (Array.isArray(ev.subtasks) ? ev.subtasks.length : 0);
             $('d-plan').textContent = `${subtasksTotal} subtasks`;
             setStage('build');
           }

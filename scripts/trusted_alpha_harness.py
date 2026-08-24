@@ -53,6 +53,8 @@ REQUIRED_COVERAGE = frozenset(
         "token_streaming",
         "output_limit_rejection",
         "cancellation_and_late_result",
+        "terminal_publication",
+        "submission_idempotency",
         "restart_reconciliation",
         "artifact_sealing_download_and_mutation",
         "share_creation_and_revocation",
@@ -132,6 +134,29 @@ SCENARIOS = (
         nodeids=(
             "tests/test_execution_lifecycle.py::test_remote_cancellation_is_terminal_and_rejects_late_result",
             "tests/test_result_binding.py::test_late_result_after_cancellation_is_rejected",
+        ),
+    ),
+    Scenario(
+        coverage=("terminal_publication",),
+        description="required snapshots commit before live, event, callback, and artifact publication",
+        nodeids=(
+            "tests/test_durable_execution_truth.py::test_transient_terminal_write_commits_before_publication",
+            "tests/test_durable_execution_truth.py::test_permanent_terminal_write_is_not_published",
+            "tests/test_durable_execution_truth.py::test_running_write_failure_does_not_publish_or_start",
+            "tests/test_durable_execution_truth.py::test_background_terminal_persistence_error_is_not_reclassified_or_callbacked",
+            "tests/test_durable_execution_truth.py::test_cancellation_persistence_failure_does_not_claim_cancellation",
+            "tests/test_durable_execution_truth.py::test_uncommitted_terminal_artifacts_remain_unpublished_after_reconciliation",
+        ),
+    ),
+    Scenario(
+        coverage=("submission_idempotency",),
+        description="scoped canonical retries create, replay, conflict, and recover without duplicate work",
+        nodeids=(
+            "tests/test_execution_submission.py::test_same_scoped_key_replays_one_execution_and_conflicts_on_change",
+            "tests/test_execution_submission.py::test_concurrent_http_retries_schedule_and_emit_creation_exactly_once",
+            "tests/test_execution_submission.py::test_open_mode_scopes_to_direct_peer_and_ignores_forwarding_headers",
+            "tests/test_execution_submission.py::test_only_digests_reach_storage_or_logs",
+            "tests/test_execution_submission.py::test_restart_after_atomic_commit_replays_same_interrupted_execution",
         ),
     ),
     Scenario(

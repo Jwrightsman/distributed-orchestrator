@@ -67,18 +67,42 @@ async def _fake_pipeline(task, **kwargs):
 
 def test_unhandled_error_log_redacts_share_capability(caplog):
     token = "plaintext-share-capability"
+    exception_secret = "private prompt echoed by a strategy failure"
     request = SimpleNamespace(
         url=SimpleNamespace(path=f"/v1/shares/{token}/artifacts/result.txt")
     )
 
     with caplog.at_level(logging.ERROR, logger="mycelium"):
         response = asyncio.run(
-            server.unhandled_exception_handler(request, RuntimeError("failed"))
+            server.unhandled_exception_handler(
+                request,
+                RuntimeError(exception_secret),
+            )
         )
 
     assert response.status_code == 500
     assert token not in caplog.text
+    assert exception_secret not in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
     assert "/v1/shares/<redacted>/artifacts/result.txt" in caplog.text
+
+
+def test_diagnostic_event_failure_log_omits_exception_text(caplog, monkeypatch):
+    exception_secret = "attempt nonce and private worker output"
+
+    def fail_event_write(event_type, data):
+        raise RuntimeError(exception_secret)
+
+    monkeypatch.setattr(server_state, "_emit", fail_event_write)
+    with caplog.at_level(logging.ERROR, logger="mycelium.diagnostics"):
+        server_state._safe_diagnostic_emit(
+            "attempt_issue_failed",
+            {"phase": "attempt_issue", "error_type": "OperationalError"},
+        )
+
+    assert exception_secret not in caplog.text
+    assert "event_type=attempt_issue_failed" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
 
 
 async def _fake_plan(task, max_retries=None, memory_context=""):

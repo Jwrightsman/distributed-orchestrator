@@ -191,7 +191,10 @@ class Dispatcher:
             {
                 "execution_id": execution_id,
                 "unit_id": unit.unit_id,
-                "reason": reason,
+                # Worker-supplied error text may echo prompts, output, or
+                # credentials. Keep details in authenticated execution state,
+                # never in the persisted lifecycle event log.
+                "reason": "distributed_execution_failed",
                 "placement_selected": "local",
             },
         )

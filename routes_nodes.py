@@ -25,6 +25,7 @@ from server_state import (
     _check_node_auth,
     _check_node_session,
     _emit,
+    _safe_diagnostic_emit,
     node_blacklist,
     node_failure_count,
     nodes,
@@ -73,11 +74,15 @@ def _reclaim_replaced_session(node_id: str, replaced_session_id: str) -> None:
                     )
                 )
             except Exception as exc:
-                _emit("attempt_reclaim_failed", {
-                    "task_id": task_id,
-                    "node_id": node_id,
-                    "reason": f"{type(exc).__name__}: {exc}"[:300],
-                })
+                _safe_diagnostic_emit(
+                    "attempt_reclaim_failed",
+                    {
+                        "task_id": task_id,
+                        "node_id": node_id,
+                        "phase": "session_replacement",
+                        "error_type": type(exc).__name__,
+                    },
+                )
                 continue
             if attempt_id and not changed:
                 continue
@@ -402,11 +407,15 @@ async def next_task(node_id: str, request: Request):
                         # Never expose work unless its authority is durable.
                         _clear_assignment(task)
                         task_queue.insert(min(idx, len(task_queue)), task)
-                        _emit("attempt_issue_failed", {
-                            "task_id": task["task_id"],
-                            "node_id": node_id,
-                            "reason": f"{type(exc).__name__}: {exc}"[:300],
-                        })
+                        _safe_diagnostic_emit(
+                            "attempt_issue_failed",
+                            {
+                                "task_id": task["task_id"],
+                                "node_id": node_id,
+                                "phase": "attempt_issue",
+                                "error_type": type(exc).__name__,
+                            },
+                        )
                         raise HTTPException(
                             status_code=503,
                             detail="worker attempt could not be issued durably",
@@ -418,7 +427,8 @@ async def next_task(node_id: str, request: Request):
                     task_inflight[task["task_id"]] = task
                     _emit("node_busy", {
                         "node_id": node_id,
-                        "task_title": task.get("title", task["task_id"]),
+                        "task_id": task["task_id"],
+                        "unit_id": task.get("execution_unit_id"),
                     })
                     _emit("attempt_started", {
                         "task_id": task["task_id"],

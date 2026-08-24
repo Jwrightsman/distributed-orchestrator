@@ -11,6 +11,7 @@ process this module is loaded into.
     uvicorn scripts._soak_app:app
 """
 
+import gc
 import json
 import sys
 from pathlib import Path
@@ -55,3 +56,22 @@ ollama_client.generate = _fake_generate
 routes_pitch.generate = _fake_generate
 
 from server import app  # noqa: E402,F401
+
+
+@app.post("/_soak/collect")
+async def _soak_collect():
+    """Settle collectable cycles before the harness compares RSS samples."""
+
+    collected = gc.collect()
+    from execution.service import get_execution_service
+    from server_state import jobs
+
+    service = get_execution_service()
+    return {
+        "collected": collected,
+        "jobs": len(jobs),
+        "service_live_results": len(service._live_results),
+        "service_requests": len(service._requests),
+        "service_controls": len(service._controls),
+        "service_background": len(service._background),
+    }
