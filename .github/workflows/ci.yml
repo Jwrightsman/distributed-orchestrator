@@ -96,7 +96,7 @@ jobs:
         run: docker run --rm distributed-orchestrator python -c "import prompts, orchestrator; print('prompt sets:', [p.name for p in prompts.list_prompt_sets()], '| active:', orchestrator.active_prompt_set().name)"
 
       - name: Operations tools present in image
-        run: docker run --rm distributed-orchestrator python -c "from scripts.preflight import deployment_health_ready; import scripts.backup, scripts.restore; assert deployment_health_ready({'status':'ok','private_routes_protected':True})"
+        run: docker run --rm distributed-orchestrator python -c "from scripts.preflight import deployment_health_ready; import scripts.backup, scripts.restore; assert deployment_health_ready({'status':'ok','private_routes_protected':True,'node_enrollment_required':True})"
 
       - name: Compose file is valid
         run: docker compose config --quiet

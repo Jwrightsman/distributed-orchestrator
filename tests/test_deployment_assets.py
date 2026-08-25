@@ -30,3 +30,11 @@ def test_compose_defaults_to_loopback_and_one_persistent_state_mount():
     assert "MYCELIUM_STATE_DIR: /data" in compose
     assert "scripts/node_enrollment_admin.py" in dockerfile
     assert '"--workers"' not in dockerfile
+
+
+def test_ci_docker_health_fixture_includes_durable_enrollment_readiness():
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "'node_enrollment_required':True" in workflow
