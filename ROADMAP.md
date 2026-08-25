@@ -129,11 +129,14 @@ synthetic data with validators. The chart-vs-Snake gap is the evidence, already 
 ## 5. Protocol hardening — before strangers earn anything real
 
 _From external review, August 2026. Ordered by severity, which is not the order they were built
-in: **the first part of the second item shipped in PR #45** (attempt binding — see below) and the
-first item, per-node identity, is untouched. The rest are deferred with intent._
+in. Server-issued attempt binding shipped first; Theme 2A later added durable per-node bearer
+enrollment and individual revocation. Public-key identity and the rest remain deferred._
 
-**Per-node cryptographic identity.** `node_secret` is network admission, not identity. Keypair at
-first setup, challenge-response registration, node-scoped tokens thereafter. Enables the rest.
+**Per-node durable bearer enrollment.** Theme 2A now treats `node_secret` as bootstrap admission and
+uses a distinct digest-only bearer credential for durable enrollment, restart-stable attribution,
+and individual revocation/rotation. A future less-trusted boundary still needs a keypair at first
+setup, challenge-response, and signed provenance/result envelopes. Bearer enrollment does not
+claim physical-machine identity, attestation, or Sybil resistance.
 
 **Server-issued expiring leases.** Every assignment carries `task_id`, `attempt_id`,
 `assigned_node_id`, `payload_hash`, nonce, issue and expiry. The node signs a result envelope

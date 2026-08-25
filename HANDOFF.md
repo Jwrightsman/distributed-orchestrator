@@ -1,26 +1,25 @@
-# Handoff — Mycelium Durable Execution Truth
+# Handoff — Mycelium Durable Node Enrollment
 
-_Updated August 23, 2026._
+_Updated August 25, 2026._
 
 ## Read these first
 
-1. `SPRINT_DURABLE_EXECUTION_TRUTH.md` — current Theme 1 scope, evidence, and residuals
+1. `SPRINT_DURABLE_NODE_ENROLLMENT.md` — current Theme 2A scope, evidence, and residuals
 2. `MASTER_PLAN.md` — current direction and freeze boundary
 3. `docs/PROTOCOL.md` — normative execution/client/worker contract
 4. `docs/ACCESS_CONTROL.md` and `docs/ARTIFACTS.md` — authority and delivery APIs
 5. `docs/THREAT_MODEL.md` — defended and undefended boundaries
 6. `docs/DEPLOY.md`, `docs/TRUSTED_ALPHA_RUNBOOK.md`, and
    `docs/OPERATIONS.md` — deployment and recovery procedure
-7. `docs/adr/0008-idempotent-canonical-execution-submission.md` and
-   `docs/adr/0009-durable-terminal-commit-before-publication.md` — Theme 1 decisions
+7. `docs/adr/0010-durable-enrollment-identity.md` — Theme 2A identity decision
 8. `docs/audits/2026-08-23-comparative-architecture-audit.md` — historical,
    non-normative architecture research
 9. `CLAUDE.md` and `AGENTS.md` — repository and consent rules
 
-`SPRINT_TRUSTED_ALPHA_RC1.md`, `SPRINT_STRATEGY_PROTOCOL.md`,
-`SPRINT_TRUSTED_ALPHA_INTEGRITY.md`, and `SPRINT_PHASE2.md` are historical
-records. Do not copy their old test counts, status lists, or interface
-assumptions into a current claim.
+`SPRINT_DURABLE_EXECUTION_TRUTH.md`, `SPRINT_TRUSTED_ALPHA_RC1.md`,
+`SPRINT_STRATEGY_PROTOCOL.md`, `SPRINT_TRUSTED_ALPHA_INTEGRITY.md`, and
+`SPRINT_PHASE2.md` are historical records. Do not copy their old test counts,
+status lists, or interface assumptions into a current claim.
 
 ## Human and scope context
 
@@ -29,25 +28,55 @@ he must act on, and warn before anything network-facing. Never install, join, or
 run Mycelium on a machine without that machine owner's explicit informed
 consent.
 
-Theme 1 is a bounded execution-truth change on the trusted-alpha backend. It
-does not authorize a permissionless network, workflow engine, durable scheduler,
-coordinator HA, new execution strategies, accounts, marketplace/token features,
-federation, model sharding, generated-code sandbox, or unrelated UI redesign.
-Frontend work may consume the contract below without changing its meanings.
+Theme 2A is a bounded durable-enrollment change on the trusted-alpha backend. It
+does not authorize typed resource descriptors (Theme 2B), permissionless
+admission, public-key infrastructure, attestation, Sybil resistance, workflow
+resumption, coordinator HA, new strategies, accounts, marketplace/token
+features, federation, model sharding, generated-code sandbox, or unrelated UI
+redesign. Frontend work may consume the contract below without changing its
+meanings.
 
 ## Branch and review
 
-- Branch: `codex/theme-1-durable-execution-truth`
-- Base: `origin/master` at `8a9a09a2920dc376c60b7e63064df61e5c0602d3`
+- Branch: `codex/theme-2a-durable-node-enrollment`
+- Base: `origin/master` at `9979f681369fa69cfb35133f17e07ce3aac54abf`
 - Merge: review explicitly; do not auto-merge
-- Current sprint record: `SPRINT_DURABLE_EXECUTION_TRUTH.md`
+- Current sprint record: `SPRINT_DURABLE_NODE_ENROLLMENT.md`
 
 The final integrator must record the current commit range and current full-suite,
 Ruff, import, preflight, and deployment checks. Historical counts in sprint
 records are evidence for those exact revisions, not a substitute for the final
 branch run.
 
-## Theme 1 architecture
+## Theme 2A architecture
+
+- `enrollment_id` is immutable durable contributor attribution; `node_id` is a
+  display label; `session_id` is one process incarnation; `attempt_id` is one
+  lease authority.
+- Bootstrap requires shared admission plus a worker-generated high-entropy
+  credential. Returning registration uses only the per-node credential.
+- SQLite stores a domain-separated enrollment credential digest, status,
+  timestamps, and credential version. It never stores plaintext.
+- Sessions remain process-local and bind enrollment, label, token digest, and
+  credential version. Every worker operation checks durable enrollment status.
+- Revocation/rotation affects one enrollment, reclaims its active leases, and
+  preserves attempts, receipts, and contribution history.
+- New attempts, accepted receipts, quarantine audit rows, and contributions
+  carry nullable enrollment attribution. Historical label-only rows stay
+  explicitly unattributed.
+- New enrolled contribution and verification identity uses enrollment ID;
+  legacy compatibility identity is session-scoped so a label takeover cannot
+  inherit trust/history.
+- The stock worker owns a private atomic coordinator-scoped identity file. A
+  coordinator backup preserves enrollment digests/attribution but not worker
+  plaintext identity files.
+- Trusted alpha requires durable enrollment plus TLS or a private authenticated
+  overlay. Local `compat` mode remains explicit and cannot claim an enrolled or
+  revoked label.
+
+Decision: [ADR 0010](docs/adr/0010-durable-enrollment-identity.md).
+
+## Theme 1 prerequisite retained
 
 ### Durable execution publication
 
@@ -136,26 +165,32 @@ Decision: [ADR 0008](docs/adr/0008-idempotent-canonical-execution-submission.md)
 - Compute points mean accepted, bound compute. They do not mean candidate
   selection, validated correctness, money, a token, or future value.
 
-### Node sessions and bounded worker traffic
+### Enrollment, sessions, and bounded worker traffic
 
-- `X-Node-Secret` remains shared network admission. Registration returns a
-  normalized node ID, non-secret session ID, one-time plaintext session token,
-  and start/expiry timestamps; the server retains only a SHA-256 digest.
+- `X-Node-Secret` authorizes initial bootstrap only. The stock worker proposes a
+  high-entropy per-node credential; SQLite stores only its domain-separated
+  digest under an immutable enrollment ID.
+- Returning registration uses the label and enrollment credential without the
+  shared secret. Registration returns a non-secret session ID, one-time
+  plaintext session token, and start/expiry timestamps; the server retains only
+  the session digest.
 - Poll, heartbeat, drain, result, stream, and token-stream routes require the
-  current `X-Node-Session` in addition to admission. Attempts bind the assigned
-  session.
-- Exact-token registration is idempotent. A different live claimant for the
-  same node ID gets `409`; stale/expired IDs can be reclaimed; restart
-  invalidates sessions; and the stock worker automatically re-registers after a
-  machine-readable rejection.
-- Sessions are process-local, last at most 24 hours, and are not public-key
-  machine identity. Any `node_secret` holder can register another free label.
+  current `X-Node-Session`. Enrolled operations recover durable identity
+  server-side and attempts bind enrollment, node, session, and credential
+  version.
+- Coordinator restart invalidates sessions while preserving enrollment.
+  Revocation/rotation is enforced at the next authenticated operation and
+  safely reclaims active leases.
+- Sessions are process-local, last at most 24 hours, and enrollment remains
+  bearer attribution rather than public-key/physical-machine identity or Sybil
+  resistance.
 - Node/registration/error fields, output bytes, cumulative stream bytes, batch
   count/rate, event fanout, and quarantine preview/count are bounded. Crossing a
   worker stream/output limit cannot be bypassed through reconnect or final
   settlement.
-- Private node APIs distinguish current-session counters from durable lifetime
-  contribution totals. They never return the session token.
+- Private node APIs distinguish immutable enrollment identity, current-session
+  counters, and durable enrollment-keyed lifetime totals. They never return an
+  enrollment credential/digest or session token.
 
 ### Lifecycle, validation, and post-hoc state
 
@@ -234,8 +269,8 @@ filenames, or generic “verified” badges:
 
 | Frontend-visible concept | Backend source and required presentation |
 | --- | --- |
-| Node session state | Private node fields: session ID/start/expiry, draining/current task, session counters, and lifetime counters. Never request or display a session token. |
-| Deployment protection status | Public `/health.private_routes_protected` and warnings; private `/v1/operator/health` mode, instance ID, coordinator-lock state, and preflight warnings. Make fail-open local mode visibly unsafe for reachable deployment. |
+| Enrollment/session state | Private `/v1/operator/node-enrollments` and node fields: enrollment ID/label/status/timestamps, live session ID/start/expiry, drain/current task, and session/lifetime counters. Never request or display credential material or a session token. |
+| Deployment protection status | Public `/health.private_routes_protected`, `/health.node_enrollment_required`, and warnings; private `/v1/operator/health` mode, instance ID, coordinator-lock state, and preflight warnings. Make fail-open/compat local mode visibly unsafe for reachable deployment. |
 | Artifact role | `ArtifactEntryV1.role`: Deliverable, Provenance, Log, Candidate source, or Internal. Default requester download is deliverable-only. |
 | Manifest integrity mode | `artifact_integrity_mode` / manifest `integrity_mode`: None, Active, Sealed, Legacy live, or Invalid. Do not show legacy live as sealed. |
 | Sealed manifest hash | `sealed_manifest_hash` / `manifest_hash`. Label it local sealed-baseline integrity, not signature or external attestation. |
@@ -290,8 +325,8 @@ Revise or remove these claims wherever they appear:
 - A generic “verified” badge. Show lifecycle, validation, assurance, integrity,
   and post-hoc dimensions separately with evidence-scoped labels.
 
-Also prohibited: trustless/permissionless readiness, cryptographic worker
-identity, confidential compute, enforced no-network execution, sandboxed
+Also prohibited: trustless/permissionless readiness, public-key or physical
+worker identity, attestation, confidential compute, enforced no-network execution, sandboxed
 generated code, Sybil resistance, durable queue resume, multi-coordinator
 operation, multi-user authorization, monetary credits, host-independent artifact
 attestation, exactly-once external side effects, open-mode peer identity, or
@@ -302,12 +337,15 @@ proof that arbitrary generated output is correct.
 1. Run `python scripts/preflight.py` against the intended config/state paths.
 2. Use trusted-alpha mode, three independent strong secrets, TLS or a private
    overlay, secure cookies, and exactly one coordinator process.
-3. Confirm public `/health` is `ok` and private routes are protected; confirm
-   viewer-less private HTTP and WebSocket access is rejected.
+3. Confirm public `/health` is `ok`, `node_enrollment_required` is true, and
+   private routes are protected; confirm viewer-less private HTTP and WebSocket
+   access is rejected.
 4. Configure Uvicorn/reverse-proxy logs not to retain share capability paths,
    idempotency keys, or static/session/attempt credentials.
-5. Exercise node register/idempotence/conflict/reclaim/restart, session-bound
-   poll/result/stream, and output/stream limits.
+5. Exercise bootstrap/returning register, idempotence/conflict, one-enrollment
+   revoke/rotate/reclaim/restart, label-takeover rejection, session-bound
+   poll/result/stream, cross-enrollment settlement rejection, and output/stream
+   limits.
 6. Exercise lifecycle timeout/cancel/restart, artifact seal/drift/role downloads,
    share scope/expiry/revocation, exact/changed attempt replay, transient and
    permanent terminal persistence failure, and callback/event failure after a

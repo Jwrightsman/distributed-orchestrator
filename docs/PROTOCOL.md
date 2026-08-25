@@ -4,10 +4,12 @@ This document defines the coordinator, client, and worker contracts implemented
 by Mycelium for its private trusted alpha. The key words **MUST**, **MUST NOT**,
 **SHOULD**, **SHOULD NOT**, and **MAY** are normative.
 
-The trusted-alpha boundary matters: this protocol prevents an unbound or late
-worker result from becoming an execution result, but node admission still uses
-one shared secret. It does not provide per-node cryptographic identity, a
-generated-code sandbox, or permissionless-network defenses.
+The trusted-alpha boundary matters: a shared secret admits initial enrollment,
+then a distinct per-node bearer credential authenticates durable returning
+identity and independently revocable sessions bind work. This prevents an
+unbound or late worker result from becoming an execution result. It does not
+provide public-key or physical-machine identity, a generated-code sandbox, or
+permissionless-network defenses.
 
 ## Scope and versioning
 
@@ -378,19 +380,62 @@ validators.
 
 ## Node registration sessions and bounded worker I/O
 
-`X-Node-Secret` is shared admission to the worker protocol. Successful
-`POST /nodes/register` additionally issues normalized `node_id`, a non-secret
-`session_id`, a random plaintext `session_token` returned once, and start and
-expiry timestamps. The coordinator stores only the token's SHA-256 digest.
-The reference worker keeps the token only in memory.
+The protocol separates durable enrollment, a human label, a live incarnation,
+and lease authority:
+
+```text
+enrollment_id = immutable enrolled contributor identity
+node_id       = normalized display label
+session_id    = one live worker-process incarnation
+attempt_id    = one leased execution authority
+```
+
+`POST /nodes/register` has explicit `bootstrap` and `returning` enrollment
+actions. Bootstrap requires `X-Node-Secret` plus a high-entropy worker-proposed
+`enrollment_credential`. Returning registration requires the node label and
+that per-node credential but not the shared secret. The coordinator stores only
+a domain-separated credential digest. A matching bootstrap retry returns the
+same enrollment; a label or credential collision returns a stable conflict and
+never overwrites the existing row.
+
+Only after durable enrollment succeeds does registration issue a non-secret
+`session_id`, a random plaintext `session_token` returned to the worker, and
+start/expiry timestamps. The coordinator stores only the session-token digest.
+The stock worker persists the enrollment credential in its private,
+coordinator-scoped identity file and keeps the session token only in memory.
+Identity schema version 1 also binds the normalized coordinator origin and node
+label, nullable pre-bootstrap enrollment ID/version, and positive enrolled
+`credential_version`. Coordinator URLs with userinfo, paths, queries, or
+fragments are rejected. The stock worker deliberately ignores ambient HTTP(S)
+proxy environment variables so bearer credentials are not silently routed to
+an inherited proxy, and it requires an explicit origin instead of selecting an
+unauthenticated LAN-discovery response.
 
 Poll, heartbeat, drain, stream, token-stream, and result routes require the
-current `X-Node-Session` in addition to node admission. Presenting the exact
-live token makes registration idempotent. A distinct live claimant for the same
-normalized ID receives `409`; an expired or stale session can be reclaimed and
-its prior work is closed or requeued. Sessions are process-local, expire after
-at most 24 hours, and become invalid on coordinator restart. The reference
-worker re-registers after the server's machine-readable session rejection.
+current `X-Node-Session`. An enrolled session recovers its enrollment binding
+server-side and does not present `X-Node-Secret` again. Every operation checks
+that the durable enrollment is active, still owns the label, and has the
+session's credential version. Revocation or rotation rejects the operation,
+invalidates the incarnation, and reclaims active work. Sessions are
+process-local, expire after at most 24 hours, and become invalid on coordinator
+restart. The returning credential obtains a fresh session while keeping the
+same enrollment ID.
+
+The next authenticated operation observes revocation or rotation. Independently,
+the coordinator janitor checks live enrolled sessions every 30 seconds; this is
+the nominal idle detection bound, subject to ordinary scheduler delay and
+durable-store availability. Failed store checks do not assume validity or
+revocation; they are diagnosed and retried on a later sweep.
+
+`node_enrollment_mode=required` rejects a legacy-only registration with a
+stable worker-upgrade response and is mandatory in trusted alpha. Explicit
+local `compat` mode may issue an unenrolled session for an old worker. Such a
+session has `enrollment_id=null`, retains the old shared-secret checks, and
+cannot claim a label already present in the durable enrollment table.
+The stock enrollment-capable worker fails closed if a coordinator does not
+explicitly confirm the requested action, enrollment ID, and credential version;
+it never silently downgrades its private identity to a legacy shared-secret
+session.
 
 Registration strings and capabilities are bounded, and the server normalizes
 node IDs to at most 64 ASCII characters. `max_output_bytes` is an execution
@@ -414,7 +459,9 @@ attempt record, never from worker-supplied fields.
 Assignment creates an active attempt with:
 
 - task, execution, execution-unit, and unit-kind bindings;
-- assigned node and node-session identifiers;
+- assigned enrollment (nullable for historical/compatibility work), node, and
+  node-session identifiers;
+- the enrollment credential version for a newly enrolled assignment;
 - contract version;
 - unguessable attempt identifier;
 - a high-entropy nonce whose digest, not plaintext, is stored;
@@ -423,9 +470,11 @@ Assignment creates an active attempt with:
 For a v1 attempt, the worker must echo `contract_version`, `attempt_id`, nonce,
 `node_id`, `execution_id`, `execution_unit_id`, and `execution_unit_kind`, and
 the URL task id must match. The authenticated session must match the attempt's
-assigned session. Missing fields are rejection, not legacy fallback. The
-submitted contract version must equal the server-owned contract version. The
-attempt must still be active and unexpired.
+assigned enrollment and active-session authority. Active settlement also
+requires the issued session and credential version; a newly registered session
+cannot take over an old active lease. Missing fields are rejection, not legacy
+fallback. The submitted contract version must equal the server-owned contract
+version. The attempt must still be active and unexpired.
 
 The accepted flow is:
 
@@ -448,10 +497,10 @@ SQLite uniqueness permits one active attempt per task, one accepted receipt per
 task, and one compute-contribution record per attempt. `BEGIN IMMEDIATE` plus a
 conditional active-to-settled update makes concurrent settlement exactly once.
 An exact retry of a settled attempt returns its stored response, including after
-database reopen, and does not award points twice. A changed replay is rejected.
-This durable storage property does not make a process-local node session usable
-after coordinator restart; the worker must re-register and old-session protocol
-calls remain rejected.
+database reopen, and does not award points twice. A current session for the
+same active enrollment may recover that exact response after an incarnation
+change; a different enrollment or a changed payload is rejected. This does not
+make the old process-local session usable after restart.
 
 Unknown, queued-but-unleased, expired, reclaimed, cancelled, superseded,
 interrupted, wrong-node, wrong-execution, wrong-unit, wrong-kind, missing-field,
@@ -478,6 +527,9 @@ explicit basis `compute_contribution` and mean that a nonempty, attempt-bound
 worker result was accepted. They do **not** mean the candidate was selected,
 the final output passed validation, or the output is correct. Points are not
 money, a token, payment, transferable value, or a claim on future value.
+New per-node summaries group by immutable enrollment ID and retain the node
+label as metadata. Historical node-label-only rows remain readable with missing
+enrollment attribution; they are not backfilled or inherited by a new session.
 
 ## Canonical REST API
 
@@ -611,17 +663,20 @@ error-report POST fail, the original generation error remains the primary error.
 Private node records distinguish current session state/counters from durable
 lifetime contribution totals. Compatibility `tasks_completed` and
 `credits_earned` remain session projections. Clients MUST NOT expect a session
-token in node-list or event payloads.
+token, enrollment credential, or credential digest in node-list or event
+payloads. Viewer-protected `GET /v1/operator/node-enrollments` lists only safe
+identity/status/timestamp, live-session/drain, and contribution metadata.
 
 ## Deployment, SQLite, and coordinator ownership
 
 `deployment_mode=local` preserves fail-open developer defaults.
 `deployment_mode=trusted_alpha` fails startup/preflight unless viewer, pitch,
 and node secrets are independent and at least 32 characters, cookie/TLS intent
-is coherent, config and state paths pass safety checks, and public pitch has an
-explicit acknowledgement when enabled. `/health` publishes only safe protection
-state; the private `/v1/operator/health` identifies the process, mode, held lock,
-and preflight warnings.
+is coherent, durable enrollment is required, TLS or a private authenticated
+overlay is declared, config and state paths pass safety checks, and public pitch
+has an explicit acknowledgement when enabled. `/health` publishes only safe
+protection state; the private `/v1/operator/health` identifies the process,
+mode, held lock, and preflight warnings.
 
 Exactly one coordinator may own a state directory. An operating-system lock is
 acquired before migrations and background work; a second process fails closed.
@@ -651,8 +706,11 @@ canonical `POST /v1/executions`; legacy HTTP, CLI, and MCP interfaces are
 unchanged.
 
 Invalid canonical requests return `422`; missing private resources return
-`404`; missing viewer, pitch, or node credentials return `401`; invalid worker
-attempt settlement returns `403`; configured limits may return `413`, `429`, or
+`404`; missing viewer, pitch, returning-enrollment, or session credentials
+normally return `401`; missing or malformed registration fields return `422`;
+enrollment conflicts return `409`; an old worker in required mode receives a
+stable `426` durable-enrollment upgrade error; revoked enrollment returns `403`;
+invalid worker attempt settlement fails closed. Configured limits may return `413`, `429`, or
 `503`. Invalid, expired, and revoked share tokens deliberately share one `404`
 shape. Invalid idempotency keys return `422` with
 `detail.code=invalid_idempotency_key`; a changed request under an existing scope
@@ -667,9 +725,9 @@ envelopes contain no raw key, requester credential, prompt, or result.
 ## Explicit limitations
 
 Protocol v1 does not provide a durable worker queue, automatic execution resume,
-durable node sessions, per-node public-key identity, individual node revocation,
-TLS, multi-user accounts, a general network-policy enforcement layer, process
-isolation,
+durable node sessions, per-node public-key identity, physical-machine identity,
+built-in TLS, multi-user accounts, a general network-policy enforcement layer,
+process isolation,
 generated-code sandboxing, malicious-output detection, permissionless
 settlement, Sybil resistance, externally anchored artifact attestation, durable
 post-hoc duplicate verification, or proof that arbitrary generated output is

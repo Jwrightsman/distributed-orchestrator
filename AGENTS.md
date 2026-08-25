@@ -96,9 +96,10 @@ python join.py http://ORCHESTRATOR_ADDRESS:8000
 ```
 
 It prints what it will do and waits for confirmation. Joining the project's own
-orchestrator is currently by invite — the node endpoints require a shared key, so
-the address alone is not enough. Anyone can run their own orchestrator with no
-permission from anybody.
+orchestrator is currently by invite: a shared key admits only the initial
+bootstrap, after which that worker uses its own revocable enrollment credential
+and process-local sessions. The address alone is not enough. Anyone can run
+their own orchestrator with no permission from anybody.
 
 ## Reading the network without joining
 

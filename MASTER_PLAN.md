@@ -24,7 +24,8 @@ deadlines, cancellation, and restart reconciliation; server-authoritative
 durable worker attempts and accepted receipts; validator contract floors and
 honest assurance; authenticated artifact delivery; explicit redacted shares;
 viewer/pitch/node credential separation; privacy-safe canonical defaults;
-persistent DAG project memory; digest-only node sessions; bounded worker output,
+persistent DAG project memory; digest-only durable per-node enrollment with
+independent revocation/rotation; process-local node sessions; bounded worker output,
 streams, and event fanout; one-coordinator state ownership; common SQLite
 policy; role-scoped sealed artifact manifests; required execution commit before
 publication; requester-scoped canonical HTTP submission idempotency; verified
@@ -32,9 +33,10 @@ backup/restore; operational preflight/harnesses; REST, CLI, MCP, events,
 dashboard, contribution records, LAN discovery, demo modes, and deployment
 guides.
 
-**Current trust tier:** a small private trusted alpha. Worker identity still
-starts with a shared admission secret; node sessions are process-local bearer
-credentials rather than cryptographic identity; the queue is process-local;
+**Current trust tier:** a small private trusted alpha. Worker bootstrap starts
+with a shared admission secret, then uses an individually revocable bearer
+enrollment; node sessions remain process-local incarnation credentials. This is
+not public-key/physical-machine identity or Sybil resistance. The queue is process-local;
 `network_policy` is not enforced; generated code is not sandboxed; sealed
 manifests are not host-independent attestations; post-hoc duplicate verification
 is disabled; and there is no permissionless-network defense. Ensemble/direct
@@ -122,7 +124,7 @@ accounts, major UI, sandbox, or model-sharding work.
 
 ### Phase D — First external nodes (Days 10–30)
 1. Private testers first: Tailscale (free). Testers install Tailscale, join the tailnet by invite, run `python join.py http://<tailscale-ip>:8000`. Zero public port exposure; laptop stays the orchestrator.
-2. Internet-reachable **private** alpha (if demand): a 24/7 orchestrator may be used only in `trusted_alpha` mode after preflight; independent strong `node_secret`, `pitch_key`, and `viewer_key` configuration; TLS or a private overlay; exactly one coordinator; verified route denial and WebSocket auth; rate/admission, worker-output, and artifact caps; access-log share-token hygiene; share expiry/revocation; sealed-artifact drift checks; tested backup/restore; restart reconciliation; and a current branch verification run. This is still not anonymous-node or permissionless readiness.
+2. Internet-reachable **private** alpha (if demand): a 24/7 orchestrator may be used only in `trusted_alpha` mode after preflight; independent strong `node_secret`, `pitch_key`, and `viewer_key` configuration; `node_enrollment_mode=required`; TLS or a private authenticated overlay; exactly one coordinator; verified route denial and WebSocket auth; per-node revocation/rotation; rate/admission, worker-output, and artifact caps; access-log share-token hygiene; share expiry/revocation; sealed-artifact drift checks; tested backup/restore; restart reconciliation; and a current branch verification run. This is still not anonymous-node or permissionless readiness.
 3. Turn on GitHub Discussions for coordination. A Discord server only when there are ≥10 active people to talk to.
 4. Goal: 3–5 invited external node owners, 10 real pitches from testers, every rough edge they hit logged as an issue.
 

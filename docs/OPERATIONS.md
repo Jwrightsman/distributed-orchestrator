@@ -15,7 +15,10 @@ coordinator on a local filesystem serving a small private trusted alpha.
   publication.
 - Canonical idempotency preserves one submission identity; it does not restart
   lost work or make external side effects exactly once.
-- `node_secret` is shared admission, not public-key machine identity.
+- `node_secret` authorizes initial enrollment; it is not a durable node
+  identity and is not sent on an enrolled session's normal operations.
+- Enrollment credentials are bearer secrets and require TLS or a private
+  authenticated overlay.
 - Workers can read every prompt assigned to them.
 - Placement, confidentiality, and network policy are recorded intent, not an
   operating-system or network sandbox.
@@ -32,13 +35,16 @@ coordinator on a local filesystem serving a small private trusted alpha.
 | Canonical executions, lifecycle, validation, telemetry | SQLite | Retained; queued/running become `interrupted` and retryable |
 | Scoped canonical submission mappings | SQLite | Retained indefinitely; replay resolves to the same execution, including after interruption |
 | Attempt authority, nonce digests, settlement receipts, quarantine | SQLite | Retained; active attempts become `interrupted`; exact settled replay remains durable |
+| Node enrollment IDs, credential digests, status, rotation/revocation | SQLite | Retained; sessions are reacquired after restart |
 | Shares and revocation metadata | SQLite | Retained; plaintext share token is never stored |
 | Contribution records | SQLite | Authoritative; JSON ledger is only a compatibility projection |
 | Artifact roots, entries, hashes, roles, seal state | SQLite plus files | Retained if both database and artifact trees are restored together |
 | Projects and compatibility output | Files, gated by canonical SQLite authority for current runs | Retained by state directory/backup; staged current output is not completion truth |
 | Pending worker queue and dispatcher waits | Memory | Lost; corresponding work is marked interrupted where durable identity exists |
-| Connected node registry and node sessions | Memory | Lost; workers must register again |
-| Plaintext attempt nonce or node session token | Client memory only | Not recoverable by the coordinator |
+| Connected node registry and node sessions | Memory | Lost; enrolled workers authenticate for a fresh session |
+| Plaintext enrollment credential | Worker identity file only | Not recoverable from coordinator state; back up separately and privately |
+| Plaintext attempt nonce | Coordinator and assigned-worker process memory | Never stored durably; SQLite and backups contain only its digest |
+| Plaintext node session token | Worker process memory only | Not recoverable from coordinator state; the coordinator stores only its digest |
 
 Do not copy only `events.db` and assume a complete recovery. Artifacts,
 projects, config, output, and the compatibility ledger are part of the backup
@@ -199,22 +205,61 @@ active.
 
 ## Node registration and identity boundary
 
-`POST /nodes/register` checks the shared `node_secret`, normalizes/bounds the
-node ID, and issues a random session ID, one-time plaintext session token, and
-expiry. The coordinator stores only the token's SHA-256 digest. Tokens are
-process-local and restart-invalidated.
+An initial `bootstrap` registration presents the shared `node_secret` and a
+high-entropy credential generated and persisted by the worker. SQLite creates
+one immutable random `enrollment_id` for the normalized label and stores only a
+domain-separated credential digest. Repeating the same label and credential is
+idempotent. A different label or credential conflicts; shared admission never
+overwrites an existing or revoked enrollment.
 
-Poll, heartbeat, drain, stream, and result calls require `X-Node-Session` bound
-to the normalized node. Registration with the current live token is
-idempotent. A different live claimant for the same ID receives 409; a stale or
-expired ID can be reclaimed, and work bound to the replaced session is closed
-or requeued. The stock worker automatically re-registers after an explicit
-session rejection or reconnect.
+A `returning` registration presents the node label and its enrollment
+credential, without `node_secret`. After durable authentication the coordinator
+issues a random session ID, one-time plaintext session token, and expiry. The
+session binds enrollment, label, and credential version, stores only the token
+digest, and is process-local/restart-invalidated.
 
-This protects against accidental/colliding labels and session mix-ups. It does
-not prove hardware identity or prevent a `node_secret` holder from registering
-another available label. There is no per-node public key, individual
-certificate, remote attestation, or Sybil defense.
+The version-1 worker identity JSON contains the normalized coordinator origin,
+normalized node label, enrollment ID, positive `credential_version`, and the
+plaintext enrollment credential. Before the first bootstrap, enrollment ID and
+credential version are null. The coordinator must be an HTTP(S) origin with no
+userinfo, path, query, or fragment. Default files are scoped by a hash of that
+origin and live at `%APPDATA%\Mycelium\nodes` on Windows,
+`~/Library/Application Support/Mycelium/nodes` on macOS, and
+`$XDG_CONFIG_HOME/mycelium/nodes` (or `~/.config/mycelium/nodes`) on Linux.
+`MYCELIUM_WORKER_CONFIG_DIR` or `join.py --identity-file` overrides the root or
+full path. The credential is intentionally plaintext only in this private
+worker-owned file; POSIX permissions must be `0600`, while Windows ACL safety is
+an operator-verified best effort.
+
+The stock worker ignores ambient HTTP(S) proxy environment variables for all
+coordinator traffic (`trust_env=False`) so enrollment, session, and attempt
+bearers are not silently routed to an inherited proxy. Configure direct TLS or
+private-overlay reachability instead of relying on `HTTP_PROXY` or
+`HTTPS_PROXY`. Credentialed joins also require an explicit coordinator origin;
+the worker does not select an unauthenticated LAN-discovery response.
+
+Poll, heartbeat, drain, stream, and result calls require `X-Node-Session`. For
+an enrolled session they do not require or send the shared admission secret.
+Each operation reads durable enrollment status, so an externally committed
+revocation or rotation is enforced at that operation. An idle long poll checks
+again before handout; the stock poll returns about every 25 seconds. A separate
+janitor revalidates live enrolled sessions every 30 seconds, which is the
+nominal maximum detection interval for an otherwise idle live coordinator
+(ordinary scheduling delay or unavailable durable storage can add latency;
+storage failures are diagnosed and retried). Active workers normally detect
+sooner through stream, heartbeat, poll, or result traffic. Rejection invalidates
+the session and safely reclaims active attempts.
+
+Coordinator restart clears sessions and active scheduler state, but the same
+enrollment credential obtains a new session with the same enrollment ID.
+`node_enrollment_mode=required` is mandatory in trusted alpha. Explicit local
+`compat` mode may issue an unenrolled legacy session, but it cannot claim a
+label found in the enrollment table and its contributions/verification are
+session-scoped rather than inherited by label.
+
+This is stable, independently revocable bearer attribution. It is not a
+per-node public key, certificate, physical-machine proof, remote attestation,
+or Sybil defense.
 
 Session counters and durable lifetime contribution counters are distinct:
 
@@ -224,6 +269,39 @@ Session counters and durable lifetime contribution counters are distinct:
   accepted durable contribution rows; and
 - legacy `tasks_completed`/`credits_earned` aliases are session projections,
   not lifetime totals.
+
+### Enrollment administration
+
+Run administration locally against the coordinator state directory. Stop or
+coordinate with the service only as required by the ordinary one-coordinator
+operating procedure; the commands use the same SQLite transaction policy and
+the running coordinator observes status on authenticated operations.
+
+```bash
+python scripts/node_enrollment_admin.py --state-dir data list
+python scripts/node_enrollment_admin.py --state-dir data revoke ENROLLMENT_ID --reason "operator offboarded"
+python scripts/node_enrollment_admin.py --state-dir data rotate ENROLLMENT_ID \
+  --coordinator https://coordinator.example \
+  --identity-output /secure/path/unused-worker-identity.json
+```
+
+`list` returns no credential material. Revocation is idempotent and preserves
+attempt, receipt, and contribution history. Rotation preserves the enrollment
+ID and label, invalidates the old credential/session, and writes the replacement
+credential only to the requested private identity file. Transfer that file to
+the intended worker through an authenticated secret channel.
+
+For a planned rotation, drain and stop the worker, choose an unused protected
+output path, rotate, replace the worker's matching identity file, and restart
+it. Verify that the same enrollment ID returns with the incremented credential
+version. The command refuses a pre-existing output by default.
+
+If the command reports that commit was not confirmed, keep the prepared output
+and rerun the exact command with `--resume-existing`; this safely converges on
+the same credential/version after an ambiguous commit. If a committed output
+is actually lost, rotate again to a different unused path, producing another
+new version. Plaintext cannot and should not be recovered from SQLite. Do not
+copy a credential into a command line, chat, ticket, log, or URL.
 
 ## Confidentiality and worker trust
 
@@ -372,10 +450,26 @@ rollback-capable renames, and refuses existing managed state without
 `--force`. It removes stale SQLite sidecars and prints the post-restore
 preflight command. Stop the coordinator before restore.
 
+The SQLite snapshot includes node enrollment IDs, credential digests,
+revocation/rotation state, and nullable attempt/contribution attribution. It
+contains no plaintext enrollment credential. Worker identity files live on the
+workers and are deliberately outside the coordinator backup; each worker
+operator must protect and back them up separately.
+
+A restore is point-in-time, not an offboarding log. Only revocations and
+rotations already present in that snapshot survive. Restoring an older snapshot
+can therefore re-enable an enrollment revoked later, restore an older
+credential digest or `node_secret`, desynchronize current worker identity files,
+and carry a `private_overlay=true` assertion onto a host where it is no longer
+true. Before reopening worker access, reconcile every post-snapshot enrollment
+change, revoke or rotate as needed, redistribute matching identity files, verify
+the current transport/overlay controls, and rerun trusted-alpha preflight.
+
 No backup restores process-local queue entries, dispatcher coroutines, in-flight
 node sessions, or plaintext session/attempt credentials. A restored coordinator
-reconciles durable active state to interrupted and workers register again. See
-the exact commands in [Trusted Alpha Runbook](TRUSTED_ALPHA_RUNBOOK.md).
+reconciles durable active state to interrupted, preserves enrollment identity,
+and requires workers to authenticate for new sessions. See the exact commands
+in [Trusted Alpha Runbook](TRUSTED_ALPHA_RUNBOOK.md).
 
 Keyed submission mappings are ordinary SQLite state and are restored with the
 database. Replaying a restored key therefore returns the captured execution;
@@ -388,7 +482,7 @@ fields directly:
 
 | Concern | Fields/source | Display rule |
 | --- | --- | --- |
-| Node session | Private `GET /nodes`: `session_id`, `session_started_at`, `session_expires_at`, `draining`, `current_task`, `session_tasks_completed`, `session_contribution_points`, `lifetime_tasks_completed`, `lifetime_contribution_points` | Keep session and lifetime totals visually distinct; never request or render `session_token` |
+| Enrollment/session | Private `GET /v1/operator/node-enrollments` and `GET /nodes`: `enrollment_id`, `node_id`, `status`, timestamps, live session/drain state, and session/lifetime totals | Use enrollment ID as trust/accounting key and node ID as label; never request or render credential material or `session_token` |
 | Deployment protection | Public `/health.private_routes_protected` and `warnings`; private `/v1/operator/health`: `deployment_mode`, `instance_id`, `single_coordinator_lock`, `preflight_warnings` | “Protected” requires the boolean true; do not treat HTTP 200 alone as safe |
 | Artifact role | Manifest entry `role` | Label deliverable separately from provenance/log/candidate/internal |
 | Manifest integrity | Execution `artifact_integrity_mode`, `sealed_manifest_hash`; manifest `integrity_mode`, `manifest_hash`, `sealed_at` | Say “sealed local hash baseline,” not signed/verified; explain legacy/active/invalid states |

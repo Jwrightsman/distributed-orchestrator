@@ -65,8 +65,6 @@ ipconfig
 Tell your friend your IP. On their machine, one terminal:
 ```bash
 python join.py http://192.168.1.42:8000
-# Or if auto-discovery works (same network):
-python join.py
 ```
 
 Wait until they see: `Registered as` and a node ID.
@@ -141,7 +139,7 @@ This is the live distributed version. It:
 
 **Friend can't connect:**
 - Check you're on the same Wi-Fi
-- Try `python join.py http://YOUR_IP:8000` with your actual IP instead of auto-discovery
+- Use `python join.py http://YOUR_IP:8000` with the explicit protected origin
 - Make sure Windows Firewall isn't blocking port 8000:
   `netsh advfirewall firewall add rule name="Orchestrator" dir=in action=allow protocol=TCP localport=8000`
 

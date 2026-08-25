@@ -43,17 +43,19 @@ whole point of writing the threat model down was to make the honesty checkable.
 
 Known and documented, so probably not news:
 
-- **`node_secret` is a shared password, not per-node identity.** Any node that
-  authenticates can return whatever it likes, and can register under a name of
-  its choosing.
-- **Everything is readable without a credential.** `/history`, `/events`,
-  `/gallery`, `/ledger` and the rest require no key. `pitch_key` gates
-  submitting work, not reading it. Treat everything the orchestrator holds as
-  public.
+- **`node_secret` is shared bootstrap admission, not per-node identity.** Each
+  enrolled worker has a separate digest-only bearer credential and independent
+  revocation, but an admitted worker can still return arbitrary model output.
+  Enrollment is not physical-machine identity, attestation, or Sybil defense.
+- **Local compatibility mode deliberately fails open.** When `viewer_key` is
+  empty, `/history`, `/events`, `/gallery`, `/ledger`, and other private routes
+  remain readable for loopback development. Trusted-alpha preflight requires a
+  separate viewer authority and durable enrollment; do not expose local mode.
 - **Worker nodes see the text of the tasks they are given.** Inherent — you
   cannot ask a machine to work on a prompt without showing it the prompt.
 - **Generated code is not sandboxed** and must not be executed unreviewed.
-- **No HTTPS out of the box.** Traffic, including both secrets, is clear text.
+- **No HTTPS out of the box.** Bearer admission, enrollment, session, pitch,
+  viewer, and share credentials require TLS or an authenticated private overlay.
 - **Credits are contribution points, not currency.** No token, no wallet, no
   monetary value, so no credit bug costs anyone money.
 
@@ -61,7 +63,8 @@ Known and documented, so probably not news:
 these *worse* than documented — reading data the threat model says is private,
 getting a node to execute something, getting credit settled for work not done,
 bypassing `pitch_key` on a write endpoint, causing remote code execution on the
-orchestrator, or extracting `node_secret` / `pitch_key` from outside the box.
+orchestrator, or extracting any admission, enrollment, session, pitch, viewer,
+attempt, or share credential from outside the box.
 
 **Definitely report** anything the threat model does not mention at all. A gap
 in that document is itself the finding.

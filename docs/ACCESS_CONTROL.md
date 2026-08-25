@@ -1,7 +1,7 @@
 # Access control for the trusted alpha
 
-Mycelium uses three independent instance-wide credentials and explicit share
-capabilities. This is intentionally smaller than an account system, but it
+Mycelium uses three independent instance-wide credentials, per-node enrollment
+credentials, and explicit share capabilities. This is intentionally smaller than an account system, but it
 prevents the old failure mode where knowing the server address implied being
 able to read every task, result, event, project, and machine record.
 
@@ -11,8 +11,9 @@ able to read every task, result, event, project, and machine record.
 | --- | --- | --- | --- |
 | Viewer | `viewer_key` | `X-Viewer-Key`, exact Bearer token, or signed session cookie | private reads and trusted operator actions |
 | Pitcher | `pitch_key` | `X-Pitch-Key` | canonical and compatibility task submission |
-| Worker admission | `node_secret` | `X-Node-Secret` | instance-wide permission to register and use the worker protocol |
-| Node session | server-issued bearer token | `X-Node-Session` | one current normalized node registration; required in addition to admission after registration |
+| Worker bootstrap | `node_secret` | `X-Node-Secret` | instance-wide permission to create an unused enrollment |
+| Node enrollment | worker identity file | registration body over protected transport | returning durable attribution and individual revocation/rotation |
+| Node session | server-issued bearer token | `X-Node-Session` | one current process incarnation; enrollment recovered server-side |
 | Share holder | generated share token | token in `/v1/shares/{token}` URL | one redacted execution and optional filtered artifacts |
 
 These authorities are deliberately not interchangeable. A worker does not gain
@@ -110,10 +111,10 @@ them:
 | --- | --- | --- |
 | POST | `/v1/executions` | `pitch_key` + pitch rate limit |
 | POST | `/pitch`, `/pitch/async`, `/pitch/distributed` | `pitch_key` + pitch rate limit |
-| POST | `/nodes/register` | `node_secret` |
-| GET | `/tasks/next` | `node_secret` + current node session |
-| POST | `/tasks/{id}/result`, `/tasks/{id}/stream`, `/tasks/{id}/tokens` | `node_secret` + current node session + active-attempt binding |
-| POST | `/nodes/{id}/heartbeat`, `/nodes/{id}/drain` | `node_secret` + current node session |
+| POST | `/nodes/register` | bootstrap: `node_secret` + proposed enrollment credential; returning: enrollment credential |
+| GET | `/tasks/next` | current enrollment-bound node session (legacy compat also requires `node_secret`) |
+| POST | `/tasks/{id}/result`, `/tasks/{id}/stream`, `/tasks/{id}/tokens` | current enrollment-bound session + active-attempt binding (legacy compat also requires `node_secret`) |
+| POST | `/nodes/{id}/heartbeat`, `/nodes/{id}/drain` | current enrollment-bound session (legacy compat also requires `node_secret`) |
 
 If the corresponding pitch or node secret is empty in local mode, its static
 admission check is open even when viewer protection is enabled; node-session
@@ -156,31 +157,38 @@ Every other method/path requires viewer authorization, including:
 An unauthorized HTTP request returns `401` with `WWW-Authenticate: Bearer`.
 An unauthorized event WebSocket is closed before acceptance with code `4401`.
 
-## Node registration sessions
+## Node enrollment and registration sessions
 
-`node_secret` answers only “may this client join this coordinator?” Successful
-`POST /nodes/register` also returns normalized `node_id`, non-secret
-`session_id`, one-time plaintext `session_token`, `session_started_at`, and
-`session_expires_at`. The coordinator retains only the token's SHA-256 digest;
-the stock worker keeps plaintext in memory and never writes it to config.
+`node_secret` answers only “may this client bootstrap an unused enrollment?”
+The worker proposes a random per-node credential; SQLite assigns an immutable
+`enrollment_id` and stores only its domain-separated digest. Returning
+registration uses that credential without shared admission. A label or
+credential conflict cannot overwrite an existing or revoked row.
+
+Successful `POST /nodes/register` returns normalized `node_id`, enrollment ID,
+non-secret `session_id`, one-time plaintext `session_token`,
+`session_started_at`, and `session_expires_at`. The coordinator retains only the
+session token's digest; the stock worker keeps it in memory. The enrollment
+credential is persisted only in the worker's private identity file.
 
 Sessions last at most 24 hours and are process-local. Registration presenting
 the exact live `X-Node-Session` is idempotent. A different live claimant for
 the same normalized ID receives `409 node_id_in_use`; an expired or 90-second
 stale session can be reclaimed, invalidating its old token and closing/requeuing
 work bound to that session. Coordinator restart invalidates all sessions, and
-the stock worker automatically re-registers after a machine-readable `401`
-with `action=register_again`.
+the stock worker automatically authenticates its durable enrollment after a
+machine-readable `401` with `action=register_again`.
 
-Every handout records `assigned_session_id` in the durable attempt. Session
-authorization supplements attempt ID, nonce, node, execution, unit, kind,
-contract, state, and lease binding; it never replaces those checks. A session
-token is still a bearer credential, not public-key identity or proof of a
-physical machine. Any `node_secret` holder can register another available ID.
+Every enrolled handout records `assigned_enrollment_id`, node label, session,
+and credential version in the durable attempt. Session authorization supplements
+attempt ID, nonce, execution, unit, kind, contract, state, and lease binding; it
+never replaces those checks. Enrollment/session tokens are bearer credentials,
+not public-key identity, physical-machine proof, or Sybil resistance.
 
-Private node views expose `session_id`, start/expiry, draining/current-task
-state, session counters, and durable lifetime contribution counters. They MUST
-NOT expose `session_token`. Compatibility `tasks_completed` and
+Private node views expose enrollment ID/status/timestamps, `session_id`,
+start/expiry, draining/current-task state, session counters, and durable
+lifetime contribution counters. They MUST NOT expose enrollment credentials,
+digests, or `session_token`. Compatibility `tasks_completed` and
 `credits_earned` are session projections; new clients use the explicit session
 and lifetime fields.
 
@@ -322,22 +330,25 @@ Before binding beyond localhost:
 
 1. Set `deployment_mode=trusted_alpha` and configure independent 32+-character
    `viewer_key`, `pitch_key`, and `node_secret` values.
-2. Put TLS in front of the app or use a private overlay network. The application
+2. Set `node_enrollment_mode=required`; never enable the legacy bypass in
+   trusted alpha.
+3. Put TLS in front of the app or use a private authenticated overlay network. The application
    does not provide HTTPS itself.
-3. Set `https_enabled=true` and `viewer_cookie_secure=true` behind HTTPS; leave
+4. Set `https_enabled=true` and `viewer_cookie_secure=true` behind HTTPS; leave
    unsupported proxy-header trust off.
-4. Run `scripts/preflight.py`; exactly one coordinator must own the state
+5. Run `scripts/preflight.py`; exactly one coordinator must own the state
    directory.
-5. Keep `public_pitch=false` unless you set its acknowledgement and intentionally
+6. Keep `public_pitch=false` unless you set its acknowledgement and intentionally
    accept public compute use.
-6. Require both `/health.status == "ok"` and
-   `/health.private_routes_protected == true`.
-7. Confirm unauthenticated private HTTP returns `401` and unauthenticated
+7. Require `/health.status == "ok"`,
+   `/health.private_routes_protected == true`, and
+   `/health.node_enrollment_required == true`.
+8. Confirm unauthenticated private HTTP returns `401` and unauthenticated
    `/ws/events` closes with `4401`.
-8. Rotate any shared key after suspected disclosure. Node and pitch keys do not
-   currently have individual-holder revocation.
-9. Confirm application and proxy logs do not capture idempotency, pitch,
-   viewer, node, session, attempt, or share credentials.
+9. Revoke/rotate the affected enrollment after node credential disclosure;
+   rotate shared authorities only for compromise of that shared role.
+10. Confirm application and proxy logs do not capture idempotency, pitch,
+   viewer, admission, enrollment, session, attempt, or share credentials.
 
 ## Residual limitations
 
@@ -346,8 +357,8 @@ There is no password hashing flow, account recovery, MFA, audit identity,
 per-project ACL, per-execution owner, session list, or individual viewer
 revocation. Static secrets and share tokens are bearer credentials. TLS,
 secret distribution, rotation procedures, proxy trust, and host security remain
-operator responsibilities. Node sessions reduce active-label collision but do
-not add durable or cryptographic machine identity. Share revocation cannot
+operator responsibilities. Enrollment adds durable revocable attribution but
+not public-key or physical-machine identity. Share revocation cannot
 recall copied content, and one coordinator process remains the only supported
 owner of a state directory. A shared pitch key creates one shared submission
 scope, while open-mode peer scoping is development-grade rather than user
