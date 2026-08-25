@@ -48,6 +48,7 @@ async def health():
         "models": models,
         "nodes_online": len(nodes),
         "tasks_pending": len(task_queue),
+        "node_enrollment_required": state.node_enrollment_required(),
         **viewer_health_fields(),
     }
 

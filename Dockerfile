@@ -21,7 +21,7 @@ COPY execution/ execution/
 # Server startup imports the trusted-alpha preflight, and operators need the
 # matching backup/restore tools in the immutable image. Copy only runtime
 # scripts, not benchmark result fixtures or local bytecode.
-COPY scripts/__init__.py scripts/preflight.py scripts/backup.py scripts/restore.py scripts/
+COPY scripts/__init__.py scripts/preflight.py scripts/backup.py scripts/restore.py scripts/node_enrollment_admin.py scripts/
 
 # All state files are resolved relative to the working directory
 WORKDIR /data

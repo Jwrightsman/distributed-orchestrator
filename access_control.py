@@ -185,8 +185,9 @@ async def authorize_viewer_websocket(websocket: WebSocket) -> bool:
 def is_public_or_separately_authenticated(method: str, path: str) -> bool:
     """Classify paths exempt from viewer auth.
 
-    Separately authenticated means the route already applies pitch_key or
-    node_secret.  It does not mean those routes are unauthenticated.
+    Separately authenticated means the route applies pitch authority or the
+    enrollment/session worker protocol. It does not mean those routes are
+    unauthenticated.
     """
     method = method.upper()
     if (method, path) in _PUBLIC_EXACT or (method, path) in _PITCH_AUTH_EXACT:

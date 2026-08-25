@@ -37,6 +37,7 @@ from server_state import (
     _emit,
     jobs,
 )
+from verification import verification_identity_key
 
 # Imported as a module attribute for compatibility with tests and scripts that
 # replace the legacy DAG runner. The service receives this callable explicitly.
@@ -120,8 +121,19 @@ def _safe_legacy_emit(event_type: str, data: dict[str, Any]) -> None:
         )
 
 
-def _spawn_comparison(dup_id, subtask_title, job_id, trace_id,
-                      primary_node, primary_output, await_result, pool):
+def _spawn_comparison(
+    dup_id,
+    subtask_title,
+    job_id,
+    trace_id,
+    primary_node,
+    primary_output,
+    await_result,
+    pool,
+    *,
+    primary_enrollment_id=None,
+    primary_session_id=None,
+):
     """Wait for a sampled duplicate in the background and record its shape."""
     async def _collect():
         try:
@@ -131,6 +143,16 @@ def _spawn_comparison(dup_id, subtask_title, job_id, trace_id,
             verdict = pool.record_comparison(
                 primary_node, primary_output,
                 dup.get("node_id", "unknown"), dup["output"],
+                identity_a=verification_identity_key(
+                    enrollment_id=primary_enrollment_id,
+                    session_id=primary_session_id,
+                ),
+                identity_b=verification_identity_key(
+                    enrollment_id=dup.get("enrollment_id"),
+                    session_id=dup.get("session_id"),
+                ),
+                enrollment_id_a=primary_enrollment_id,
+                enrollment_id_b=dup.get("enrollment_id"),
             )
             _safe_legacy_emit("verification", {
                 "job_id": job_id,

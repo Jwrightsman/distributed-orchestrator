@@ -2,14 +2,21 @@
 #
 #   $env:SWARM_SERVER="http://ORCHESTRATOR_IP:8000"; irm https://raw.githubusercontent.com/Jwrightsman/distributed-orchestrator/master/install.ps1 | iex
 #
-# Omit SWARM_SERVER to auto-discover an orchestrator on your LAN.
-# Set SWARM_SECRET if the orchestrator requires a node secret.
+# SWARM_SERVER is required so credentials are never sent to an unauthenticated
+# LAN-discovery responder. Set SWARM_SECRET for first enrollment if required by
+# bootstrap
+# admission. Set SWARM_IDENTITY_FILE only to override the private user default.
 #
 # What it does: checks Python + Ollama, downloads the repo to
 # ~\distributed-orchestrator, installs two Python packages (httpx, rich),
 # then runs join.py — which pulls the model and starts working.
 
 $ErrorActionPreference = "Stop"
+$serverOrigin = $env:SWARM_SERVER
+if (-not $serverOrigin) {
+    Write-Host "SWARM_SERVER is required for durable enrollment; use an explicit HTTPS, private-overlay, or loopback origin." -ForegroundColor Red
+    exit 1
+}
 $repoUrl = "https://github.com/Jwrightsman/distributed-orchestrator"
 $dest = Join-Path $HOME "distributed-orchestrator"
 
@@ -70,8 +77,8 @@ Write-Host "  Deps:    httpx, rich"
 
 # 5. Join the network (join.py pulls the model and starts polling)
 Write-Host ""
-$joinArgs = @()
-if ($env:SWARM_SERVER) { $joinArgs += $env:SWARM_SERVER }
+$joinArgs = @($serverOrigin)
 if ($env:SWARM_SECRET) { $joinArgs += @("--secret", $env:SWARM_SECRET) }
+if ($env:SWARM_IDENTITY_FILE) { $joinArgs += @("--identity-file", $env:SWARM_IDENTITY_FILE) }
 Set-Location $dest
 & $python join.py @joinArgs

@@ -44,12 +44,18 @@ async def main():
     console.print(f"  Timeout:     {config['timeout']}s")
     console.print(f"  Retries:     {config['planner_retries']}")
 
-    # Node auth
+    # Node bootstrap and durable-enrollment mode
+    enrollment_mode = config.get("node_enrollment_mode", "compat")
+    if enrollment_mode == "required":
+        console.print("  Enrollment:  [green]required[/green]")
+    else:
+        console.print("  Enrollment:  [yellow]compat (legacy sessions allowed)[/yellow]")
+
     secret = config.get("node_secret", "")
     if secret:
-        console.print("  Node auth:   [green]enabled[/green]")
+        console.print("  Bootstrap:   [green]protected[/green]")
     else:
-        console.print("  Node auth:   [dim]off (any node can join)[/dim]")
+        console.print("  Bootstrap:   [dim]open (any node can enroll)[/dim]")
 
     # Pitch auth
     pitch_key = config.get("pitch_key", "")

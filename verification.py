@@ -36,11 +36,27 @@ MIN_SAMPLES_FOR_ROUTING = 3
 MIN_WEIGHT = 0.25
 
 
+def verification_identity_key(
+    *,
+    enrollment_id: str | None = None,
+    session_id: str | None = None,
+) -> str | None:
+    """Return a namespaced trust key without falling back to a node label."""
+
+    if enrollment_id:
+        return f"enrollment:{enrollment_id}"
+    if session_id:
+        return f"legacy-session:{session_id}"
+    return None
+
+
 @dataclass
 class NodeReputation:
     """Running verification record for one node."""
 
-    node_id: str
+    identity_key: str
+    node_id: str | None = None
+    enrollment_id: str | None = None
     agreed: int = 0
     disagreed: int = 0
     samples: list[dict] = field(default_factory=list)
@@ -74,6 +90,7 @@ class NodeReputation:
     def as_dict(self) -> dict:
         return {
             "node_id": self.node_id,
+            "enrollment_id": self.enrollment_id,
             "verified_samples": self.total,
             "agreement_score": round(self.score, 3),
             "routing_weight": round(self.routing_weight, 3),
@@ -140,8 +157,31 @@ class VerificationPool:
         self.reputations: dict[str, NodeReputation] = {}
         self._rng = rng or random.Random()
 
-    def reputation(self, node_id: str) -> NodeReputation:
-        return self.reputations.setdefault(node_id, NodeReputation(node_id))
+    def reputation(
+        self,
+        identity_key: str,
+        *,
+        node_id: str | None = None,
+        enrollment_id: str | None = None,
+    ) -> NodeReputation:
+        """Return one record keyed by enrollment or explicit legacy session."""
+
+        if not identity_key:
+            raise ValueError("verification identity key is required")
+        record = self.reputations.get(identity_key)
+        if record is None:
+            record = NodeReputation(
+                identity_key=identity_key,
+                node_id=node_id,
+                enrollment_id=enrollment_id,
+            )
+            self.reputations[identity_key] = record
+        else:
+            if record.node_id is None and node_id is not None:
+                record.node_id = node_id
+            if record.enrollment_id is None and enrollment_id is not None:
+                record.enrollment_id = enrollment_id
+        return record
 
     def should_verify(self, available_nodes: int) -> bool:
         """Duplicate this task? Needs a spare node and the dice.
@@ -153,7 +193,18 @@ class VerificationPool:
             return False
         return self._rng.random() < self.verify_rate
 
-    def record_comparison(self, node_a: str, output_a: str, node_b: str, output_b: str) -> dict:
+    def record_comparison(
+        self,
+        node_a: str,
+        output_a: str,
+        node_b: str,
+        output_b: str,
+        *,
+        identity_a: str | None = None,
+        identity_b: str | None = None,
+        enrollment_id_a: str | None = None,
+        enrollment_id_b: str | None = None,
+    ) -> dict:
         """Compare two answers and credit both nodes with the outcome.
 
         Neither node is assumed correct. Agreement raises both records;
@@ -161,17 +212,47 @@ class VerificationPool:
         wrong. Over many samples the consistently-odd node separates itself.
         """
         agreed, reason = compare_outputs(output_a, output_b)
-        self.reputation(node_a).record(agreed, reason)
-        self.reputation(node_b).record(agreed, reason)
+        recorded = bool(identity_a and identity_b)
+        if recorded:
+            self.reputation(
+                str(identity_a),
+                node_id=node_a,
+                enrollment_id=enrollment_id_a,
+            ).record(agreed, reason)
+            self.reputation(
+                str(identity_b),
+                node_id=node_b,
+                enrollment_id=enrollment_id_b,
+            ).record(agreed, reason)
         return {
             "agreed": agreed,
             "reason": reason,
             "nodes": [node_a, node_b],
+            "enrollment_id_a": enrollment_id_a,
+            "enrollment_id_b": enrollment_id_b,
+            "recorded": recorded,
         }
 
-    def rank(self, node_ids: list[str]) -> list[str]:
-        """Nodes ordered best-first by routing weight. Stable for equal weights."""
-        return sorted(node_ids, key=lambda n: (-self.reputation(n).routing_weight, n))
+    def rank(self, identity_keys: list[str]) -> list[str]:
+        """Identity keys ordered best-first. Stable for equal weights."""
+        return sorted(
+            identity_keys,
+            key=lambda key: (-self.reputation(key).routing_weight, key),
+        )
+
+    def rank_nodes(self, nodes: list[tuple[str, str]]) -> list[str]:
+        """Return display labels ranked through their non-label identity keys."""
+
+        return [
+            node_id
+            for node_id, _identity_key in sorted(
+                nodes,
+                key=lambda item: (
+                    -self.reputation(item[1], node_id=item[0]).routing_weight,
+                    item[0],
+                ),
+            )
+        ]
 
     def as_dict(self) -> dict:
         return {

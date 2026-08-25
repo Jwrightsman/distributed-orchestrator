@@ -18,7 +18,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import HTTPException, Request, WebSocket
 from pydantic import BaseModel, Field, field_validator
@@ -36,6 +36,17 @@ from execution.contracts import (
 )
 from verification import VerificationPool
 from sqlite_store import connection, migration_lock
+from node_enrollments import (
+    ENROLLMENT_CREDENTIAL_MAX_LENGTH,
+    ENROLLMENT_CREDENTIAL_MIN_LENGTH,
+    EnrollmentCredentialRotated,
+    EnrollmentRevoked,
+    EnrollmentSessionMismatch,
+    InvalidEnrollmentCredential,
+    NodeEnrollmentError,
+    NodeEnrollmentStore,
+    validate_enrollment_credential,
+)
 from node_sessions import (
     InvalidNodeId,
     InvalidNodeSession,
@@ -51,9 +62,9 @@ _NODE_TIMEOUT = 90
 _MAX_TASK_QUEUE = 100
 _LONG_POLL_TIMEOUT = 25   # seconds to hold GET /tasks/next open waiting for work
 
-# Sessions deliberately live only for this coordinator process.  The shared
-# ``node_secret`` admits a worker; this registry prevents two admitted workers
-# from silently using the same node label at once.
+# Sessions deliberately live only for this coordinator process. Durable
+# enrollment authentication binds trusted-alpha sessions; explicit local
+# compatibility sessions still rely on the shared admission secret.
 node_sessions = NodeSessionRegistry(stale_after_seconds=_NODE_TIMEOUT)
 
 # ── Circuit breaker thresholds ────────────────────────────────────────────
@@ -100,11 +111,9 @@ nodes: dict[str, dict] = {}          # node_id -> info
 # channel. The dictionaries below are process-local scheduling/compatibility
 # projections, not settlement authority.
 #
-# DEFERRED, and this is not equivalent to it: per-node keypairs with signed
-# receipts, revocation and rotation. That is the right long-term answer and is
-# tracked in ROADMAP §5. What is here stops an admitted node stealing another
-# node's credit; it does not stop a node that holds the shared secret from
-# joining under a name of its choosing in the first place.
+# Bearer enrollment adds independent revocation and durable attribution, but it
+# is not a keypair, signature, physical-machine identity, attestation, or Sybil
+# defense. Those stronger identity mechanisms remain deferred.
 ATTEMPT_LEASE_SECONDS = 900
 
 # Deprecated in-memory compatibility mirror. Durable exact replay is handled by
@@ -227,8 +236,85 @@ _db_lock = threading.Lock()
 # queue above remains deliberately process-local; receipts, settlement and
 # rejection authority do not.
 attempt_store = AttemptStore(_DB_PATH)
+enrollment_store = NodeEnrollmentStore(_DB_PATH)
 accepted_result_broker = AcceptedResultBroker(attempt_store)
 _COORDINATOR_RESTART_MARKER = f"restart-{secrets.token_hex(12)}"
+
+
+def node_enrollment_required() -> bool:
+    """Whether this coordinator rejects legacy shared-secret-only registration."""
+
+    return str(get_config().get("node_enrollment_mode", "compat")) == "required"
+
+
+def _clear_worker_assignment(task: dict[str, Any]) -> None:
+    for field in (
+        "assigned_to",
+        "assigned_session_id",
+        "assigned_enrollment_id",
+        "assigned_credential_version",
+        "assigned_at",
+        "attempt_id",
+        "nonce",
+        "lease_expires_at",
+    ):
+        task.pop(field, None)
+
+
+def reclaim_enrollment_work(enrollment_id: str, reason: str) -> list[str]:
+    """Close and safely requeue work held by an invalid durable enrollment.
+
+    The durable attempt transition happens first.  A process-local task is
+    removed only when ``AttemptStore`` confirms that its active attempt changed,
+    preserving the existing fail-closed reclaim ordering.
+    """
+
+    normalized = str(enrollment_id or "").strip().lower()
+    if not normalized:
+        return []
+    try:
+        reclaimed_ids = set(attempt_store.reclaim_enrollment(normalized, reason))
+    except Exception as exc:
+        _safe_diagnostic_emit(
+            "attempt_reclaim_failed",
+            {
+                "enrollment_id": normalized,
+                "phase": "enrollment_reclaim",
+                "error_type": type(exc).__name__,
+            },
+        )
+        return []
+
+    now = time.time()
+    requeued: list[str] = []
+    with _task_queue_lock:
+        for task_id in reclaimed_ids:
+            task = task_inflight.get(task_id)
+            if task is None or task.get("assigned_enrollment_id") != normalized:
+                continue
+            task = task_inflight.pop(task_id)
+            assigned_node = task.get("assigned_to")
+            _clear_worker_assignment(task)
+            deadline = task.get("execution_deadline_at")
+            if not deadline or float(deadline) > now:
+                task_queue.append(task)
+                requeued.append(task_id)
+            _emit(
+                "task_reclaimed",
+                {
+                    "task_id": task_id,
+                    "node_id": assigned_node,
+                    "enrollment_id": normalized,
+                    "reason": reason,
+                },
+            )
+
+    for node_id, node in list(nodes.items()):
+        if node.get("enrollment_id") == normalized:
+            waiting_nodes.pop(node_id, None)
+            nodes.pop(node_id, None)
+    node_sessions.invalidate_enrollment(normalized)
+    return requeued
 
 # Persisted events are operational lifecycle metadata, not a second prompt or
 # result log.  Keep this an allowlist: newly introduced payload fields remain
@@ -243,6 +329,7 @@ _GENERIC_SAFE_EVENT_FIELDS = frozenset(
         "unit_id",
         "candidate_id",
         "node_id",
+        "enrollment_id",
         "session_id",
         "status",
         "lifecycle_status",
@@ -269,9 +356,18 @@ _SAFE_EVENT_FIELDS = {
     "node_task_queued": frozenset(
         {"trace_id", "job_id", "task_id", "verification"}
     ),
-    "node_readmitted": frozenset({"node_id"}),
+    "node_readmitted": frozenset({"node_id", "enrollment_id"}),
     "verification": frozenset(
-        {"execution_id", "job_id", "trace_id", "unit_id", "agreed", "nodes"}
+        {
+            "execution_id",
+            "job_id",
+            "trace_id",
+            "unit_id",
+            "agreed",
+            "nodes",
+            "enrollment_id_a",
+            "enrollment_id_b",
+        }
     ),
     "execution_created": frozenset(
         {"execution_id", "job_id", "protocol_version"}
@@ -321,6 +417,7 @@ _SAFE_EVENT_FIELDS = {
             "attempt_id",
             "unit_id",
             "node_id",
+            "enrollment_id",
             "placement",
         }
     ),
@@ -332,6 +429,7 @@ _SAFE_EVENT_FIELDS = {
             "unit_id",
             "unit_kind",
             "node_id",
+            "enrollment_id",
             "placement",
             "status",
             "duration_ms",
@@ -351,11 +449,12 @@ _SAFE_EVENT_FIELDS = {
     "winner_selected": frozenset(
         {"execution_id", "candidate_id", "verified"}
     ),
-    "node_draining": frozenset({"node_id", "session_id"}),
-    "node_busy": frozenset({"node_id", "task_id", "unit_id"}),
+    "node_draining": frozenset({"node_id", "enrollment_id", "session_id"}),
+    "node_busy": frozenset({"node_id", "enrollment_id", "task_id", "unit_id"}),
     "node_idle": frozenset(
         {
             "node_id",
+            "enrollment_id",
             "credits_earned",
             "contribution_basis",
             "points_are_monetary",
@@ -365,10 +464,12 @@ _SAFE_EVENT_FIELDS = {
         }
     ),
     "node_blacklisted": frozenset(
-        {"node_id", "failure_count", "blacklist_seconds"}
+        {"node_id", "enrollment_id", "failure_count", "blacklist_seconds"}
     ),
-    "task_reclaimed": frozenset({"task_id", "node_id"}),
-    "worker_task_expired": frozenset({"task_id", "execution_id"}),
+    "task_reclaimed": frozenset({"task_id", "node_id", "enrollment_id"}),
+    "worker_task_expired": frozenset(
+        {"task_id", "execution_id", "node_id", "enrollment_id"}
+    ),
     "result_rejected": frozenset(
         {
             "task_id",
@@ -378,6 +479,7 @@ _SAFE_EVENT_FIELDS = {
             "error_code",
             "quarantined",
             "quarantine_id",
+            "enrollment_id",
         }
     ),
     "stream_limit_exceeded": frozenset(
@@ -385,23 +487,32 @@ _SAFE_EVENT_FIELDS = {
             "task_id",
             "attempt_id",
             "node_id",
+            "enrollment_id",
             "max_output_bytes",
             "streamed_bytes",
             "stream_batch_count",
         }
     ),
-    "attempt_expiry_failed": frozenset({"task_id", "phase", "error_type"}),
+    "attempt_expiry_failed": frozenset(
+        {"task_id", "node_id", "enrollment_id", "phase", "error_type"}
+    ),
     "attempt_reclaim_failed": frozenset(
-        {"task_id", "node_id", "phase", "error_type"}
+        {"task_id", "node_id", "enrollment_id", "phase", "error_type"}
     ),
     "attempt_issue_failed": frozenset(
-        {"task_id", "node_id", "phase", "error_type"}
+        {"task_id", "node_id", "enrollment_id", "phase", "error_type"}
+    ),
+    "enrollment_revalidation_failed": frozenset(
+        {"node_id", "enrollment_id", "phase", "error_type"}
+    ),
+    "post_settlement_mirror_failed": frozenset(
+        {"task_id", "node_id", "enrollment_id", "phase", "error_type"}
     ),
     "output_pruned": frozenset({"runs_deleted_count", "cap_mb"}),
     # Generated token text is allowed only for an ephemeral live broadcast.
     # The durable sanitizer and startup migration never retain ``token``.
     "token": frozenset(
-        {"job_id", "trace_id", "subtask_id", "source", "node_id"}
+        {"job_id", "trace_id", "subtask_id", "source", "node_id", "enrollment_id"}
     ),
     "token_fanout_truncated": frozenset(),
 }
@@ -621,6 +732,7 @@ def _init_db() -> None:
         _redact_events_in_transaction(con)
         con.commit()
     _redact_in_memory_events()
+    enrollment_store.migrate()
     attempt_store.migrate()
     # Redact legacy free-form contribution metadata and regenerate the JSON
     # projection before any read route can expose it.
@@ -940,10 +1052,10 @@ def _check_pitch_key(request: Request):
 
 # ── Node auth ────────────────────────────────────────────────────────
 def _check_node_auth(request: Request):
-    """Raise 401 if node_secret is configured and the request doesn't present it.
+    """Require the shared secret for bootstrap or explicit legacy compatibility.
 
-    Nodes must include 'X-Node-Secret: <value>' in their request headers.
-    When node_secret is empty in config, all nodes are allowed (trusted-network mode).
+    Returning enrolled workers and their normal operations use per-enrollment
+    credentials and process-local sessions instead.
     """
     secret = get_config().get("node_secret", "")
     if not secret:
@@ -954,11 +1066,16 @@ def _check_node_auth(request: Request):
 
 
 def _check_node_session(request: Request, node_id: str) -> NodeSessionRecord:
-    """Require the current server-issued bearer session for ``node_id``."""
+    """Require a current session and validate its durable enrollment binding.
+
+    Enrolled sessions are sufficient authority for normal worker operations.
+    The deployment-wide admission secret remains required only for legacy
+    compatibility sessions and initial bootstrap.
+    """
 
     provided = request.headers.get("X-Node-Session")
     try:
-        return node_sessions.authenticate(node_id, provided)
+        record = node_sessions.authenticate(node_id, provided)
     except InvalidNodeSession as exc:
         raise HTTPException(
             status_code=401,
@@ -969,6 +1086,58 @@ def _check_node_session(request: Request, node_id: str) -> NodeSessionRecord:
             },
             headers={"X-Node-Session-Required": "true"},
         ) from exc
+
+    if record.enrollment_id is None:
+        if node_enrollment_required():
+            node_sessions.invalidate_node(
+                record.node_id, session_id=record.session_id
+            )
+            nodes.pop(record.node_id, None)
+            raise HTTPException(
+                status_code=426,
+                detail={
+                    "code": "durable_node_enrollment_required",
+                    "message": (
+                        "This coordinator requires durable node enrollment; "
+                        "upgrade the worker and register with an enrollment credential."
+                    ),
+                    "action": "upgrade_worker",
+                },
+                headers={"X-Node-Enrollment-Required": "true"},
+            )
+        _check_node_auth(request)
+        return record
+
+    try:
+        enrollment_store.validate_session(
+            record.enrollment_id,
+            record.node_id,
+            record.credential_version or 0,
+        )
+    except NodeEnrollmentError as exc:
+        reclaim_enrollment_work(record.enrollment_id, exc.reason)
+        if isinstance(exc, EnrollmentRevoked):
+            status_code = 403
+            action = "stop_and_contact_operator"
+        elif isinstance(exc, EnrollmentCredentialRotated):
+            status_code = 401
+            action = "reload_identity_and_register_again"
+        elif isinstance(exc, EnrollmentSessionMismatch):
+            status_code = 401
+            action = "register_again"
+        else:
+            status_code = 401
+            action = "register_again"
+        raise HTTPException(
+            status_code=status_code,
+            detail={
+                "code": exc.code,
+                "message": exc.reason,
+                "action": action,
+            },
+            headers={"X-Node-Session-Required": "true"},
+        ) from exc
+    return record
 
 
 # ── Request/response models ──────────────────────────────────────────
@@ -1004,6 +1173,13 @@ class PitchResponse(BaseModel):
 
 class NodeRegistration(BaseModel):
     node_id: str = Field(min_length=1, max_length=64)
+    enrollment_action: Literal["bootstrap", "returning"] | None = None
+    enrollment_credential: str | None = Field(
+        default=None,
+        min_length=ENROLLMENT_CREDENTIAL_MIN_LENGTH,
+        max_length=ENROLLMENT_CREDENTIAL_MAX_LENGTH,
+        repr=False,
+    )
     model: str = Field(min_length=1, max_length=96)
     platform: str = Field(min_length=1, max_length=64)
     machine: str = Field(min_length=1, max_length=64)
@@ -1023,6 +1199,16 @@ class NodeRegistration(BaseModel):
             return normalize_node_id(value)
         except InvalidNodeId as exc:
             raise ValueError(str(exc)) from exc
+
+    @field_validator("enrollment_credential")
+    @classmethod
+    def validate_enrollment_secret(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        try:
+            return validate_enrollment_credential(value)
+        except InvalidEnrollmentCredential as exc:
+            raise ValueError(exc.reason) from exc
 
     @field_validator("model", "platform", "machine", "hostname", "gpu")
     @classmethod
@@ -1164,7 +1350,15 @@ async def _cleanup_stale_nodes():
     """
     while True:
         await asyncio.sleep(30)
-        _cleanup_pass()
+        try:
+            _cleanup_pass()
+        except Exception as exc:
+            # A single malformed in-memory record or transient storage error
+            # must not permanently terminate every later cleanup sweep.
+            logger.error(
+                "node janitor sweep failed error_type=%s",
+                type(exc).__name__,
+            )
 
 
 def _cleanup_pass():
@@ -1189,6 +1383,8 @@ def _cleanup_pass():
             if task is None:
                 continue
             attempt_id = task.get("attempt_id")
+            assigned_node = task.get("assigned_to")
+            assigned_enrollment = task.get("assigned_enrollment_id")
             try:
                 if attempt_id:
                     attempt_store.transition_active(
@@ -1202,6 +1398,8 @@ def _cleanup_pass():
                     "attempt_expiry_failed",
                     {
                         "task_id": tid,
+                        "node_id": assigned_node,
+                        "enrollment_id": assigned_enrollment,
                         "phase": "lease_expiry",
                         "error_type": type(exc).__name__,
                     },
@@ -1210,10 +1408,11 @@ def _cleanup_pass():
             task = task_inflight.pop(tid)
             deadline = task.get("execution_deadline_at")
             if not deadline or float(deadline) > now:
-                assigned_node = task.get("assigned_to")
                 for field in (
                     "assigned_to",
                     "assigned_session_id",
+                    "assigned_enrollment_id",
+                    "assigned_credential_version",
                     "assigned_at",
                     "attempt_id",
                     "nonce",
@@ -1224,16 +1423,48 @@ def _cleanup_pass():
                 _emit("task_reclaimed", {
                     "task_id": tid,
                     "node_id": assigned_node,
+                    "enrollment_id": assigned_enrollment,
                     "reason": "lease expired",
                 })
             else:
                 _emit("worker_task_expired", {
                     "task_id": tid,
                     "execution_id": task.get("execution_id"),
+                    "node_id": assigned_node,
+                    "enrollment_id": assigned_enrollment,
                     "reason": "execution deadline elapsed",
                 })
 
-    # 2. Dead nodes
+    # 2. Durably revoked, rotated, or otherwise invalid enrollment sessions.
+    # External local administration is therefore observed without a process
+    # restart; the janitor interval bounds idle-session enforcement to 30s.
+    for nid, node in list(nodes.items()):
+        enrollment_id = node.get("enrollment_id")
+        if not enrollment_id:
+            continue
+        try:
+            enrollment_store.validate_session(
+                str(enrollment_id),
+                nid,
+                int(node.get("credential_version") or 0),
+            )
+        except NodeEnrollmentError as exc:
+            reclaim_enrollment_work(str(enrollment_id), exc.reason)
+        except Exception as exc:
+            # Storage unavailability is not evidence that an enrollment is
+            # valid or revoked. Leave the session untouched, diagnose without
+            # secrets, and retry it on the next bounded sweep.
+            _safe_diagnostic_emit(
+                "enrollment_revalidation_failed",
+                {
+                    "node_id": nid,
+                    "enrollment_id": str(enrollment_id),
+                    "phase": "janitor_revalidation",
+                    "error_type": type(exc).__name__,
+                },
+            )
+
+    # 3. Dead nodes
     cutoff = now - _NODE_TIMEOUT
     stale = [nid for nid, n in nodes.items() if n.get("last_seen", 0) < cutoff]
     for nid in stale:
@@ -1257,6 +1488,7 @@ def _cleanup_pass():
                 if task is None:
                     continue
                 attempt_id = task.get("attempt_id")
+                enrollment_id = task.get("assigned_enrollment_id")
                 try:
                     if attempt_id:
                         attempt_store.transition_active(
@@ -1274,6 +1506,7 @@ def _cleanup_pass():
                         {
                             "task_id": tid,
                             "node_id": nid,
+                            "enrollment_id": enrollment_id,
                             "phase": "stale_node_reclaim",
                             "error_type": type(exc).__name__,
                         },
@@ -1283,6 +1516,8 @@ def _cleanup_pass():
                 for field in (
                     "assigned_to",
                     "assigned_session_id",
+                    "assigned_enrollment_id",
+                    "assigned_credential_version",
                     "assigned_at",
                     "attempt_id",
                     "nonce",
@@ -1290,9 +1525,16 @@ def _cleanup_pass():
                 ):
                     task.pop(field, None)
                 task_queue.append(task)
-            _emit("task_reclaimed", {"task_id": tid, "node_id": nid})
+            _emit(
+                "task_reclaimed",
+                {
+                    "task_id": tid,
+                    "node_id": nid,
+                    "enrollment_id": enrollment_id,
+                },
+            )
 
-    # 3. Old task results (only needed long enough for the caller to collect them)
+    # 4. Old task results (only needed long enough for the caller to collect them)
     result_cutoff = now - _RESULT_TTL
     stale_results = [
         tid for tid, r in task_results.items()
@@ -1301,7 +1543,7 @@ def _cleanup_pass():
     for tid in stale_results:
         task_results.pop(tid, None)
 
-    # 4. Old async jobs (finished jobs older than 7 days)
+    # 5. Old async jobs (finished jobs older than 7 days)
     job_cutoff = now - _JOB_TTL
     stale_jobs = []
     for jid, job in jobs.items():

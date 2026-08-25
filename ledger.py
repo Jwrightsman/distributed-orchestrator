@@ -70,13 +70,32 @@ def ensure_contribution_schema(con: sqlite3.Connection) -> None:
             basis              TEXT NOT NULL,
             points_are_monetary INTEGER NOT NULL DEFAULT 0 CHECK(points_are_monetary = 0),
             attempt_id         TEXT UNIQUE,
+            enrollment_id      TEXT,
+            node_id            TEXT,
+            session_id         TEXT,
             created_at         REAL NOT NULL
         )
         """
     )
+    existing = {
+        str(row[1]) for row in con.execute("PRAGMA table_info(contributions)").fetchall()
+    }
+    for name in ("enrollment_id", "node_id", "session_id"):
+        if name not in existing:
+            con.execute(f"ALTER TABLE contributions ADD COLUMN {name} TEXT")
     con.execute(
         "CREATE INDEX IF NOT EXISTS idx_contributions_contributor_created "
         "ON contributions(contributor, created_at)"
+    )
+    con.execute(
+        "CREATE INDEX IF NOT EXISTS idx_contributions_enrollment_created "
+        "ON contributions(enrollment_id, created_at) "
+        "WHERE enrollment_id IS NOT NULL"
+    )
+    con.execute(
+        "CREATE INDEX IF NOT EXISTS idx_contributions_session_created "
+        "ON contributions(session_id, created_at) "
+        "WHERE enrollment_id IS NULL AND session_id IS NOT NULL"
     )
 
 
@@ -91,6 +110,9 @@ def insert_contribution_in_transaction(
     details: str = "",
     basis: str,
     attempt_id: str | None = None,
+    enrollment_id: str | None = None,
+    node_id: str | None = None,
+    session_id: str | None = None,
     created_at: float | None = None,
 ) -> bool:
     """Insert once using the caller's transaction.
@@ -104,8 +126,9 @@ def insert_contribution_in_transaction(
         """
         INSERT OR IGNORE INTO contributions (
             contribution_id, contributor, contribution_type, points, task,
-            details, basis, points_are_monetary, attempt_id, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+            details, basis, points_are_monetary, attempt_id, enrollment_id,
+            node_id, session_id, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
         """,
         (
             contribution_id,
@@ -116,6 +139,9 @@ def insert_contribution_in_transaction(
             "",
             basis,
             attempt_id,
+            enrollment_id,
+            node_id,
+            session_id,
             created_at if created_at is not None else time.time(),
         ),
     )
@@ -179,6 +205,9 @@ def _import_legacy_entries(con: sqlite3.Connection) -> None:
             details=str(entry.get("details") or ""),
             basis=basis,
             attempt_id=entry.get("attempt_id"),
+            enrollment_id=entry.get("enrollment_id"),
+            node_id=entry.get("node_id"),
+            session_id=entry.get("session_id"),
             created_at=float(entry.get("timestamp", time.time())),
         )
 
@@ -211,6 +240,12 @@ def _entry_from_row(row: sqlite3.Row) -> dict:
         "timestamp": row["created_at"],
         "contribution_basis": row["basis"],
         "points_are_monetary": False,
+        # These fields are deliberately present even for historical rows. Null
+        # means attribution was never recorded; it must not be inferred later
+        # from a reusable display label.
+        "enrollment_id": row["enrollment_id"],
+        "node_id": row["node_id"],
+        "session_id": row["session_id"],
     }
     if row["attempt_id"]:
         entry["attempt_id"] = row["attempt_id"]
@@ -276,6 +311,9 @@ def log_contribution(
     contribution_id: str | None = None,
     basis: str | None = None,
     attempt_id: str | None = None,
+    enrollment_id: str | None = None,
+    node_id: str | None = None,
+    session_id: str | None = None,
 ) -> None:
     """Record non-monetary contribution points exactly once.
 
@@ -298,6 +336,9 @@ def log_contribution(
                 details=details,
                 basis=basis,
                 attempt_id=attempt_id,
+                enrollment_id=enrollment_id,
+                node_id=node_id,
+                session_id=session_id,
             )
             con.commit()
             entries = _query_entries(con)
@@ -305,15 +346,35 @@ def log_contribution(
 
 
 def get_standings() -> list[dict]:
-    """Aggregate non-monetary contribution points by contributor."""
+    """Aggregate points by durable enrollment or explicit legacy incarnation.
+
+    Historical rows predate both fields and remain grouped by their old
+    contributor label. Newly accepted legacy-session work is scoped to its
+    process incarnation, so a later claimant of the same label cannot inherit
+    it. Enrolled work is always grouped by immutable ``enrollment_id``.
+    """
     entries = _load()
     contributors: dict[str, dict] = {}
     for entry in entries:
-        contributor_id = entry["contributor"]
+        enrollment_id = entry.get("enrollment_id")
+        session_id = entry.get("session_id")
+        if enrollment_id:
+            contributor_id = f"enrollment:{enrollment_id}"
+            attribution = "enrollment"
+        elif session_id:
+            contributor_id = f"legacy-session:{session_id}"
+            attribution = "legacy_session"
+        else:
+            contributor_id = f"historical-node:{entry['contributor']}"
+            attribution = "historical_node"
         contributor = contributors.setdefault(
             contributor_id,
             {
-                "contributor": contributor_id,
+                "contributor": entry["contributor"],
+                "enrollment_id": enrollment_id,
+                "node_id": entry.get("node_id"),
+                "session_id": session_id if not enrollment_id else None,
+                "attribution": attribution,
                 "total_credits": 0,
                 "total_points": 0,
                 "contributions": 0,

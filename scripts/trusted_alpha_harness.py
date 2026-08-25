@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import secrets
 import signal
 import socket
 import subprocess
@@ -354,6 +355,7 @@ def _write_trusted_config(state_dir: Path, fake_model_port: int) -> tuple[Path, 
         path,
         model="mycelium-harness-fake:latest",
         ollama_url=f"http://127.0.0.1:{fake_model_port}",
+        private_overlay=True,
     )
     stored = json.loads(path.read_text(encoding="utf-8"))
     return path, stored
@@ -423,6 +425,7 @@ def _register_node(
     node_secret: str,
     node_id: str,
 ) -> dict:
+    enrollment_credential = secrets.token_urlsafe(32)
     response = client.post(
         "/nodes/register",
         headers={"X-Node-Secret": node_secret},
@@ -435,20 +438,28 @@ def _register_node(
             "cpu_count": 2,
             "ram_gb": 8,
             "capabilities": ["code"],
+            "enrollment_action": "bootstrap",
+            "enrollment_credential": enrollment_credential,
         },
     )
     _assert_status(response, 200, f"register {node_id}")
     payload = response.json()
-    if not all(payload.get(field) for field in ("node_id", "session_id", "session_token")):
+    if not all(
+        payload.get(field)
+        for field in (
+            "node_id",
+            "enrollment_id",
+            "credential_version",
+            "session_id",
+            "session_token",
+        )
+    ) or payload.get("enrolled") is not True:
         raise HarnessFailure(f"register {node_id}: incomplete session grant")
     return payload
 
 
-def _node_headers(settings: dict, registration: dict) -> dict[str, str]:
-    return {
-        "X-Node-Secret": str(settings["node_secret"]),
-        "X-Node-Session": str(registration["session_token"]),
-    }
+def _node_headers(registration: dict) -> dict[str, str]:
+    return {"X-Node-Session": str(registration["session_token"])}
 
 
 def _worker_binding(task: dict, node_id: str) -> dict:
@@ -463,12 +474,12 @@ def _worker_binding(task: dict, node_id: str) -> dict:
     }
 
 
-def _claim_worker_task(base_url: str, settings: dict, registration: dict) -> dict:
+def _claim_worker_task(base_url: str, registration: dict) -> dict:
     with httpx.Client(base_url=base_url, timeout=35, trust_env=False) as worker:
         response = worker.get(
             "/tasks/next",
             params={"node_id": registration["node_id"]},
-            headers=_node_headers(settings, registration),
+            headers=_node_headers(registration),
         )
     _assert_status(response, 200, f"task claim {registration['node_id']}")
     task = response.json()
@@ -491,12 +502,11 @@ def _claim_worker_task(base_url: str, settings: dict, registration: dict) -> dic
 
 def _settle_worker_task(
     base_url: str,
-    settings: dict,
     registration: dict,
 ) -> tuple[str, str]:
-    task = _claim_worker_task(base_url, settings, registration)
+    task = _claim_worker_task(base_url, registration)
     binding = _worker_binding(task, registration["node_id"])
-    headers = _node_headers(settings, registration)
+    headers = _node_headers(registration)
     with httpx.Client(base_url=base_url, timeout=15, trust_env=False) as worker:
         streamed = worker.post(
             f"/tasks/{task['task_id']}/tokens",
@@ -576,6 +586,8 @@ def _exercise_live_coordinator(state_dir: Path) -> None:
             health = _wait_for_health(client, process)
             if health.get("private_routes_protected") is not True:
                 raise HarnessFailure("health did not report private-route protection")
+            if health.get("node_enrollment_required") is not True:
+                raise HarnessFailure("health did not report required node enrollment")
 
             _assert_status(client.get("/v1/operator/health"), 401, "viewer denial")
             operator = client.get(
@@ -607,14 +619,13 @@ def _exercise_live_coordinator(state_dir: Path) -> None:
                 raise HarnessFailure("two node registrations received the same session id")
             if first["session_token"] == second["session_token"]:
                 raise HarnessFailure("two node registrations received the same session token")
+            if first["enrollment_id"] == second["enrollment_id"]:
+                raise HarnessFailure("two node registrations received the same enrollment id")
 
             for registration in (first, second):
                 heartbeat = client.post(
                     f"/nodes/{registration['node_id']}/heartbeat",
-                    headers={
-                        "X-Node-Secret": settings["node_secret"],
-                        "X-Node-Session": registration["session_token"],
-                    },
+                    headers=_node_headers(registration),
                 )
                 if heartbeat.status_code != 200:
                     try:
@@ -671,7 +682,6 @@ def _exercise_live_coordinator(state_dir: Path) -> None:
                     workers.submit(
                         _settle_worker_task,
                         base_url,
-                        settings,
                         registration,
                     )
                     for registration in (first, second)
@@ -797,7 +807,6 @@ def _exercise_live_coordinator(state_dir: Path) -> None:
                     workers.submit(
                         _settle_worker_task,
                         base_url,
-                        settings,
                         registration,
                     )
                     for registration in (first, second)
@@ -844,7 +853,7 @@ def _exercise_live_coordinator(state_dir: Path) -> None:
             )
             _assert_status(direct, 202, "distributed direct submission")
             direct_execution_id = direct.json()["execution_id"]
-            _settle_worker_task(base_url, settings, first)
+            _settle_worker_task(base_url, first)
             direct_deadline = time.monotonic() + 30
             while time.monotonic() < direct_deadline:
                 direct_result = client.get(
@@ -883,7 +892,7 @@ def _exercise_live_coordinator(state_dir: Path) -> None:
             )
             _assert_status(cancellable, 202, "cancellable execution submission")
             cancelled_execution_id = cancellable.json()["execution_id"]
-            late_task = _claim_worker_task(base_url, settings, first)
+            late_task = _claim_worker_task(base_url, first)
             cancelled = client.post(
                 f"/v1/executions/{cancelled_execution_id}/cancel",
                 headers=viewer_headers,
@@ -894,7 +903,7 @@ def _exercise_live_coordinator(state_dir: Path) -> None:
             late_binding = _worker_binding(late_task, first["node_id"])
             late_result = client.post(
                 f"/tasks/{late_task['task_id']}/result",
-                headers=_node_headers(settings, first),
+                headers=_node_headers(first),
                 json={
                     **late_binding,
                     "output": "late result must not settle",

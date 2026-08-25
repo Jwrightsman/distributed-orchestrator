@@ -78,6 +78,7 @@ def _unit_summary(result: DispatchResult) -> dict[str, Any]:
         "status": result.status,
         "placement": result.placement,
         "node_id": result.node_id,
+        "enrollment_id": result.enrollment_id,
         "attempt_count": result.attempt_count,
         "duration_ms": result.duration_ms,
         "fallback_reason": result.fallback_reason,
@@ -138,6 +139,7 @@ class DagStrategy(ExecutionStrategy):
                 return {}
             return {
                 "node_id": result.node_id,
+                "enrollment_id": result.enrollment_id,
                 "placement": result.placement,
                 "fallback_reason": result.fallback_reason,
             }
@@ -547,6 +549,7 @@ class EnsembleStrategy(ExecutionStrategy):
                     "error": dispatched.error,
                     "placement": dispatched.placement,
                     "node_id": dispatched.node_id,
+                    "enrollment_id": dispatched.enrollment_id,
                     "generation_duration_ms": dispatched.duration_ms,
                     "validation_duration_ms": sum(item.duration_ms for item in evidence),
                     "validation": [item.model_dump(mode="json") for item in evidence],
