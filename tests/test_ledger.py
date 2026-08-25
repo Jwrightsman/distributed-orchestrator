@@ -58,6 +58,96 @@ def test_history_filter_and_limit():
     assert all(e["contributor"] == "node-b" for e in get_history("node-b"))
 
 
+def test_standings_use_enrollment_or_legacy_session_not_reusable_label():
+    log_contribution("shared", "compute", credits=1)
+    log_contribution(
+        "shared",
+        "compute",
+        credits=2,
+        enrollment_id="enrollment-a",
+        node_id="shared",
+        session_id="session-enrolled-a",
+    )
+    log_contribution(
+        "shared",
+        "compute",
+        credits=3,
+        enrollment_id="enrollment-b",
+        node_id="shared",
+        session_id="session-enrolled-b",
+    )
+    log_contribution(
+        "shared",
+        "compute",
+        credits=4,
+        node_id="shared",
+        session_id="legacy-session-a",
+    )
+    log_contribution(
+        "shared",
+        "compute",
+        credits=5,
+        node_id="shared",
+        session_id="legacy-session-b",
+    )
+
+    standings = get_standings()
+    assert len(standings) == 5
+    by_key = {
+        (item["enrollment_id"], item["session_id"], item["attribution"]): item
+        for item in standings
+    }
+    assert by_key[("enrollment-a", None, "enrollment")]["total_points"] == 2
+    assert by_key[("enrollment-b", None, "enrollment")]["total_points"] == 3
+    assert by_key[(None, "legacy-session-a", "legacy_session")][
+        "total_points"
+    ] == 4
+    assert by_key[(None, "legacy-session-b", "legacy_session")][
+        "total_points"
+    ] == 5
+    assert by_key[(None, None, "historical_node")]["total_points"] == 1
+
+
+def test_contribution_schema_migration_is_additive_and_does_not_infer_identity():
+    with sqlite3.connect("events.db") as con:
+        con.execute(
+            """
+            CREATE TABLE contributions (
+                contribution_id TEXT PRIMARY KEY,
+                contributor TEXT NOT NULL,
+                contribution_type TEXT NOT NULL,
+                points REAL NOT NULL,
+                task TEXT NOT NULL,
+                details TEXT NOT NULL,
+                basis TEXT NOT NULL,
+                points_are_monetary INTEGER NOT NULL DEFAULT 0,
+                attempt_id TEXT UNIQUE,
+                created_at REAL NOT NULL
+            )
+            """
+        )
+        con.execute(
+            """
+            INSERT INTO contributions VALUES (
+                'historical', 'old-label', 'compute', 5,
+                'compute_contribution', '', 'compute_contribution', 0,
+                'old-attempt', 1
+            )
+            """
+        )
+        ensure_contribution_schema(con)
+        ensure_contribution_schema(con)
+        row = con.execute(
+            "SELECT enrollment_id, node_id, session_id FROM contributions"
+        ).fetchone()
+    assert row == (None, None, None)
+
+    entry = get_history("old-label")[0]
+    assert entry["enrollment_id"] is None
+    assert entry["node_id"] is None
+    assert entry["session_id"] is None
+
+
 def test_corrupt_ledger_treated_as_empty():
     Path("ledger.json").write_text("{not valid json")
     assert get_standings() == []

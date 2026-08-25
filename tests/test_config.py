@@ -11,6 +11,8 @@ def test_defaults_when_no_config_file():
     assert cfg["model"] == config.DEFAULTS["model"]
     assert cfg["timeout"] == config.DEFAULTS["timeout"]
     assert cfg["node_secret"] == ""
+    assert cfg["node_enrollment_mode"] == "compat"
+    assert cfg["private_overlay"] is False
 
 
 def test_config_json_overrides_defaults():

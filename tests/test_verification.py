@@ -16,6 +16,7 @@ from verification import (
     NodeReputation,
     VerificationPool,
     compare_outputs,
+    verification_identity_key,
 )
 
 PY_A = """```python
@@ -33,6 +34,12 @@ def add(x, y):
 
 REFUSAL = "I cannot help with that request."
 STUB = "```python\npass\n```"
+
+
+def _enrollment_key(name: str) -> str:
+    key = verification_identity_key(enrollment_id=f"enrollment-{name}")
+    assert key is not None
+    return key
 
 
 class TestHonestVariationIsNotDisagreement:
@@ -128,30 +135,70 @@ class TestVerificationSampling:
 class TestComparisonCreditsBothNodes:
     def test_agreement_raises_both(self):
         pool = VerificationPool(verify_rate=1.0)
-        pool.record_comparison("a", PY_A, "b", PY_B)
-        assert pool.reputation("a").agreed == 1
-        assert pool.reputation("b").agreed == 1
+        key_a, key_b = _enrollment_key("a"), _enrollment_key("b")
+        pool.record_comparison(
+            "a", PY_A, "b", PY_B, identity_a=key_a, identity_b=key_b
+        )
+        assert pool.reputation(key_a).agreed == 1
+        assert pool.reputation(key_b).agreed == 1
 
     def test_disagreement_lowers_both(self):
         """We cannot tell which one was wrong, so neither is credited."""
         pool = VerificationPool(verify_rate=1.0)
-        result = pool.record_comparison("a", PY_A, "b", REFUSAL)
+        key_a, key_b = _enrollment_key("a"), _enrollment_key("b")
+        result = pool.record_comparison(
+            "a", PY_A, "b", REFUSAL, identity_a=key_a, identity_b=key_b
+        )
         assert not result["agreed"]
-        assert pool.reputation("a").disagreed == 1
-        assert pool.reputation("b").disagreed == 1
+        assert pool.reputation(key_a).disagreed == 1
+        assert pool.reputation(key_b).disagreed == 1
 
     def test_bad_node_separates_over_many_samples(self):
         """The point of the design: one liar, many honest peers."""
         pool = VerificationPool(verify_rate=1.0)
         for peer in ("good1", "good2", "good3"):
             for _ in range(4):
-                pool.record_comparison(peer, PY_A, "liar", REFUSAL)
+                pool.record_comparison(
+                    peer,
+                    PY_A,
+                    "liar",
+                    REFUSAL,
+                    identity_a=_enrollment_key(peer),
+                    identity_b=_enrollment_key("liar"),
+                )
         for _ in range(4):
-            pool.record_comparison("good1", PY_A, "good2", PY_B)
+            pool.record_comparison(
+                "good1",
+                PY_A,
+                "good2",
+                PY_B,
+                identity_a=_enrollment_key("good1"),
+                identity_b=_enrollment_key("good2"),
+            )
 
-        liar = pool.reputation("liar").routing_weight
-        honest = pool.reputation("good1").routing_weight
+        liar = pool.reputation(_enrollment_key("liar")).routing_weight
+        honest = pool.reputation(_enrollment_key("good1")).routing_weight
         assert liar < honest, f"liar {liar} should rank below honest {honest}"
+
+    def test_same_label_does_not_share_enrollment_or_legacy_session_record(self):
+        pool = VerificationPool(verify_rate=1.0)
+        enrolled_a = verification_identity_key(enrollment_id="enrollment-a")
+        enrolled_b = verification_identity_key(enrollment_id="enrollment-b")
+        legacy_a = verification_identity_key(session_id="session-a")
+        legacy_b = verification_identity_key(session_id="session-b")
+        assert None not in {enrolled_a, enrolled_b, legacy_a, legacy_b}
+
+        pool.reputation(str(enrolled_a), node_id="shared").record(False)
+        pool.reputation(str(legacy_a), node_id="shared").record(False)
+
+        assert pool.reputation(str(enrolled_b), node_id="shared").total == 0
+        assert pool.reputation(str(legacy_b), node_id="shared").total == 0
+
+    def test_comparison_without_identity_is_not_attributed_to_labels(self):
+        pool = VerificationPool(verify_rate=1.0)
+        verdict = pool.record_comparison("same-label", PY_A, "peer", PY_B)
+        assert verdict["recorded"] is False
+        assert pool.reputations == {}
 
 
 class TestRouting:

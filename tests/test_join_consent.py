@@ -13,6 +13,7 @@ import builtins
 import sys
 
 import join
+import pytest
 
 
 def test_yes_flag_skips_the_prompt(capsys):
@@ -42,7 +43,7 @@ def test_explains_the_cost_before_asking(monkeypatch, capsys):
 
     join.confirm_consent("http://example:8000", False)
     out = capsys.readouterr().out.lower()
-    for claim in ("cpu", "gb", "other people"):
+    for claim in ("cpu", "gb", "other people", "enrollment identity"):
         assert claim in out, f"consent screen never mentions {claim!r}"
     assert "not do" in out, "should state what it will not do, not only what it will"
 
@@ -81,6 +82,16 @@ def test_consent_runs_before_anything_is_installed():
     )
 
 
+@pytest.mark.asyncio
+async def test_join_requires_an_explicit_coordinator_before_any_install(
+    monkeypatch,
+):
+    monkeypatch.setattr(sys, "argv", ["join.py"])
+    with pytest.raises(SystemExit) as raised:
+        await join.main()
+    assert raised.value.code == 2
+
+
 # ── The advertised one-liner has to survive its own delivery mechanism ──
 #
 # `curl … | bash -s -- URL` gives bash the downloaded script as *stdin*, so
@@ -99,6 +110,27 @@ def test_consent_runs_before_anything_is_installed():
 def _install_sh() -> str:
     from pathlib import Path
     return (Path(__file__).resolve().parent.parent / "install.sh").read_text(encoding="utf-8")
+
+
+def _install_ps1() -> str:
+    from pathlib import Path
+    return (Path(__file__).resolve().parent.parent / "install.ps1").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_installers_require_explicit_origin_before_mutating_the_machine():
+    shell = _install_sh()
+    powershell = _install_ps1()
+
+    assert "An explicit coordinator origin is required" in shell
+    assert shell.index("An explicit coordinator origin is required") < shell.index(
+        "# 1. Python"
+    )
+    assert "SWARM_SERVER is required for durable enrollment" in powershell
+    assert powershell.index(
+        "SWARM_SERVER is required for durable enrollment"
+    ) < powershell.index("# 1. Python")
 
 
 def test_installer_hands_over_on_the_terminal_not_the_pipe():

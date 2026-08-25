@@ -10,6 +10,10 @@ def test_deploy_uses_three_authority_migration_and_strict_health_gate():
     assert "ensure_trusted_alpha_config" in script
     assert "viewer_key, pitch_key, and node_secret" in script
     assert "deployment_health_ready" in script
+    assert "private_overlay=True" in script
+    assert "MYCELIUM_PRIVATE_OVERLAY_CONFIRMED" in script
+    assert "Join this host to that overlay" in script
+    assert "revocable enrollment identity" in script
     assert "--mode trusted_alpha" in script
     assert "set +x" in script
     assert "NODE_SECRET=" not in script
@@ -24,5 +28,5 @@ def test_compose_defaults_to_loopback_and_one_persistent_state_mount():
     assert "${MYCELIUM_PUBLISH_ADDRESS:-127.0.0.1}:8000:8000" in compose
     assert "./data:/data" in compose
     assert "MYCELIUM_STATE_DIR: /data" in compose
-    assert "COPY scripts/__init__.py scripts/preflight.py" in dockerfile
+    assert "scripts/node_enrollment_admin.py" in dockerfile
     assert '"--workers"' not in dockerfile

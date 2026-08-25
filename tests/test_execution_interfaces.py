@@ -22,7 +22,7 @@ from execution.dispatch import DispatchResult, Dispatcher, ExecutionUnit, Placem
 from execution.persistence import ExecutionStore
 from execution.service import ExecutionService
 from server import app
-from verification import VerificationPool
+from verification import VerificationPool, verification_identity_key
 
 
 @pytest.fixture(autouse=True)
@@ -372,6 +372,7 @@ async def test_distributed_dag_sampled_verification_remains_wired(monkeypatch):
         output="```python\nprint('same shape')\n```",
         placement="distributed",
         node_id="primary",
+        enrollment_id="enrollment-primary",
         attempt_count=1,
     )
 
@@ -383,6 +384,7 @@ async def test_distributed_dag_sampled_verification_remains_wired(monkeypatch):
             output="```python\nprint('same shape, different text')\n```",
             placement="distributed",
             node_id="secondary",
+            enrollment_id="enrollment-secondary",
             attempt_count=1,
         )
 
@@ -407,6 +409,9 @@ async def test_distributed_dag_sampled_verification_remains_wired(monkeypatch):
     )
     await asyncio.sleep(0)
 
-    assert pool.reputation("primary").total == 1
-    assert pool.reputation("secondary").total == 1
+    primary_key = verification_identity_key(enrollment_id="enrollment-primary")
+    secondary_key = verification_identity_key(enrollment_id="enrollment-secondary")
+    assert primary_key is not None and secondary_key is not None
+    assert pool.reputation(primary_key).total == 1
+    assert pool.reputation(secondary_key).total == 1
     assert any(name == "verification" for name, _ in emitted)

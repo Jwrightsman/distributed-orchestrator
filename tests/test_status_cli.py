@@ -16,8 +16,9 @@ def test_status_reports_three_authorities_without_secret_fragments(monkeypatch):
         status,
         "get_config",
         lambda: {
-            **secrets,
-            "deployment_mode": "trusted_alpha",
+                **secrets,
+                "deployment_mode": "trusted_alpha",
+                "node_enrollment_mode": "required",
             "model": "test-model",
             "timeout": 30,
             "planner_retries": 1,
@@ -42,7 +43,8 @@ def test_status_reports_three_authorities_without_secret_fragments(monkeypatch):
 
     rendered = output.getvalue()
     assert "Mode:        trusted_alpha" in rendered
-    assert "Node auth:   enabled" in rendered
+    assert "Enrollment:  required" in rendered
+    assert "Bootstrap:   protected" in rendered
     assert "Pitch auth:  enabled" in rendered
     assert "Viewer auth: enabled" in rendered
     assert all(secret not in rendered for secret in secrets.values())
