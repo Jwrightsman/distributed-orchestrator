@@ -14,8 +14,19 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
+from access_control import require_viewer
 from execution.attempts import AttemptRejected, WorkerPayloadLimitExceeded
 from ledger import sync_compatibility_ledger
+from node_enrollments import (
+    EnrollmentAuthenticationFailed,
+    EnrollmentCredentialConflict,
+    EnrollmentLabelConflict,
+    EnrollmentNotFound,
+    EnrollmentRevoked,
+    EnrollmentRotationConflict,
+    InvalidEnrollmentCredential,
+    NodeEnrollmentError,
+)
 from node_sessions import DuplicateNodeSession
 import server_state as state
 from server_state import (
@@ -41,6 +52,8 @@ def _clear_assignment(task: dict) -> None:
     for field in (
         "assigned_to",
         "assigned_session_id",
+        "assigned_enrollment_id",
+        "assigned_credential_version",
         "assigned_at",
         "attempt_id",
         "nonce",
@@ -79,6 +92,7 @@ def _reclaim_replaced_session(node_id: str, replaced_session_id: str) -> None:
                     {
                         "task_id": task_id,
                         "node_id": node_id,
+                        "enrollment_id": task.get("assigned_enrollment_id"),
                         "phase": "session_replacement",
                         "error_type": type(exc).__name__,
                     },
@@ -87,6 +101,7 @@ def _reclaim_replaced_session(node_id: str, replaced_session_id: str) -> None:
             if attempt_id and not changed:
                 continue
             task = task_inflight.pop(task_id)
+            enrollment_id = task.get("assigned_enrollment_id")
             _clear_assignment(task)
             deadline = task.get("execution_deadline_at")
             if not deadline or float(deadline) > time.time():
@@ -94,8 +109,69 @@ def _reclaim_replaced_session(node_id: str, replaced_session_id: str) -> None:
             _emit("task_reclaimed", {
                 "task_id": task_id,
                 "node_id": node_id,
+                "enrollment_id": enrollment_id,
                 "reason": "node session replaced after staleness",
             })
+
+
+def _verification_key(node_id: str) -> str | None:
+    """Return the trust key for routing without treating a label as enrollment."""
+
+    node = nodes.get(node_id, {})
+    try:
+        from verification import verification_identity_key
+
+        return verification_identity_key(
+            enrollment_id=node.get("enrollment_id"),
+            session_id=node.get("session_id"),
+        )
+    except ImportError:  # Rolling-source compatibility during the additive change.
+        return None
+
+
+def _lifetime_summary(
+    node_id: str,
+    enrollment_id: str | None,
+    session_id: str | None = None,
+) -> dict:
+    if enrollment_id:
+        return state.attempt_store.lifetime_contribution_summary(
+            node_id, enrollment_id=enrollment_id
+        )
+    if session_id:
+        return state.attempt_store.lifetime_contribution_summary(
+            node_id, session_id=session_id
+        )
+    # Only rows that predate explicit enrollment/session attribution are
+    # eligible for the historical label-only view.  Never merge those rows
+    # into a newly registered legacy session merely because its label matches.
+    return state.attempt_store.lifetime_contribution_summary(node_id)
+
+
+def _raise_enrollment_http_error(exc: NodeEnrollmentError) -> None:
+    if isinstance(
+        exc,
+        (
+            EnrollmentLabelConflict,
+            EnrollmentCredentialConflict,
+            EnrollmentRotationConflict,
+        ),
+    ):
+        status_code = 409
+    elif isinstance(exc, EnrollmentRevoked):
+        status_code = 403
+    elif isinstance(exc, EnrollmentAuthenticationFailed):
+        status_code = 401
+    elif isinstance(exc, EnrollmentNotFound):
+        status_code = 404
+    elif isinstance(exc, InvalidEnrollmentCredential):
+        status_code = 422
+    else:
+        status_code = 401
+    raise HTTPException(
+        status_code=status_code,
+        detail={"code": exc.code, "message": exc.reason},
+    ) from exc
 
 
 def _should_defer(node_id: str, waiting_since: float) -> bool:
@@ -119,17 +195,104 @@ def _should_defer(node_id: str, waiting_since: float) -> bool:
     if len(contenders) < 2:
         return False
     pool = state.verification_pool
-    if len({pool.reputation(n).routing_weight for n in contenders}) < 2:
+    keyed = [
+        (candidate, identity_key)
+        for candidate in contenders
+        if (identity_key := _verification_key(candidate)) is not None
+    ]
+    if len(keyed) < 2 or not any(candidate == node_id for candidate, _key in keyed):
+        return False
+    if len({pool.reputation(key).routing_weight for _node, key in keyed}) < 2:
         return False  # nothing to choose between
+    if hasattr(pool, "rank_nodes"):
+        return pool.rank_nodes(keyed)[0] != node_id
     return pool.rank(contenders)[0] != node_id
 
 
 @router.post("/nodes/register")
 async def register_node(reg: NodeRegistration, request: Request):
-    _check_node_auth(request)
+    enrollment = None
+    enrollment_idempotent = False
+    effective_action = reg.enrollment_action
+
+    if reg.enrollment_action is None:
+        # Preserve the legacy path only in the explicit local compatibility
+        # mode. Validate admission first so an old trusted-alpha worker receives
+        # the actionable upgrade response only after proving it has the invite.
+        _check_node_auth(request)
+        if state.node_enrollment_required():
+            raise HTTPException(
+                status_code=426,
+                detail={
+                    "code": "durable_node_enrollment_required",
+                    "message": (
+                        "This coordinator requires durable node enrollment. "
+                        "Upgrade the worker and register with enrollment_action "
+                        "and an enrollment credential."
+                    ),
+                    "action": "upgrade_worker",
+                },
+                headers={"X-Node-Enrollment-Required": "true"},
+            )
+        if reg.enrollment_credential is not None:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "node_enrollment_action_required",
+                    "message": "enrollment_action is required when a credential is supplied",
+                },
+            )
+        if state.enrollment_store.get_by_node(reg.node_id) is not None:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "node_enrollment_label_conflict",
+                    "message": (
+                        "node label belongs to a durable enrollment; authenticate "
+                        "with its enrollment credential"
+                    ),
+                },
+            )
+        effective_action = "legacy_compat"
+    elif reg.enrollment_action == "bootstrap":
+        _check_node_auth(request)
+        if reg.enrollment_credential is None:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "invalid_enrollment_credential",
+                    "message": "bootstrap requires an enrollment credential",
+                },
+            )
+        try:
+            bootstrapped = state.enrollment_store.bootstrap(
+                reg.node_id, reg.enrollment_credential
+            )
+        except NodeEnrollmentError as exc:
+            _raise_enrollment_http_error(exc)
+        enrollment = bootstrapped.record
+        enrollment_idempotent = bootstrapped.idempotent
+    elif reg.enrollment_action == "returning":
+        if reg.enrollment_credential is None:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "invalid_enrollment_credential",
+                    "message": "returning registration requires an enrollment credential",
+                },
+            )
+        try:
+            enrollment = state.enrollment_store.authenticate(
+                reg.node_id, reg.enrollment_credential
+            )
+        except NodeEnrollmentError as exc:
+            _raise_enrollment_http_error(exc)
+
     try:
         grant = state.node_sessions.register(
             reg.node_id,
+            enrollment_id=enrollment.enrollment_id if enrollment else None,
+            credential_version=enrollment.credential_version if enrollment else None,
             presented_token=request.headers.get("X-Node-Session"),
         )
     except DuplicateNodeSession as exc:
@@ -151,12 +314,20 @@ async def register_node(reg: NodeRegistration, request: Request):
     if model_tag not in caps:
         caps.append(model_tag)
     existing = nodes.get(reg.node_id) if grant.idempotent else None
-    lifetime = state.attempt_store.lifetime_contribution_summary(reg.node_id)
+    lifetime = _lifetime_summary(
+        reg.node_id,
+        enrollment.enrollment_id if enrollment else None,
+        grant.record.session_id,
+    )
     session_tasks = int((existing or {}).get("session_tasks_completed", 0))
     session_points = float((existing or {}).get("session_contribution_points", 0))
     session_metadata = grant.record.public_metadata()
     nodes[reg.node_id] = {
         "node_id": reg.node_id,
+        "enrollment_id": enrollment.enrollment_id if enrollment else None,
+        "credential_version": enrollment.credential_version if enrollment else None,
+        "enrollment_status": enrollment.status if enrollment else "unenrolled",
+        "enrolled": enrollment is not None,
         "model": reg.model,
         "platform": reg.platform,
         "machine": reg.machine,
@@ -185,12 +356,18 @@ async def register_node(reg: NodeRegistration, request: Request):
     return {
         "message": f"Welcome, {reg.node_id}. You are node #{len(nodes)} in the network.",
         "node_id": reg.node_id,
+        "enrollment_id": enrollment.enrollment_id if enrollment else None,
+        "credential_version": enrollment.credential_version if enrollment else None,
+        "enrolled": enrollment is not None,
+        "enrollment_action": effective_action,
+        "enrollment_idempotent": enrollment_idempotent,
         "capabilities": caps,
         "session_id": grant.record.session_id,
         "session_token": grant.session_token,
         "session_expires_at": session_metadata["session_expires_at"],
         "session_started_at": session_metadata["session_started_at"],
-        "idempotent": grant.idempotent,
+        "idempotent": grant.idempotent or enrollment_idempotent,
+        "session_idempotent": grant.idempotent,
         **lifetime,
     }
 
@@ -205,18 +382,65 @@ async def list_nodes():
     pool = state.verification_pool
     out = []
     for n in nodes.values():
-        lifetime = state.attempt_store.lifetime_contribution_summary(n["node_id"])
+        lifetime = _lifetime_summary(
+            n["node_id"], n.get("enrollment_id"), n.get("session_id")
+        )
         n.update(lifetime)
-        rep = pool.reputation(n["node_id"]).as_dict()
+        identity_key = _verification_key(n["node_id"])
+        rep = (
+            pool.reputation(
+                identity_key,
+                node_id=n["node_id"],
+                enrollment_id=n.get("enrollment_id"),
+            ).as_dict()
+            if identity_key is not None
+            else {}
+        )
         out.append({**n, **{k: v for k, v in rep.items() if k != "node_id"}})
     return {"nodes": out, "count": len(nodes), "verify_rate": pool.verify_rate}
+
+
+@router.get("/v1/operator/node-enrollments")
+async def list_node_enrollments(request: Request):
+    """Protected secret-free durable enrollment and live-session inventory."""
+
+    require_viewer(request)
+    out = []
+    records = state.enrollment_store.list()
+    for enrollment in records:
+        node = nodes.get(enrollment.node_id)
+        if node is not None and node.get("enrollment_id") != enrollment.enrollment_id:
+            node = None
+        session = state.node_sessions.current(enrollment.node_id)
+        if session is not None and session.enrollment_id != enrollment.enrollment_id:
+            session = None
+        session_metadata = session.public_metadata() if session is not None else {}
+        lifetime = _lifetime_summary(enrollment.node_id, enrollment.enrollment_id)
+        out.append(
+            {
+                **enrollment.public_metadata(),
+                "live_session_present": session is not None,
+                "session_id": session_metadata.get("session_id"),
+                "session_started_at": session_metadata.get("session_started_at"),
+                "session_expires_at": session_metadata.get("session_expires_at"),
+                "last_seen": session_metadata.get("last_seen"),
+                "draining": bool(node and node.get("draining")),
+                "current_task": node.get("current_task") if node else None,
+                **lifetime,
+            }
+        )
+    return {
+        "enrollments": out,
+        "count": len(out),
+        "active_count": sum(item.status == "active" for item in records),
+        "revoked_count": sum(item.status == "revoked" for item in records),
+    }
 
 
 @router.post("/nodes/{node_id}/heartbeat")
 async def heartbeat_node(node_id: str, request: Request):
     """Refresh one registered worker session without polling for work."""
 
-    _check_node_auth(request)
     session_record = _check_node_session(request, node_id)
     if not state.touch_node(session_record.node_id):
         raise HTTPException(
@@ -230,11 +454,17 @@ async def heartbeat_node(node_id: str, request: Request):
         )
     node = nodes[session_record.node_id]
     node.update(
-        state.attempt_store.lifetime_contribution_summary(session_record.node_id)
+        _lifetime_summary(
+            session_record.node_id,
+            session_record.enrollment_id,
+            session_record.session_id,
+        )
     )
     return {
         "ok": True,
         "node_id": session_record.node_id,
+        "enrollment_id": session_record.enrollment_id,
+        "enrolled": session_record.enrollment_id is not None,
         "session_id": session_record.session_id,
         "session_tasks_completed": node.get("session_tasks_completed", 0),
         "session_contribution_points": node.get(
@@ -251,7 +481,6 @@ async def heartbeat_node(node_id: str, request: Request):
 async def drain_node(node_id: str, request: Request):
     """Stop handing new work to a session while allowing its current result."""
 
-    _check_node_auth(request)
     session_record = _check_node_session(request, node_id)
     if not state.touch_node(session_record.node_id):
         raise HTTPException(
@@ -267,11 +496,14 @@ async def drain_node(node_id: str, request: Request):
     state.waiting_nodes.pop(session_record.node_id, None)
     _emit("node_draining", {
         "node_id": session_record.node_id,
+        "enrollment_id": session_record.enrollment_id,
         "session_id": session_record.session_id,
     })
     return {
         "ok": True,
         "node_id": session_record.node_id,
+        "enrollment_id": session_record.enrollment_id,
+        "enrolled": session_record.enrollment_id is not None,
         "session_id": session_record.session_id,
         "draining": True,
         "current_task": nodes[session_record.node_id].get("current_task"),
@@ -288,7 +520,6 @@ async def next_task(node_id: str, request: Request):
 
     Returns 429 if the node is circuit-breaker blacklisted.
     """
-    _check_node_auth(request)
     session_record = _check_node_session(request, node_id)
     node_id = session_record.node_id
     if not state.touch_node(node_id):
@@ -355,6 +586,11 @@ async def next_task(node_id: str, request: Request):
                 # held in a long poll.  Recheck immediately before handout.
                 session_record = _check_node_session(request, node_id)
                 with state._task_queue_lock:
+                    # A returning registration may replace a live incarnation
+                    # after the pre-lock check. Reauthenticate under the same
+                    # lock used by replacement reclaim, so an old poll can
+                    # neither strand nor receive a newly issued attempt.
+                    session_record = _check_node_session(request, node_id)
                     # Another TestClient thread may have claimed it between the
                     # peek and this mutation. Recompute while holding the lock.
                     idx = _find_task()
@@ -363,6 +599,10 @@ async def next_task(node_id: str, request: Request):
                     task = task_queue.pop(idx)
                     task["assigned_to"] = node_id
                     task["assigned_session_id"] = session_record.session_id
+                    task["assigned_enrollment_id"] = session_record.enrollment_id
+                    task["assigned_credential_version"] = (
+                        session_record.credential_version
+                    )
                     task["assigned_at"] = time.time()
                     execution_deadline = task.get("execution_deadline_at")
                     if execution_deadline and task["assigned_at"] >= float(execution_deadline):
@@ -402,6 +642,10 @@ async def next_task(node_id: str, request: Request):
                             issued_at=task["assigned_at"],
                             lease_expires_at=task["lease_expires_at"],
                             assigned_session_id=session_record.session_id,
+                            assigned_enrollment_id=session_record.enrollment_id,
+                            assigned_credential_version=(
+                                session_record.credential_version
+                            ),
                         )
                     except Exception as exc:
                         # Never expose work unless its authority is durable.
@@ -412,6 +656,7 @@ async def next_task(node_id: str, request: Request):
                             {
                                 "task_id": task["task_id"],
                                 "node_id": node_id,
+                                "enrollment_id": session_record.enrollment_id,
                                 "phase": "attempt_issue",
                                 "error_type": type(exc).__name__,
                             },
@@ -427,6 +672,7 @@ async def next_task(node_id: str, request: Request):
                     task_inflight[task["task_id"]] = task
                     _emit("node_busy", {
                         "node_id": node_id,
+                        "enrollment_id": session_record.enrollment_id,
                         "task_id": task["task_id"],
                         "unit_id": task.get("execution_unit_id"),
                     })
@@ -436,6 +682,7 @@ async def next_task(node_id: str, request: Request):
                         "execution_id": task.get("execution_id"),
                         "unit_id": task.get("execution_unit_id"),
                         "node_id": node_id,
+                        "enrollment_id": session_record.enrollment_id,
                         "placement": "distributed",
                     })
                     return task
@@ -449,7 +696,14 @@ async def next_task(node_id: str, request: Request):
         state.waiting_nodes.pop(node_id, None)
 
 
-def _settle_and_publish(task_id: str, result: TaskResult, *, session_id: str):
+def _settle_and_publish(
+    task_id: str,
+    result: TaskResult,
+    *,
+    session_id: str,
+    enrollment_id: str | None,
+    credential_version: int | None,
+):
     """Serialize in-memory lifecycle changes around the SQLite transaction."""
     with state._task_queue_lock:
         pending = task_inflight.get(task_id)
@@ -470,6 +724,8 @@ def _settle_and_publish(task_id: str, result: TaskResult, *, session_id: str):
             execution_unit_id=result.execution_unit_id,
             execution_unit_kind=result.execution_unit_kind,
             session_id=session_id,
+            enrollment_id=enrollment_id,
+            credential_version=credential_version,
         )
         receipt = outcome.receipt
         state.accepted_result_broker.publish(receipt)
@@ -491,7 +747,6 @@ def _settle_and_publish(task_id: str, result: TaskResult, *, session_id: str):
 @router.post("/tasks/{task_id}/result")
 async def submit_result(task_id: str, result: TaskResult, request: Request):
     """Settle a result only through its active server-issued attempt."""
-    _check_node_auth(request)
     session_record = _check_node_session(request, result.node_id)
     if not state.touch_node(session_record.node_id):
         raise HTTPException(
@@ -506,7 +761,11 @@ async def submit_result(task_id: str, result: TaskResult, request: Request):
     pending = task_inflight.get(task_id)
     try:
         pending, outcome, _task, trace_id = _settle_and_publish(
-            task_id, result, session_id=session_record.session_id
+            task_id,
+            result,
+            session_id=session_record.session_id,
+            enrollment_id=session_record.enrollment_id,
+            credential_version=session_record.credential_version,
         )
     except WorkerPayloadLimitExceeded as exc:
         try:
@@ -514,6 +773,7 @@ async def submit_result(task_id: str, result: TaskResult, request: Request):
                 task_id=task_id,
                 claimed_attempt_id=result.attempt_id,
                 claimed_node_id=result.node_id,
+                claimed_enrollment_id=session_record.enrollment_id,
                 claimed_execution_id=result.execution_id,
                 claimed_unit_id=result.execution_unit_id,
                 claimed_unit_kind=result.execution_unit_kind,
@@ -527,6 +787,7 @@ async def submit_result(task_id: str, result: TaskResult, request: Request):
         _emit("result_rejected", {
             "task_id": task_id,
             "claimed_by": result.node_id,
+            "enrollment_id": session_record.enrollment_id,
             "assigned_to": pending.get("assigned_to") if pending else None,
             "reason": exc.reason,
             "attempt_state": exc.state,
@@ -552,6 +813,7 @@ async def submit_result(task_id: str, result: TaskResult, request: Request):
                 task_id=task_id,
                 claimed_attempt_id=result.attempt_id,
                 claimed_node_id=result.node_id,
+                claimed_enrollment_id=session_record.enrollment_id,
                 claimed_execution_id=result.execution_id,
                 claimed_unit_id=result.execution_unit_id,
                 claimed_unit_kind=result.execution_unit_kind,
@@ -565,6 +827,7 @@ async def submit_result(task_id: str, result: TaskResult, request: Request):
         _emit("result_rejected", {
             "task_id": task_id,
             "claimed_by": result.node_id,
+            "enrollment_id": session_record.enrollment_id,
             "assigned_to": pending.get("assigned_to") if pending else None,
             "reason": exc.reason,
             "attempt_state": exc.state,
@@ -590,29 +853,60 @@ async def submit_result(task_id: str, result: TaskResult, request: Request):
             node_blacklist[node_id] = time.time() + state._BLACKLIST_DURATION
             _emit("node_blacklisted", {
                 "node_id": node_id,
+                "enrollment_id": receipt.assigned_enrollment_id,
                 "failure_count": count,
                 "blacklist_seconds": state._BLACKLIST_DURATION,
             })
     else:
         node_failure_count[node_id] = 0
 
-    state.touch_node(node_id)
-    node_record = nodes[node_id]
-    node_record["session_tasks_completed"] = int(
-        node_record.get("session_tasks_completed", 0)
-    ) + 1
-    node_record["tasks_completed"] = node_record["session_tasks_completed"]
-    node_record["current_task"] = None
     credits_earned = int(outcome.response.get("credits_earned", 0))
-    if credits_earned:
-        node_record["session_contribution_points"] = (
-            float(node_record.get("session_contribution_points", 0))
-            + credits_earned
+    try:
+        node_record = nodes.get(node_id)
+        if (
+            node_record is not None
+            and node_record.get("session_id") == session_record.session_id
+            and node_record.get("enrollment_id") == receipt.assigned_enrollment_id
+            and node_record.get("credential_version")
+            == session_record.credential_version
+        ):
+            # This is only a process-local compatibility mirror. A concurrent
+            # revoke, rotation, or returning registration may have removed or
+            # replaced the incarnation after durable settlement; never turn
+            # that accepted commit into a 500 or credit the replacement session.
+            node_record["session_tasks_completed"] = int(
+                node_record.get("session_tasks_completed", 0)
+            ) + 1
+            node_record["tasks_completed"] = node_record[
+                "session_tasks_completed"
+            ]
+            node_record["current_task"] = None
+            if credits_earned:
+                node_record["session_contribution_points"] = (
+                    float(node_record.get("session_contribution_points", 0))
+                    + credits_earned
+                )
+            node_record["credits_earned"] = node_record.get(
+                "session_contribution_points", 0
+            )
+            node_record.update(
+                _lifetime_summary(
+                    node_id,
+                    receipt.assigned_enrollment_id,
+                    session_record.session_id,
+                )
+            )
+    except Exception as exc:
+        _safe_diagnostic_emit(
+            "post_settlement_mirror_failed",
+            {
+                "task_id": task_id,
+                "node_id": node_id,
+                "enrollment_id": receipt.assigned_enrollment_id,
+                "phase": "session_counter_mirror",
+                "error_type": type(exc).__name__,
+            },
         )
-    node_record["credits_earned"] = node_record.get(
-        "session_contribution_points", 0
-    )
-    node_record.update(state.attempt_store.lifetime_contribution_summary(node_id))
     try:
         sync_compatibility_ledger()
     except Exception:
@@ -622,6 +916,7 @@ async def submit_result(task_id: str, result: TaskResult, request: Request):
 
     _emit("node_idle", {
         "node_id": node_id,
+        "enrollment_id": getattr(receipt, "assigned_enrollment_id", None),
         "credits_earned": credits_earned,
         "contribution_basis": "compute_contribution" if credits_earned else None,
         "points_are_monetary": False,
@@ -636,6 +931,7 @@ async def submit_result(task_id: str, result: TaskResult, request: Request):
         "unit_id": receipt.execution_unit_id,
         "unit_kind": receipt.execution_unit_kind,
         "node_id": node_id,
+        "enrollment_id": getattr(receipt, "assigned_enrollment_id", None),
         "status": "completed" if success else "failed",
         "placement": "distributed",
     })
@@ -662,7 +958,6 @@ async def stream_task_tokens(task_id: str, batch: TokenBatch, request: Request):
     building. A node emitting tokens for a task is the strongest liveness
     signal there is.
     """
-    _check_node_auth(request)
     session_record = _check_node_session(request, batch.node_id)
     if session_record.node_id not in nodes:
         raise HTTPException(
@@ -687,6 +982,8 @@ async def stream_task_tokens(task_id: str, batch: TokenBatch, request: Request):
             execution_unit_id=batch.execution_unit_id,
             execution_unit_kind=batch.execution_unit_kind,
             session_id=session_record.session_id,
+            enrollment_id=session_record.enrollment_id,
+            credential_version=session_record.credential_version,
         )
     except AttemptRejected as exc:
         raise HTTPException(
@@ -702,6 +999,7 @@ async def stream_task_tokens(task_id: str, batch: TokenBatch, request: Request):
                 "task_id": task_id,
                 "attempt_id": stream_outcome.attempt_id,
                 "node_id": batch.node_id,
+                "enrollment_id": session_record.enrollment_id,
                 "error": stream_outcome.error_code,
                 "detail": stream_outcome.detail,
                 "max_output_bytes": stream_outcome.max_output_bytes,
@@ -732,5 +1030,6 @@ async def stream_task_tokens(task_id: str, batch: TokenBatch, request: Request):
         "trace_id": task.get("trace_id", "") if task else "",
         "source": "node",
         "node_id": batch.node_id,
+        "enrollment_id": session_record.enrollment_id,
     })
     return {"ok": True}

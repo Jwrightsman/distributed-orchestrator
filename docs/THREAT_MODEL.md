@@ -1,6 +1,6 @@
 # Threat model
 
-_Implemented state on August 23, 2026. This describes current controls and
+_Implemented state on August 25, 2026. This describes current controls and
 current gaps, not the intended end state._
 
 **One-sentence version:** Mycelium is suitable for a small private trusted
@@ -11,9 +11,11 @@ Trusted-alpha hardening requires a worker result to settle a server-issued
 durable, session-bound attempt before execution can consume it; protects
 sensitive read routes in deployment mode; seals role-scoped artifact manifests;
 enforces one coordinator per state directory; commits lifecycle truth before
-publication; and deduplicates requester-scoped canonical retries. It did not
-add per-node cryptographic identity, TLS, sandboxing, multi-user accounts,
-durable scheduling, or a hostile-host trust boundary.
+publication; deduplicates requester-scoped canonical retries; and adds durable
+per-node bearer enrollment with independent revocation and attempt attribution.
+It did not add public-key/physical-machine identity, TLS, sandboxing, multi-user accounts,
+durable scheduling, attestation, Sybil resistance, or a hostile-host trust
+boundary.
 
 ## 1. Assets
 
@@ -22,8 +24,9 @@ durable scheduling, or a hostile-host trust boundary.
 | Task and project text | execution/job SQLite, project files, coordinator memory, assigned worker prompts | disclosure to an unauthorized reader or worker operator |
 | Generated output and artifacts | SQLite previews/receipts, `output/`, `execution_artifacts/` | disclosure, tampering, retention beyond intent, or unsafe code execution by an operator |
 | Attempt authority | SQLite attempt rows and accepted receipts | an unbound, late, or duplicate result entering execution or earning points |
-| Node sessions | process memory plus session identifiers/digests attached to node and attempt state | label collision, stale session use, bearer-token disclosure, or restart invalidation |
-| Viewer, pitch, and node secrets | local config/environment and HTTP headers | private reads, unwanted compute use, or worker admission |
+| Node enrollments | SQLite identity/status/credential digest plus worker-owned plaintext identity file | credential theft, label takeover, failed revocation, or false attribution |
+| Node sessions | process memory plus session identifiers/digests attached to node and attempt state | stale incarnation use, bearer-token disclosure, or restart invalidation |
+| Viewer, pitch, and admission secrets | local config/environment and HTTP headers | private reads, unwanted compute use, or initial worker admission |
 | Canonical submission identity | digest-only SQLite mapping to an execution | duplicate execution after retry, key conflict, or a mapping whose execution is missing |
 | Artifact integrity baseline | sealed manifest rows/hash in SQLite plus files on disk | ordinary file drift, database/file loss, or host-level joint tampering |
 | Contribution history | SQLite plus `ledger.json` compatibility projection | misattribution or misleading claims about correctness/value |
@@ -55,9 +58,12 @@ Requester ── pitch_key + optional scoped retry key ──▶ ORCHESTRATOR
 - Requesters, viewers, workers, and share holders are outside it.
 - The three configured static secrets represent different authority. Possessing
   one must not imply possessing the other two.
-- Every worker holding `node_secret` shares the same admission credential.
-  A server session protects one current normalized label from accidental/live
-  collision, but `node_id` is still not a cryptographic machine identity.
+- Every bootstrap worker may initially receive the same `node_secret`, but that
+  secret authorizes creation only. Each durable enrollment has a different
+  worker-generated bearer credential and can be revoked independently.
+- `enrollment_id` is stable attribution inside this coordinator. A server
+  session identifies one live incarnation. `node_id` remains a display label;
+  none of these prove a physical machine or unique human operator.
 - A share token is a bearer capability. Anyone who receives it can use its
   exact redacted scope until expiry or revocation.
 
@@ -68,9 +74,10 @@ Requester ── pitch_key + optional scoped retry key ──▶ ORCHESTRATOR
 | `viewer_key` | private HTTP and WebSocket access via header, Bearer token, or signed expiring HttpOnly cookie | users, roles, per-execution ACLs, TLS |
 | `pitch_key` | canonical and compatibility task submission when configured | private reads or public-share revocation |
 | Scoped canonical idempotency | one queued execution per requester-scope/key/canonical-request mapping, with digest-only storage | user identity, workflow resumption, or exactly-once external side effects |
-| `node_secret` | instance-wide permission to register and enter the worker protocol | individual node identity or revocation |
-| Digest-only node sessions | one current normalized node claimant, stale reclaim, session-bound worker calls and attempts | durable identity, protection after restart, or stopping another secret holder from claiming a free label |
-| Server-owned attempts | active lease and exact task/execution/unit/kind/node/session/version/nonce/output-cap binding | truthfulness or quality of the returned model output |
+| `node_secret` | instance-wide permission to bootstrap a previously unused enrollment | returning identity, label replacement, or normal enrolled operations |
+| Digest-only enrollment credentials | durable per-node attribution, returning registration, independent revocation/rotation | physical-machine identity, attestation, or Sybil resistance |
+| Digest-only node sessions | one live enrollment incarnation, stale reclaim, and restart invalidation | durable scheduling or identity by themselves |
+| Server-owned attempts | active lease and exact task/execution/unit/kind/enrollment/node/session/version/nonce/output-cap binding | truthfulness or quality of the returned model output |
 | Atomic settlement | one accepted attempt transition, receipt, response, and compute contribution; durable exact-replay state across database reopen | durable scheduling, worker resumption, or reuse of a restart-invalidated node session |
 | Worker I/O bounds | per-attempt result/stream byte cap, error cap, cumulative stream batch/rate limits, bounded fanout | semantic safety of allowed output or transport-level denial of service |
 | Result quarantine | 500 bounded diagnostics with hash and at most 4 KiB preview outside operational execution | malware analysis or a complete forensic archive |
@@ -113,8 +120,9 @@ When `viewer_key` is configured, the deliberate unauthenticated surface is:
 
 Pitch and worker protocol routes are exempt from the viewer gate because they
 use their own credentials. Poll, result/stream/token, heartbeat, and drain also
-require the current node session. If `pitch_key` or `node_secret` is empty in
-local mode, that separate static control is open.
+require the current node session. In local mode an empty `pitch_key` opens pitch
+admission, while `node_enrollment_mode=compat` plus an empty `node_secret` opens
+only the explicitly unenrolled legacy worker path.
 
 Canonical `Idempotency-Key` does not bypass pitch authentication, canonical
 validation, or rate limiting. Configured pitch-key holders share one requester
@@ -135,11 +143,13 @@ whether private routes are protected. It warns when they are not.
 
 ### Fail-open local-development mode
 
-All three secrets default to empty in `deployment_mode=local` for compatibility.
-Most importantly, when `viewer_key` is empty the viewer middleware allows
-private routes. Startup logs and `/health` explicitly say so. Anyone who can
-reach that deployment can then read tasks, results, projects, events, node
-detail, and artifacts.
+All three deployment secrets default to empty in `deployment_mode=local` for
+compatibility, and `node_enrollment_mode=compat` may admit an explicitly
+unenrolled legacy session. Most importantly, when `viewer_key` is empty the
+viewer middleware allows private routes. Startup logs and `/health` explicitly
+say so. Anyone who can reach that deployment can then read tasks, results,
+projects, events, node detail, and artifacts. A compatibility session is not
+durable identity and cannot claim a label already in the enrollment table.
 
 In this mode, keyed canonical submissions are scoped to the direct ASGI peer
 host. NAT can merge callers, address changes can split one caller, and proxies
@@ -148,11 +158,13 @@ attribution, or security policy.
 
 `deployment_mode=trusted_alpha` changes this posture to fail closed: preflight
 and startup require independent 32+-character viewer, pitch, and node secrets,
-coherent HTTPS/cookie intent, safe config/state paths, and explicit public-pitch
-acknowledgement when that endpoint is enabled. `/health` exposes a safe
-protection bit; viewer-authorized `/v1/operator/health` exposes mode, instance,
-lock, and preflight state. Passing preflight does not supply TLS or secure the
-host.
+`node_enrollment_mode=required`, coherent HTTPS/cookie intent, a declared TLS
+or private authenticated overlay transport, safe config/state paths, and
+explicit public-pitch acknowledgement when that endpoint is enabled. `/health`
+exposes safe protection/enrollment bits; viewer-authorized operator endpoints
+expose mode, process lock, and secret-free enrollment state. A private-overlay
+configuration value is an operator assertion: preflight cannot inspect overlay
+ACLs or supply transport security.
 
 An operator must not bind such a configuration to an untrusted network. Set all
 three secrets as appropriate, put TLS in front, and prefer a private network
@@ -168,9 +180,10 @@ server-issued attempt. The server record, not the submitted payload, determines
 whether contract-v1 binding is mandatory.
 
 For v1, omission of contract version, attempt id, nonce, execution id, unit id,
-or unit kind is a rejection. The assigned node and session, URL task, lease,
-state, output cap, and all bindings must match. A worker cannot downgrade
-validation by omitting fields or by reconnecting under a new session.
+or unit kind is a rejection. The assigned enrollment, node, session,
+credential version, URL task, lease, state, output cap, and all applicable
+bindings must match. A worker cannot downgrade validation by omitting fields or
+by reconnecting under a different enrollment or session.
 
 Settlement uses a SQLite write transaction and uniqueness constraints. The
 active attempt becomes settled, an immutable accepted receipt is inserted, and
@@ -193,15 +206,20 @@ low-quality text. Attempt binding proves which active lease admitted a byte
 sequence; it does not prove who physically controlled the node or whether the
 bytes satisfy the user's intent.
 
-Registration returns a random session token once and retains only its digest.
-Exact-token registration is idempotent; a different live claimant for the same
-normalized ID receives a conflict; stale/expired sessions can be reclaimed; and
-restart invalidates all sessions. This reduces accidental/colliding label use.
-The shared node secret still permits any holder to register another available
-`node_id` and create many claimed identities. Attempt/session binding prevents
-settlement under the wrong active assignment, but not admission-level Sybil
-behavior. Per-node keypairs, individual revocation, rotation, and signed result
-envelopes remain prerequisites for a less-trusted network.
+Bootstrap consumes shared admission plus a worker-generated high-entropy
+credential and creates an immutable enrollment. Returning registration proves
+that per-node bearer without the shared secret. The coordinator stores only a
+domain-separated digest; the worker stores plaintext in a private identity
+file. Registration then returns a random session token once and retains only
+its digest. Restart invalidates sessions, not enrollments.
+
+Revocation and rotation are independently durable. Each authenticated operation
+checks status/version, and settlement checks active enrollment inside its write
+transaction. This prevents one enrolled session from settling another
+enrollment's attempt and prevents shared admission from replacing an existing
+label. It still does not prevent an authorized bootstrap holder from creating
+many unused-label enrollments. Public keys, signed envelopes, attestation, and
+Sybil defenses remain prerequisites for a less-trusted network.
 
 ## 6. What a malicious admitted worker can do
 
@@ -212,7 +230,7 @@ It can:
 - return arbitrary text that passes structural checks while being behaviorally
   wrong;
 - hold work until its lease expires and waste capacity;
-- register many available node labels while holding the shared secret;
+- bootstrap many unused labels while holding the shared admission secret;
 - report misleading hardware/capability metadata;
 - send bounded but high-rate model text up to the enforced protocol limits;
 - consume operator time through repeated failures or plausible bad output.
@@ -222,7 +240,8 @@ It cannot, through the worker protocol alone:
 - settle a queued-but-unleased or inactive task;
 - downgrade a v1 attempt into legacy settlement;
 - settle with a missing or mismatched nonce, contract, execution, or unit;
-- replace a different live claimant for the same normalized node ID;
+- replace an existing or revoked enrollment with shared admission alone;
+- settle an attempt assigned to another enrollment;
 - exceed the assigned cumulative stream/output cap and still settle that output;
 - settle the same attempt twice with changed output;
 - turn a quarantined result into operational output or points;
@@ -369,10 +388,14 @@ request-count and concurrency cap reduce abuse; they do not eliminate it.
 
 ## 13. Remaining weaknesses
 
-- Shared static secrets with instance-wide authority.
-- No per-node cryptographic identity, rotation, or individual revocation.
-- Node sessions are process-local bearer credentials, not durable identities.
-- No built-in HTTPS; bearer secrets and content require external TLS.
+- Shared static secrets still provide instance-wide bootstrap, pitch, or viewer
+  authority within their separate roles.
+- Enrollment uses a symmetric bearer credential, not public-key identity or a
+  signature, and identity-file recovery is an operator responsibility.
+- Node sessions are process-local incarnation credentials, not durable
+  scheduling state.
+- No built-in HTTPS; enrollment/session secrets and content require external
+  TLS or a private authenticated overlay.
 - No generated-code or model-executor sandbox.
 - `network_policy` is not enforced.
 - Process-local scheduler, node sessions, connected-node state, and breaker state.
@@ -395,14 +418,15 @@ request-count and concurrency cap reduce abuse; they do not eliminate it.
 
 Run Mycelium on hardware you control, or among a small invited group whose node
 operators you trust. Use `deployment_mode=trusted_alpha`, run preflight, set
-independent strong `node_secret`, `pitch_key`, and `viewer_key` values, and allow
-exactly one process to own the state directory before binding beyond localhost.
-Use TLS or a private overlay network; configure access logs to redact share
-capabilities and never capture idempotency or static/session/attempt
-credentials; keep keyless pitching off unless you explicitly acknowledge and
-accept its compute risk; take and verify backups; review generated code; rotate
-a viewer key after suspected disclosure; and treat shared prompts as disclosed
-to every worker that receives them.
+independent strong `node_secret`, `pitch_key`, and `viewer_key` values, require
+durable enrollment, and allow exactly one process to own the state directory
+before binding beyond localhost. Use TLS or a private authenticated overlay;
+configure access logs to redact share capabilities and never capture
+idempotency, admission, enrollment, session, or attempt credentials; keep
+keyless pitching off unless you explicitly acknowledge and accept its compute
+risk; take and verify backups; protect worker identity files; review generated
+code; rotate or revoke the narrowest affected authority after disclosure; and
+treat shared prompts as disclosed to every worker that receives them.
 
 Do not describe this implementation as trustless, permissionless,
 confidential-compute, sandboxed, behaviorally verified, or safe for anonymous

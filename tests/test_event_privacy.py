@@ -67,6 +67,44 @@ async def test_future_event_writes_cache_and_broadcast_are_sanitized(monkeypatch
         assert all(sentinel not in surface for surface in serialized_surfaces)
 
 
+def test_operational_events_preserve_nonsecret_enrollment_attribution():
+    enrollment_a = "11111111111141118111111111111111"
+    enrollment_b = "22222222222242228222222222222222"
+
+    assert state._sanitize_event_payload(
+        "node_blacklisted",
+        {
+            "node_id": "worker-a",
+            "enrollment_id": enrollment_a,
+            "failure_count": 3,
+            "blacklist_seconds": 300,
+            "credential": "must-not-survive",
+        },
+    ) == {
+        "node_id": "worker-a",
+        "enrollment_id": enrollment_a,
+        "failure_count": 3,
+        "blacklist_seconds": 300,
+    }
+    assert state._sanitize_event_payload(
+        "verification",
+        {
+            "job_id": "job-1",
+            "agreed": True,
+            "nodes": ["worker-a", "worker-b"],
+            "enrollment_id_a": enrollment_a,
+            "enrollment_id_b": enrollment_b,
+            "reason": "free-form comparison detail",
+        },
+    ) == {
+        "job_id": "job-1",
+        "agreed": True,
+        "nodes": ["worker-a", "worker-b"],
+        "enrollment_id_a": enrollment_a,
+        "enrollment_id_b": enrollment_b,
+    }
+
+
 @pytest.mark.asyncio
 async def test_generated_tokens_remain_live_only_and_are_never_replayed(monkeypatch):
     prompt_sentinel = "TOKEN_EVENT_PRIVATE_PROMPT_d614"

@@ -91,6 +91,7 @@ async def test_dag_distributed_uses_the_same_strategy_and_full_worker_dispatch(t
             output="remote unit output",
             placement="distributed",
             node_id="worker",
+            enrollment_id="enrollment-worker",
             attempt_count=1,
         )
 
@@ -112,6 +113,7 @@ async def test_dag_distributed_uses_the_same_strategy_and_full_worker_dispatch(t
 
     assert run.result.placement_selected == "distributed"
     assert run.result.participating_nodes == ["worker"]
+    assert run.result.execution_units[0].enrollment_id == "enrollment-worker"
     assert dispatched[0][0].kind == "dag_subtask"
     assert dispatched[0][1:] == ("dag", ("worker",))
 
@@ -363,6 +365,7 @@ async def test_distributed_ensemble_fans_out_complete_candidates_with_one_worker
             output=f"complete: {unit.prompt}",
             placement="distributed",
             node_id="only-worker",
+            enrollment_id="enrollment-only-worker",
             attempt_count=1,
         )
 
@@ -381,6 +384,9 @@ async def test_distributed_ensemble_fans_out_complete_candidates_with_one_worker
     assert all(unit.kind == "candidate" for unit in units)
     assert all("Build the whole artifact" in unit.prompt for unit in units)
     assert run.result.participating_nodes == ["only-worker"]
+    assert {
+        candidate.enrollment_id for candidate in run.result.candidates
+    } == {"enrollment-only-worker"}
     assert run.result.telemetry["candidate_count"] == 3
 
 

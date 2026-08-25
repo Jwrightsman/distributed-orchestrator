@@ -1,9 +1,10 @@
 """Process-local, server-issued sessions for admitted worker nodes.
 
-``node_secret`` admits a machine to the trusted-alpha worker network.  It is a
-shared credential and therefore cannot distinguish two workers that both know
-it.  This module adds a short-lived server-issued session that binds subsequent
-worker requests to one normalized node label.
+``node_secret`` authorizes initial durable enrollment in trusted alpha; it is
+not a worker identity. This module issues a short-lived session after durable
+enrollment authentication and binds it to the immutable enrollment, current
+credential version, and normalized display label. Local compatibility sessions
+remain explicitly unenrolled.
 
 Only a SHA-256 digest of the high-entropy session token is retained.  Sessions
 are intentionally process-local: a coordinator restart invalidates every token
@@ -19,7 +20,7 @@ import re
 import secrets
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 
@@ -84,10 +85,12 @@ def _iso_timestamp(timestamp: float) -> str:
 class NodeSessionRecord:
     node_id: str
     session_id: str
-    token_digest: str
+    token_digest: str = field(repr=False)
     session_started_at: float
     last_seen: float
     expires_at: float
+    enrollment_id: str | None = None
+    credential_version: int | None = None
 
     def public_metadata(self) -> dict[str, str | float]:
         """Return non-secret metadata safe for registration and node views."""
@@ -95,6 +98,8 @@ class NodeSessionRecord:
         return {
             "node_id": self.node_id,
             "session_id": self.session_id,
+            "enrollment_id": self.enrollment_id,
+            "credential_version": self.credential_version,
             "session_started_at": _iso_timestamp(self.session_started_at),
             "session_expires_at": _iso_timestamp(self.expires_at),
             "last_seen": self.last_seen,
@@ -104,7 +109,7 @@ class NodeSessionRecord:
 @dataclass(frozen=True)
 class NodeSessionGrant:
     record: NodeSessionRecord
-    session_token: str
+    session_token: str = field(repr=False)
     idempotent: bool
     replaced_session_id: str | None = None
 
@@ -140,25 +145,54 @@ class NodeSessionRegistry:
         self,
         node_id: str,
         *,
+        enrollment_id: str | None = None,
+        credential_version: int | None = None,
         presented_token: str | None = None,
         now: float | None = None,
     ) -> NodeSessionGrant:
         """Create, reclaim, or idempotently refresh one normalized claim.
 
-        A different claimant cannot replace a live, recently-seen session.  A
-        claim becomes reclaimable after either its absolute token expiry or the
-        documented node-staleness interval.  If the exact live token is
+        A different legacy claimant cannot replace a live, recently-seen
+        session. A caller already authenticated as the same durable enrollment
+        may replace its earlier process incarnation immediately, which makes a
+        lost bootstrap response or worker-process restart recoverable. A claim
+        otherwise becomes reclaimable after absolute expiry or the documented
+        staleness interval. If the exact live token and enrollment binding are
         presented, registration is idempotent and the server echoes that token;
         it never needs to retain the plaintext itself.
         """
 
         normalized = normalize_node_id(node_id)
+        normalized_enrollment = str(enrollment_id).strip().lower() if enrollment_id else None
+        if normalized_enrollment is None and credential_version is not None:
+            raise ValueError("an unenrolled session cannot have a credential version")
+        if normalized_enrollment is not None:
+            if len(normalized_enrollment) > 64:
+                raise ValueError("enrollment_id must be 64 characters or fewer")
+            try:
+                normalized_version = int(credential_version)  # type: ignore[arg-type]
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "an enrolled session requires a positive credential version"
+                ) from exc
+            if normalized_version < 1:
+                raise ValueError(
+                    "an enrolled session requires a positive credential version"
+                )
+        else:
+            normalized_version = None
         current_time = time.time() if now is None else float(now)
         with self._lock:
             existing = self._sessions.get(normalized)
+            binding_matches = bool(
+                existing is not None
+                and existing.enrollment_id == normalized_enrollment
+                and existing.credential_version == normalized_version
+            )
             if (
                 existing is not None
                 and current_time < existing.expires_at
+                and binding_matches
                 and self._token_matches(existing, presented_token)
             ):
                 existing.last_seen = current_time
@@ -173,7 +207,12 @@ class NodeSessionRegistry:
                 and current_time < existing.expires_at
                 and current_time - existing.last_seen <= self.stale_after_seconds
             )
-            if claim_is_active:
+            authorized_durable_replacement = bool(
+                existing is not None
+                and normalized_enrollment is not None
+                and existing.enrollment_id in (None, normalized_enrollment)
+            )
+            if claim_is_active and not authorized_durable_replacement:
                 raise DuplicateNodeSession(
                     f"node_id '{normalized}' already has an active session"
                 )
@@ -187,6 +226,8 @@ class NodeSessionRegistry:
                 session_started_at=current_time,
                 last_seen=current_time,
                 expires_at=current_time + self.session_ttl_seconds,
+                enrollment_id=normalized_enrollment,
+                credential_version=normalized_version,
             )
             self._sessions[normalized] = record
             return NodeSessionGrant(
@@ -252,6 +293,20 @@ class NodeSessionRegistry:
             return None
         with self._lock:
             return self._sessions.get(normalized)
+
+    def invalidate_enrollment(self, enrollment_id: str) -> list[NodeSessionRecord]:
+        """Invalidate every live session bound to one durable enrollment."""
+
+        normalized = str(enrollment_id or "").strip().lower()
+        if not normalized:
+            return []
+        removed: list[NodeSessionRecord] = []
+        with self._lock:
+            for node_id, record in list(self._sessions.items()):
+                if record.enrollment_id == normalized:
+                    removed.append(record)
+                    self._sessions.pop(node_id, None)
+        return removed
 
     def reset(self) -> None:
         """Invalidate every session, as happens on coordinator restart."""

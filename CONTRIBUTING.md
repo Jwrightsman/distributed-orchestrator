@@ -107,7 +107,8 @@ Do not open a public issue for anything exploitable. Email
 wrightsmanjett@gmail.com instead — [SECURITY.md](SECURITY.md) has the disclosure
 path and what response to expect.
 
-Note the honest trust model: worker nodes authenticate with a shared secret, so
-a node that authenticates can return whatever it likes. That is a known
-limitation of this phase rather than a vulnerability — see the README's
-Limitations section.
+Note the honest trust model: a shared secret admits initial enrollment, then
+each worker authenticates with its own revocable bearer credential and a
+short-lived session. An enrolled node can still return whatever it likes.
+That is a known limitation of this phase rather than a vulnerability — see the
+README's Limitations section.

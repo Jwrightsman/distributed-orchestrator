@@ -35,12 +35,13 @@ Treat each static credential as an instance-wide authority:
 - give `viewer_key` only to operators/readers who may see all private runs and
   administer artifacts and shares;
 - give `pitch_key` only to submitters allowed to spend instance compute; and
-- give `node_secret` only to owners of invited worker machines.
+- give `node_secret` only for an invited worker's initial enrollment bootstrap.
 
 Use a secret manager or an authenticated encrypted channel. Never send the
-entire config when one authority is sufficient. These are shared keys, so the
-coordinator cannot distinguish two holders of the same key or revoke only one
-holder. Record distribution outside Mycelium.
+entire config when one authority is sufficient. Viewer, pitch, and bootstrap
+authorities remain shared within their roles. After bootstrap, each stock
+worker has a distinct enrollment credential in its identity file; do not copy
+that file back into the coordinator config or reuse it for another node.
 
 ## 3. Viewer login
 
@@ -124,17 +125,32 @@ The machine owner must run the consent gate on the worker machine:
 python join.py "$BASE_URL" --secret NODE_SECRET
 ```
 
-Registration returns a normalized node ID and a one-time plaintext node
-session token. The coordinator stores only its SHA-256 digest; the worker keeps
-the token only in memory and sends `X-Node-Session` on polling, heartbeat,
-streaming, result, and drain calls. The stock worker automatically re-registers
-after coordinator restart, reconnect, expiry, or a machine-readable session
-rejection.
+On first join, the stock worker generates a high-entropy enrollment credential,
+writes it to its coordinator-scoped private identity file, and bootstraps with
+`node_secret`. Use `--identity-file PATH` to choose an explicit protected path;
+otherwise the worker uses the documented per-user Mycelium configuration
+directory and a filename derived from a hash of the normalized coordinator.
+Those directories are `%APPDATA%\Mycelium\nodes` on Windows,
+`~/Library/Application Support/Mycelium/nodes` on macOS, and
+`$XDG_CONFIG_HOME/mycelium/nodes` or `~/.config/mycelium/nodes` on Linux.
+`MYCELIUM_WORKER_CONFIG_DIR` overrides the configuration root. Use a coordinator
+origin only: paths, user information, queries, and fragments are rejected.
 
-A different live claimant for the same normalized node ID receives 409. A
-stale/expired session can be reclaimed, after which the old session and attempt
-path are rejected. This prevents accidental label collision; it does not prove
-physical machine identity because `node_secret` remains shared admission.
+Registration returns the immutable enrollment ID plus a one-time plaintext
+session token. The coordinator stores only domain-separated enrollment and
+session-token digests. The worker sends only `X-Node-Session` on normal polling,
+heartbeat, streaming, result, and drain calls. After restart/reconnect it uses
+the identity-file credential, not `node_secret`, to obtain a new session for
+the same enrollment.
+
+Protect and back up the worker identity file separately. POSIX mode must be
+`0600`; a malformed, wrong-coordinator, wrong-label, or dangerously permissive
+file fails closed. Windows file protection is best effort through the current
+user account/ACLs and must be checked by the worker operator. Enrollment is
+durable attribution, not proof of a physical machine or Sybil resistance.
+The stock worker ignores ambient HTTP(S) proxy variables to keep these bearers
+out of inherited proxies; provide direct private-overlay or reviewed TLS
+reachability.
 
 ## 6. Drain or stop a worker
 
@@ -143,7 +159,6 @@ while allowing current work to finish:
 
 ```bash
 curl -fsS -X POST "$BASE_URL/nodes/NODE_ID/drain" \
-  -H 'X-Node-Secret: NODE_SECRET' \
   -H 'X-Node-Session: NODE_SESSION_TOKEN'
 ```
 
@@ -162,11 +177,13 @@ curl -fsS "$BASE_URL/health"
 curl -fsS "$BASE_URL/status.json"
 ```
 
-A trusted-alpha deployment is ready only when `/health` reports `status: ok`
-and `private_routes_protected: true`. Private process identity:
+A trusted-alpha deployment is ready only when `/health` reports `status: ok`,
+`private_routes_protected: true`, and `node_enrollment_required: true`. Private
+process and enrollment views:
 
 ```bash
 curl -fsS -b viewer.cookies "$BASE_URL/v1/operator/health"
+curl -fsS -b viewer.cookies "$BASE_URL/v1/operator/node-enrollments"
 ```
 
 It should report `single_coordinator_lock: true`, the expected mode, and one
@@ -208,14 +225,38 @@ used for that authority. Effects:
 
 - rotating `viewer_key` invalidates every viewer cookie;
 - rotating `pitch_key` rejects future submissions using the old value; and
-- rotating `node_secret` blocks old admission credentials. Restart also
-  invalidates all process-local node sessions, so workers need the new secret
-  to re-register.
+- rotating `node_secret` blocks old *bootstrap* admission. Already enrolled
+  workers continue returning with their individual credentials.
 
 Restart interrupts queued/running executions and active attempts. Schedule
-node-secret rotation during a drain window. Because the keys are shared,
-selective holder revocation requires rotating and redistributing the whole
-authority.
+shared-authority rotation during an appropriate maintenance window.
+
+Rotate or revoke one enrollment without touching other workers:
+
+```bash
+python scripts/node_enrollment_admin.py --state-dir data list
+python scripts/node_enrollment_admin.py --state-dir data revoke ENROLLMENT_ID \
+  --reason "operator offboarded"
+python scripts/node_enrollment_admin.py --state-dir data rotate ENROLLMENT_ID \
+  --coordinator "$BASE_URL" \
+  --identity-output /secure/transfer/unused-node-identity.json
+```
+
+The command never prints the new credential and refuses an existing output by
+default. For planned rotation, drain and stop the worker first. Deliver the
+replacement identity file through an authenticated secret channel, replace the
+worker's coordinator-scoped file, restart it, and verify that the same
+enrollment ID returns at the incremented credential version. Remove the
+transfer copy afterward.
+
+If the command says the commit was not confirmed, retain the prepared output
+and rerun the exact command with `--resume-existing` to converge on the same
+candidate. If a committed output is lost, use a different unused output path
+and rotate again; the database cannot recover plaintext. Rotation/revocation is
+observed on the enrollment's next authenticated operation. A 30-second janitor
+check is the nominal maximum for an otherwise idle live coordinator, subject
+to ordinary scheduler delay and durable-store availability; failed checks are
+diagnosed and retried. Active leases are reclaimed safely after invalidation.
 
 ## 9. Back up
 
@@ -230,14 +271,18 @@ python scripts/backup.py \
 
 The versioned ZIP includes a consistent `events.db` snapshot, config, projects,
 output, execution artifacts, compatibility ledger when present, build metadata,
-and a SHA-256 index. The tool does not print configuration values. Store the ZIP
-as sensitive data: it contains private prompts/results, artifacts, and static
-credentials. Copy it off-host and test restore periodically.
+and a SHA-256 index. Enrollment IDs, digests, revocation, attribution, and
+rotation version are in SQLite. The tool does not print configuration values.
+Store the ZIP as sensitive data: it contains private prompts/results, artifacts,
+static credentials, and authentication digests. Copy it off-host and test
+restore periodically.
 
 Not backed up because it is process-local: pending queue entries, dispatcher
 waits, in-flight coroutine state, connected-node sessions, and plaintext node
-session tokens. The database records interrupted work, but backup cannot turn
-that work into resumable scheduling state.
+session tokens. Worker identity files and plaintext enrollment credentials are
+also not coordinator state; back them up separately on each worker. The
+database records interrupted work, but backup cannot turn that work into
+resumable scheduling state.
 
 ## 10. Restore
 
@@ -263,7 +308,17 @@ coordinator is stopped.
 
 Stale SQLite `-wal`, `-shm`, and journal sidecars are removed during a
 successful replacement. Restored process-local queues/sessions do not exist;
-workers re-register and interrupted work must be retried as a new execution.
+durable enrollment IDs/revocations remain, workers authenticate for new
+sessions, and interrupted work must be retried as a new execution.
+
+The snapshot is the authority as of its capture time: only revocations and
+rotations inside it remain. An older restore can re-enable a worker revoked
+later, restore an older credential digest or shared `node_secret`, leave current
+worker identity files at incompatible versions, and restore a
+`private_overlay=true` assertion that is false on the new host. Before reopening
+worker access, reconcile all enrollment changes since the snapshot, revoke or
+rotate as needed, distribute matching identity files, validate the current
+overlay/TLS controls, and rerun preflight.
 
 ## 11. Update
 

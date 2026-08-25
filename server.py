@@ -25,6 +25,8 @@ from contextlib import asynccontextmanager, suppress
 from typing import Mapping, Sequence
 
 from fastapi import FastAPI
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 import routes_events
@@ -164,6 +166,24 @@ async def _lifespan(app: FastAPI):
 
 app = FastAPI(title="Mycelium", version="0.3.0", lifespan=_lifespan)
 app.add_middleware(ViewerAccessMiddleware)
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_exception_handler(_request, exc):
+    """Return useful validation structure without echoing request-body secrets."""
+
+    errors = []
+    for error in exc.errors():
+        cleaned = dict(error)
+        # Pydantic includes the rejected raw value by default. Request models
+        # carry prompts, output, attempt nonces, and enrollment credentials, so
+        # no validation response should reflect any raw input value.
+        cleaned.pop("input", None)
+        errors.append(cleaned)
+    return JSONResponse(
+        status_code=422,
+        content={"detail": jsonable_encoder(errors)},
+    )
 
 
 @app.get("/v1/operator/health")

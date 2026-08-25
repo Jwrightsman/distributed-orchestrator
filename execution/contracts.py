@@ -356,6 +356,7 @@ class ExecutionUnitSummaryV1(ProtocolModel):
     status: Literal["queued", "running", "completed", "failed", "cancelled"] = "queued"
     placement: SelectedPlacementV1 | None = None
     node_id: str | None = Field(default=None, max_length=128)
+    enrollment_id: str | None = Field(default=None, max_length=64)
     attempt_count: int = Field(default=0, ge=0, le=20)
     duration_ms: int = Field(default=0, ge=0)
     fallback_reason: str | None = Field(default=None, max_length=500)
@@ -370,6 +371,7 @@ class CandidateSummaryV1(ProtocolModel):
     error: str | None = Field(default=None, max_length=500)
     placement: SelectedPlacementV1 | None = None
     node_id: str | None = Field(default=None, max_length=128)
+    enrollment_id: str | None = Field(default=None, max_length=64)
     generation_duration_ms: int = Field(default=0, ge=0)
     validation_duration_ms: int = Field(default=0, ge=0)
     validation: list[ValidationEvidenceV1] = Field(default_factory=list, max_length=16)

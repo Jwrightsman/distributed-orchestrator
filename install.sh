@@ -3,16 +3,24 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/Jwrightsman/distributed-orchestrator/master/install.sh | bash -s -- http://ORCHESTRATOR_IP:8000
 #
-# Omit the URL to auto-discover an orchestrator on your LAN.
-# Pass "--secret VALUE" after the URL if the orchestrator requires node
-# admission. Use a private overlay or TLS URL; the shared node secret grants
-# instance-wide worker admission and should travel through a secure channel.
+# An explicit URL is required so credentials are never sent to an
+# unauthenticated LAN-discovery responder. Pass "--secret VALUE" after the URL
+# for first enrollment if the orchestrator
+# requires bootstrap admission. Use a private overlay or TLS URL. The stock
+# worker stores its own credential in a private coordinator-hashed identity file
+# and does not need the shared bootstrap secret when returning.
 #
 # What it does: checks Python + Ollama (installs Ollama on Linux), downloads
 # the repo to ~/distributed-orchestrator, installs two Python packages
 # (httpx, rich), then runs join.py — which pulls the model and starts working.
 
 set -euo pipefail
+
+if [ "$#" -lt 1 ] || [[ "$1" == -* ]]; then
+  echo "An explicit coordinator origin is required for durable enrollment."
+  echo "Use: install.sh https://COORDINATOR [--secret VALUE]"
+  exit 1
+fi
 
 REPO_URL="https://github.com/Jwrightsman/distributed-orchestrator"
 DEST="$HOME/distributed-orchestrator"
@@ -82,8 +90,10 @@ fi
 echo "  Deps:    httpx, rich"
 
 # 5. Join the network (join.py pulls the model and starts polling).
-# Registration exchanges the shared admission secret for a server-issued,
-# process-local node session. The plaintext session token stays in worker
+# Registration uses the shared admission secret only to create a durable,
+# independently revocable enrollment, then receives a server-issued process-
+# local node session. The enrollment credential stays in the user's private
+# Mycelium configuration directory. The plaintext session token stays in worker
 # memory, is sent on worker-protocol calls, and is refreshed automatically
 # after a coordinator restart or a machine-readable session rejection. This is
 # collision protection for node labels, not public-key machine identity.

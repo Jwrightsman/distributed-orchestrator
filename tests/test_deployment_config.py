@@ -14,7 +14,9 @@ def _secret(character: str) -> str:
 def test_trusted_alpha_upgrade_generates_three_distinct_authorities(tmp_path):
     path = tmp_path / "config.json"
 
-    result = config.ensure_trusted_alpha_config(path, model="test-model")
+    result = config.ensure_trusted_alpha_config(
+        path, model="test-model", private_overlay=True
+    )
 
     stored = json.loads(path.read_text(encoding="utf-8"))
     values = [stored[name] for name in ("viewer_key", "pitch_key", "node_secret")]
@@ -27,10 +29,21 @@ def test_trusted_alpha_upgrade_generates_three_distinct_authorities(tmp_path):
     }
     assert result.preserved_authorities == ()
     assert stored["deployment_mode"] == "trusted_alpha"
+    assert stored["node_enrollment_mode"] == "required"
+    assert stored["private_overlay"] is True
     assert stored["bind_host"] == "0.0.0.0"
     assert stored["model"] == "test-model"
     assert config.deployment_marker_path(path).is_file()
     assert not any(value in repr(result) for value in values)
+
+
+def test_trusted_alpha_upgrade_does_not_invent_private_transport(tmp_path):
+    path = tmp_path / "config.json"
+
+    config.ensure_trusted_alpha_config(path)
+
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    assert stored["private_overlay"] is False
 
 
 def test_trusted_alpha_upgrade_preserves_safe_existing_values(tmp_path):
@@ -99,6 +112,42 @@ def test_duplicate_authority_is_rotated_without_rotating_earlier_authority(tmp_p
     assert stored["pitch_key"] != duplicate
     assert "node_secret" in result.preserved_authorities
     assert "pitch_key" in result.generated_authorities
+
+
+def test_trusted_alpha_upgrade_replaces_legacy_enrollment_mode(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "node_enrollment_mode": "compat",
+                "node_secret": _secret("n"),
+                "pitch_key": _secret("p"),
+                "viewer_key": _secret("v"),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    config.ensure_trusted_alpha_config(path)
+
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    assert stored["node_enrollment_mode"] == "required"
+
+
+def test_invalid_enrollment_mode_fails_strict_loading(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "deployment_mode": "trusted_alpha",
+                "node_enrollment_mode": "implicit",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(config.ConfigError, match="node_enrollment_mode"):
+        config.load(path, strict=True)
 
 
 def test_trusted_marker_fails_closed_when_json_is_damaged(tmp_path):

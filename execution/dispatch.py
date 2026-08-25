@@ -12,6 +12,7 @@ from typing import Any, Awaitable, Callable
 import server_state as state
 from execution.contracts import ExecutionRequestV1, SelectedPlacementV1
 from execution.attempts import ReceiptBindingError
+from verification import verification_identity_key
 
 
 class PlacementUnavailable(RuntimeError):
@@ -48,6 +49,11 @@ class DispatchResult:
     output: str = ""
     placement: SelectedPlacementV1 = "local"
     node_id: str | None = None
+    enrollment_id: str | None = None
+    # Internal-only legacy identity input. Canonical execution projections need
+    # enrollment attribution, while the verification pool also needs to keep
+    # two unenrolled process incarnations with the same label separate.
+    session_id: str | None = None
     fallback_reason: str | None = None
     error: str | None = None
     duration_ms: int = 0
@@ -269,6 +275,16 @@ class Dispatcher:
                 primary.output,
                 secondary.node_id,
                 secondary.output,
+                identity_a=verification_identity_key(
+                    enrollment_id=primary.enrollment_id,
+                    session_id=primary.session_id,
+                ),
+                identity_b=verification_identity_key(
+                    enrollment_id=secondary.enrollment_id,
+                    session_id=secondary.session_id,
+                ),
+                enrollment_id_a=primary.enrollment_id,
+                enrollment_id_b=secondary.enrollment_id,
             )
             self.emit(
                 "verification",
@@ -518,12 +534,15 @@ class Dispatcher:
             output = ""
             error = f"worker output exceeds max_output_bytes={request.max_output_bytes}"
         attempts = max(1, state.attempt_store.count_attempts(task_id))
+        attempt_record = state.attempt_store.get(receipt.attempt_id)
         return DispatchResult(
             unit=unit,
             status="completed" if output and not error else "failed",
             output=output,
             placement="distributed",
             node_id=receipt.assigned_node_id,
+            enrollment_id=receipt.assigned_enrollment_id,
+            session_id=(attempt_record.assigned_session_id if attempt_record else None),
             error=str(error)[:500] if error else (None if output else "worker returned empty output"),
             duration_ms=duration,
             attempt_count=attempts,

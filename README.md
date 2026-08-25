@@ -16,7 +16,7 @@ active model, no auth required. **Agents:** read [AGENTS.md](AGENTS.md) first;
 it states plainly that installing this on a machine requires that machine
 owner's consent.
 
-> **Status (August 2026):** The current target is a **small private trusted alpha**. Execution protocol v1 has DAG and ensemble strategies, direct-as-one-candidate, deterministic auto-selection, durable server-authoritative worker attempts, commit-before-publication lifecycle truth, requester-scoped canonical retry idempotency, authenticated artifact delivery, and explicit redacted shares. The scheduler is still process-local, node identity is still a shared secret, and generated code is not sandboxed. See [the protocol](docs/PROTOCOL.md), [access model](docs/ACCESS_CONTROL.md), and [threat model](docs/THREAT_MODEL.md).
+> **Status (August 2026):** The current target is a **small private trusted alpha**. Execution protocol v1 has DAG and ensemble strategies, durable per-node bearer enrollment with independent revocation, process-local sessions, server-authoritative worker attempts, commit-before-publication lifecycle truth, requester-scoped canonical retry idempotency, authenticated artifact delivery, and explicit redacted shares. The scheduler is still process-local, enrollment is not physical-machine identity or Sybil resistance, and generated code is not sandboxed. See [the protocol](docs/PROTOCOL.md), [access model](docs/ACCESS_CONTROL.md), and [threat model](docs/THREAT_MODEL.md).
 
 ## Positioning
 
@@ -30,7 +30,7 @@ The network gets real when invited testers connect hardware they own. Joining ta
 python join.py http://ORCHESTRATOR_ADDRESS:8000
 ```
 
-There is an internet-reachable orchestrator used for status and invited testing, but it is **not a permissionless public network**. Worker endpoints require a shared key and node operators are admitted deliberately. If you want to volunteer a machine you own, open the **[I'd like to join a machine to the network](https://github.com/Jwrightsman/distributed-orchestrator/issues/new?template=join-the-network.yml)** issue. Do not install or join this software on somebody else's machine without that owner's explicit informed consent.
+There is an internet-reachable orchestrator used for status and invited testing, but it is **not a permissionless public network**. Initial enrollment requires shared invitation authority; each enrolled node then has a separate revocable credential. If you want to volunteer a machine you own, open the **[I'd like to join a machine to the network](https://github.com/Jwrightsman/distributed-orchestrator/issues/new?template=join-the-network.yml)** issue. Do not install or join this software on somebody else's machine without that owner's explicit informed consent.
 
 You don't have to wait for that to try it: `python cli.py "your task"` runs the whole pipeline on one machine, and [docs/DEPLOY.md](docs/DEPLOY.md) has a LAN setup that takes minutes, plus a [Tailscale](docs/DEPLOY.md) path for inviting friends to your own instance.
 
@@ -114,14 +114,15 @@ Config
   Model:       qwen3.5:4b
   Timeout:     1800s
   Retries:     3
-  Node auth:   off (any node can join)
+  Enrollment:  compat (legacy sessions allowed)
+  Bootstrap:   open (any node can enroll)
   Pitch auth:  off (anyone can pitch)
   Viewer auth: off (private reads are unprotected)
   Role routing: any node
   Provider:    Ollama only
 ```
 
-`Status: offline` means Ollama isn't running — start it with `ollama serve` and re-run. If the model is missing, run `ollama pull qwen3.5:4b`. The three displayed `off` lines are expected only for loopback local development. Before binding beyond localhost, configure distinct `node_secret`, `pitch_key`, and `viewer_key`; verify public `/health` reports `private_routes_protected: true`. See [access control](docs/ACCESS_CONTROL.md).
+`Status: offline` means Ollama isn't running — start it with `ollama serve` and re-run. If the model is missing, run `ollama pull qwen3.5:4b`. Compatibility/open bootstrap and the two displayed `off` lines are expected only for loopback local development. Before binding beyond localhost, configure distinct `node_secret`, `pitch_key`, and `viewer_key`, require durable enrollment, and verify public `/health` reports both `private_routes_protected: true` and `node_enrollment_required: true`. See [access control](docs/ACCESS_CONTROL.md).
 
 `status.py` reads local files only, so it works with Ollama stopped — as do `python cli.py --history`, `--standings` and `--projects`.
 
@@ -231,7 +232,16 @@ curl -fsSL https://raw.githubusercontent.com/Jwrightsman/distributed-orchestrato
 $env:SWARM_SERVER="http://ORCHESTRATOR_IP:8000"; irm https://raw.githubusercontent.com/Jwrightsman/distributed-orchestrator/master/install.ps1 | iex
 ```
 
-The installer checks Python and Ollama, downloads the repo, pulls the model, and starts working. Omit the address to auto-discover an orchestrator on your LAN.
+The installer checks Python and Ollama, downloads the repo, pulls the model,
+and starts working. The coordinator origin is required: enrollment credentials
+are never sent to an unauthenticated LAN-discovery responder. Use HTTPS, a
+private-overlay HTTP address, or loopback for local development.
+
+The stock worker creates a private, coordinator-scoped identity file on first
+bootstrap. Use `--identity-file PATH` to select an explicit location. Keep that
+file secret: it lets the same durable enrollment obtain a fresh process-local
+session after coordinator restart. Returning workers do not need the shared
+bootstrap secret.
 
 Piping a script from the internet into your shell deserves a look first — it's short, and reading it is the right instinct: [install.sh](install.sh) · [install.ps1](install.ps1).
 
@@ -253,6 +263,9 @@ For DAG, planning and review remain on the coordinator while builder units may b
 cli.py              # Terminal interface
 server.py           # App assembly — routers, lifespan, exception handling
 server_state.py     # Shared state, SQLite persistence, events, auth, rate limits
+node_enrollments.py # Durable digest-only contributor enrollment and revocation
+node_sessions.py    # Process-local worker incarnation authority
+worker_identity.py  # Atomic private stock-worker identity files
 access_control.py   # Viewer auth, signed sessions, public/private route policy
 routes_pitch.py     # /pitch, /pitch/async, /pitch/distributed, /jobs*
 routes_executions.py # Canonical POST/GET /v1/executions API
@@ -321,6 +334,7 @@ See **[docs/DEPLOY.md](docs/DEPLOY.md)** for local, private-overlay, and reverse
 | `/gallery` | GET | Private completed-task gallery |
 | `/projects*` | GET/POST | Private persistent project APIs |
 | `/nodes` | GET | Private connected-worker details |
+| `/v1/operator/node-enrollments` | GET | Private secret-free durable enrollment status and accounting |
 | `/nodes/register` | POST | Worker node registration |
 | `/nodes/{id}/heartbeat`, `/drain` | POST | Session-bound worker liveness and drain control |
 | `/tasks/next` | GET | Session-bound worker poll (long-polls 25s) |
@@ -339,16 +353,17 @@ This is a **Phase 0 private trusted-alpha system**. Here's exactly what's durabl
 | Normalized execution metadata | Yes | SQLite `executions` table — strategy, placement, candidates, validation, errors |
 | Keyed canonical submission mappings | Yes | Digest-only SQLite rows retained during trusted alpha; matching retries return one execution ID |
 | Attempt settlement and accepted receipts | Yes | SQLite — exact replay survives restart; active attempts interrupt on restart |
-| Contribution records | Yes | SQLite plus a regenerated JSON compatibility projection; fixed labels only, no prompt/output text |
+| Node enrollment identity/revocation | Yes | SQLite stores immutable IDs and credential digests, never plaintext credentials |
+| Contribution records | Yes | SQLite plus a regenerated JSON compatibility projection; enrolled compute is keyed by enrollment ID |
 | Share records and token hashes | Yes | SQLite — expiry and revocation survive restart |
 | Artifact manifests | Yes | Terminal baselines, roles, hashes, and seal state in SQLite; files remain under registered roots |
 | Project memory | Yes | `projects/<id>/memory.md` on disk |
-| Connected nodes and node sessions | No | Workers automatically re-register after restart/session expiry |
+| Connected nodes and node sessions | No | Durable enrollments survive; workers authenticate for fresh sessions |
 | Task queue and running coroutines | No | Restart marks affected canonical executions/jobs/attempts `interrupted`; it does not resume them |
 
 **Execution guarantees:** Required execution snapshots commit before live, event, callback, project-memory/legacy mirrors, response, and terminal artifact/share publication. Current execution-linked history/run/gallery/download/demo surfaces require that durable terminal state and its sealed artifact binding; staged files are not completion authority. A keyed canonical retry converges on one durable execution ID; a changed request conflicts. Distributed compute may still be attempted more than once after expiry or reclaim, but only the current active server-issued attempt can settle. Settlement, its accepted receipt, replay response, and compute contribution are atomic and durable. Changed, unknown, queued-but-unleased, expired, reclaimed, cancelled, interrupted, or mismatched results are rejected and kept only in a bounded diagnostic quarantine. The queue itself remains process-local, and these controls are not an exactly-once external-side-effect guarantee.
 
-**Trust model:** `node_secret` admits workers, `pitch_key` admits task submissions, and `viewer_key` protects task-, result-, project-, event-, artifact-, and machine-sensitive routes. All pitch-key holders share one idempotency scope; open development mode uses the direct peer address as a best-effort scope, not user identity. Explicit share tokens expose one allowlisted redacted result instead of making every execution public. All three keys default empty for local compatibility, and `/health` warns when viewer protection is off. **Set the applicable three keys and use TLS or a private overlay before network exposure.** Attempt binding is structural integrity, not per-node cryptographic identity; an admitted worker can still return plausible wrong output. Full details: [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
+**Trust model:** `node_secret` authorizes initial bootstrap, a distinct per-node bearer credential authenticates durable enrollment, `pitch_key` admits task submissions, and `viewer_key` protects task-, result-, project-, event-, artifact-, and machine-sensitive routes. All pitch-key holders share one idempotency scope; open development mode uses the direct peer address as a best-effort scope, not user identity. Explicit share tokens expose one allowlisted redacted result instead of making every execution public. **Require durable enrollment and use TLS or a private authenticated overlay before trusted-alpha exposure.** Enrollment/attempt binding provides attribution and lease integrity, not machine attestation or output correctness. Full details: [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
 
 `scripts/trusted_alpha_harness.py`, `scripts/restart_recovery.py`, and `scripts/soak_test.py` are reproducible operational checks, but do not copy an old pass count into a current claim: rerun them against the commit being deployed. The bounded trusted-alpha harness uses fake executors/workers and no live model. Canonical startup reconciliation truthfully interrupts non-resumable queued/running state rather than leaving it active indefinitely.
 
@@ -401,12 +416,12 @@ Stated plainly, because you'll find them anyway:
 - **CPU-only is slow.** A full pitch is minutes, not seconds — the planner, each builder, and the reviewer are each a separate model call, and the reviewer has to re-emit the whole deliverable. A GPU changes this dramatically.
 - **Generated code is not sandboxed.** The pipeline writes runnable files to `output/`. It checks that Python parses and HTML is structurally sound, but *you* are responsible for reading anything before you run it.
 - **The full threat model is written down**, including the deliberate public allowlist, viewer-protected surfaces, share capabilities, malicious-worker limits, and what still blocks a permissionless network: [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md). Reporting a vulnerability: [SECURITY.md](SECURITY.md).
-- **It's a trusted network, not a trustless one.** `node_secret` is a shared admission password, while a short-lived server session prevents active node-ID collisions; neither is public-key identity. A node that authenticates can still return plausible-looking garbage. Experimental sampled redundant execution remains available only in local mode; trusted-alpha mode disables it until post-hoc evidence has durable semantics. Shape agreement is not proof of correctness.
+- **It's a trusted network, not a trustless one.** Per-node bearer enrollment supports stable attribution and individual revocation; a short-lived server session identifies one incarnation. Neither proves a physical machine, honest operator, model bytes, or Sybil resistance. An authenticated node can still return plausible-looking garbage. Experimental sampled redundant execution remains available only in local mode; trusted-alpha mode disables it until post-hoc evidence has durable semantics. Shape agreement is not proof of correctness.
 - **One orchestrator, no failover.** DAG planning/review remain on the coordinator; DAG builder units and complete ensemble candidates may run on workers. If the orchestrator goes down, the swarm stops. Durable records reconcile truthfully on restart, but process-local work is not resumed. Reusing an idempotency key returns the same interrupted record; it does not restart it.
 - **No HTTPS, no accounts, no multi-tenancy.** This is a prototype you run for yourself or a group you know.
 
-None of these are secrets being kept until someone notices. What would fix each one — per-node
-cryptographic identity, a durable scheduler, layered verification, real sandboxing — is written
+None of these are secrets being kept until someone notices. What would fix each one — public-key
+identity/attestation, a durable scheduler, layered verification, real sandboxing — is written
 down in [ROADMAP.md](ROADMAP.md), along with the trigger that would make it worth building. It is
 a reference, not a promise of dates.
 
@@ -415,6 +430,7 @@ a reference, not a promise of dates.
 - [x] Planner → builder → reviewer → reviser pipeline
 - [x] Parallel builder execution (wave-based DAG, `asyncio.gather`)
 - [x] Distributed execution across worker nodes with automatic task reclaim
+- [x] Durable per-node enrollment credentials, restart-stable attribution, individual revocation/rotation, and private worker identity files
 - [x] Server-authoritative durable attempts, accepted-result broker, exact replay, and bounded quarantine
 - [x] Total execution deadline, cancellation API, and restart reconciliation
 - [x] Required execution commit before live/event/callback/response and terminal artifact/share publication

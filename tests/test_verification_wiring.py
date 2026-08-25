@@ -58,12 +58,16 @@ def _register(client, node_id: str):
     return client.post("/nodes/register", json={
         "node_id": node_id, "model": "qwen3.5:4b", "platform": "Linux",
         "machine": "x86_64", "hostname": node_id,
+        "enrollment_action": "bootstrap",
+        "enrollment_credential": f"verification-{node_id}-" + "x" * 40,
     })
 
 
 def _degrade(node_id: str, disagreements: int = MIN_SAMPLES_FOR_ROUTING):
     """Give a node a real, routing-eligible record of disagreement."""
-    rep = server_state.verification_pool.reputation(node_id)
+    identity_key = routes_nodes._verification_key(node_id)
+    assert identity_key is not None
+    rep = server_state.verification_pool.reputation(identity_key)
     for _ in range(disagreements):
         rep.record(False, "test")
     return rep
@@ -178,7 +182,9 @@ def test_no_deferral_when_verification_is_off():
     assert routes_nodes._should_defer("beta", now) is False
 
 
-def test_worse_node_defers_to_better_one():
+def test_worse_node_defers_to_better_one(client):
+    _register(client, "alpha")
+    _register(client, "beta")
     now = time.time()
     server_state.waiting_nodes.update({"alpha": now, "beta": now})
     _degrade("beta")
@@ -187,8 +193,10 @@ def test_worse_node_defers_to_better_one():
     assert routes_nodes._should_defer("alpha", now) is False  # better proceeds
 
 
-def test_worse_node_is_never_starved():
+def test_worse_node_is_never_starved(client):
     """After the grace period it takes the work regardless of reputation."""
+    _register(client, "alpha")
+    _register(client, "beta")
     now = time.time()
     server_state.waiting_nodes.update({"alpha": now, "beta": now})
     _degrade("beta")
@@ -197,7 +205,8 @@ def test_worse_node_is_never_starved():
     assert routes_nodes._should_defer("beta", stale) is False
 
 
-def test_lone_worse_node_does_not_defer_to_an_absent_better_one():
+def test_lone_worse_node_does_not_defer_to_an_absent_better_one(client):
+    _register(client, "beta")
     now = time.time()
     _degrade("beta")
     server_state.waiting_nodes.update({"beta": now})           # alpha is not polling
@@ -235,18 +244,23 @@ async def test_comparison_records_in_the_background_without_blocking():
 
     async def slow_duplicate(_tid, _budget):
         await asyncio.sleep(0.05)
-        return {"node_id": "beta", "output": _CODE_B}
+        return {
+            "node_id": "beta",
+            "enrollment_id": "enrollment-beta",
+            "output": _CODE_B,
+        }
 
     routes_pitch._spawn_comparison(
-        "verify_1", "subtask", "job_1", "trace_1", "alpha", _CODE_A, slow_duplicate, pool,
+        "verify_1", "subtask", "job_1", "trace_1", "alpha", _CODE_A,
+        slow_duplicate, pool, primary_enrollment_id="enrollment-alpha",
     )
     # The pipeline has already moved on: nothing recorded yet.
-    assert pool.reputation("alpha").total == 0
+    assert pool.reputation("enrollment:enrollment-alpha").total == 0
 
     await asyncio.sleep(0.2)
-    assert pool.reputation("alpha").total == 1
-    assert pool.reputation("beta").total == 1
-    assert pool.reputation("alpha").agreed == 1  # same shape, so they agree
+    assert pool.reputation("enrollment:enrollment-alpha").total == 1
+    assert pool.reputation("enrollment:enrollment-beta").total == 1
+    assert pool.reputation("enrollment:enrollment-alpha").agreed == 1
 
 
 @pytest.mark.asyncio
@@ -254,14 +268,19 @@ async def test_disagreement_lowers_both_nodes():
     pool = server_state.verification_pool
 
     async def prose_duplicate(_tid, _budget):
-        return {"node_id": "beta", "output": "I'm sorry, I can't help with that."}
+        return {
+            "node_id": "beta",
+            "enrollment_id": "enrollment-beta",
+            "output": "I'm sorry, I can't help with that.",
+        }
 
     routes_pitch._spawn_comparison(
-        "verify_2", "subtask", "job_1", "trace_1", "alpha", _CODE_A, prose_duplicate, pool,
+        "verify_2", "subtask", "job_1", "trace_1", "alpha", _CODE_A,
+        prose_duplicate, pool, primary_enrollment_id="enrollment-alpha",
     )
     await asyncio.sleep(0.1)
-    assert pool.reputation("alpha").disagreed == 1
-    assert pool.reputation("beta").disagreed == 1
+    assert pool.reputation("enrollment:enrollment-alpha").disagreed == 1
+    assert pool.reputation("enrollment:enrollment-beta").disagreed == 1
 
 
 @pytest.mark.asyncio

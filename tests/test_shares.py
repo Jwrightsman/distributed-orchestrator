@@ -57,6 +57,7 @@ def _execution(execution_id=EXECUTION_ID):
                 "output_preview": "candidate output",
                 "produced_files": ["C:/server/private/candidate/index.html"],
                 "node_id": "private-node-id",
+                "enrollment_id": "private-enrollment-id",
                 "validation": [
                     {"validator_name": "code_parse", "status": "passed", "score": 1.0}
                 ],
@@ -158,6 +159,7 @@ def test_public_projection_is_allowlist_based_and_path_free(tmp_path):
         "private-project-id",
         "C:/server/private",
         "private-node-id",
+        "private-enrollment-id",
         "private-hostname",
         "private-attempt",
         "server_path",

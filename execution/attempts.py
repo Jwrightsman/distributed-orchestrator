@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from ledger import ensure_contribution_schema, insert_contribution_in_transaction
+from node_enrollments import ensure_node_enrollment_schema
 from sqlite_store import connect as sqlite_connect
 from sqlite_store import connection, migration_lock
 
@@ -96,6 +97,8 @@ class AttemptRecord:
     execution_unit_id: str | None
     execution_unit_kind: str | None
     assigned_node_id: str
+    assigned_enrollment_id: str | None
+    assigned_credential_version: int | None
     assigned_session_id: str | None
     contract_version: str | None
     nonce_digest: str
@@ -129,6 +132,7 @@ class AcceptedResultReceipt:
     execution_unit_id: str | None
     execution_unit_kind: str | None
     assigned_node_id: str
+    assigned_enrollment_id: str | None
     contract_version: str | None
     result_hash: str
     accepted_at: float
@@ -145,6 +149,7 @@ class AcceptedResultReceipt:
         return {
             "task_id": self.task_id,
             "node_id": self.assigned_node_id,
+            "enrollment_id": self.assigned_enrollment_id,
             "output": self.output,
             "error": self.error,
             "elapsed_seconds": self.elapsed_seconds,
@@ -234,6 +239,8 @@ class AttemptStore:
                 execution_unit_id      TEXT,
                 execution_unit_kind    TEXT,
                 assigned_node_id       TEXT NOT NULL,
+                assigned_enrollment_id TEXT,
+                assigned_credential_version INTEGER,
                 assigned_session_id    TEXT,
                 contract_version       TEXT,
                 nonce_digest           TEXT NOT NULL,
@@ -263,6 +270,8 @@ class AttemptStore:
             str(row[1]) for row in con.execute("PRAGMA table_info(attempts)").fetchall()
         }
         for name, declaration in {
+            "assigned_enrollment_id": "TEXT",
+            "assigned_credential_version": "INTEGER",
             "assigned_session_id": "TEXT",
             "max_output_bytes": "INTEGER NOT NULL DEFAULT 1048576",
             "streamed_bytes": "INTEGER NOT NULL DEFAULT 0",
@@ -285,6 +294,11 @@ class AttemptStore:
             "ON attempts(execution_id, state)"
         )
         con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_attempts_enrollment_state "
+            "ON attempts(assigned_enrollment_id, state) "
+            "WHERE assigned_enrollment_id IS NOT NULL"
+        )
+        con.execute(
             """
             CREATE TABLE IF NOT EXISTS accepted_result_receipts (
                 attempt_id             TEXT PRIMARY KEY REFERENCES attempts(attempt_id),
@@ -293,6 +307,7 @@ class AttemptStore:
                 execution_unit_id      TEXT,
                 execution_unit_kind    TEXT,
                 assigned_node_id       TEXT NOT NULL,
+                assigned_enrollment_id TEXT,
                 contract_version       TEXT,
                 result_hash            TEXT NOT NULL,
                 accepted_at            REAL NOT NULL,
@@ -302,9 +317,25 @@ class AttemptStore:
             )
             """
         )
+        receipt_columns = {
+            str(row[1])
+            for row in con.execute(
+                "PRAGMA table_info(accepted_result_receipts)"
+            ).fetchall()
+        }
+        if "assigned_enrollment_id" not in receipt_columns:
+            con.execute(
+                "ALTER TABLE accepted_result_receipts "
+                "ADD COLUMN assigned_enrollment_id TEXT"
+            )
         con.execute(
             "CREATE INDEX IF NOT EXISTS idx_receipts_execution_unit "
             "ON accepted_result_receipts(execution_id, execution_unit_id)"
+        )
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_receipts_enrollment "
+            "ON accepted_result_receipts(assigned_enrollment_id) "
+            "WHERE assigned_enrollment_id IS NOT NULL"
         )
         con.execute(
             """
@@ -313,6 +344,7 @@ class AttemptStore:
                 task_id                TEXT NOT NULL,
                 claimed_attempt_id     TEXT,
                 claimed_node_id        TEXT NOT NULL,
+                claimed_enrollment_id  TEXT,
                 claimed_execution_id   TEXT,
                 claimed_unit_id        TEXT,
                 claimed_unit_kind      TEXT,
@@ -325,10 +357,19 @@ class AttemptStore:
             )
             """
         )
+        quarantine_columns = {
+            str(row[1])
+            for row in con.execute("PRAGMA table_info(result_quarantine)").fetchall()
+        }
+        if "claimed_enrollment_id" not in quarantine_columns:
+            con.execute(
+                "ALTER TABLE result_quarantine ADD COLUMN claimed_enrollment_id TEXT"
+            )
         con.execute(
             "CREATE INDEX IF NOT EXISTS idx_quarantine_received "
             "ON result_quarantine(received_at)"
         )
+        ensure_node_enrollment_schema(con)
         ensure_contribution_schema(con)
 
     def _ensure_schema(self, con: sqlite3.Connection) -> None:
@@ -344,6 +385,31 @@ class AttemptStore:
             self._ensure_schema(con)
             con.commit()
 
+    @staticmethod
+    def _active_enrollment_matches(
+        con: sqlite3.Connection,
+        *,
+        enrollment_id: str,
+        node_id: str,
+        credential_version: int,
+    ) -> bool:
+        """Check durable enrollment authority inside the caller's transaction."""
+
+        row = con.execute(
+            """
+            SELECT node_id, status, credential_version
+            FROM node_enrollments
+            WHERE enrollment_id = ?
+            """,
+            (enrollment_id,),
+        ).fetchone()
+        return bool(
+            row is not None
+            and hmac.compare_digest(str(row["node_id"]), str(node_id))
+            and str(row["status"]) == "active"
+            and int(row["credential_version"]) == int(credential_version)
+        )
+
     def issue(
         self,
         task: dict[str, Any],
@@ -354,11 +420,25 @@ class AttemptStore:
         issued_at: float,
         lease_expires_at: float,
         assigned_session_id: str | None = None,
+        assigned_enrollment_id: str | None = None,
+        assigned_credential_version: int | None = None,
     ) -> AttemptRecord:
         if not attempt_id or not nonce:
             raise ValueError("attempt id and nonce are required")
         if lease_expires_at <= issued_at:
             raise ValueError("attempt lease must expire after issuance")
+        if assigned_enrollment_id is None:
+            if assigned_credential_version is not None:
+                raise ValueError(
+                    "legacy attempt cannot have an enrollment credential version"
+                )
+        else:
+            if not assigned_session_id:
+                raise ValueError("enrolled attempt requires an assigned session")
+            if assigned_credential_version is None or int(assigned_credential_version) < 1:
+                raise ValueError(
+                    "enrolled attempt requires a positive credential version"
+                )
         try:
             max_output_bytes = int(
                 task.get("max_output_bytes", DEFAULT_MAX_OUTPUT_BYTES)
@@ -387,6 +467,8 @@ class AttemptStore:
             task.get("execution_unit_id"),
             task.get("execution_unit_kind"),
             assigned_node_id,
+            assigned_enrollment_id,
+            assigned_credential_version,
             assigned_session_id,
             task.get("contract_version"),
             nonce_digest(nonce),
@@ -400,14 +482,24 @@ class AttemptStore:
             ) as con:
                 self._ensure_schema(con)
                 con.execute("BEGIN IMMEDIATE")
+                if assigned_enrollment_id is not None and not self._active_enrollment_matches(
+                    con,
+                    enrollment_id=assigned_enrollment_id,
+                    node_id=assigned_node_id,
+                    credential_version=int(assigned_credential_version),
+                ):
+                    raise AttemptConflict(
+                        "assigned enrollment is revoked, missing, or no longer current"
+                    )
                 con.execute(
                     """
                     INSERT INTO attempts (
                         attempt_id, task_id, execution_id, execution_unit_id,
                         execution_unit_kind, assigned_node_id,
+                        assigned_enrollment_id, assigned_credential_version,
                         assigned_session_id, contract_version, nonce_digest,
                         state, issued_at, lease_expires_at, max_output_bytes
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
                     """,
                     values,
                 )
@@ -443,6 +535,8 @@ class AttemptStore:
             issued_at=issued,
             lease_expires_at=float(expires),
             assigned_session_id=task.get("assigned_session_id"),
+            assigned_enrollment_id=task.get("assigned_enrollment_id"),
+            assigned_credential_version=task.get("assigned_credential_version"),
         )
 
     def get(self, attempt_id: str) -> AttemptRecord | None:
@@ -475,12 +569,40 @@ class AttemptStore:
         execution_unit_id: str | None,
         execution_unit_kind: str | None,
         session_id: str | None = None,
+        enrollment_id: str | None = None,
+        credential_version: int | None = None,
+        allow_enrolled_replay_session: bool = False,
     ) -> None:
         if task_id != record.task_id:
             raise AttemptRejected("attempt belongs to another task", state=record.state)
         if node_id != record.assigned_node_id:
             raise AttemptRejected("submitting node is not the assigned node", state=record.state)
-        if record.assigned_session_id is not None:
+        if record.assigned_enrollment_id is None:
+            if enrollment_id is not None or credential_version is not None:
+                raise AttemptRejected(
+                    "enrolled session cannot claim a legacy attempt",
+                    state=record.state,
+                )
+        else:
+            if not enrollment_id or not hmac.compare_digest(
+                str(enrollment_id), str(record.assigned_enrollment_id)
+            ):
+                raise AttemptRejected(
+                    "enrollment does not own this attempt", state=record.state
+                )
+            if credential_version is None:
+                raise AttemptRejected(
+                    "missing enrollment credential version", state=record.state
+                )
+            if not allow_enrolled_replay_session and (
+                record.assigned_credential_version is None
+                or int(credential_version) != int(record.assigned_credential_version)
+            ):
+                raise AttemptRejected(
+                    "enrollment credential version does not own this attempt",
+                    state=record.state,
+                )
+        if record.assigned_session_id is not None and not allow_enrolled_replay_session:
             if not session_id:
                 raise AttemptRejected("missing assigned node session", state=record.state)
             if not hmac.compare_digest(
@@ -489,6 +611,10 @@ class AttemptStore:
                 raise AttemptRejected(
                     "node session does not own this attempt", state=record.state
                 )
+        elif allow_enrolled_replay_session and not session_id:
+            raise AttemptRejected(
+                "missing current node session for replay", state=record.state
+            )
         if record.contract_version == "1":
             if not contract_version:
                 raise AttemptRejected("missing contract version", state=record.state)
@@ -531,6 +657,8 @@ class AttemptStore:
         execution_unit_id: str | None,
         execution_unit_kind: str | None,
         session_id: str | None = None,
+        enrollment_id: str | None = None,
+        credential_version: int | None = None,
         now: float | None = None,
     ) -> SettlementOutcome:
         """Atomically settle one active attempt or replay its exact response."""
@@ -567,6 +695,22 @@ class AttemptStore:
                     raise AttemptRejected("no active server-issued attempt")
                 record = AttemptRecord.from_row(row)
 
+                if record.assigned_enrollment_id is not None:
+                    if enrollment_id is None or credential_version is None:
+                        raise AttemptRejected(
+                            "missing assigned enrollment authority", state=record.state
+                        )
+                    if not self._active_enrollment_matches(
+                        con,
+                        enrollment_id=str(enrollment_id),
+                        node_id=node_id,
+                        credential_version=int(credential_version),
+                    ):
+                        raise AttemptRejected(
+                            "enrollment is revoked, missing, or no longer current",
+                            state=record.state,
+                        )
+
                 self._validate_binding(
                     record,
                     task_id=task_id,
@@ -578,6 +722,12 @@ class AttemptStore:
                     execution_unit_id=execution_unit_id,
                     execution_unit_kind=execution_unit_kind,
                     session_id=session_id,
+                    enrollment_id=enrollment_id,
+                    credential_version=credential_version,
+                    allow_enrolled_replay_session=(
+                        record.state == "settled"
+                        and record.assigned_enrollment_id is not None
+                    ),
                 )
 
                 if record.state == "settled":
@@ -670,9 +820,10 @@ class AttemptStore:
                     """
                     INSERT INTO accepted_result_receipts (
                         attempt_id, task_id, execution_id, execution_unit_id,
-                        execution_unit_kind, assigned_node_id, contract_version,
+                        execution_unit_kind, assigned_node_id,
+                        assigned_enrollment_id, contract_version,
                         result_hash, accepted_at, output, error, elapsed_seconds
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         record.attempt_id,
@@ -681,6 +832,7 @@ class AttemptStore:
                         record.execution_unit_id,
                         record.execution_unit_kind,
                         record.assigned_node_id,
+                        record.assigned_enrollment_id,
                         record.contract_version,
                         result_hash,
                         accepted_at,
@@ -702,6 +854,9 @@ class AttemptStore:
                     ),
                     basis="compute_contribution",
                     attempt_id=record.attempt_id,
+                    enrollment_id=record.assigned_enrollment_id,
+                    node_id=record.assigned_node_id,
+                    session_id=record.assigned_session_id,
                     created_at=accepted_at,
                 )
                 con.commit()
@@ -736,6 +891,8 @@ class AttemptStore:
         execution_unit_id: str | None,
         execution_unit_kind: str | None,
         session_id: str | None = None,
+        enrollment_id: str | None = None,
+        credential_version: int | None = None,
         now: float | None = None,
     ) -> StreamBatchOutcome:
         """Atomically validate and account for one worker token batch.
@@ -763,6 +920,21 @@ class AttemptStore:
                 if row is None:
                     raise AttemptRejected("no active server-issued attempt")
                 record = AttemptRecord.from_row(row)
+                if record.assigned_enrollment_id is not None:
+                    if enrollment_id is None or credential_version is None:
+                        raise AttemptRejected(
+                            "missing assigned enrollment authority", state=record.state
+                        )
+                    if not self._active_enrollment_matches(
+                        con,
+                        enrollment_id=str(enrollment_id),
+                        node_id=node_id,
+                        credential_version=int(credential_version),
+                    ):
+                        raise AttemptRejected(
+                            "enrollment is revoked, missing, or no longer current",
+                            state=record.state,
+                        )
                 self._validate_binding(
                     record,
                     task_id=task_id,
@@ -774,6 +946,8 @@ class AttemptStore:
                     execution_unit_id=execution_unit_id,
                     execution_unit_kind=execution_unit_kind,
                     session_id=session_id,
+                    enrollment_id=enrollment_id,
+                    credential_version=credential_version,
                 )
                 if record.state != "active":
                     reason = (
@@ -906,23 +1080,78 @@ class AttemptStore:
             ).fetchone()
         return int(row[0]) if row else 0
 
-    def lifetime_contribution_summary(self, node_id: str) -> dict[str, int | float]:
-        """Read lifetime task/point counters from durable contribution rows."""
+    def lifetime_contribution_summary(
+        self,
+        node_id: str,
+        enrollment_id: str | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, int | float]:
+        """Read counters without treating a reusable label as durable identity."""
 
         self.migrate()
         with self._lock, connection(self.path, row_factory=sqlite3.Row) as con:
+            if enrollment_id is not None:
+                predicate = "enrollment_id = ?"
+                parameters = (enrollment_id,)
+            elif session_id is not None:
+                predicate = "enrollment_id IS NULL AND session_id = ?"
+                parameters = (session_id,)
+            else:
+                # Historical rows have neither attribution field. Do not merge
+                # them into a newly enrolled or newly session-scoped claimant.
+                predicate = (
+                    "enrollment_id IS NULL AND session_id IS NULL "
+                    "AND contributor = ?"
+                )
+                parameters = (node_id,)
             row = con.execute(
-                """
+                f"""
                 SELECT COUNT(*) AS tasks, COALESCE(SUM(points), 0) AS points
                 FROM contributions
-                WHERE contributor = ? AND contribution_type = 'compute'
+                WHERE {predicate} AND contribution_type = 'compute'
                 """,
-                (node_id,),
+                parameters,
             ).fetchone()
         return {
             "lifetime_tasks_completed": int(row["tasks"] if row else 0),
             "lifetime_contribution_points": float(row["points"] if row else 0),
         }
+
+    def reclaim_enrollment(
+        self,
+        enrollment_id: str,
+        reason: str,
+        *,
+        now: float | None = None,
+    ) -> list[str]:
+        """Atomically reclaim every active lease owned by one enrollment."""
+
+        if not enrollment_id:
+            raise ValueError("enrollment_id is required")
+        reclaimed_at = time.time() if now is None else float(now)
+        with self._lock, connection(self.path, row_factory=sqlite3.Row) as con:
+            self._ensure_schema(con)
+            con.execute("BEGIN IMMEDIATE")
+            rows = con.execute(
+                """
+                SELECT task_id
+                FROM attempts
+                WHERE assigned_enrollment_id = ? AND state = 'active'
+                ORDER BY task_id
+                """,
+                (enrollment_id,),
+            ).fetchall()
+            con.execute(
+                """
+                UPDATE attempts
+                SET state = 'reclaimed', settled_at = ?, reason = ?,
+                    stream_closed = 1
+                WHERE assigned_enrollment_id = ? AND state = 'active'
+                """,
+                (reclaimed_at, reason, enrollment_id),
+            )
+            con.commit()
+        return [str(row["task_id"]) for row in rows]
 
     def execution_attempt_summary(self, execution_id: str) -> dict[str, int]:
         """Return durable attempt/retry counts for terminal telemetry."""
@@ -1043,6 +1272,7 @@ class AttemptStore:
         task_id: str,
         claimed_attempt_id: str | None,
         claimed_node_id: str,
+        claimed_enrollment_id: str | None = None,
         claimed_execution_id: str | None,
         claimed_unit_id: str | None,
         claimed_unit_kind: str | None,
@@ -1065,16 +1295,18 @@ class AttemptStore:
                 """
                 INSERT INTO result_quarantine (
                     quarantine_id, task_id, claimed_attempt_id, claimed_node_id,
+                    claimed_enrollment_id,
                     claimed_execution_id, claimed_unit_id, claimed_unit_kind,
                     claimed_contract_version, reason, output_sha256,
                     output_preview, error, received_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     quarantine_id,
                     task_id,
                     claimed_attempt_id,
                     claimed_node_id,
+                    claimed_enrollment_id,
                     claimed_execution_id,
                     claimed_unit_id,
                     claimed_unit_kind,

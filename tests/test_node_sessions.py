@@ -210,7 +210,7 @@ def test_replacement_session_cannot_stream_or_settle_old_attempt(client):
     assert state.attempt_store.get(task["attempt_id"]).state == "reclaimed"
 
 
-def test_session_and_lifetime_statistics_are_distinct(client):
+def test_unenrolled_statistics_do_not_cross_session_identity(client):
     first = _register(client)
     _queue_v1()
     task = client.get(
@@ -233,8 +233,10 @@ def test_session_and_lifetime_statistics_are_distinct(client):
     node = state.nodes["worker"]
     assert node["session_tasks_completed"] == 0
     assert node["session_contribution_points"] == 0
-    assert node["lifetime_tasks_completed"] == 1
-    assert node["lifetime_contribution_points"] == 5
+    # A new legacy session is not durable identity. Reusing its human-readable
+    # label must not inherit the prior process incarnation's contribution.
+    assert node["lifetime_tasks_completed"] == 0
+    assert node["lifetime_contribution_points"] == 0
 
 
 def test_heartbeat_and_drain_require_current_session(client):

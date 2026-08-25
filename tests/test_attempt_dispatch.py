@@ -8,6 +8,7 @@ import pytest
 import server_state as state
 from execution.contracts import ExecutionRequestV1
 from execution.dispatch import Dispatcher, ExecutionUnit, PlacementDecision
+from node_enrollments import NodeEnrollmentStore
 
 
 @pytest.fixture(autouse=True)
@@ -183,6 +184,10 @@ async def test_local_inference_obeys_cancellation_event():
 
 @pytest.mark.asyncio
 async def test_reclaimed_attempt_reports_real_retry_and_reassignment_counts():
+    enrolled = NodeEnrollmentStore(state._DB_PATH).bootstrap(
+        node_id="worker",
+        credential="dispatch-test-enrollment-credential-with-enough-entropy",
+    )
     dispatcher = Dispatcher()
     running = asyncio.create_task(
         dispatcher._distributed(
@@ -201,6 +206,9 @@ async def test_reclaimed_attempt_reports_real_retry_and_reassignment_counts():
         state.attempt_store.issue(
             queued,
             assigned_node_id="worker",
+            assigned_enrollment_id=enrolled.record.enrollment_id,
+            assigned_credential_version=enrolled.record.credential_version,
+            assigned_session_id="session-first",
             attempt_id="attempt-first",
             nonce="nonce-first",
             issued_at=first_issued,
@@ -215,6 +223,9 @@ async def test_reclaimed_attempt_reports_real_retry_and_reassignment_counts():
         queued.update(
             {
                 "assigned_to": "worker",
+                "assigned_enrollment_id": enrolled.record.enrollment_id,
+                "assigned_credential_version": enrolled.record.credential_version,
+                "assigned_session_id": "session-second",
                 "assigned_at": second_issued,
                 "attempt_id": "attempt-second",
                 "nonce": "nonce-second",
@@ -224,6 +235,9 @@ async def test_reclaimed_attempt_reports_real_retry_and_reassignment_counts():
         state.attempt_store.issue(
             queued,
             assigned_node_id="worker",
+            assigned_enrollment_id=enrolled.record.enrollment_id,
+            assigned_credential_version=enrolled.record.credential_version,
+            assigned_session_id="session-second",
             attempt_id="attempt-second",
             nonce="nonce-second",
             issued_at=second_issued,
@@ -243,6 +257,9 @@ async def test_reclaimed_attempt_reports_real_retry_and_reassignment_counts():
         execution_id=queued["execution_id"],
         execution_unit_id=queued["execution_unit_id"],
         execution_unit_kind=queued["execution_unit_kind"],
+        session_id="session-second",
+        enrollment_id=enrolled.record.enrollment_id,
+        credential_version=enrolled.record.credential_version,
     )
     state.accepted_result_broker.publish(settled.receipt)
     result = await running
@@ -250,3 +267,5 @@ async def test_reclaimed_attempt_reports_real_retry_and_reassignment_counts():
     assert result.attempt_count == 2
     assert result.retry_count == 1
     assert result.reassignment_count == 1
+    assert result.enrollment_id == enrolled.record.enrollment_id
+    assert result.session_id == "session-second"

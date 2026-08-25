@@ -2,7 +2,8 @@
 # Take a fresh Ubuntu VM to a trusted-alpha Mycelium coordinator.
 #
 #   ssh ubuntu@YOUR_VM_IP
-#   curl -fsSL https://raw.githubusercontent.com/Jwrightsman/distributed-orchestrator/master/deploy.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/Jwrightsman/distributed-orchestrator/master/deploy.sh \
+#     | MYCELIUM_PRIVATE_OVERLAY_CONFIRMED=1 bash
 #
 # Safe to re-run: valid existing authorities and unrelated configuration are
 # preserved. Credential values are written atomically to data/config.json and
@@ -17,6 +18,15 @@ REQUESTED_MODEL="${SWARM_MODEL:-}"
 
 say()  { printf '\n\033[1;36m==> %s\033[0m\n' "$1"; }
 warn() { printf '\033[1;33m    %s\033[0m\n' "$1"; }
+
+case "${MYCELIUM_PRIVATE_OVERLAY_CONFIRMED:-}" in
+  1|true|yes) ;;
+  *)
+    warn "Trusted-alpha bearer credentials require an authenticated private overlay."
+    warn "Join this host to that overlay, then rerun with MYCELIUM_PRIVATE_OVERLAY_CONFIRMED=1."
+    exit 1
+    ;;
+esac
 
 # 1. Docker and Python
 if ! command -v docker >/dev/null 2>&1; then
@@ -67,6 +77,7 @@ result = ensure_trusted_alpha_config(
     path,
     model=requested_model,
     ollama_url="http://ollama:11434",
+    private_overlay=True,
 )
 print(f"  Configuration: {result.path}")
 if result.generated_authorities:
@@ -137,8 +148,9 @@ cat <<EOF
 The three separate authorities (viewer_key, pitch_key, and node_secret) are in
 the private configuration file above. Their values were deliberately not
 printed. Move only the authority a person or machine needs through your secret
-manager or another secure channel. Every holder receives that authority across
-the entire coordinator instance; these are not per-user credentials.
+manager or another secure channel. node_secret authorizes initial worker
+bootstrap only; each current worker then uses its own private, independently
+revocable enrollment identity. Viewer and pitch keys remain instance-wide.
 
 Keep port 8000 off the public Internet. Prefer a private overlay such as
 Tailscale/WireGuard. If browser access crosses an untrusted network, terminate

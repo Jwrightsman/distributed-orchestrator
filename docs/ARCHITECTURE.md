@@ -20,7 +20,8 @@ flowchart TD
     E --> X
     X --> L[Local model integration]
     X --> Q[Process-local worker queue]
-    Q --> W[Admitted worker]
+    Q --> W[Enrolled worker session]
+    W --> N[(Durable node enrollment)]
     W --> T[Durable attempt settlement]
     T --> B[Accepted-result broker]
     B --> X
@@ -92,6 +93,25 @@ Idempotency preserves one execution identity; it does not resume process-local
 work. A queued commit whose scheduler task is lost at restart becomes
 `interrupted`, and the same key continues to return that execution. See
 [ADR 0008](adr/0008-idempotent-canonical-execution-submission.md).
+
+## Contributor enrollment and incarnation
+
+Worker trust uses four deliberately separate identifiers. `enrollment_id` is
+the immutable durable identity of one invited contributor; `node_id` is its
+human-readable label; `session_id` identifies one live worker process; and
+`attempt_id` authorizes one lease. The deployment-wide `node_secret` is used
+only to admit an initial bootstrap. A returning worker proves its per-node
+enrollment credential and receives a new process-local session without the
+shared secret.
+
+The coordinator stores a domain-separated digest of each enrollment credential
+and no plaintext. Sessions retain only their own token digest plus the
+enrollment, label, and credential-version binding. Every authenticated worker
+operation checks durable active status. Revocation or rotation therefore
+invalidates live use without making sessions durable. Restart drops all
+sessions and active scheduling state but preserves enrollment identity and
+historical attribution. See
+[ADR 0010](adr/0010-durable-enrollment-identity.md).
 
 ## DAG execution
 
@@ -277,11 +297,15 @@ flowchart TD
     P -->|yes| U[Public liveness / landing / capability]
     P -->|no| S{Separately authenticated protocol?}
     S -->|pitch| K[pitch_key]
-    S -->|worker| N[node_secret]
+    S -->|worker registration| N{Enrollment action}
+    N -->|bootstrap| B[node_secret admission + worker credential]
+    N -->|returning| E[per-enrollment credential]
+    S -->|worker operation| W[session bearer bound to enrollment + version]
     S -->|no| V[viewer_key / Bearer / signed cookie]
 ```
 
-Viewer, pitch, and worker credentials are separate authorities. When
+Viewer, pitch, bootstrap-admission, enrollment, and live-session credentials
+are separate authorities. When
 `viewer_key` is configured, all routes are private unless method and path are
 deliberately allowlisted. When it is empty, middleware fails open for local
 compatibility and both startup and `/health` report the exposure. Full matrices
@@ -296,11 +320,12 @@ and cookie behavior are in [ACCESS_CONTROL.md](ACCESS_CONTROL.md).
 | Legacy jobs | Yes, SQLite | queued/running rows become retryable `interrupted` |
 | Attempt state and exact replay | Yes, SQLite | active rows become `interrupted`; settled replay remains |
 | Accepted receipts | Yes, SQLite | broker can reload a matching receipt |
-| Contribution records | Yes, SQLite | unique attempt contribution remains exactly once |
+| Node enrollments and credential digests | Yes, SQLite | identity/revocation survive; worker obtains a new session |
+| Contribution records | Yes, SQLite | unique attempt contribution and enrollment attribution remain exactly once |
 | Share records and token hashes | Yes, SQLite | expiry/revocation remain effective |
 | Artifact root and manifest metadata | Yes, SQLite plus disk | files remain until retention/pruning |
 | Worker queue and in-flight coroutine | **No** | lost; never represented as still running |
-| Connected nodes and breaker state | **No** | workers re-register; operational state resets |
+| Connected nodes, sessions, and breaker state | **No** | enrolled workers authenticate again; operational state resets |
 
 Reconciliation makes non-resumable loss truthful; it is not durable scheduling
 or failover. Submission mappings are retained indefinitely during trusted alpha
@@ -318,11 +343,13 @@ memory.
 
 ## Trust boundary
 
-Node admission remains one shared `node_secret`; pitch submission may use one
-shared `pitch_key`; viewers may use one shared `viewer_key`. Constant-time
-comparisons and attempt binding reduce specific attacks but do not create
-identity, individual revocation, TLS, multi-user authorization, Sybil
-resistance, or sandboxing. The intended deployment is a small private group of
-known operators. All pitch-key holders share an idempotency scope; open-mode
-peer scoping is development-grade and is not user identity. See
+Initial node admission uses one shared `node_secret`; each enrolled contributor
+then has an independently revocable bearer credential. Pitch submission may use
+one shared `pitch_key`, and viewers may use one shared `viewer_key`.
+Constant-time comparisons and enrollment/session/attempt binding reduce
+specific attacks but do not prove physical-machine identity, provide TLS,
+multi-user authorization, Sybil resistance, attestation, or sandboxing. The
+intended deployment remains a small private group over TLS or a private
+authenticated overlay. All pitch-key holders share an idempotency scope;
+open-mode peer scoping is development-grade and is not user identity. See
 [THREAT_MODEL.md](THREAT_MODEL.md).

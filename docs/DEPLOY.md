@@ -14,9 +14,10 @@ automatically safe to execute.
 | Private-overlay trusted alpha | `trusted_alpha` | Tailscale, WireGuard, or equivalent | Recommended invited alpha |
 | Internet-facing reverse proxy | `trusted_alpha` | Restricted TLS proxy; app port remains private | Only when an overlay is impractical |
 
-Do not expose port 8000 directly to the public Internet. The three static
-credentials are instance-wide shared authorities, not user accounts, and node
-admission is not public-key identity.
+Do not expose port 8000 directly to the public Internet. The three deployment
+credentials are instance-wide shared authorities, not user accounts. Durable
+per-node bearer enrollment adds individual revocation and attribution, not
+public-key or physical-machine identity.
 
 ## The three authorities
 
@@ -27,12 +28,13 @@ be at least 32 characters, and all three must differ.
 | --- | --- |
 | `viewer_key` | Read private executions, results, projects, nodes, artifacts, and operator routes; administer shares |
 | `pitch_key` | Submit work that consumes coordinator and worker compute |
-| `node_secret` | Register a worker on the instance and obtain a process-local node session |
+| `node_secret` | Bootstrap a previously unused durable worker enrollment |
 
 Do not reuse one value for two roles. Give each person or machine only the
-authority it needs. A node session narrows subsequent worker-protocol calls,
-but the shared `node_secret` still admits any holder under an available node
-label; it is not a per-machine identity credential.
+authority it needs. The worker generates a distinct enrollment credential at
+bootstrap; returning registration and normal session operations do not require
+the shared `node_secret`. Enrollment is still a bearer credential and must
+travel only over TLS or a private authenticated overlay.
 
 ## Local-only development
 
@@ -53,7 +55,8 @@ Empty credentials retain the historical local workflow. Startup and
 `/health` warn that private routes are unprotected. Binding local mode beyond
 loopback with disabled credentials emits an additional preflight warning. Do
 not interpret compatibility mode as a secure LAN default; shared or public
-Wi-Fi is outside this boundary.
+Wi-Fi is outside this boundary. `node_enrollment_mode=compat` is explicitly
+local-only and any legacy worker session is represented as unenrolled.
 
 ## Recommended: private-overlay trusted alpha
 
@@ -62,8 +65,12 @@ overlay on the coordinator before inviting workers. Then deploy on the
 coordinator:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Jwrightsman/distributed-orchestrator/master/deploy.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Jwrightsman/distributed-orchestrator/master/deploy.sh \
+  | MYCELIUM_PRIVATE_OVERLAY_CONFIRMED=1 bash
 ```
+
+The confirmation is an operator assertion, not overlay detection. Do not set
+it until this host is actually joined to the authenticated overlay.
 
 The script:
 
@@ -71,13 +78,15 @@ The script:
 - creates or updates `data/config.json` atomically with owner-only permissions
   on POSIX systems;
 - generates any missing, short, or duplicate authority with 32 random bytes;
+- sets `node_enrollment_mode=required` and records the private-overlay
+  transport assertion used by the recommended deployment path;
 - preserves valid independent authorities and unrelated settings on rerun;
 - upgrades a two-key installation by adding `viewer_key` without rotating a
   valid `node_secret` or `pitch_key`;
 - runs strict preflight before launch;
 - starts one coordinator process and Ollama; and
-- reports success only when `/health` has both `status: ok` and
-  `private_routes_protected: true`.
+- reports success only when `/health` has `status: ok`,
+  `private_routes_protected: true`, and `node_enrollment_required: true`.
 
 Credential values are deliberately not printed, even under shell tracing.
 Their storage location and authority names are printed. Transfer individual
@@ -103,16 +112,26 @@ python join.py http://OVERLAY_ADDRESS:8000 --secret NODE_SECRET
 ```
 
 `join.py` describes the model download and CPU/RAM/disk cost and waits for the
-owner. An agent must not bypass that gate on someone else's machine.
+owner. It creates a private, coordinator-scoped worker identity file before
+bootstrap; later joins use that file and no longer need `--secret`. An agent
+must not bypass the consent gate on someone else's machine.
+
+Pass a coordinator origin only—no path, query, user information, or fragment.
+The stock worker intentionally ignores ambient `HTTP_PROXY`/`HTTPS_PROXY`
+settings so enrollment and session bearers cannot be inherited by an
+unreviewed proxy. Ensure the worker can reach the coordinator directly through
+the private overlay or protected TLS endpoint.
 
 ## Manual trusted-alpha configuration
 
 The supported generator avoids shell interpolation and never prints generated
-values:
+values. The example below is valid only after the host has joined an
+authenticated private overlay; the explicit argument records that operator
+assertion rather than detecting or creating the overlay:
 
 ```bash
 mkdir -p data
-python -c "from config import ensure_trusted_alpha_config as e; e('data/config.json', ollama_url='http://ollama:11434')"
+python -c "from config import ensure_trusted_alpha_config as e; e('data/config.json', ollama_url='http://ollama:11434', private_overlay=True)"
 python scripts/preflight.py --config data/config.json --state-dir data --mode trusted_alpha
 ```
 
@@ -122,6 +141,8 @@ valid credentials and must never be deployed literally:
 ```json
 {
   "deployment_mode": "trusted_alpha",
+  "node_enrollment_mode": "required",
+  "private_overlay": true,
   "ollama_url": "http://ollama:11434",
   "viewer_key": "<independent-random-viewer-authority-at-least-32-chars>",
   "pitch_key": "<independent-random-pitch-authority-at-least-32-chars>",
@@ -159,9 +180,11 @@ python scripts/preflight.py \
 
 Preflight returns nonzero for an unsafe trusted-alpha deployment and never
 prints credential values. It validates JSON, deployment mode, authority length
-and separation, public-pitch acknowledgement, HTTPS/cookie coherence, writable
+and separation, required durable enrollment, declared TLS/private-overlay
+transport, public-pitch acknowledgement, HTTPS/cookie coherence, writable
 SQLite/artifact/output/project paths, database integrity when one exists, and
-availability of the single-coordinator OS lock.
+availability of the single-coordinator OS lock. `private_overlay=true` is an
+operator assertion; preflight cannot inspect Tailscale/WireGuard ACLs.
 
 An active coordinator legitimately holds the lock. Use
 `--skip-lock-check` only to validate its other settings while it is running;
@@ -186,6 +209,8 @@ Set these fields before restarting:
 ```json
 {
   "deployment_mode": "trusted_alpha",
+  "node_enrollment_mode": "required",
+  "private_overlay": false,
   "https_enabled": true,
   "viewer_cookie_secure": true,
   "trust_proxy_headers": false
@@ -196,8 +221,8 @@ Merge them into the existing config; do not replace the authority values.
 RC1 does not consume trusted proxy headers, so `trust_proxy_headers: true` is a
 preflight error in trusted-alpha mode. Restrict direct access to port 8000 so a
 client cannot bypass the proxy. Even with TLS, this remains a small invited
-alpha: there are no per-user roles, per-node public keys, generated-code
-sandbox, or high-availability coordinator.
+alpha: there are no per-user roles, per-node public keys/attestation,
+generated-code sandbox, or high-availability coordinator.
 
 ## Viewer login and health
 
@@ -256,9 +281,11 @@ documented there and in [Operations](OPERATIONS.md).
 | Preflight says another coordinator owns the state directory | Stop the other process or select a different state directory; do not delete the lock file to bypass ownership |
 | `/health` is `degraded` | Check `docker compose logs ollama` and confirm the configured model pull completed |
 | `/health` says private routes are unprotected | Configure a distinct `viewer_key`, run preflight, and restart |
-| Worker registration returns 401 | Confirm only that worker received the current `node_secret`; do not send `viewer_key` or `pitch_key` |
+| Preflight rejects legacy-only node admission | Set `node_enrollment_mode` to `required`, upgrade stock workers, and preserve their identity files; do not add a trusted-alpha compatibility bypass |
+| Initial worker bootstrap returns 401 | Confirm only that worker received the current `node_secret`; returning workers use their identity file instead |
+| Registration says durable enrollment is required | Upgrade the worker and use `--identity-file` if its default user configuration directory is unsuitable |
 | Worker protocol returns a session-specific 401 | The stock worker automatically re-registers; repeated failures require checking coordinator and worker clocks/logs |
-| Registration returns 409 | The normalized node ID already has a live different session; choose another ID or wait for the old session to become stale |
+| Registration returns 409 | The label or credential belongs to another durable enrollment; do not delete history or reuse the label—inspect the protected enrollment list |
 | Pitch returns 401 | Send the current `pitch_key` on the pitch route |
 | Browser logs in but immediately loses the cookie | HTTPS and `viewer_cookie_secure` declarations disagree, or the proxy is not actually serving HTTPS |
 | Compose is reachable only locally | This is the safe default; set `MYCELIUM_PUBLISH_ADDRESS` to the private overlay address, not a public wildcard |

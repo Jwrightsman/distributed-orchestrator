@@ -48,6 +48,22 @@ class _Client:
         return _Response(200, {"status": "accepted", "credits_earned": 0})
 
 
+class _RegistrationClient:
+    def __init__(self, response):
+        self.response = response
+        self.request = None
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return None
+
+    async def post(self, url, **kwargs):
+        self.request = (url, kwargs)
+        return self.response
+
+
 def _task():
     return {
         "task_id": "task-1",
@@ -146,19 +162,150 @@ async def test_worker_stops_before_byte_budget_and_reports_limit_failure(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_worker_automatically_reregisters_after_session_rejection(monkeypatch):
+async def test_enrolled_worker_sends_only_session_on_normal_operations(monkeypatch):
+    client = _Client(_task(), reject_result=True)
+    monkeypatch.setattr(node.httpx, "AsyncClient", lambda **kwargs: client)
+
+    async def generated(*args, **kwargs):
+        yield "complete output"
+
+    monkeypatch.setattr(node, "generate_stream", generated)
+    session = {
+        "tasks": 0,
+        "credits": 0,
+        "session_token": "session-token",
+        "enrolled": True,
+    }
+
+    await node.poll_and_execute(
+        "http://server", "worker", session, secret="bootstrap-secret"
+    )
+
+    for _url, _payload, headers in client.posts:
+        assert headers["X-Node-Session"] == "session-token"
+        assert "X-Node-Secret" not in headers
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("action", "expect_secret"),
+    [("bootstrap", True), ("returning", False)],
+)
+async def test_registration_sends_secret_only_for_bootstrap(
+    monkeypatch, action, expect_secret
+):
+    client = _RegistrationClient(_Response(200, {"ok": True}))
+    client_options = {}
+
+    def client_factory(**kwargs):
+        client_options.update(kwargs)
+        return client
+
+    monkeypatch.setattr(node.httpx, "AsyncClient", client_factory)
+
+    await node.register(
+        "https://coordinator.example",
+        "worker",
+        secret="bootstrap-secret",
+        enrollment_action=action,
+        enrollment_credential="c" * 43,
+    )
+
+    _url, request = client.request
+    assert request["json"]["enrollment_action"] == action
+    assert request["json"]["enrollment_credential"] == "c" * 43
+    assert ("X-Node-Secret" in request["headers"]) is expect_secret
+    assert client_options["trust_env"] is False
+
+
+@pytest.mark.asyncio
+async def test_actionable_registration_error_redacts_every_credential(monkeypatch):
+    credential = "c" * 43
+    bootstrap = "bootstrap-secret"
+    client = _RegistrationClient(
+        _Response(
+            409,
+            {
+                "detail": {
+                    "code": f"node_enrollment_conflict-{credential}-{bootstrap}",
+                    "message": f"bad {credential} {bootstrap}",
+                    "action": f"restore {credential}",
+                }
+            },
+        )
+    )
+    monkeypatch.setattr(node.httpx, "AsyncClient", lambda **kwargs: client)
+
+    with pytest.raises(node.NodeRegistrationRejected) as raised:
+        await node.register(
+            "https://coordinator.example",
+            "worker",
+            secret=bootstrap,
+            enrollment_action="bootstrap",
+            enrollment_credential=credential,
+        )
+
+    assert credential not in str(raised.value)
+    assert bootstrap not in str(raised.value)
+    assert credential not in raised.value.code
+    assert bootstrap not in raised.value.code
+    assert "node_enrollment_conflict" in str(raised.value)
+
+
+def test_registration_error_redacts_before_bounding_cutoff_fragments():
+    credential = "CredentialCutoff" + "c" * 32
+    bootstrap = "BootstrapCutoff" + "b" * 32
+    session = "SessionCutoff" + "s" * 32
+    response = _Response(
+        409,
+        {
+            "detail": {
+                "code": "A" * 80 + credential,
+                "action": "B" * 150 + session,
+                "message": "C" * 500 + bootstrap,
+            }
+        },
+    )
+
+    error = node._bounded_registration_error(
+        response,
+        sensitive_values=(bootstrap, credential, session),
+    )
+    rendered = f"{error.code} {error.action} {error}"
+
+    assert "CredentialCut" not in rendered
+    assert "BootstrapCu" not in rendered
+    assert "SessionCutof" not in rendered
+    assert "<redacted>" in rendered
+
+@pytest.mark.asyncio
+async def test_worker_automatically_reregisters_after_session_rejection(
+    monkeypatch, tmp_path
+):
     registrations = []
 
     async def healthy_ollama():
         return {"ok": True, "models": [node.DEFAULT_MODEL]}
 
-    async def register(server, node_id, secret="", capabilities=None, session_token=""):
-        registrations.append(session_token)
+    async def register(
+        server,
+        node_id,
+        secret="",
+        capabilities=None,
+        session_token="",
+        enrollment_action=None,
+        enrollment_credential="",
+    ):
+        registrations.append((session_token, enrollment_action, bool(enrollment_credential)))
         index = len(registrations)
         return {
             "message": "registered",
             "node_id": str(node_id).casefold(),
             "capabilities": [],
+            "enrolled": True,
+            "enrollment_action": enrollment_action,
+            "enrollment_id": "11111111111141118111111111111111",
+            "credential_version": 1,
             "session_id": f"session-{index}",
             "session_token": f"token-{index}",
             "session_expires_at": "2099-01-01T00:00:00+00:00",
@@ -178,10 +325,51 @@ async def test_worker_automatically_reregisters_after_session_rejection(monkeypa
     monkeypatch.setattr(node, "poll_and_execute", poll)
     monkeypatch.setattr(node.console, "print", lambda *args, **kwargs: None)
     monkeypatch.setattr(
-        "sys.argv", ["node.py", "--server", "http://server", "--node-id", "Worker"]
+        "sys.argv",
+        [
+            "node.py",
+            "--server",
+            "http://server",
+            "--node-id",
+            "Worker",
+            "--identity-file",
+            str(tmp_path / "identity.json"),
+        ],
     )
 
     await node.main()
 
-    assert registrations == ["", "token-1"]
+    assert registrations == [
+        ("", "bootstrap", True),
+        ("token-1", "returning", True),
+    ]
     assert polls == 2
+
+
+def test_worker_refuses_legacy_downgrade_after_requesting_enrollment(tmp_path):
+    identity_path = tmp_path / "identity.json"
+    identity = node.load_or_create_worker_identity(
+        identity_path,
+        coordinator="https://coordinator.example",
+        node_id="worker",
+        credential_factory=lambda: "c" * 43,
+    )
+    session = {}
+
+    with pytest.raises(
+        node.WorkerIdentityError,
+        match="did not confirm the requested durable enrollment",
+    ):
+        node._apply_registration(
+            session,
+            {
+                "node_id": "worker",
+                "session_id": "legacy-session",
+                "session_token": "legacy-token",
+                "enrolled": False,
+            },
+            identity=identity,
+            identity_file=identity_path,
+        )
+
+    assert session == {}

@@ -145,6 +145,43 @@ def run_preflight(
     settings.update(overrides)
     settings["deployment_mode"] = mode
 
+    enrollment_mode = settings.get("node_enrollment_mode")
+    if (
+        not isinstance(enrollment_mode, str)
+        or enrollment_mode not in app_config.VALID_NODE_ENROLLMENT_MODES
+    ):
+        checks.append(
+            Check(
+                "node_enrollment_mode",
+                "error" if trusted else "warning",
+                "node_enrollment_mode must be compat or required",
+            )
+        )
+    elif trusted and enrollment_mode != "required":
+        checks.append(
+            Check(
+                "node_enrollment_mode",
+                "error",
+                "trusted-alpha requires durable node enrollment; set node_enrollment_mode to required",
+            )
+        )
+    elif enrollment_mode == "compat":
+        checks.append(
+            Check(
+                "node_enrollment_mode",
+                "warning",
+                "legacy unenrolled node sessions are explicitly enabled for local compatibility",
+            )
+        )
+    else:
+        checks.append(
+            Check(
+                "node_enrollment_mode",
+                "pass",
+                "durable node enrollment is required",
+            )
+        )
+
     authorities = ("viewer_key", "pitch_key", "node_secret")
     valid_authorities: dict[str, str] = {}
     for authority in authorities:
@@ -200,6 +237,7 @@ def run_preflight(
         checks.append(Check("public_pitch", "pass", "public pitch is disabled"))
 
     https_enabled = settings.get("https_enabled")
+    private_overlay = settings.get("private_overlay")
     secure_cookie = settings.get("viewer_cookie_secure")
     trust_proxy = settings.get("trust_proxy_headers")
     if not all(isinstance(value, bool) for value in (https_enabled, secure_cookie, trust_proxy)):
@@ -232,6 +270,37 @@ def run_preflight(
         )
     else:
         checks.append(Check("https_cookie", "pass", "HTTPS and cookie settings agree"))
+
+    if not isinstance(private_overlay, bool):
+        checks.append(
+            Check(
+                "worker_transport",
+                "error" if trusted else "warning",
+                "private_overlay must be a boolean",
+            )
+        )
+    elif trusted and not (https_enabled is True or private_overlay is True):
+        checks.append(
+            Check(
+                "worker_transport",
+                "error",
+                "trusted-alpha bearer credentials require HTTPS or an authenticated private overlay",
+            )
+        )
+    elif https_enabled is True:
+        checks.append(Check("worker_transport", "pass", "HTTPS transport is declared"))
+    elif private_overlay is True:
+        checks.append(
+            Check("worker_transport", "pass", "authenticated private-overlay transport is declared")
+        )
+    else:
+        checks.append(
+            Check(
+                "worker_transport",
+                "warning",
+                "local compatibility mode does not declare protected bearer transport",
+            )
+        )
 
     effective_bind = bind_host or settings.get("bind_host")
     if trusted:
@@ -308,6 +377,7 @@ def deployment_health_ready(payload: object) -> bool:
         isinstance(payload, dict)
         and payload.get("status") == "ok"
         and payload.get("private_routes_protected") is True
+        and payload.get("node_enrollment_required") is True
     )
 
 

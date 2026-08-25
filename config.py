@@ -16,6 +16,7 @@ from typing import Any
 CONFIG_FILE = Path(os.environ.get("MYCELIUM_CONFIG_FILE", "config.json"))
 TRUSTED_ALPHA_MARKER = ".mycelium-trusted-alpha"
 VALID_DEPLOYMENT_MODES = frozenset({"local", "trusted_alpha"})
+VALID_NODE_ENROLLMENT_MODES = frozenset({"compat", "required"})
 MIN_STATIC_CREDENTIAL_LENGTH = 32
 GENERATED_SECRET_BYTES = 32
 
@@ -108,13 +109,21 @@ DEFAULTS = {
     # Reverse proxies are not trusted by default. Operators terminating TLS at
     # a proxy must explicitly enable both settings and restrict proxy access.
     "https_enabled": False,
+    # Trusted-alpha bearer credentials must travel through HTTPS or an
+    # authenticated private overlay.  This boolean records the operator's
+    # explicit overlay boundary; it is not network enforcement by the app.
+    "private_overlay": False,
     "trust_proxy_headers": False,
 
-    # Shared secret for node authentication.
-    # Set this to a non-empty string to require worker nodes to present
-    # X-Node-Secret: <value> on /nodes/register, /tasks/next, and /tasks/*/result.
-    # Leave empty ("") to allow any node to join (default — trusted networks only).
+    # Shared initial-enrollment admission secret. Enrolled workers use their
+    # private credential to return and their issued session for normal work.
+    # Legacy compatibility sessions still send this secret on normal requests.
     "node_secret": "",
+
+    # "compat" permits explicitly unenrolled legacy sessions for loopback
+    # development. Trusted-alpha preflight requires "required" so the shared
+    # node secret is bootstrap admission rather than durable worker identity.
+    "node_enrollment_mode": "compat",
 
     # Shared key for pitch authentication.
     # Set this to a non-empty string to require X-Pitch-Key: <value> on
@@ -277,6 +286,22 @@ def load(
         _LOG.warning("Unknown deployment_mode; using local compatibility mode")
         overrides["deployment_mode"] = "local"
 
+    configured_enrollment_mode = overrides.get(
+        "node_enrollment_mode", DEFAULTS["node_enrollment_mode"]
+    )
+    valid_enrollment_mode = (
+        isinstance(configured_enrollment_mode, str)
+        and configured_enrollment_mode in VALID_NODE_ENROLLMENT_MODES
+    )
+    if not valid_enrollment_mode:
+        if effective_strict:
+            raise ConfigError(
+                "node_enrollment_mode must be one of: "
+                + ", ".join(sorted(VALID_NODE_ENROLLMENT_MODES))
+            )
+        _LOG.warning("Unknown node_enrollment_mode; using local compatibility mode")
+        overrides["node_enrollment_mode"] = "compat"
+
     config = DEFAULTS.copy()
     config.update(overrides)
     if expected:
@@ -347,19 +372,24 @@ def ensure_trusted_alpha_config(
     *,
     model: str | None = None,
     ollama_url: str | None = None,
+    private_overlay: bool | None = None,
 ) -> DeploymentConfigUpdate:
     """Create or safely upgrade a trusted-alpha configuration.
 
     Valid, independent credentials are preserved so repeat deployments do not
     disconnect operators or workers. Missing, short, or duplicate authorities
     are replaced. The returned summary intentionally contains names, never
-    values.
+    values. Transport protection is never inferred: callers must explicitly
+    assert a private authenticated overlay or configure HTTPS separately.
     """
     config_path = _config_path(path)
     overrides = read_overrides(config_path) if config_path.exists() else {}
     config = DEFAULTS.copy()
     config.update(overrides)
     config["deployment_mode"] = "trusted_alpha"
+    config["node_enrollment_mode"] = "required"
+    if private_overlay is not None and not bool(config.get("https_enabled", False)):
+        config["private_overlay"] = bool(private_overlay)
     if "bind_host" not in overrides:
         config["bind_host"] = "0.0.0.0"
     if model:
