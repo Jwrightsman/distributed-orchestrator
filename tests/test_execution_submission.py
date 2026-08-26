@@ -23,9 +23,14 @@ from execution.contracts import ExecutionRequestV1
 from execution.dispatch import Dispatcher
 from execution.idempotency import (
     InvalidIdempotencyKey,
+    REQUEST_HASH_VERSION_V1,
+    REQUEST_HASH_VERSION_V2,
+    RequestHashVersionIncompatible,
     SubmissionIdentity,
+    UnsupportedRequestHashVersion,
     canonical_request_digest,
     canonical_request_json,
+    request_hash_version,
     submission_identity,
     validate_idempotency_key,
 )
@@ -40,6 +45,33 @@ from execution.service import (
     ExecutionService,
     ServiceExecution,
     SubmissionActivationError,
+)
+
+
+_PRE_THEME_2B_TASK = "Pre-Theme-2 replay fixture"
+_PRE_THEME_2B_CANONICAL_JSON = (
+    '{"confidentiality":"local_only","max_output_bytes":1048576,'
+    '"network_policy":"disabled","output_contract":null,"placement":"local",'
+    '"project_id":null,"protocol_version":"1","remote_dispatch_consent":false,'
+    '"requirements":{"allow_local_fallback":true,"approved_node_ids":[],'
+    '"required_capabilities":[]},"strategy":"direct","strategy_options":null,'
+    '"task":"Pre-Theme-2 replay fixture","timeout_seconds":1800,'
+    '"verification":{"allow_unverified_fallback":true,"require_all":true,'
+    '"validators":[]}}'
+)
+_PRE_THEME_2B_REQUEST_JSON = (
+    '{"protocol_version":"1","task":"Pre-Theme-2 replay fixture",'
+    '"project_id":null,"strategy":"direct","strategy_options":null,'
+    '"placement":"local","remote_dispatch_consent":false,'
+    '"requirements":{"required_capabilities":[],"approved_node_ids":[],'
+    '"allow_local_fallback":true},"output_contract":null,'
+    '"verification":{"validators":[],"allow_unverified_fallback":true,'
+    '"require_all":true},"confidentiality":"local_only",'
+    '"timeout_seconds":1800,"max_output_bytes":1048576,'
+    '"network_policy":"disabled"}'
+)
+_PRE_THEME_2B_REQUEST_HASH = (
+    "c806e1c1eff81f8de2c9d30c84268e44a2d60a57e8e245875d139f7b02998b31"
 )
 
 
@@ -87,6 +119,68 @@ def _api(
     app = FastAPI()
     app.include_router(routes_executions.router)
     return TestClient(app, client=(peer_host, 50000))
+
+
+@pytest.fixture
+def pre_theme_2b_submission_database(tmp_path):
+    """A populated execution/mapping pair using the pre-Theme-2 schema and bytes."""
+
+    database = tmp_path / "pre-theme-2b.db"
+    request = ExecutionRequestV1(task=_PRE_THEME_2B_TASK, strategy="direct")
+    identity = submission_identity(
+        request,
+        idempotency_key="pre-theme-2b-key",
+        requester_scope_kind="pitch-key",
+        requester_scope_value="pre-theme-2b-requester",
+    )
+    assert identity.request_hash == _PRE_THEME_2B_REQUEST_HASH
+    service = ExecutionService(store=ExecutionStore(database))
+    queued = service._new_result(request, "f" * 32, None, "queued")
+    service.store.create_or_replay_submission(request, identity, lambda: queued)
+
+    with sqlite3.connect(database) as con:
+        mapping = con.execute(
+            """
+            SELECT requester_scope_hash, idempotency_key_hash, request_hash,
+                   execution_id, created_at
+            FROM execution_submissions
+            """
+        ).fetchone()
+        con.execute(
+            "UPDATE executions SET request_json = ? WHERE execution_id = ?",
+            (_PRE_THEME_2B_REQUEST_JSON, queued.execution_id),
+        )
+        con.execute("DROP TABLE execution_submissions")
+        con.execute(
+            """
+            CREATE TABLE execution_submissions (
+                requester_scope_hash TEXT NOT NULL,
+                idempotency_key_hash TEXT NOT NULL,
+                request_hash TEXT NOT NULL,
+                execution_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (requester_scope_hash, idempotency_key_hash),
+                FOREIGN KEY (execution_id) REFERENCES executions(execution_id)
+                    ON DELETE RESTRICT
+            )
+            """
+        )
+        con.execute(
+            """
+            INSERT INTO execution_submissions (
+                requester_scope_hash, idempotency_key_hash, request_hash,
+                execution_id, created_at
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            mapping,
+        )
+        con.execute(
+            "CREATE INDEX idx_execution_submissions_execution_id "
+            "ON execution_submissions(execution_id)"
+        )
+        con.commit()
+
+    return database, request, identity, queued.execution_id
 
 
 class CommitThenRaiseStore(ExecutionStore):
@@ -276,6 +370,69 @@ def test_canonical_request_digest_changes_for_material_request_change():
     assert canonical_request_digest(first) != canonical_request_digest(changed)
 
 
+def test_pre_theme_2b_request_hash_v1_bytes_are_frozen():
+    request = ExecutionRequestV1(task=_PRE_THEME_2B_TASK, strategy="direct")
+
+    assert request_hash_version(request) == REQUEST_HASH_VERSION_V1
+    assert canonical_request_json(request) == _PRE_THEME_2B_CANONICAL_JSON
+    assert canonical_request_digest(request) == _PRE_THEME_2B_REQUEST_HASH
+
+
+def test_empty_typed_requirement_block_preserves_request_hash_v1():
+    legacy = ExecutionRequestV1(task="No effective typed requirement", strategy="direct")
+    explicit_empty = ExecutionRequestV1(
+        task="No effective typed requirement",
+        strategy="direct",
+        requirements={"resource_requirements": {}},
+    )
+
+    assert request_hash_version(explicit_empty) == REQUEST_HASH_VERSION_V1
+    assert canonical_request_json(explicit_empty) == canonical_request_json(legacy)
+    assert canonical_request_digest(explicit_empty) == canonical_request_digest(legacy)
+
+
+def test_material_typed_requirements_use_v2_and_conflict_when_changed():
+    first = ExecutionRequestV1(
+        task="Typed resources",
+        strategy="direct",
+        requirements={
+            "resource_requirements": {
+                "minimum_memory_bytes": 8_589_934_592,
+                "required_features": ["json", "code"],
+            }
+        },
+    )
+    reordered = ExecutionRequestV1(
+        requirements={
+            "resource_requirements": {
+                "required_features": ["code", "json"],
+                "minimum_memory_bytes": 8_589_934_592,
+            }
+        },
+        strategy="direct",
+        task="Typed resources",
+    )
+    changed = ExecutionRequestV1(
+        task="Typed resources",
+        strategy="direct",
+        requirements={
+            "resource_requirements": {
+                "minimum_memory_bytes": 17_179_869_184,
+                "required_features": ["code", "json"],
+            }
+        },
+    )
+
+    assert request_hash_version(first) == REQUEST_HASH_VERSION_V2
+    assert canonical_request_json(first) == canonical_request_json(reordered)
+    assert canonical_request_digest(first) == canonical_request_digest(reordered)
+    assert canonical_request_digest(first) != canonical_request_digest(changed)
+    with pytest.raises(RequestHashVersionIncompatible):
+        canonical_request_digest(first, hash_version=REQUEST_HASH_VERSION_V1)
+    with pytest.raises(UnsupportedRequestHashVersion):
+        canonical_request_digest(first, hash_version="")
+
+
 @pytest.mark.parametrize("value", ["", "   ", "x" * 129, "control\x1fcharacter", "snowman-☃"])
 def test_idempotency_key_validation_rejects_values_outside_printable_ascii(value):
     with pytest.raises(InvalidIdempotencyKey):
@@ -294,6 +451,16 @@ def test_submission_identity_rejects_plaintext_before_persistence(tmp_path):
         )
 
     assert _counts(database) == (0, 0)
+
+
+def test_submission_identity_legacy_constructor_defaults_to_hash_v1():
+    identity = SubmissionIdentity(
+        requester_scope_hash="0" * 64,
+        idempotency_key_hash="1" * 64,
+        request_hash="2" * 64,
+    )
+
+    assert identity.request_hash_version == REQUEST_HASH_VERSION_V1
 
 
 def test_idempotent_submission_detaches_caller_owned_request(
@@ -356,11 +523,14 @@ def test_fresh_schema_has_scoped_primary_key_index_and_foreign_key(tmp_path):
         "requester_scope_hash",
         "idempotency_key_hash",
         "request_hash",
+        "request_hash_version",
         "execution_id",
         "created_at",
     }
     assert by_name["requester_scope_hash"][5] == 1
     assert by_name["idempotency_key_hash"][5] == 2
+    assert by_name["request_hash_version"][3] == 1
+    assert by_name["request_hash_version"][4] == "'1'"
     assert "idx_execution_submissions_execution_id" in indexes
     assert any(
         row[2] == "executions"
@@ -368,6 +538,140 @@ def test_fresh_schema_has_scoped_primary_key_index_and_foreign_key(tmp_path):
         and row[4] == "execution_id"
         for row in foreign_keys
     )
+
+
+def test_pre_theme_2b_mapping_migrates_and_replays_with_stored_hash_version(
+    pre_theme_2b_submission_database,
+    monkeypatch,
+):
+    database, request, identity, execution_id = pre_theme_2b_submission_database
+    with sqlite3.connect(database) as con:
+        before = {
+            row[1] for row in con.execute("PRAGMA table_info(execution_submissions)")
+        }
+    assert "request_hash_version" not in before
+
+    store = ExecutionStore(database)
+    store.migrate()
+    store.migrate()
+    row = store.raw_submission(
+        identity.requester_scope_hash,
+        identity.idempotency_key_hash,
+    )
+    assert row is not None
+    assert row["request_hash"] == _PRE_THEME_2B_REQUEST_HASH
+    assert row["request_hash_version"] == REQUEST_HASH_VERSION_V1
+
+    service = ExecutionService(store=store)
+    activated: list[str] = []
+    _stub_activation(monkeypatch, service, activated)
+    replayed = service.submit_idempotent(request, identity)
+
+    assert replayed.replayed is True
+    assert replayed.result.execution_id == execution_id
+    assert activated == []
+    assert _counts(database) == (1, 1)
+
+
+def test_typed_requirements_conflict_with_pre_theme_2b_mapping(
+    pre_theme_2b_submission_database,
+):
+    database, request, _identity, execution_id = pre_theme_2b_submission_database
+    typed_request = ExecutionRequestV1.model_validate(
+        {
+            **request.model_dump(mode="json"),
+            "requirements": {
+                **request.requirements.model_dump(mode="json"),
+                "resource_requirements": {"minimum_logical_cpus": 8},
+            },
+        }
+    )
+    typed_identity = submission_identity(
+        typed_request,
+        idempotency_key="pre-theme-2b-key",
+        requester_scope_kind="pitch-key",
+        requester_scope_value="pre-theme-2b-requester",
+    )
+
+    assert typed_identity.request_hash_version == REQUEST_HASH_VERSION_V2
+    service = ExecutionService(store=ExecutionStore(database))
+    with pytest.raises(IdempotencyConflictError) as raised:
+        service.submit_idempotent(typed_request, typed_identity)
+    assert raised.value.execution_id == execution_id
+
+
+def test_new_typed_mapping_replays_and_material_requirement_change_conflicts(
+    tmp_path,
+    monkeypatch,
+):
+    database = tmp_path / "events.db"
+    request = ExecutionRequestV1(
+        task="Versioned typed mapping",
+        strategy="direct",
+        requirements={"resource_requirements": {"minimum_logical_cpus": 4}},
+    )
+    changed = ExecutionRequestV1(
+        task="Versioned typed mapping",
+        strategy="direct",
+        requirements={"resource_requirements": {"minimum_logical_cpus": 8}},
+    )
+    identity = submission_identity(
+        request,
+        idempotency_key="typed-version-key",
+        requester_scope_kind="pitch-key",
+        requester_scope_value="typed-version-requester",
+    )
+    changed_identity = submission_identity(
+        changed,
+        idempotency_key="typed-version-key",
+        requester_scope_kind="pitch-key",
+        requester_scope_value="typed-version-requester",
+    )
+    service = ExecutionService(store=ExecutionStore(database))
+    activated: list[str] = []
+    _stub_activation(monkeypatch, service, activated)
+
+    created = service.submit_idempotent(request, identity)
+    replayed = service.submit_idempotent(request, identity)
+    with pytest.raises(IdempotencyConflictError):
+        service.submit_idempotent(changed, changed_identity)
+
+    row = service.store.raw_submission(
+        identity.requester_scope_hash,
+        identity.idempotency_key_hash,
+    )
+    assert created.replayed is False
+    assert replayed.replayed is True
+    assert replayed.result.execution_id == created.result.execution_id
+    assert row is not None
+    assert row["request_hash_version"] == REQUEST_HASH_VERSION_V2
+    assert activated == [created.result.execution_id]
+
+
+def test_unknown_stored_request_hash_version_fails_closed(tmp_path, monkeypatch):
+    database = tmp_path / "events.db"
+    request = ExecutionRequestV1(task="Unknown hash version", strategy="direct")
+    identity = submission_identity(
+        request,
+        idempotency_key="unknown-version-key",
+        requester_scope_kind="pitch-key",
+        requester_scope_value="unknown-version-requester",
+    )
+    service = ExecutionService(store=ExecutionStore(database))
+    activated: list[str] = []
+    _stub_activation(monkeypatch, service, activated)
+    created = service.submit_idempotent(request, identity)
+    with sqlite3.connect(database) as con:
+        con.execute(
+            "UPDATE execution_submissions SET request_hash_version = '99' "
+            "WHERE execution_id = ?",
+            (created.result.execution_id,),
+        )
+        con.commit()
+
+    with pytest.raises(SubmissionConsistencyError):
+        service.submit_idempotent(request, identity)
+    assert activated == [created.result.execution_id]
 
 
 def test_schema_upgrade_preserves_existing_data_and_is_idempotent(tmp_path):
@@ -1797,6 +2101,7 @@ def test_only_digests_reach_storage_or_logs(tmp_path, monkeypatch, caplog):
         value = row[field]
         assert len(value) == 64
         assert set(value) <= set(string.hexdigits.lower())
+    assert row["request_hash_version"] == REQUEST_HASH_VERSION_V1
     serialized_row = repr(row)
     database_bytes = b"".join(
         path.read_bytes()

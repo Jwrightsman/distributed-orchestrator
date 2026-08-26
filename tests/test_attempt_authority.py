@@ -15,10 +15,33 @@ from execution.attempts import (
     AttemptStore,
     ReceiptBindingError,
 )
+from node_capabilities import (
+    NodeCapabilityDescriptorV1,
+    NodeCapabilitySnapshotStore,
+    capability_descriptor_digest,
+)
 from node_enrollments import ensure_node_enrollment_schema
 
 
 EXECUTION_ID = "e" * 32
+TEST_DESCRIPTOR = NodeCapabilityDescriptorV1.model_validate(
+    {
+        "executor": {"kind": "ollama", "worker_protocol_version": "1"},
+        "models": [{"provider": "ollama", "name": "qwen3.5:4b"}],
+        "hardware": {
+            "architecture": "x86_64",
+            "logical_cpu_count": 4,
+            "total_memory_bytes": 8 * 1024**3,
+        },
+        "features": ["code"],
+        "limits": {
+            "max_concurrent_execution_units": 1,
+            "max_output_bytes": 1_048_576,
+        },
+        "isolation": {"kind": "none"},
+    }
+)
+TEST_DESCRIPTOR_HASH = capability_descriptor_digest(TEST_DESCRIPTOR)
 
 
 def _task(task_id: str = "task-1") -> dict:
@@ -92,6 +115,7 @@ def _enroll(
             ),
         )
         con.commit()
+    NodeCapabilitySnapshotStore(path).remember(enrollment_id, TEST_DESCRIPTOR)
 
 
 def _issue_enrolled(
@@ -113,12 +137,69 @@ def _issue_enrolled(
         assigned_enrollment_id=enrollment_id,
         assigned_credential_version=credential_version,
         assigned_session_id=session_id,
+        assigned_descriptor_version=TEST_DESCRIPTOR.descriptor_version,
+        assigned_descriptor_hash=TEST_DESCRIPTOR_HASH,
         attempt_id=attempt_id,
         nonce=nonce,
         issued_at=now,
         lease_expires_at=now + 60,
     )
     return task, attempt_id, nonce
+
+
+def test_enrolled_attempt_requires_a_valid_descriptor_snapshot_binding(tmp_path):
+    path = tmp_path / "attempts.db"
+    _enroll(path, "enrollment-a", "worker")
+    store = AttemptStore(path)
+    now = time.time()
+
+    with pytest.raises(ValueError, match="descriptor snapshot binding"):
+        store.issue(
+            _task("missing-descriptor"),
+            assigned_node_id="worker",
+            assigned_enrollment_id="enrollment-a",
+            assigned_credential_version=1,
+            assigned_session_id="session-a",
+            attempt_id="attempt-missing-descriptor",
+            nonce="nonce-missing-descriptor",
+            issued_at=now,
+            lease_expires_at=now + 60,
+        )
+
+    with pytest.raises(AttemptConflict, match="snapshot is missing"):
+        store.issue(
+            _task("unknown-descriptor"),
+            assigned_node_id="worker",
+            assigned_enrollment_id="enrollment-a",
+            assigned_credential_version=1,
+            assigned_session_id="session-a",
+            assigned_descriptor_version="1",
+            assigned_descriptor_hash="f" * 64,
+            attempt_id="attempt-unknown-descriptor",
+            nonce="nonce-unknown-descriptor",
+            issued_at=now,
+            lease_expires_at=now + 60,
+        )
+
+
+def test_attempt_issue_rejects_injected_requirement_identity(tmp_path):
+    store = AttemptStore(tmp_path / "attempts.db")
+    now = time.time()
+    task = _task("injected-requirements")
+    task["requires"] = ["code"]
+    task["requirement_digest"] = "f" * 64
+
+    with pytest.raises(ValueError, match="canonical task requirements"):
+        store.issue(
+            task,
+            assigned_node_id="legacy-worker",
+            attempt_id="attempt-injected-requirements",
+            nonce="nonce-injected-requirements",
+            issued_at=now,
+            lease_expires_at=now + 60,
+        )
+
+    assert store.get("attempt-injected-requirements") is None
 
 
 def test_migration_stores_nonce_digest_not_raw_secret(tmp_path):
@@ -229,14 +310,42 @@ def test_additive_migration_keeps_historical_attempt_and_receipt_unattributed(tm
     assert attempt is not None
     assert attempt.assigned_enrollment_id is None
     assert attempt.assigned_credential_version is None
+    assert attempt.assigned_descriptor_version is None
+    assert attempt.assigned_descriptor_hash is None
+    assert attempt.requirement_version is None
+    assert attempt.requirement_digest is None
     assert receipt is not None
     assert receipt.assigned_enrollment_id is None
+    assert receipt.assigned_descriptor_version is None
+    assert receipt.assigned_descriptor_hash is None
+    assert receipt.requirement_version is None
+    assert receipt.requirement_digest is None
     assert receipt.as_legacy_result()["enrollment_id"] is None
+    assert receipt.as_legacy_result()["capability_descriptor_hash"] is None
     with sqlite3.connect(path) as con:
         quarantine_columns = {
             row[1] for row in con.execute("PRAGMA table_info(result_quarantine)")
         }
+        attempt_columns = {
+            row[1] for row in con.execute("PRAGMA table_info(attempts)")
+        }
+        receipt_columns = {
+            row[1]
+            for row in con.execute("PRAGMA table_info(accepted_result_receipts)")
+        }
     assert "claimed_enrollment_id" in quarantine_columns
+    assert {
+        "assigned_descriptor_version",
+        "assigned_descriptor_hash",
+        "requirement_version",
+        "requirement_digest",
+    }.issubset(attempt_columns)
+    assert {
+        "assigned_descriptor_version",
+        "assigned_descriptor_hash",
+        "requirement_version",
+        "requirement_digest",
+    }.issubset(receipt_columns)
 
 
 def test_exact_replay_survives_database_reopen(tmp_path):

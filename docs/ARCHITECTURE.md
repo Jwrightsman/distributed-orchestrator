@@ -78,8 +78,11 @@ lifecycle transition. See [ADR 0009](adr/0009-durable-terminal-commit-before-pub
 
 Only canonical HTTP submission currently accepts `Idempotency-Key`. After
 authentication, rate limiting, and canonical validation, the endpoint computes
-three digests: the validated request including defaults, the key, and its
-requester scope. Configured `pitch_key` material defines the authenticated
+three digests: the explicitly versioned canonical request, the key, and its
+requester scope. Pre-capability requests retain serializer version 1; an
+effective typed resource constraint selects version 2, and the durable mapping
+records which serializer replay must use. Configured `pitch_key` material
+defines the authenticated
 scope; open development mode uses the direct ASGI peer host as a best-effort
 scope and does not trust forwarding headers.
 
@@ -112,6 +115,34 @@ invalidates live use without making sessions durable. Restart drops all
 sessions and active scheduling state but preserves enrollment identity and
 historical attribution. See
 [ADR 0010](adr/0010-durable-enrollment-identity.md).
+
+## Capability claims and hard eligibility
+
+Each enrolled worker session may bind one strict versioned capability
+descriptor. It describes the node's claimed executor, models, hardware,
+features, limits, and isolation. Canonical JSON and its SHA-256 digest are
+stored as an immutable enrollment-scoped snapshot; changing a claim requires a
+new session. Values populated by stock-worker detection or operator overrides
+remain self-reported claims, not observed evidence or attestation. The digest
+identifies the claim; it does not prove the claimed hardware or model bytes.
+
+Canonical requests may carry bounded typed resource requirements in addition
+to legacy required-capability strings. A single pure matcher is used for both
+initial node qualification and final task handout. It returns stable exclusion
+reasons and the descriptor hash evaluated. Hard constraints exclude ineligible
+nodes but never rank eligible ones, and unknown claim values do not satisfy
+exact or minimum constraints.
+
+That matcher boundary does not remove the pre-existing process-local sampled
+verification pool. In local mode, when explicitly enabled, its routing weight
+may defer first refusal among nodes that already passed hard eligibility. It is
+off by default and forced off in trusted-alpha mode. Theme 2B neither consumes
+descriptor evidence nor adds a new ranking mechanism.
+
+Attempt issuance binds the session's descriptor version/hash and the canonical
+requirement version/digest before handout. Receipts preserve that binding, so a
+later session's descriptor cannot change historical assignment meaning. See
+[ADR 0011](adr/0011-node-capabilities-versioned-claims.md).
 
 ## DAG execution
 
@@ -194,7 +225,9 @@ flowchart LR
 
 Strategy and placement are orthogonal: complete ensemble candidates as well as
 DAG builder units may run on workers. `local_only` prohibits worker dispatch.
-Capabilities, approved-node allowlists, and breaker state filter eligibility.
+Typed resource requirements, legacy capability tags, approved-node allowlists,
+and breaker state filter eligibility. Typed and legacy constraints are both
+hard when both are present and use the same matcher again at task handout.
 Canonical remote-capable requests require a recorded consent bit.
 
 Results distinguish placement requested, planned, and observed. Unit counts,
@@ -212,8 +245,8 @@ sequenceDiagram
     participant B as AcceptedResultBroker
     D->>Q: queue bound execution unit
     W->>Q: poll as admitted node
-    Q->>A: insert active attempt before handout
-    Q-->>W: task + attempt id + nonce + lease + bindings
+    Q->>A: insert attempt + descriptor/requirement digests before handout
+    Q-->>W: task + attempt id + nonce + lease + immutable bindings
     W->>A: submit echoed binding fields and output
     A->>A: BEGIN IMMEDIATE; validate; active→settled
     A->>A: insert receipt + unique compute contribution
@@ -321,6 +354,7 @@ and cookie behavior are in [ACCESS_CONTROL.md](ACCESS_CONTROL.md).
 | Attempt state and exact replay | Yes, SQLite | active rows become `interrupted`; settled replay remains |
 | Accepted receipts | Yes, SQLite | broker can reload a matching receipt |
 | Node enrollments and credential digests | Yes, SQLite | identity/revocation survive; worker obtains a new session |
+| Enrolled capability snapshots | Yes, SQLite | immutable claim JSON and descriptor hashes survive; a fresh session selects its claim |
 | Contribution records | Yes, SQLite | unique attempt contribution and enrollment attribution remain exactly once |
 | Share records and token hashes | Yes, SQLite | expiry/revocation remain effective |
 | Artifact root and manifest metadata | Yes, SQLite plus disk | files remain until retention/pruning |

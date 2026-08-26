@@ -54,6 +54,10 @@ from node_sessions import (
     NodeSessionRegistry,
     normalize_node_id,
 )
+from node_capabilities import (
+    NodeCapabilityDescriptorV1,
+    NodeCapabilitySnapshotStore,
+)
 
 logger = logging.getLogger("mycelium.diagnostics")
 
@@ -237,6 +241,7 @@ _db_lock = threading.Lock()
 # rejection authority do not.
 attempt_store = AttemptStore(_DB_PATH)
 enrollment_store = NodeEnrollmentStore(_DB_PATH)
+capability_snapshot_store = NodeCapabilitySnapshotStore(_DB_PATH)
 accepted_result_broker = AcceptedResultBroker(attempt_store)
 _COORDINATOR_RESTART_MARKER = f"restart-{secrets.token_hex(12)}"
 
@@ -253,6 +258,9 @@ def _clear_worker_assignment(task: dict[str, Any]) -> None:
         "assigned_session_id",
         "assigned_enrollment_id",
         "assigned_credential_version",
+        "assigned_descriptor_version",
+        "assigned_descriptor_hash",
+        "selected_model",
         "assigned_at",
         "attempt_id",
         "nonce",
@@ -418,6 +426,8 @@ _SAFE_EVENT_FIELDS = {
             "unit_id",
             "node_id",
             "enrollment_id",
+            "descriptor_version",
+            "descriptor_hash",
             "placement",
         }
     ),
@@ -430,6 +440,8 @@ _SAFE_EVENT_FIELDS = {
             "unit_kind",
             "node_id",
             "enrollment_id",
+            "descriptor_version",
+            "descriptor_hash",
             "placement",
             "status",
             "duration_ms",
@@ -733,6 +745,7 @@ def _init_db() -> None:
         con.commit()
     _redact_in_memory_events()
     enrollment_store.migrate()
+    capability_snapshot_store.migrate()
     attempt_store.migrate()
     # Redact legacy free-form contribution metadata and regenerate the JSON
     # projection before any read route can expose it.
@@ -1191,6 +1204,7 @@ class NodeRegistration(BaseModel):
     # Used by the dispatcher to match tasks to capable nodes.
     # One slot is reserved for the server-added ``model:<name>`` tag.
     capabilities: list[str] = Field(default_factory=list, max_length=31)
+    capability_descriptor: NodeCapabilityDescriptorV1 | None = None
 
     @field_validator("node_id")
     @classmethod
@@ -1408,17 +1422,7 @@ def _cleanup_pass():
             task = task_inflight.pop(tid)
             deadline = task.get("execution_deadline_at")
             if not deadline or float(deadline) > now:
-                for field in (
-                    "assigned_to",
-                    "assigned_session_id",
-                    "assigned_enrollment_id",
-                    "assigned_credential_version",
-                    "assigned_at",
-                    "attempt_id",
-                    "nonce",
-                    "lease_expires_at",
-                ):
-                    task.pop(field, None)
+                _clear_worker_assignment(task)
                 task_queue.append(task)
                 _emit("task_reclaimed", {
                     "task_id": tid,
@@ -1513,17 +1517,7 @@ def _cleanup_pass():
                     )
                     continue
                 task = task_inflight.pop(tid)
-                for field in (
-                    "assigned_to",
-                    "assigned_session_id",
-                    "assigned_enrollment_id",
-                    "assigned_credential_version",
-                    "assigned_at",
-                    "attempt_id",
-                    "nonce",
-                    "lease_expires_at",
-                ):
-                    task.pop(field, None)
+                _clear_worker_assignment(task)
                 task_queue.append(task)
             _emit(
                 "task_reclaimed",

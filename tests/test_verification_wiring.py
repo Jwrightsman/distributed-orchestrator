@@ -55,12 +55,33 @@ def client():
 
 
 def _register(client, node_id: str):
-    return client.post("/nodes/register", json={
-        "node_id": node_id, "model": "qwen3.5:4b", "platform": "Linux",
-        "machine": "x86_64", "hostname": node_id,
-        "enrollment_action": "bootstrap",
-        "enrollment_credential": f"verification-{node_id}-" + "x" * 40,
-    })
+    return client.post(
+        "/nodes/register",
+        json={
+            "node_id": node_id,
+            "model": "qwen3.5:4b",
+            "platform": "Linux",
+            "machine": "x86_64",
+            "hostname": node_id,
+            "enrollment_action": "bootstrap",
+            "enrollment_credential": f"verification-{node_id}-" + "x" * 40,
+            "capability_descriptor": {
+                "executor": {"kind": "ollama", "worker_protocol_version": "1"},
+                "models": [{"provider": "ollama", "name": "qwen3.5:4b"}],
+                "hardware": {
+                    "architecture": "x86_64",
+                    "logical_cpu_count": 4,
+                    "total_memory_bytes": 8 * 1024**3,
+                },
+                "features": ["code"],
+                "limits": {
+                    "max_concurrent_execution_units": 1,
+                    "max_output_bytes": 1_048_576,
+                },
+                "isolation": {"kind": "none"},
+            },
+        },
+    )
 
 
 def _degrade(node_id: str, disagreements: int = MIN_SAMPLES_FOR_ROUTING):

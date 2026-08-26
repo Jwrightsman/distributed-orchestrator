@@ -21,6 +21,10 @@ from pathlib import Path
 from typing import Any, Literal
 
 from ledger import ensure_contribution_schema, insert_contribution_in_transaction
+from node_capabilities import (
+    canonical_requirement_binding,
+    ensure_node_capability_snapshot_schema,
+)
 from node_enrollments import ensure_node_enrollment_schema
 from sqlite_store import connect as sqlite_connect
 from sqlite_store import connection, migration_lock
@@ -100,6 +104,10 @@ class AttemptRecord:
     assigned_enrollment_id: str | None
     assigned_credential_version: int | None
     assigned_session_id: str | None
+    assigned_descriptor_version: str | None
+    assigned_descriptor_hash: str | None
+    requirement_version: str | None
+    requirement_digest: str | None
     contract_version: str | None
     nonce_digest: str
     state: str
@@ -133,6 +141,10 @@ class AcceptedResultReceipt:
     execution_unit_kind: str | None
     assigned_node_id: str
     assigned_enrollment_id: str | None
+    assigned_descriptor_version: str | None
+    assigned_descriptor_hash: str | None
+    requirement_version: str | None
+    requirement_digest: str | None
     contract_version: str | None
     result_hash: str
     accepted_at: float
@@ -150,6 +162,10 @@ class AcceptedResultReceipt:
             "task_id": self.task_id,
             "node_id": self.assigned_node_id,
             "enrollment_id": self.assigned_enrollment_id,
+            "capability_descriptor_version": self.assigned_descriptor_version,
+            "capability_descriptor_hash": self.assigned_descriptor_hash,
+            "resource_requirement_version": self.requirement_version,
+            "resource_requirement_digest": self.requirement_digest,
             "output": self.output,
             "error": self.error,
             "elapsed_seconds": self.elapsed_seconds,
@@ -186,6 +202,34 @@ class StreamBatchOutcome:
 def nonce_digest(nonce: str) -> str:
     """One-way digest for a high-entropy server nonce."""
     return hashlib.sha256(nonce.encode("utf-8")).hexdigest()
+
+
+def _validate_versioned_digest(
+    version: str | None,
+    digest: str | None,
+    *,
+    label: str,
+) -> tuple[str | None, str | None]:
+    if (version is None) != (digest is None):
+        raise ValueError(f"{label} version and digest must be supplied together")
+    if version is None:
+        return None, None
+    normalized_version = str(version).strip()
+    normalized_digest = str(digest).strip().lower()
+    if (
+        not normalized_version
+        or len(normalized_version) > 16
+        or any(
+            ord(character) < 33 or ord(character) > 126
+            for character in normalized_version
+        )
+    ):
+        raise ValueError(f"{label} version must be 1-16 printable ASCII characters")
+    if len(normalized_digest) != 64 or any(
+        character not in "0123456789abcdef" for character in normalized_digest
+    ):
+        raise ValueError(f"{label} digest must be lowercase SHA-256")
+    return normalized_version, normalized_digest
 
 
 def canonical_result_hash(
@@ -242,6 +286,10 @@ class AttemptStore:
                 assigned_enrollment_id TEXT,
                 assigned_credential_version INTEGER,
                 assigned_session_id    TEXT,
+                assigned_descriptor_version TEXT,
+                assigned_descriptor_hash TEXT,
+                requirement_version     TEXT,
+                requirement_digest      TEXT,
                 contract_version       TEXT,
                 nonce_digest           TEXT NOT NULL,
                 state                  TEXT NOT NULL CHECK(state IN (
@@ -273,6 +321,10 @@ class AttemptStore:
             "assigned_enrollment_id": "TEXT",
             "assigned_credential_version": "INTEGER",
             "assigned_session_id": "TEXT",
+            "assigned_descriptor_version": "TEXT",
+            "assigned_descriptor_hash": "TEXT",
+            "requirement_version": "TEXT",
+            "requirement_digest": "TEXT",
             "max_output_bytes": "INTEGER NOT NULL DEFAULT 1048576",
             "streamed_bytes": "INTEGER NOT NULL DEFAULT 0",
             "stream_batch_count": "INTEGER NOT NULL DEFAULT 0",
@@ -308,6 +360,10 @@ class AttemptStore:
                 execution_unit_kind    TEXT,
                 assigned_node_id       TEXT NOT NULL,
                 assigned_enrollment_id TEXT,
+                assigned_descriptor_version TEXT,
+                assigned_descriptor_hash TEXT,
+                requirement_version    TEXT,
+                requirement_digest     TEXT,
                 contract_version       TEXT,
                 result_hash            TEXT NOT NULL,
                 accepted_at            REAL NOT NULL,
@@ -323,11 +379,17 @@ class AttemptStore:
                 "PRAGMA table_info(accepted_result_receipts)"
             ).fetchall()
         }
-        if "assigned_enrollment_id" not in receipt_columns:
-            con.execute(
-                "ALTER TABLE accepted_result_receipts "
-                "ADD COLUMN assigned_enrollment_id TEXT"
-            )
+        for name in (
+            "assigned_enrollment_id",
+            "assigned_descriptor_version",
+            "assigned_descriptor_hash",
+            "requirement_version",
+            "requirement_digest",
+        ):
+            if name not in receipt_columns:
+                con.execute(
+                    f"ALTER TABLE accepted_result_receipts ADD COLUMN {name} TEXT"
+                )
         con.execute(
             "CREATE INDEX IF NOT EXISTS idx_receipts_execution_unit "
             "ON accepted_result_receipts(execution_id, execution_unit_id)"
@@ -370,6 +432,7 @@ class AttemptStore:
             "ON result_quarantine(received_at)"
         )
         ensure_node_enrollment_schema(con)
+        ensure_node_capability_snapshot_schema(con)
         ensure_contribution_schema(con)
 
     def _ensure_schema(self, con: sqlite3.Connection) -> None:
@@ -410,6 +473,29 @@ class AttemptStore:
             and int(row["credential_version"]) == int(credential_version)
         )
 
+    @staticmethod
+    def _capability_snapshot_matches(
+        con: sqlite3.Connection,
+        *,
+        enrollment_id: str,
+        descriptor_version: str,
+        descriptor_hash: str,
+    ) -> bool:
+        row = con.execute(
+            """
+            SELECT descriptor_version
+            FROM node_capability_snapshots
+            WHERE enrollment_id = ? AND descriptor_hash = ?
+            """,
+            (enrollment_id, descriptor_hash),
+        ).fetchone()
+        return bool(
+            row is not None
+            and hmac.compare_digest(
+                str(row["descriptor_version"]), descriptor_version
+            )
+        )
+
     def issue(
         self,
         task: dict[str, Any],
@@ -422,6 +508,10 @@ class AttemptStore:
         assigned_session_id: str | None = None,
         assigned_enrollment_id: str | None = None,
         assigned_credential_version: int | None = None,
+        assigned_descriptor_version: str | None = None,
+        assigned_descriptor_hash: str | None = None,
+        requirement_version: str | None = None,
+        requirement_digest: str | None = None,
     ) -> AttemptRecord:
         if not attempt_id or not nonce:
             raise ValueError("attempt id and nonce are required")
@@ -439,6 +529,42 @@ class AttemptStore:
                 raise ValueError(
                     "enrolled attempt requires a positive credential version"
                 )
+        assigned_descriptor_version, assigned_descriptor_hash = (
+            _validate_versioned_digest(
+                assigned_descriptor_version,
+                assigned_descriptor_hash,
+                label="capability descriptor",
+            )
+        )
+        if assigned_enrollment_id is not None and assigned_descriptor_hash is None:
+            raise ValueError(
+                "enrolled attempt requires a capability descriptor snapshot binding"
+            )
+        expected_requirement_version, expected_requirement_digest = (
+            canonical_requirement_binding(
+                task.get("resource_requirements"), task.get("requires", [])
+            )
+        )
+        for supplied, expected, label in (
+            (
+                task.get("requirement_version"),
+                expected_requirement_version,
+                "task requirement version",
+            ),
+            (
+                task.get("requirement_digest"),
+                expected_requirement_digest,
+                "task requirement digest",
+            ),
+            (requirement_version, expected_requirement_version, "requirement version"),
+            (requirement_digest, expected_requirement_digest, "requirement digest"),
+        ):
+            if supplied is not None and str(supplied) != expected:
+                raise ValueError(f"{label} does not match canonical task requirements")
+        requirement_version = expected_requirement_version
+        requirement_digest = expected_requirement_digest
+        task["requirement_version"] = requirement_version
+        task["requirement_digest"] = requirement_digest
         try:
             max_output_bytes = int(
                 task.get("max_output_bytes", DEFAULT_MAX_OUTPUT_BYTES)
@@ -470,6 +596,10 @@ class AttemptStore:
             assigned_enrollment_id,
             assigned_credential_version,
             assigned_session_id,
+            assigned_descriptor_version,
+            assigned_descriptor_hash,
+            requirement_version,
+            requirement_digest,
             task.get("contract_version"),
             nonce_digest(nonce),
             issued_at,
@@ -491,15 +621,30 @@ class AttemptStore:
                     raise AttemptConflict(
                         "assigned enrollment is revoked, missing, or no longer current"
                     )
+                if (
+                    assigned_enrollment_id is not None
+                    and not self._capability_snapshot_matches(
+                        con,
+                        enrollment_id=assigned_enrollment_id,
+                        descriptor_version=str(assigned_descriptor_version),
+                        descriptor_hash=assigned_descriptor_hash,
+                    )
+                ):
+                    raise AttemptConflict(
+                        "assigned capability descriptor snapshot is missing or inconsistent"
+                    )
                 con.execute(
                     """
                     INSERT INTO attempts (
                         attempt_id, task_id, execution_id, execution_unit_id,
                         execution_unit_kind, assigned_node_id,
                         assigned_enrollment_id, assigned_credential_version,
-                        assigned_session_id, contract_version, nonce_digest,
+                        assigned_session_id, assigned_descriptor_version,
+                        assigned_descriptor_hash, requirement_version,
+                        requirement_digest, contract_version, nonce_digest,
                         state, issued_at, lease_expires_at, max_output_bytes
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                              'active', ?, ?, ?)
                     """,
                     values,
                 )
@@ -537,6 +682,10 @@ class AttemptStore:
             assigned_session_id=task.get("assigned_session_id"),
             assigned_enrollment_id=task.get("assigned_enrollment_id"),
             assigned_credential_version=task.get("assigned_credential_version"),
+            assigned_descriptor_version=task.get("assigned_descriptor_version"),
+            assigned_descriptor_hash=task.get("assigned_descriptor_hash"),
+            requirement_version=task.get("requirement_version"),
+            requirement_digest=task.get("requirement_digest"),
         )
 
     def get(self, attempt_id: str) -> AttemptRecord | None:
@@ -821,9 +970,11 @@ class AttemptStore:
                     INSERT INTO accepted_result_receipts (
                         attempt_id, task_id, execution_id, execution_unit_id,
                         execution_unit_kind, assigned_node_id,
-                        assigned_enrollment_id, contract_version,
+                        assigned_enrollment_id, assigned_descriptor_version,
+                        assigned_descriptor_hash, requirement_version,
+                        requirement_digest, contract_version,
                         result_hash, accepted_at, output, error, elapsed_seconds
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         record.attempt_id,
@@ -833,6 +984,10 @@ class AttemptStore:
                         record.execution_unit_kind,
                         record.assigned_node_id,
                         record.assigned_enrollment_id,
+                        record.assigned_descriptor_version,
+                        record.assigned_descriptor_hash,
+                        record.requirement_version,
+                        record.requirement_digest,
                         record.contract_version,
                         result_hash,
                         accepted_at,

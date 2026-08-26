@@ -22,6 +22,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Callable
 
 
 NODE_ID_MAX_LENGTH = 64
@@ -39,6 +40,10 @@ class InvalidNodeId(ValueError):
 
 class DuplicateNodeSession(RuntimeError):
     """A different live session already owns a normalized node label."""
+
+
+class NodeSessionDescriptorConflict(RuntimeError):
+    """A live session attempted to replace its immutable capability claim."""
 
 
 class InvalidNodeSession(RuntimeError):
@@ -91,6 +96,8 @@ class NodeSessionRecord:
     expires_at: float
     enrollment_id: str | None = None
     credential_version: int | None = None
+    capability_descriptor_version: str | None = None
+    capability_descriptor_hash: str | None = None
 
     def public_metadata(self) -> dict[str, str | float]:
         """Return non-secret metadata safe for registration and node views."""
@@ -100,6 +107,8 @@ class NodeSessionRecord:
             "session_id": self.session_id,
             "enrollment_id": self.enrollment_id,
             "credential_version": self.credential_version,
+            "capability_descriptor_version": self.capability_descriptor_version,
+            "capability_descriptor_hash": self.capability_descriptor_hash,
             "session_started_at": _iso_timestamp(self.session_started_at),
             "session_expires_at": _iso_timestamp(self.expires_at),
             "last_seen": self.last_seen,
@@ -147,7 +156,10 @@ class NodeSessionRegistry:
         *,
         enrollment_id: str | None = None,
         credential_version: int | None = None,
+        capability_descriptor_version: str | None = None,
+        capability_descriptor_hash: str | None = None,
         presented_token: str | None = None,
+        before_grant: Callable[[], None] | None = None,
         now: float | None = None,
     ) -> NodeSessionGrant:
         """Create, reclaim, or idempotently refresh one normalized claim.
@@ -159,7 +171,10 @@ class NodeSessionRegistry:
         otherwise becomes reclaimable after absolute expiry or the documented
         staleness interval. If the exact live token and enrollment binding are
         presented, registration is idempotent and the server echoes that token;
-        it never needs to retain the plaintext itself.
+        it never needs to retain the plaintext itself. ``before_grant`` runs
+        under the registry lock only after conflicts have been rejected and
+        before the session is refreshed or installed, so durable claim storage
+        can fail closed without recording a rejected mutation.
         """
 
         normalized = normalize_node_id(node_id)
@@ -181,20 +196,67 @@ class NodeSessionRegistry:
                 )
         else:
             normalized_version = None
+        if (capability_descriptor_version is None) != (
+            capability_descriptor_hash is None
+        ):
+            raise ValueError(
+                "capability descriptor version and hash must be supplied together"
+            )
+        if capability_descriptor_version is not None:
+            normalized_descriptor_version = str(
+                capability_descriptor_version
+            ).strip()
+            normalized_descriptor_hash = str(capability_descriptor_hash).strip().lower()
+            if (
+                not normalized_descriptor_version
+                or len(normalized_descriptor_version) > 16
+                or any(
+                    ord(character) < 33 or ord(character) > 126
+                    for character in normalized_descriptor_version
+                )
+            ):
+                raise ValueError(
+                    "capability descriptor version must be 1-16 printable ASCII characters"
+                )
+            if len(normalized_descriptor_hash) != 64 or any(
+                character not in "0123456789abcdef"
+                for character in normalized_descriptor_hash
+            ):
+                raise ValueError("capability descriptor hash must be lowercase SHA-256")
+        else:
+            normalized_descriptor_version = None
+            normalized_descriptor_hash = None
         current_time = time.time() if now is None else float(now)
         with self._lock:
             existing = self._sessions.get(normalized)
-            binding_matches = bool(
+            authority_binding_matches = bool(
                 existing is not None
                 and existing.enrollment_id == normalized_enrollment
                 and existing.credential_version == normalized_version
             )
-            if (
+            descriptor_binding_matches = bool(
+                existing is not None
+                and existing.capability_descriptor_version
+                == normalized_descriptor_version
+                and existing.capability_descriptor_hash == normalized_descriptor_hash
+            )
+            current_token_matches = bool(
                 existing is not None
                 and current_time < existing.expires_at
-                and binding_matches
+                and authority_binding_matches
                 and self._token_matches(existing, presented_token)
+            )
+            if current_token_matches and not descriptor_binding_matches:
+                raise NodeSessionDescriptorConflict(
+                    "capability descriptor is immutable for the current node session; "
+                    "drain or establish a new session"
+                )
+            if (
+                current_token_matches
+                and descriptor_binding_matches
             ):
+                if before_grant is not None:
+                    before_grant()
                 existing.last_seen = current_time
                 return NodeSessionGrant(
                     record=existing,
@@ -217,6 +279,8 @@ class NodeSessionRegistry:
                     f"node_id '{normalized}' already has an active session"
                 )
 
+            if before_grant is not None:
+                before_grant()
             plaintext = secrets.token_urlsafe(32)
             replacement = existing.session_id if existing is not None else None
             record = NodeSessionRecord(
@@ -228,6 +292,8 @@ class NodeSessionRegistry:
                 expires_at=current_time + self.session_ttl_seconds,
                 enrollment_id=normalized_enrollment,
                 credential_version=normalized_version,
+                capability_descriptor_version=normalized_descriptor_version,
+                capability_descriptor_hash=normalized_descriptor_hash,
             )
             self._sessions[normalized] = record
             return NodeSessionGrant(

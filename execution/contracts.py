@@ -11,6 +11,8 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from node_capabilities import NodeResourceRequirementsV1
+
 StrategyNameV1 = Literal["auto", "dag", "ensemble", "direct"]
 SelectedStrategyV1 = Literal["dag", "ensemble"]
 PlacementV1 = Literal["auto", "local", "distributed"]
@@ -221,6 +223,7 @@ class ExecutionRequirementsV1(ProtocolModel):
     required_capabilities: list[str] = Field(default_factory=list, max_length=16)
     approved_node_ids: list[str] = Field(default_factory=list, max_length=32)
     allow_local_fallback: bool = True
+    resource_requirements: NodeResourceRequirementsV1 | None = None
 
     @field_validator("required_capabilities", "approved_node_ids")
     @classmethod
@@ -357,6 +360,11 @@ class ExecutionUnitSummaryV1(ProtocolModel):
     placement: SelectedPlacementV1 | None = None
     node_id: str | None = Field(default=None, max_length=128)
     enrollment_id: str | None = Field(default=None, max_length=64)
+    capability_descriptor_version: str | None = Field(default=None, max_length=16)
+    capability_descriptor_hash: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
     attempt_count: int = Field(default=0, ge=0, le=20)
     duration_ms: int = Field(default=0, ge=0)
     fallback_reason: str | None = Field(default=None, max_length=500)
@@ -372,6 +380,11 @@ class CandidateSummaryV1(ProtocolModel):
     placement: SelectedPlacementV1 | None = None
     node_id: str | None = Field(default=None, max_length=128)
     enrollment_id: str | None = Field(default=None, max_length=64)
+    capability_descriptor_version: str | None = Field(default=None, max_length=16)
+    capability_descriptor_hash: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
     generation_duration_ms: int = Field(default=0, ge=0)
     validation_duration_ms: int = Field(default=0, ge=0)
     validation: list[ValidationEvidenceV1] = Field(default_factory=list, max_length=16)

@@ -71,6 +71,19 @@ in that document is itself the finding.
 
 ## Scope
 
+Versioned worker capability descriptors are self-reported claims. Their
+canonical SHA-256 hashes identify the exact claim bound to a session and
+attempt; they do not attest hardware, model bytes, isolation, operator identity,
+performance, trust, or correctness. An admitted worker can submit a valid but
+false descriptor. Typed requirements reduce accidental misrouting, not this
+malicious-worker risk.
+
+Full normalized descriptors may reveal private hardware/model inventory. They
+are available only through viewer-protected operator diagnostics; public health
+and status surfaces must remain descriptor-free. Reports should include a
+descriptor hash and stable exclusion/error code when sufficient, not the full
+claim, hostname, override file, enrollment credential, or session token.
+
 **In scope:** this repository, and the orchestrator, node, MCP server and
 installers it contains.
 

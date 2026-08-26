@@ -37,7 +37,8 @@ defaults are local placement and local-only confidentiality:
   "requirements": {
     "required_capabilities": [],
     "approved_node_ids": [],
-    "allow_local_fallback": true
+    "allow_local_fallback": true,
+    "resource_requirements": null
   },
   "verification": {
     "validators": [],
@@ -74,6 +75,17 @@ Remote-capable canonical calls must make consent explicit. For example:
 DAG subtasks, identifiers, schemas, file lists, output sizes, and deadlines are
 bounded in `execution/contracts.py`.
 
+`requirements.resource_requirements` optionally contains strict
+`NodeResourceRequirementsV1` with `requirement_version="1"`. Its hard,
+bounded fields are `allowed_executor_kinds`,
+`required_worker_protocol_version`, `acceptable_models` (provider/name pairs),
+`exact_model_digest`, `minimum_logical_cpus`, `minimum_memory_bytes`,
+`gpu_required`, `allowed_gpu_vendors`, `minimum_gpu_memory_bytes`,
+`minimum_context_tokens`, `required_features`, and
+`allowed_isolation_kinds`. Omitted or effectively empty typed requirements
+preserve previous behavior. `required_capabilities` remains the legacy string
+compatibility contract; when both forms are present both must match.
+
 ### Strategy options
 
 `DagOptionsV1` contains `maximum_subtasks` from one through five and booleans
@@ -92,10 +104,13 @@ characters, and is not empty or whitespace-only. The coordinator does not
 normalize an otherwise valid value and never stores or logs its plaintext.
 
 After the body is parsed and validated as `ExecutionRequestV1`, the coordinator
-serializes the model with explicit and defaulted values, sorted JSON keys,
-compact separators, and UTF-8 encoding. SHA-256 of those canonical bytes is the
-request digest. Original HTTP byte layout and JSON object-key order do not
-affect it.
+selects an explicit request-hash serializer. Version 1 projects exactly the
+pre-capability request shape. Requests with no effective typed constraint keep
+that serializer and their pre-upgrade semantic digest. Version 2 adds the
+complete versioned typed requirement block and is selected only when it has an
+effective constraint. Both serializers use explicit/defaulted values, sorted
+JSON keys, compact separators, UTF-8, and SHA-256; original HTTP byte layout and
+object-key order do not affect the result.
 
 The key is scoped to the requester. When `pitch_key` is configured, a
 domain-separated SHA-256 digest of that configured credential defines the
@@ -105,8 +120,11 @@ direct ASGI peer address from `request.client.host`. Mycelium does not trust
 user identity. The key itself is stored only as a separately domain-separated
 SHA-256 digest.
 
-The initial queued execution and its `execution_submissions` mapping commit in
-one immediate SQLite transaction. Only after commit may the service create
+The initial queued execution and its `execution_submissions` mapping, including
+`request_hash_version`, commit in one immediate SQLite transaction. Existing
+rows migrate with version `1`. On replay the stored version selects the
+serializer; an unrepresentable typed change conflicts and an unknown stored
+version fails closed as a consistency error. Only after commit may the service create
 process-local controls, publish its live snapshot and creation event, or
 schedule work. A keyed request has these responses:
 
@@ -421,6 +439,76 @@ process-local, expire after at most 24 hours, and become invalid on coordinator
 restart. The returning credential obtains a fresh session while keeping the
 same enrollment ID.
 
+An enrolled `bootstrap` or `returning` registration must include a strict
+`capability_descriptor` with `descriptor_version="1"`:
+
+```json
+{
+  "descriptor_version": "1",
+  "executor": {
+    "kind": "ollama",
+    "version": "0.12.3",
+    "worker_protocol_version": "1"
+  },
+  "models": [{
+    "provider": "ollama",
+    "name": "qwen3.5:4b",
+    "digest": null,
+    "context_tokens": 8192,
+    "variant": null
+  }],
+  "hardware": {
+    "architecture": "x86_64",
+    "logical_cpu_count": 8,
+    "total_memory_bytes": 17179869184,
+    "gpus": null
+  },
+  "features": [],
+  "limits": {
+    "max_concurrent_execution_units": 1,
+    "max_output_bytes": 10485760,
+    "max_context_tokens": 8192
+  },
+  "isolation": {"kind": "none"}
+}
+```
+
+All fields and collections are bounded and unknown fields are forbidden. Each
+model provider/name pair is unique within a descriptor, so one runnable name
+cannot claim conflicting digests or capacities. A model digest is nullable and,
+when present, is a normalized SHA-256 supplied by the runtime; a model name is
+not converted into a digest. The hardware block
+excludes hostnames, serial numbers, MAC addresses, and physical identifiers.
+Descriptor limits cannot exceed protocol ceilings. Unsupported descriptor or
+resource-requirement versions fail validation with machine-readable
+`unsupported_capability_descriptor_version` or
+`unsupported_resource_requirement_version` error types.
+
+Canonical compact sorted-key JSON defines the descriptor SHA-256 hash. For an
+enrolled node, each distinct JSON snapshot is stored idempotently by enrollment
+and hash and validated on read. The session binds the descriptor version/hash;
+reusing its token with a different claim returns `409` with
+`detail.code=node_capability_descriptor_conflict` and
+`action=drain_or_establish_new_session`. Registration responses echo the
+normalized descriptor, version, and hash. The stock worker checks that echo and
+reuses one constructed descriptor across reconnects in the same process.
+
+The shared matcher also selects the advertised model for a handout. It keeps
+the worker's configured model when that model satisfies the request; otherwise
+it chooses the canonical first model satisfying acceptable-model, exact-digest,
+and context constraints. The handout carries the selected provider, name, and
+nullable advertised digest. The stock worker validates that binding against
+its immutable process descriptor and passes the selected name to Ollama.
+Handouts from older coordinators have no binding and retain the configured-model
+behavior.
+
+These values are node claims, whether populated by best-effort detection or an
+operator override. Persistence and hashing do not measure, attest, or verify
+them. Legacy `capabilities` remain accepted: worker values are exposed as
+`claimed_capabilities`, coordinator-added `model:<name>` tags as
+`server_compatibility_capabilities`, and their combined compatibility view as
+`capabilities`.
+
 The next authenticated operation observes revocation or rotation. Independently,
 the coordinator janitor checks live enrolled sessions every 30 seconds; this is
 the nominal idle detection bound, subject to ordinary scheduler delay and
@@ -462,6 +550,10 @@ Assignment creates an active attempt with:
 - assigned enrollment (nullable for historical/compatibility work), node, and
   node-session identifiers;
 - the enrollment credential version for a newly enrolled assignment;
+- the assigned capability-descriptor version and hash (nullable for historical
+  or descriptor-less compatibility work);
+- the resource-requirement version and canonical digest, covering typed and
+  legacy hard constraints;
 - contract version;
 - unguessable attempt identifier;
 - a high-entropy nonce whose digest, not plaintext, is stored;
@@ -664,8 +756,12 @@ Private node records distinguish current session state/counters from durable
 lifetime contribution totals. Compatibility `tasks_completed` and
 `credits_earned` remain session projections. Clients MUST NOT expect a session
 token, enrollment credential, or credential digest in node-list or event
-payloads. Viewer-protected `GET /v1/operator/node-enrollments` lists only safe
-identity/status/timestamp, live-session/drain, and contribution metadata.
+payloads. `GET /nodes` exposes descriptor version/hash but omits the full
+descriptor. Viewer-protected `GET /v1/operator/node-enrollments` additionally
+returns the normalized claim, claim/tag provenance, snapshot count, and stable
+hard-requirement match diagnostics. Its optional bounded
+`resource_requirements` and repeated `required_capability` query parameters are
+diagnostic only. Public `/health` and `/status.json` expose none of this detail.
 
 ## Deployment, SQLite, and coordinator ownership
 
@@ -689,7 +785,7 @@ in-flight coroutines, node sessions, and breaker state remain process-local.
 
 `execution_submissions` is an additive, indefinitely retained trusted-alpha
 table containing only requester-scope, idempotency-key, and canonical-request
-digests plus execution identity and creation time. An immediate transaction
+digests, request-hash version, execution identity, and creation time. An immediate transaction
 creates its mapping and the queued execution together. The table is included in
 ordinary SQLite backup/restore; it does not make queued work resumable.
 
@@ -708,8 +804,9 @@ unchanged.
 Invalid canonical requests return `422`; missing private resources return
 `404`; missing viewer, pitch, returning-enrollment, or session credentials
 normally return `401`; missing or malformed registration fields return `422`;
-enrollment conflicts return `409`; an old worker in required mode receives a
-stable `426` durable-enrollment upgrade error; revoked enrollment returns `403`;
+enrollment or live descriptor conflicts return `409`; an old worker or an
+enrollment-capable worker missing its descriptor in required mode receives a
+stable `426` worker-upgrade error; revoked enrollment returns `403`;
 invalid worker attempt settlement fails closed. Configured limits may return `413`, `429`, or
 `503`. Invalid, expired, and revoked share tokens deliberately share one `404`
 shape. Invalid idempotency keys return `422` with
@@ -737,3 +834,11 @@ holders are known and trusted. These limitations must not be represented as
 solved by the normalized API. Idempotent canonical submission is not durable
 scheduling, user identity, workflow resumption, or exactly-once execution of
 external effects.
+
+Capability descriptors are self-reported claims, not observed performance,
+trust, correctness, physical-machine identity, or hardware/model attestation.
+The hard matcher does not rank eligible nodes, and Theme 2B adds neither an
+arbitrary scheduling-policy language nor descriptor/evidence weighting. The
+older optional local sampled-verification pool can defer first refusal among
+already eligible nodes when `verify_rate` is explicitly enabled; it is off by
+default and disabled in trusted-alpha mode.

@@ -243,6 +243,14 @@ file secret: it lets the same durable enrollment obtain a fresh process-local
 session after coordinator restart. Returning workers do not need the shared
 bootstrap secret.
 
+At startup the stock worker builds one bounded version-1 capability claim from
+the configured Ollama model plus best-effort architecture, CPU, physical-memory,
+GPU, executor-version, model-digest, and quantization detection. Optional tools
+may be absent; unknown values stay null, and no serial or network identifiers
+are collected. Ollama must actually supply a digest for it to be claimed. The
+descriptor is reused for reconnects in that process and identifies eligibility,
+not measured performance, attestation, trust, or output correctness.
+
 Piping a script from the internet into your shell deserves a look first — it's short, and reading it is the right instinct: [install.sh](install.sh) · [install.ps1](install.ps1).
 
 Already have the repo?
@@ -253,7 +261,23 @@ python join.py http://ORCHESTRATOR_IP:8000
 
 # Or manually:
 python node.py --server http://ORCHESTRATOR_IP:8000
+
+# Direct-start model/claim corrections; the JSON is strictly bounded:
+python node.py --server http://ORCHESTRATOR_IP:8000 \
+  --model qwen3.5:4b --capability-overrides worker-claims.json
+
+# Legacy string tags remain available for compatibility:
+python node.py --server http://ORCHESTRATOR_IP:8000 \
+  --capabilities code,large-context
 ```
+
+Workers started through `join.py` read `model` and `worker_capability_overrides` from
+`config.json`. The override object accepts `hardware`, `features`,
+`executor_version`, `model_context_tokens`, `model_variant`, and
+`max_context_tokens`; a direct `node.py` JSON file layers on top. There is no
+model-digest override. Drain/stop and establish a new process session before
+changing claims. Protected operator diagnostics are documented in
+[Operations](docs/OPERATIONS.md); full descriptors are not public.
 
 For DAG, planning and review remain on the coordinator while builder units may be distributed. Ensemble candidates may also be distributed as complete-task units. If a node goes offline mid-attempt, its work can be reclaimed and reassigned; only a result that settles the current server-issued attempt can enter execution.
 
@@ -265,6 +289,7 @@ server.py           # App assembly — routers, lifespan, exception handling
 server_state.py     # Shared state, SQLite persistence, events, auth, rate limits
 node_enrollments.py # Durable digest-only contributor enrollment and revocation
 node_sessions.py    # Process-local worker incarnation authority
+node_capabilities.py # Versioned capability claims, snapshots, and hard matcher
 worker_identity.py  # Atomic private stock-worker identity files
 access_control.py   # Viewer auth, signed sessions, public/private route policy
 routes_pitch.py     # /pitch, /pitch/async, /pitch/distributed, /jobs*
@@ -417,6 +442,7 @@ Stated plainly, because you'll find them anyway:
 - **Generated code is not sandboxed.** The pipeline writes runnable files to `output/`. It checks that Python parses and HTML is structurally sound, but *you* are responsible for reading anything before you run it.
 - **The full threat model is written down**, including the deliberate public allowlist, viewer-protected surfaces, share capabilities, malicious-worker limits, and what still blocks a permissionless network: [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md). Reporting a vulnerability: [SECURITY.md](SECURITY.md).
 - **It's a trusted network, not a trustless one.** Per-node bearer enrollment supports stable attribution and individual revocation; a short-lived server session identifies one incarnation. Neither proves a physical machine, honest operator, model bytes, or Sybil resistance. An authenticated node can still return plausible-looking garbage. Experimental sampled redundant execution remains available only in local mode; trusted-alpha mode disables it until post-hoc evidence has durable semantics. Shape agreement is not proof of correctness.
+- **Capability descriptors are claims, not evidence.** Typed CPU, memory, GPU, model, context, feature, executor, and isolation fields make hard routing deterministic, but an admitted worker can lie about them. A descriptor digest identifies the exact claim used for an attempt; it is not hardware or model attestation. Theme 2B adds no descriptor- or evidence-based ordering: its matcher only excludes ineligible nodes. Separately, the pre-existing optional local sampled-verification pool can defer first refusal among already eligible nodes; `verify_rate` is off by default and trusted-alpha mode disables it.
 - **One orchestrator, no failover.** DAG planning/review remain on the coordinator; DAG builder units and complete ensemble candidates may run on workers. If the orchestrator goes down, the swarm stops. Durable records reconcile truthfully on restart, but process-local work is not resumed. Reusing an idempotency key returns the same interrupted record; it does not restart it.
 - **No HTTPS, no accounts, no multi-tenancy.** This is a prototype you run for yourself or a group you know.
 
@@ -452,6 +478,7 @@ a reference, not a promise of dates.
 - [x] Auto-revision loop (up to 2 passes) — reviewer-flagged issues get targeted fixes
 - [x] Durable non-monetary compute-contribution points and compatibility standings
 - [x] Worker node hardware reporting (CPU, RAM, GPU) and auto-reconnect
+- [x] Versioned typed capability claims, immutable enrollment snapshots, deterministic hard requirements, and attempt descriptor binding
 - [x] `/metrics` endpoint — queue depth, latency, blacklisted nodes, job status
 - [x] Schema-enforced planner output (Ollama structured outputs, with text-parsing fallback)
 - [x] Trusted-alpha access controls — separate node, pitch, and viewer credentials; rate/admission limits; output caps

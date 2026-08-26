@@ -11,6 +11,7 @@ from execution.contracts import (
 from execution.registry import StrategySelector
 from execution.persistence import ExecutionStore
 from execution.service import ExecutionService
+from node_capabilities import NodeResourceRequirementsV1
 
 
 def test_valid_v1_request_uses_bounded_defaults():
@@ -20,7 +21,27 @@ def test_valid_v1_request_uses_bounded_defaults():
     assert request.placement == "local"
     assert request.confidentiality == "local_only"
     assert request.remote_dispatch_consent is False
+    assert request.requirements.resource_requirements is None
     assert request.timeout_seconds <= 7200
+
+
+def test_execution_request_parses_versioned_typed_resource_requirements():
+    request = ExecutionRequestV1(
+        task="Build on a capable node",
+        requirements={
+            "required_capabilities": ["legacy-feature"],
+            "resource_requirements": {
+                "minimum_logical_cpus": 4,
+                "required_features": ["json"],
+            },
+        },
+    )
+
+    typed = request.requirements.resource_requirements
+    assert isinstance(typed, NodeResourceRequirementsV1)
+    assert typed.requirement_version == "1"
+    assert typed.minimum_logical_cpus == 4
+    assert request.requirements.required_capabilities == ["legacy-feature"]
 
 
 def test_invalid_protocol_version_fails_loudly():

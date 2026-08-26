@@ -8,6 +8,11 @@ import pytest
 import server_state as state
 from execution.contracts import ExecutionRequestV1
 from execution.dispatch import Dispatcher, ExecutionUnit, PlacementDecision
+from node_capabilities import (
+    NodeCapabilityDescriptorV1,
+    NodeCapabilitySnapshotStore,
+    capability_descriptor_digest,
+)
 from node_enrollments import NodeEnrollmentStore
 
 
@@ -36,6 +41,28 @@ def _request() -> ExecutionRequestV1:
 
 def _unit() -> ExecutionUnit:
     return ExecutionUnit("candidate-1", "candidate", "Candidate", "prompt", "system")
+
+
+def _descriptor_binding(enrollment_id: str) -> tuple[str, str]:
+    descriptor = NodeCapabilityDescriptorV1.model_validate(
+        {
+            "executor": {"kind": "ollama", "worker_protocol_version": "1"},
+            "models": [{"provider": "ollama", "name": "qwen3.5:4b"}],
+            "hardware": {
+                "architecture": "x86_64",
+                "logical_cpu_count": 4,
+                "total_memory_bytes": 8 * 1024**3,
+            },
+            "features": ["code"],
+            "limits": {
+                "max_concurrent_execution_units": 1,
+                "max_output_bytes": 1_048_576,
+            },
+            "isolation": {"kind": "none"},
+        }
+    )
+    NodeCapabilitySnapshotStore(state._DB_PATH).remember(enrollment_id, descriptor)
+    return descriptor.descriptor_version, capability_descriptor_digest(descriptor)
 
 
 async def _wait_for_queue() -> dict:
@@ -188,6 +215,9 @@ async def test_reclaimed_attempt_reports_real_retry_and_reassignment_counts():
         node_id="worker",
         credential="dispatch-test-enrollment-credential-with-enough-entropy",
     )
+    descriptor_version, descriptor_hash = _descriptor_binding(
+        enrolled.record.enrollment_id
+    )
     dispatcher = Dispatcher()
     running = asyncio.create_task(
         dispatcher._distributed(
@@ -209,6 +239,8 @@ async def test_reclaimed_attempt_reports_real_retry_and_reassignment_counts():
             assigned_enrollment_id=enrolled.record.enrollment_id,
             assigned_credential_version=enrolled.record.credential_version,
             assigned_session_id="session-first",
+            assigned_descriptor_version=descriptor_version,
+            assigned_descriptor_hash=descriptor_hash,
             attempt_id="attempt-first",
             nonce="nonce-first",
             issued_at=first_issued,
@@ -238,6 +270,8 @@ async def test_reclaimed_attempt_reports_real_retry_and_reassignment_counts():
             assigned_enrollment_id=enrolled.record.enrollment_id,
             assigned_credential_version=enrolled.record.credential_version,
             assigned_session_id="session-second",
+            assigned_descriptor_version=descriptor_version,
+            assigned_descriptor_hash=descriptor_hash,
             attempt_id="attempt-second",
             nonce="nonce-second",
             issued_at=second_issued,

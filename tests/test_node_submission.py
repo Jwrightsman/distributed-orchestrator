@@ -79,6 +79,106 @@ def _task():
     }
 
 
+def _multi_model_descriptor():
+    return node.NodeCapabilityDescriptorV1(
+        executor=node.ExecutorDescriptorV1(
+            kind="ollama", worker_protocol_version="1"
+        ),
+        models=[
+            node.ModelDescriptorV1(
+                provider="ollama",
+                name="configured:latest",
+                digest="a" * 64,
+                context_tokens=8192,
+            ),
+            node.ModelDescriptorV1(
+                provider="ollama",
+                name="selected:latest",
+                digest="b" * 64,
+                context_tokens=8192,
+            ),
+        ],
+        hardware=node.HardwareDescriptorV1(),
+        limits=node.NodeLimitDescriptorV1(
+            max_concurrent_execution_units=1,
+            max_output_bytes=1_048_576,
+        ),
+        isolation=node.IsolationDescriptorV1(kind="none"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_worker_executes_the_server_bound_advertised_model(monkeypatch):
+    task = {
+        **_task(),
+        "selected_model": {
+            "provider": "ollama",
+            "name": "selected:latest",
+            "digest": "sha256:" + "b" * 64,
+        },
+    }
+    client = _Client(task)
+    monkeypatch.setattr(node.httpx, "AsyncClient", lambda **kwargs: client)
+    used_models = []
+
+    async def generated(*args, **kwargs):
+        used_models.append(kwargs.get("model"))
+        yield "complete output"
+
+    monkeypatch.setattr(node, "generate_stream", generated)
+
+    completed = await node.poll_and_execute(
+        "http://server",
+        "worker",
+        {"tasks": 0, "credits": 0},
+        model="configured:latest",
+        capability_descriptor=_multi_model_descriptor(),
+    )
+
+    assert completed == "task-1"
+    assert used_models == ["selected:latest"]
+
+
+@pytest.mark.asyncio
+async def test_worker_rejects_a_model_binding_outside_its_immutable_descriptor(
+    monkeypatch,
+):
+    task = {
+        **_task(),
+        "selected_model": {
+            "provider": "ollama",
+            "name": "selected:latest",
+            "digest": "sha256:" + "c" * 64,
+        },
+    }
+    client = _Client(task)
+    monkeypatch.setattr(node.httpx, "AsyncClient", lambda **kwargs: client)
+    generated = False
+
+    async def should_not_generate(*args, **kwargs):
+        nonlocal generated
+        generated = True
+        yield "unexpected"
+
+    monkeypatch.setattr(node, "generate_stream", should_not_generate)
+
+    completed = await node.poll_and_execute(
+        "http://server",
+        "worker",
+        {"tasks": 0, "credits": 0},
+        model="configured:latest",
+        capability_descriptor=_multi_model_descriptor(),
+    )
+
+    assert completed is None
+    assert generated is False
+    result_payloads = [
+        payload for url, payload, _headers in client.posts if url.endswith("/result")
+    ]
+    assert len(result_payloads) == 1
+    assert "immutable capability descriptor" in result_payloads[0]["error"]
+
+
 @pytest.mark.asyncio
 async def test_rejected_result_submission_is_not_reported_as_done(monkeypatch):
     client = _Client(_task(), reject_result=True)
@@ -287,16 +387,29 @@ async def test_worker_automatically_reregisters_after_session_rejection(
     async def healthy_ollama():
         return {"ok": True, "models": [node.DEFAULT_MODEL]}
 
+    async def no_runtime_metadata(*_args, **_kwargs):
+        return None, None, None
+
     async def register(
         server,
         node_id,
         secret="",
         capabilities=None,
+        capability_descriptor=None,
+        model=node.DEFAULT_MODEL,
         session_token="",
         enrollment_action=None,
         enrollment_credential="",
     ):
-        registrations.append((session_token, enrollment_action, bool(enrollment_credential)))
+        registrations.append(
+            (
+                session_token,
+                enrollment_action,
+                bool(enrollment_credential),
+                capability_descriptor,
+                model,
+            )
+        )
         index = len(registrations)
         return {
             "message": "registered",
@@ -309,18 +422,25 @@ async def test_worker_automatically_reregisters_after_session_rejection(
             "session_id": f"session-{index}",
             "session_token": f"token-{index}",
             "session_expires_at": "2099-01-01T00:00:00+00:00",
+            "capability_descriptor_version": capability_descriptor.descriptor_version,
+            "capability_descriptor_hash": node.capability_descriptor_digest(
+                capability_descriptor
+            ),
         }
 
     polls = 0
+    polled_models = []
 
     async def poll(*args, **kwargs):
         nonlocal polls
         polls += 1
+        polled_models.append(kwargs.get("model"))
         if polls == 1:
             raise node.NodeSessionRejected("expired")
         raise KeyboardInterrupt
 
     monkeypatch.setattr(node, "check_ollama", healthy_ollama)
+    monkeypatch.setattr(node, "_detect_ollama_metadata", no_runtime_metadata)
     monkeypatch.setattr(node, "register", register)
     monkeypatch.setattr(node, "poll_and_execute", poll)
     monkeypatch.setattr(node.console, "print", lambda *args, **kwargs: None)
@@ -339,10 +459,13 @@ async def test_worker_automatically_reregisters_after_session_rejection(
 
     await node.main()
 
-    assert registrations == [
+    assert [registration[:3] for registration in registrations] == [
         ("", "bootstrap", True),
         ("token-1", "returning", True),
     ]
+    assert registrations[0][3] is registrations[1][3]
+    assert registrations[0][4] == registrations[1][4] == node.DEFAULT_MODEL
+    assert polled_models == [node.DEFAULT_MODEL, node.DEFAULT_MODEL]
     assert polls == 2
 
 

@@ -92,6 +92,8 @@ async def test_dag_distributed_uses_the_same_strategy_and_full_worker_dispatch(t
             placement="distributed",
             node_id="worker",
             enrollment_id="enrollment-worker",
+            capability_descriptor_version="1",
+            capability_descriptor_hash="d" * 64,
             attempt_count=1,
         )
 
@@ -114,6 +116,8 @@ async def test_dag_distributed_uses_the_same_strategy_and_full_worker_dispatch(t
     assert run.result.placement_selected == "distributed"
     assert run.result.participating_nodes == ["worker"]
     assert run.result.execution_units[0].enrollment_id == "enrollment-worker"
+    assert run.result.execution_units[0].capability_descriptor_version == "1"
+    assert run.result.execution_units[0].capability_descriptor_hash == "d" * 64
     assert dispatched[0][0].kind == "dag_subtask"
     assert dispatched[0][1:] == ("dag", ("worker",))
 
@@ -366,6 +370,8 @@ async def test_distributed_ensemble_fans_out_complete_candidates_with_one_worker
             placement="distributed",
             node_id="only-worker",
             enrollment_id="enrollment-only-worker",
+            capability_descriptor_version="1",
+            capability_descriptor_hash="e" * 64,
             attempt_count=1,
         )
 
@@ -387,6 +393,9 @@ async def test_distributed_ensemble_fans_out_complete_candidates_with_one_worker
     assert {
         candidate.enrollment_id for candidate in run.result.candidates
     } == {"enrollment-only-worker"}
+    assert {
+        candidate.capability_descriptor_hash for candidate in run.result.candidates
+    } == {"e" * 64}
     assert run.result.telemetry["candidate_count"] == 3
 
 

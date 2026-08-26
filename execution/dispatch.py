@@ -9,6 +9,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
+import node_capabilities
 import server_state as state
 from execution.contracts import ExecutionRequestV1, SelectedPlacementV1
 from execution.attempts import ReceiptBindingError
@@ -54,6 +55,8 @@ class DispatchResult:
     # enrollment attribution, while the verification pool also needs to keep
     # two unenrolled process incarnations with the same label separate.
     session_id: str | None = None
+    capability_descriptor_version: str | None = None
+    capability_descriptor_hash: str | None = None
     fallback_reason: str | None = None
     error: str | None = None
     duration_ms: int = 0
@@ -64,8 +67,10 @@ class DispatchResult:
 
 
 def qualifying_nodes(request: ExecutionRequestV1) -> list[str]:
-    required = set(request.requirements.required_capabilities)
     approved = set(request.requirements.approved_node_ids)
+    resource_requirements = getattr(
+        request.requirements, "resource_requirements", None
+    )
     matches: list[str] = []
     now = time.time()
     for node_id, node in state.nodes.items():
@@ -73,7 +78,20 @@ def qualifying_nodes(request: ExecutionRequestV1) -> list[str]:
             continue
         if request.confidentiality == "approved_nodes" and node_id not in approved:
             continue
-        if required and not required.issubset(set(node.get("capabilities", []))):
+        capability_match = node_capabilities.match_node_requirements(
+            resource_requirements,
+            request.requirements.required_capabilities,
+            node.get("capability_descriptor"),
+            node.get("capabilities", []),
+            preferred_model_name=node.get("model"),
+        )
+        recorded_hash = node.get("capability_descriptor_hash")
+        if (
+            recorded_hash is not None
+            and recorded_hash != capability_match.matched_descriptor_hash
+        ):
+            continue
+        if not capability_match.eligible:
             continue
         matches.append(node_id)
     return sorted(matches)
@@ -431,6 +449,23 @@ class Dispatcher:
         task_id = f"unit_{uuid.uuid4().hex}"
         contract_summary = request.output_contract.model_dump(mode="json") if request.output_contract else None
         verification_summary = request.verification.model_dump(mode="json")
+        typed_requirements = getattr(
+            request.requirements, "resource_requirements", None
+        )
+        resource_requirement_summary = (
+            typed_requirements.model_dump(mode="json")
+            if typed_requirements is not None
+            else None
+        )
+        requirement_version = (
+            typed_requirements.requirement_version
+            if typed_requirements is not None
+            else node_capabilities.RESOURCE_REQUIREMENT_VERSION_V1
+        )
+        requirement_digest = node_capabilities.canonical_requirement_digest(
+            typed_requirements,
+            request.requirements.required_capabilities,
+        )
         task = {
             "task_id": task_id,
             "title": unit.title,
@@ -445,6 +480,9 @@ class Dispatcher:
             "verification_policy": verification_summary,
             "max_output_bytes": request.max_output_bytes,
             "requires": list(request.requirements.required_capabilities),
+            "resource_requirements": resource_requirement_summary,
+            "requirement_version": requirement_version,
+            "requirement_digest": requirement_digest,
             "eligible_nodes": list(decision.qualifying_nodes),
             # The worker lease cannot outlive the caller's total execution
             # deadline. A late result is rejected by the durable attempt state.
@@ -543,6 +581,8 @@ class Dispatcher:
             node_id=receipt.assigned_node_id,
             enrollment_id=receipt.assigned_enrollment_id,
             session_id=(attempt_record.assigned_session_id if attempt_record else None),
+            capability_descriptor_version=receipt.assigned_descriptor_version,
+            capability_descriptor_hash=receipt.assigned_descriptor_hash,
             error=str(error)[:500] if error else (None if output else "worker returned empty output"),
             duration_ms=duration,
             attempt_count=attempts,

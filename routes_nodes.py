@@ -13,10 +13,12 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 
 from access_control import require_viewer
 from execution.attempts import AttemptRejected, WorkerPayloadLimitExceeded
 from ledger import sync_compatibility_ledger
+import node_capabilities
 from node_enrollments import (
     EnrollmentAuthenticationFailed,
     EnrollmentCredentialConflict,
@@ -27,7 +29,7 @@ from node_enrollments import (
     InvalidEnrollmentCredential,
     NodeEnrollmentError,
 )
-from node_sessions import DuplicateNodeSession
+from node_sessions import DuplicateNodeSession, NodeSessionDescriptorConflict
 import server_state as state
 from server_state import (
     NodeRegistration,
@@ -54,12 +56,64 @@ def _clear_assignment(task: dict) -> None:
         "assigned_session_id",
         "assigned_enrollment_id",
         "assigned_credential_version",
+        "assigned_descriptor_version",
+        "assigned_descriptor_hash",
+        "selected_model",
         "assigned_at",
         "attempt_id",
         "nonce",
         "lease_expires_at",
     ):
         task.pop(field, None)
+
+
+def _descriptor_for_session(session_record):
+    """Resolve the exact claim immutably bound to an authenticated session."""
+
+    descriptor_hash = session_record.capability_descriptor_hash
+    descriptor_version = session_record.capability_descriptor_version
+    if descriptor_hash is None:
+        return None
+    if session_record.enrollment_id is not None:
+        snapshot = state.capability_snapshot_store.get(
+            session_record.enrollment_id, descriptor_hash
+        )
+        if snapshot is None or snapshot.descriptor_version != descriptor_version:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "node_capability_snapshot_unavailable",
+                    "message": "the registered capability snapshot is unavailable",
+                    "action": "register_again",
+                },
+            )
+        return snapshot.descriptor
+
+    node = nodes.get(session_record.node_id, {})
+    descriptor = node.get("capability_descriptor")
+    if descriptor is None:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "node_capability_snapshot_unavailable",
+                "message": "the registered capability claim is unavailable",
+                "action": "register_again",
+            },
+        )
+    parsed = node_capabilities.NodeCapabilityDescriptorV1.model_validate(descriptor)
+    if (
+        parsed.descriptor_version != descriptor_version
+        or node_capabilities.capability_descriptor_digest(parsed) != descriptor_hash
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "node_capability_snapshot_inconsistent",
+                "message": "the registered capability claim is inconsistent",
+                "action": "register_again",
+            },
+        )
+    return parsed
 
 
 def _reclaim_replaced_session(node_id: str, replaced_session_id: str) -> None:
@@ -211,6 +265,21 @@ def _should_defer(node_id: str, waiting_since: float) -> bool:
 
 @router.post("/nodes/register")
 async def register_node(reg: NodeRegistration, request: Request):
+    descriptor = reg.capability_descriptor
+    if descriptor is not None and not any(
+        model.provider == "ollama" and model.name == reg.model
+        for model in descriptor.models
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "node_capability_descriptor_model_mismatch",
+                "message": (
+                    "the legacy configured model must appear in the capability "
+                    "descriptor model list"
+                ),
+            },
+        )
     enrollment = None
     enrollment_idempotent = False
     effective_action = reg.enrollment_action
@@ -264,6 +333,19 @@ async def register_node(reg: NodeRegistration, request: Request):
                     "message": "bootstrap requires an enrollment credential",
                 },
             )
+        if descriptor is None:
+            raise HTTPException(
+                status_code=426,
+                detail={
+                    "code": "node_capability_descriptor_required",
+                    "message": (
+                        "Durably enrolled workers must submit a typed capability "
+                        "descriptor. Upgrade the worker and register again."
+                    ),
+                    "action": "upgrade_worker",
+                },
+                headers={"X-Node-Capability-Descriptor-Required": "true"},
+            )
         try:
             bootstrapped = state.enrollment_store.bootstrap(
                 reg.node_id, reg.enrollment_credential
@@ -287,14 +369,59 @@ async def register_node(reg: NodeRegistration, request: Request):
             )
         except NodeEnrollmentError as exc:
             _raise_enrollment_http_error(exc)
+        if descriptor is None:
+            raise HTTPException(
+                status_code=426,
+                detail={
+                    "code": "node_capability_descriptor_required",
+                    "message": (
+                        "Durably enrolled workers must submit a typed capability "
+                        "descriptor. Upgrade the worker and register again."
+                    ),
+                    "action": "upgrade_worker",
+                },
+                headers={"X-Node-Capability-Descriptor-Required": "true"},
+            )
+
+    descriptor_version = descriptor.descriptor_version if descriptor else None
+    descriptor_hash = (
+        node_capabilities.capability_descriptor_digest(descriptor)
+        if descriptor is not None
+        else None
+    )
+    snapshot = None
+
+    def _remember_accepted_descriptor() -> None:
+        nonlocal snapshot, descriptor_version, descriptor_hash
+        if enrollment is None or descriptor is None:  # pragma: no cover - guarded call
+            return
+        snapshot = state.capability_snapshot_store.remember(
+            enrollment.enrollment_id, descriptor
+        )
+        descriptor_version = snapshot.descriptor_version
+        descriptor_hash = snapshot.descriptor_hash
 
     try:
         grant = state.node_sessions.register(
             reg.node_id,
             enrollment_id=enrollment.enrollment_id if enrollment else None,
             credential_version=enrollment.credential_version if enrollment else None,
+            capability_descriptor_version=descriptor_version,
+            capability_descriptor_hash=descriptor_hash,
             presented_token=request.headers.get("X-Node-Session"),
+            before_grant=(
+                _remember_accepted_descriptor if enrollment is not None else None
+            ),
         )
+    except NodeSessionDescriptorConflict as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "node_capability_descriptor_conflict",
+                "message": str(exc),
+                "action": "drain_or_establish_new_session",
+            },
+        ) from exc
     except DuplicateNodeSession as exc:
         raise HTTPException(
             status_code=409,
@@ -309,10 +436,13 @@ async def register_node(reg: NodeRegistration, request: Request):
         _reclaim_replaced_session(reg.node_id, grant.replaced_session_id)
 
     # Auto-add a "model:<name>" capability tag so tasks can soft-route by model.
-    caps = list(reg.capabilities)
+    claimed_caps = list(reg.capabilities)
+    compatibility_caps: list[str] = []
+    caps = list(claimed_caps)
     model_tag = f"model:{reg.model}"
     if model_tag not in caps:
         caps.append(model_tag)
+        compatibility_caps.append(model_tag)
     existing = nodes.get(reg.node_id) if grant.idempotent else None
     lifetime = _lifetime_summary(
         reg.node_id,
@@ -335,6 +465,13 @@ async def register_node(reg: NodeRegistration, request: Request):
         "cpu_count": reg.cpu_count,
         "ram_gb": reg.ram_gb,
         "gpu": reg.gpu,
+        "capability_descriptor": (
+            descriptor.model_dump(mode="json") if descriptor is not None else None
+        ),
+        "capability_descriptor_version": descriptor_version,
+        "capability_descriptor_hash": descriptor_hash,
+        "claimed_capabilities": claimed_caps,
+        "server_compatibility_capabilities": compatibility_caps,
         "capabilities": caps,
         "registered_at": (existing or {}).get(
             "registered_at", datetime.now(timezone.utc).isoformat()
@@ -361,6 +498,13 @@ async def register_node(reg: NodeRegistration, request: Request):
         "enrolled": enrollment is not None,
         "enrollment_action": effective_action,
         "enrollment_idempotent": enrollment_idempotent,
+        "capability_descriptor": (
+            descriptor.model_dump(mode="json") if descriptor is not None else None
+        ),
+        "capability_descriptor_version": descriptor_version,
+        "capability_descriptor_hash": descriptor_hash,
+        "claimed_capabilities": claimed_caps,
+        "server_compatibility_capabilities": compatibility_caps,
         "capabilities": caps,
         "session_id": grant.record.session_id,
         "session_token": grant.session_token,
@@ -396,7 +540,14 @@ async def list_nodes():
             if identity_key is not None
             else {}
         )
-        out.append({**n, **{k: v for k, v in rep.items() if k != "node_id"}})
+        safe_node = {
+            key: value
+            for key, value in n.items()
+            if key != "capability_descriptor"
+        }
+        out.append(
+            {**safe_node, **{k: v for k, v in rep.items() if k != "node_id"}}
+        )
     return {"nodes": out, "count": len(nodes), "verify_rate": pool.verify_rate}
 
 
@@ -405,6 +556,55 @@ async def list_node_enrollments(request: Request):
     """Protected secret-free durable enrollment and live-session inventory."""
 
     require_viewer(request)
+    raw_requirements = request.query_params.get("resource_requirements")
+    if raw_requirements is not None:
+        if len(raw_requirements.encode("utf-8")) > 16_384:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "invalid_resource_requirements",
+                    "message": "resource_requirements must be 16384 bytes or fewer",
+                },
+            )
+        try:
+            diagnostic_requirements = (
+                node_capabilities.NodeResourceRequirementsV1.model_validate_json(
+                    raw_requirements
+                )
+            )
+        except ValidationError as exc:
+            errors = exc.errors()
+            error_type = str(errors[0].get("type", "")) if errors else ""
+            code = (
+                error_type
+                if error_type.startswith("unsupported_")
+                else "invalid_resource_requirements"
+            )
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": code,
+                    "message": "resource_requirements is invalid",
+                },
+            ) from exc
+    else:
+        diagnostic_requirements = None
+    diagnostic_legacy = [
+        value.strip()
+        for value in request.query_params.getlist("required_capability")
+    ]
+    if (
+        len(diagnostic_legacy) > 16
+        or any(not value or len(value) > 128 for value in diagnostic_legacy)
+        or len(set(diagnostic_legacy)) != len(diagnostic_legacy)
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "invalid_required_capabilities",
+                "message": "required_capability values must be unique bounded tags",
+            },
+        )
     out = []
     records = state.enrollment_store.list()
     for enrollment in records:
@@ -415,6 +615,28 @@ async def list_node_enrollments(request: Request):
         if session is not None and session.enrollment_id != enrollment.enrollment_id:
             session = None
         session_metadata = session.public_metadata() if session is not None else {}
+        snapshots = state.capability_snapshot_store.list_for_enrollment(
+            enrollment.enrollment_id
+        )
+        snapshot = None
+        if session is not None and session.capability_descriptor_hash is not None:
+            snapshot = state.capability_snapshot_store.get(
+                enrollment.enrollment_id,
+                session.capability_descriptor_hash,
+            )
+        elif session is None and snapshots:
+            snapshot = max(
+                snapshots,
+                key=lambda item: (item.last_seen_at, item.descriptor_hash),
+            )
+        legacy_capabilities = list((node or {}).get("capabilities", []))
+        capability_match = node_capabilities.match_node_requirements(
+            diagnostic_requirements,
+            diagnostic_legacy,
+            snapshot.descriptor if snapshot is not None else None,
+            legacy_capabilities,
+            preferred_model_name=(node or {}).get("model"),
+        )
         lifetime = _lifetime_summary(enrollment.node_id, enrollment.enrollment_id)
         out.append(
             {
@@ -426,6 +648,31 @@ async def list_node_enrollments(request: Request):
                 "last_seen": session_metadata.get("last_seen"),
                 "draining": bool(node and node.get("draining")),
                 "current_task": node.get("current_task") if node else None,
+                "capability_descriptor_version": (
+                    snapshot.descriptor_version if snapshot is not None else None
+                ),
+                "capability_descriptor_hash": (
+                    snapshot.descriptor_hash if snapshot is not None else None
+                ),
+                "capability_descriptor": (
+                    snapshot.descriptor.model_dump(mode="json")
+                    if snapshot is not None
+                    else None
+                ),
+                "capability_descriptor_is_live": bool(
+                    session is not None
+                    and snapshot is not None
+                    and session.capability_descriptor_hash == snapshot.descriptor_hash
+                ),
+                "capability_snapshot_count": len(snapshots),
+                "legacy_capability_tags": legacy_capabilities,
+                "claimed_legacy_capability_tags": list(
+                    (node or {}).get("claimed_capabilities", [])
+                ),
+                "server_compatibility_tags": list(
+                    (node or {}).get("server_compatibility_capabilities", [])
+                ),
+                "hard_requirement_eligibility": capability_match.as_dict(),
                 **lifetime,
             }
         )
@@ -551,15 +798,17 @@ async def next_task(node_id: str, request: Request):
             node_blacklist.pop(node_id, None)
             node_failure_count[node_id] = 0
 
-    # Collect this node's capabilities for task matching
-    node_caps: set[str] = set(nodes[node_id].get("capabilities", [])) if node_id in nodes else set()
+    # Resolve the exact immutable claim bound to this session once. A later
+    # process incarnation must authenticate again under the handout lock.
+    node_descriptor = _descriptor_for_session(session_record)
 
-    def _find_task() -> int | None:
-        """Index of the first task this node may take, or None.
+    def _find_task() -> tuple[int, node_capabilities.CapabilityMatchResultV1] | None:
+        """Index and exact match decision for the first task this node may take.
 
         Peeks rather than pops: whether this node is *allowed* to take it may
         still depend on which other nodes are waiting.
         """
+        current_node_caps = list(nodes.get(node_id, {}).get("capabilities", []))
         for i, t in enumerate(task_queue):
             # A verification duplicate must land on a different node than the
             # original, or it compares a node against itself and proves nothing.
@@ -568,9 +817,15 @@ async def next_task(node_id: str, request: Request):
             eligible = set(t.get("eligible_nodes", []))
             if eligible and node_id not in eligible:
                 continue
-            required = set(t.get("requires", []))
-            if not required or required.issubset(node_caps):
-                return i
+            capability_match = node_capabilities.match_node_requirements(
+                t.get("resource_requirements"),
+                t.get("requires", []),
+                node_descriptor,
+                current_node_caps,
+                preferred_model_name=nodes.get(node_id, {}).get("model"),
+            )
+            if capability_match.eligible:
+                return i, capability_match
         return None
 
     # Long-poll: wait up to _LONG_POLL_TIMEOUT for a task to appear
@@ -580,8 +835,9 @@ async def next_task(node_id: str, request: Request):
     try:
         while True:
             state.waiting_nodes[node_id] = time.time()  # liveness, not wait start
-            idx = _find_task()
-            if idx is not None and not _should_defer(node_id, waiting_since):
+            found = _find_task()
+            idx = found[0] if found is not None else None
+            if found is not None and not _should_defer(node_id, waiting_since):
                 # The token may reach its absolute expiry while this request is
                 # held in a long poll.  Recheck immediately before handout.
                 session_record = _check_node_session(request, node_id)
@@ -593,15 +849,31 @@ async def next_task(node_id: str, request: Request):
                     session_record = _check_node_session(request, node_id)
                     # Another TestClient thread may have claimed it between the
                     # peek and this mutation. Recompute while holding the lock.
-                    idx = _find_task()
-                    if idx is None:
+                    found = _find_task()
+                    if found is None:
                         continue
+                    idx, capability_match = found
                     task = task_queue.pop(idx)
                     task["assigned_to"] = node_id
                     task["assigned_session_id"] = session_record.session_id
                     task["assigned_enrollment_id"] = session_record.enrollment_id
                     task["assigned_credential_version"] = (
                         session_record.credential_version
+                    )
+                    task["assigned_descriptor_version"] = (
+                        session_record.capability_descriptor_version
+                    )
+                    task["assigned_descriptor_hash"] = (
+                        session_record.capability_descriptor_hash
+                    )
+                    task["selected_model"] = (
+                        {
+                            "provider": capability_match.selected_model.provider,
+                            "name": capability_match.selected_model.name,
+                            "digest": capability_match.selected_model.digest,
+                        }
+                        if capability_match.selected_model is not None
+                        else None
                     )
                     task["assigned_at"] = time.time()
                     execution_deadline = task.get("execution_deadline_at")
@@ -634,6 +906,23 @@ async def next_task(node_id: str, request: Request):
                             task["lease_expires_at"], float(execution_deadline)
                         )
                     try:
+                        requirement_version, requirement_digest = (
+                            node_capabilities.canonical_requirement_binding(
+                                task.get("resource_requirements"),
+                                task.get("requires", []),
+                            )
+                        )
+                        for field, expected in (
+                            ("requirement_version", requirement_version),
+                            ("requirement_digest", requirement_digest),
+                        ):
+                            supplied = task.get(field)
+                            if supplied is not None and str(supplied) != expected:
+                                raise ValueError(
+                                    f"pre-populated {field} does not match the "
+                                    "canonical task requirements"
+                                )
+                            task[field] = expected
                         state.attempt_store.issue(
                             task,
                             assigned_node_id=node_id,
@@ -646,6 +935,14 @@ async def next_task(node_id: str, request: Request):
                             assigned_credential_version=(
                                 session_record.credential_version
                             ),
+                            assigned_descriptor_version=(
+                                session_record.capability_descriptor_version
+                            ),
+                            assigned_descriptor_hash=(
+                                session_record.capability_descriptor_hash
+                            ),
+                            requirement_version=task["requirement_version"],
+                            requirement_digest=task["requirement_digest"],
                         )
                     except Exception as exc:
                         # Never expose work unless its authority is durable.
@@ -683,6 +980,12 @@ async def next_task(node_id: str, request: Request):
                         "unit_id": task.get("execution_unit_id"),
                         "node_id": node_id,
                         "enrollment_id": session_record.enrollment_id,
+                        "descriptor_version": (
+                            session_record.capability_descriptor_version
+                        ),
+                        "descriptor_hash": (
+                            session_record.capability_descriptor_hash
+                        ),
                         "placement": "distributed",
                     })
                     return task
@@ -932,6 +1235,8 @@ async def submit_result(task_id: str, result: TaskResult, request: Request):
         "unit_kind": receipt.execution_unit_kind,
         "node_id": node_id,
         "enrollment_id": getattr(receipt, "assigned_enrollment_id", None),
+        "descriptor_version": receipt.assigned_descriptor_version,
+        "descriptor_hash": receipt.assigned_descriptor_hash,
         "status": "completed" if success else "failed",
         "placement": "distributed",
     })

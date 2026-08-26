@@ -36,6 +36,7 @@ coordinator on a local filesystem serving a small private trusted alpha.
 | Scoped canonical submission mappings | SQLite | Retained indefinitely; replay resolves to the same execution, including after interruption |
 | Attempt authority, nonce digests, settlement receipts, quarantine | SQLite | Retained; active attempts become `interrupted`; exact settled replay remains durable |
 | Node enrollment IDs, credential digests, status, rotation/revocation | SQLite | Retained; sessions are reacquired after restart |
+| Enrolled capability descriptor snapshots | SQLite | Immutable canonical claim JSON retained by enrollment/hash; attempts keep version/hash references |
 | Shares and revocation metadata | SQLite | Retained; plaintext share token is never stored |
 | Contribution records | SQLite | Authoritative; JSON ledger is only a compatibility projection |
 | Artifact roots, entries, hashes, roles, seal state | SQLite plus files | Retained if both database and artifact trees are restored together |
@@ -188,7 +189,9 @@ execution, so callers that need transport retry safety must supply a key.
 
 Configured `pitch_key` holders share one requester scope. The mapping stores
 only domain-separated scope and key digests plus the canonical request digest,
-execution ID, and creation time. Never put a raw idempotency key or requester
+its serializer version, execution ID, and creation time. Pre-capability rows
+migrate as version 1; only requests with an effective typed resource constraint
+use version 2. Replay always uses the mapping's stored version. Never put a raw idempotency key or requester
 credential in application logs, diagnostics, issue reports, metrics, or event
 data.
 
@@ -260,6 +263,49 @@ session-scoped rather than inherited by label.
 This is stable, independently revocable bearer attribution. It is not a
 per-node public key, certificate, physical-machine proof, remote attestation,
 or Sybil defense.
+
+### Capability claims and descriptor changes
+
+The stock worker constructs one version-1 capability claim per process session
+and reuses it across reconnects. Standard-library probes claim architecture,
+logical CPU count, and total physical memory when safely available. A fixed,
+three-second, non-shell `nvidia-smi` query claims at most eight distinct NVIDIA
+GPU model/memory combinations. Missing tools, timeouts, malformed output, and
+unavailable values become null rather than guessed values. The configured
+Ollama model is claimed; version, digest, and quantization are included only
+when Ollama supplies them for that exact model. Stock isolation is explicitly
+`none`, concurrency is one, and its output claim stays at the protocol ceiling.
+
+Operators may set `model` and `worker_capability_overrides` in `config.json`.
+Direct `node.py` starts also accept `--model MODEL` and
+`--capability-overrides PATH`; the bounded JSON file is layered over the config
+object. Supported override keys are `hardware`, `features`,
+`executor_version`, `model_context_tokens`, `model_variant`, and
+`max_context_tokens`. Unknown fields fail startup. Model digest has no override:
+only the runtime may supply one. `--capabilities` remains the legacy tag list.
+Do not add stable device identifiers to override files.
+
+Detection and overrides are still worker-controlled claims. The coordinator
+canonicalizes and hashes the descriptor but does not measure or attest it. A
+session cannot change its descriptor: `409 node_capability_descriptor_conflict`
+means stop new assignment, let current work finish, stop the worker, and start a
+new process/session with the intended descriptor. Do not keep retrying the old
+session with changed claims.
+
+Bootstrap and returning registration for a durable enrollment require the
+descriptor. A descriptorless old worker can run only in the explicitly
+unenrolled local compatibility mode; it cannot receive a new enrolled attempt
+with an unbound claim. Upgrade that worker instead of adding a trusted-alpha
+bypass.
+
+The viewer-protected `GET /v1/operator/node-enrollments` returns each normalized
+descriptor, version/hash, snapshot count, legacy worker/server tag provenance,
+and hard-match diagnostics. For a dry diagnostic, supply one URL-encoded
+version-1 JSON object in `resource_requirements` and/or repeat
+`required_capability`. Stable `reason_codes` explain exclusion. `GET /nodes`
+omits descriptor JSON; `/health` and `/status.json` expose neither descriptors
+nor matching details. Treat the full claim and hostname as private inventory
+when collecting or sharing diagnostics.
 
 Session counters and durable lifetime contribution counters are distinct:
 
@@ -451,7 +497,8 @@ rollback-capable renames, and refuses existing managed state without
 preflight command. Stop the coordinator before restore.
 
 The SQLite snapshot includes node enrollment IDs, credential digests,
-revocation/rotation state, and nullable attempt/contribution attribution. It
+revocation/rotation state, immutable capability-claim snapshots, and nullable
+attempt/receipt descriptor and requirement bindings plus contribution attribution. It
 contains no plaintext enrollment credential. Worker identity files live on the
 workers and are deliberately outside the coordinator backup; each worker
 operator must protect and back them up separately.
@@ -483,6 +530,7 @@ fields directly:
 | Concern | Fields/source | Display rule |
 | --- | --- | --- |
 | Enrollment/session | Private `GET /v1/operator/node-enrollments` and `GET /nodes`: `enrollment_id`, `node_id`, `status`, timestamps, live session/drain state, and session/lifetime totals | Use enrollment ID as trust/accounting key and node ID as label; never request or render credential material or `session_token` |
+| Capability claim | Private operator enrollment view: descriptor/version/hash, legacy tag provenance, `hard_requirement_eligibility.reason_codes`; `/nodes` has hash/version only | Say “claimed” and “eligible,” never measured, verified, trusted, or attested; keep full hardware/model inventory off public views |
 | Deployment protection | Public `/health.private_routes_protected` and `warnings`; private `/v1/operator/health`: `deployment_mode`, `instance_id`, `single_coordinator_lock`, `preflight_warnings` | “Protected” requires the boolean true; do not treat HTTP 200 alone as safe |
 | Artifact role | Manifest entry `role` | Label deliverable separately from provenance/log/candidate/internal |
 | Manifest integrity | Execution `artifact_integrity_mode`, `sealed_manifest_hash`; manifest `integrity_mode`, `manifest_hash`, `sealed_at` | Say “sealed local hash baseline,” not signed/verified; explain legacy/active/invalid states |
@@ -505,7 +553,14 @@ The trusted-alpha controls make private invited operation reviewable; they do
 not provide public-network readiness. Remaining structural limits include shared
 instance-wide keys, process-local scheduling and node sessions, no public-key
 node identity, no coordinator HA, no generated-code sandbox, no remote
-attestation, no signed artifact provenance, and provisional model quality with
+attestation, self-reported capability descriptors with no Theme-2B evidence
+ranking, no signed artifact provenance, and provisional model quality with
 high run-to-run variance. Open-mode peer scoping is not durable identity, and
 idempotent submission does not make model, worker, callback, or filesystem side
 effects exactly once.
+
+The older process-local sampled-verification pool is a separate caveat: in
+local mode, explicitly setting `verify_rate` may change first-refusal order
+among nodes that already satisfy hard requirements. It is off by default and
+trusted-alpha mode forces it off. Descriptor claims and their hashes do not
+feed that pool in Theme 2B.

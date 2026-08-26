@@ -122,6 +122,21 @@ settings so enrollment and session bearers cannot be inherited by an
 unreviewed proxy. Ensure the worker can reach the coordinator directly through
 the private overlay or protected TLS endpoint.
 
+Before a consented join, the worker owner may set `model` and a strict
+`worker_capability_overrides` object in the worker checkout's `config.json`.
+`join.py` uses those settings when it starts `node.py`. For a direct start,
+`node.py --model MODEL --capability-overrides PATH` layers a bounded JSON file
+over config; `--capabilities` remains for legacy string tags. Override fields
+are limited to hardware claims, typed features, executor version, model context
+and variant, and maximum context. There is deliberately no model-digest
+override and no serial/MAC/device-identifier field.
+
+The worker advertises one immutable descriptor per process session. CPU,
+architecture, memory, bounded GPU details, and exact Ollama metadata are
+best-effort detections; missing values stay unknown. All detected and overridden
+values remain self-reported claims, not attestation or trust. Drain/stop the
+worker and start a new session before changing its claim.
+
 ## Manual trusted-alpha configuration
 
 The supported generator avoids shell interpolation and never prints generated
@@ -284,8 +299,11 @@ documented there and in [Operations](OPERATIONS.md).
 | Preflight rejects legacy-only node admission | Set `node_enrollment_mode` to `required`, upgrade stock workers, and preserve their identity files; do not add a trusted-alpha compatibility bypass |
 | Initial worker bootstrap returns 401 | Confirm only that worker received the current `node_secret`; returning workers use their identity file instead |
 | Registration says durable enrollment is required | Upgrade the worker and use `--identity-file` if its default user configuration directory is unsuitable |
+| Registration says a capability descriptor is required | Upgrade the worker; descriptorless sessions are limited to explicitly unenrolled local compatibility and cannot receive durable enrolled attempts |
 | Worker protocol returns a session-specific 401 | The stock worker automatically re-registers; repeated failures require checking coordinator and worker clocks/logs |
 | Registration returns 409 | The label or credential belongs to another durable enrollment; do not delete history or reuse the label—inspect the protected enrollment list |
+| Registration returns `node_capability_descriptor_conflict` | The live session attempted to change its immutable claim; drain or let current work finish, stop that worker process, and register a fresh session with the intended descriptor |
+| A typed task excludes a worker | Inspect viewer-protected `/v1/operator/node-enrollments` with the same bounded requirements and use its stable `reason_codes`; do not infer trust from an eligible result or publish the full descriptor |
 | Pitch returns 401 | Send the current `pitch_key` on the pitch route |
 | Browser logs in but immediately loses the cookie | HTTPS and `viewer_cookie_secure` declarations disagree, or the proxy is not actually serving HTTPS |
 | Compose is reachable only locally | This is the safe default; set `MYCELIUM_PUBLISH_ADDRESS` to the private overlay address, not a public wildcard |

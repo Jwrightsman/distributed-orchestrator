@@ -19,7 +19,12 @@ from pathlib import Path
 from typing import Any
 
 from execution.contracts import ExecutionRequestV1, ExecutionResultV1
-from execution.idempotency import SubmissionIdentity, canonical_request_digest
+from execution.idempotency import (
+    RequestHashVersionIncompatible,
+    SubmissionIdentity,
+    UnsupportedRequestHashVersion,
+    canonical_request_digest,
+)
 from sqlite_store import connection, migration_lock, transaction
 
 
@@ -176,6 +181,7 @@ class ExecutionStore:
                     requester_scope_hash TEXT NOT NULL,
                     idempotency_key_hash TEXT NOT NULL,
                     request_hash TEXT NOT NULL,
+                    request_hash_version TEXT NOT NULL DEFAULT '1',
                     execution_id TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     PRIMARY KEY (requester_scope_hash, idempotency_key_hash),
@@ -184,6 +190,17 @@ class ExecutionStore:
                 )
                 """
             )
+            submission_columns = {
+                row[1]
+                for row in con.execute(
+                    "PRAGMA table_info(execution_submissions)"
+                ).fetchall()
+            }
+            if "request_hash_version" not in submission_columns:
+                con.execute(
+                    "ALTER TABLE execution_submissions "
+                    "ADD COLUMN request_hash_version TEXT NOT NULL DEFAULT '1'"
+                )
             con.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_execution_submissions_execution_id
@@ -403,7 +420,13 @@ class ExecutionStore:
     ) -> SubmissionRecord:
         """Atomically bind one scoped key to one initial queued execution."""
 
-        if canonical_request_digest(request) != identity.request_hash:
+        if (
+            canonical_request_digest(
+                request,
+                hash_version=identity.request_hash_version,
+            )
+            != identity.request_hash
+        ):
             raise SubmissionConsistencyError(
                 "submission identity does not match the validated execution request"
             )
@@ -420,7 +443,7 @@ class ExecutionStore:
         ) as con:
             mapping = con.execute(
                 """
-                SELECT request_hash, execution_id
+                SELECT request_hash, request_hash_version, execution_id
                 FROM execution_submissions
                 WHERE requester_scope_hash = ? AND idempotency_key_hash = ?
                 """,
@@ -431,6 +454,11 @@ class ExecutionStore:
             ).fetchone()
             if mapping is not None:
                 execution_id = str(mapping["execution_id"])
+                stored_hash_version = mapping["request_hash_version"]
+                if not isinstance(stored_hash_version, str):
+                    raise SubmissionConsistencyError(
+                        "submission mapping contains an invalid request hash version"
+                    )
                 if not isinstance(mapping["request_hash"], str) or not isinstance(
                     identity.request_hash,
                     str,
@@ -459,11 +487,34 @@ class ExecutionStore:
                     raise SubmissionConsistencyError(
                         "submission mapping references a mismatched execution identity"
                     )
-                if canonical_request_digest(stored_request) != mapping["request_hash"]:
+                try:
+                    stored_request_hash = canonical_request_digest(
+                        stored_request,
+                        hash_version=stored_hash_version,
+                    )
+                except (
+                    RequestHashVersionIncompatible,
+                    UnsupportedRequestHashVersion,
+                ) as exc:
+                    raise SubmissionConsistencyError(
+                        "submission mapping contains an unsupported request hash version"
+                    ) from exc
+                if stored_request_hash != mapping["request_hash"]:
                     raise SubmissionConsistencyError(
                         "submission mapping references a mismatched execution request"
                     )
-                if mapping["request_hash"] != identity.request_hash:
+                try:
+                    replay_request_hash = canonical_request_digest(
+                        request,
+                        hash_version=stored_hash_version,
+                    )
+                except RequestHashVersionIncompatible as exc:
+                    raise IdempotencyConflictError(execution_id) from exc
+                except UnsupportedRequestHashVersion as exc:
+                    raise SubmissionConsistencyError(
+                        "submission mapping contains an unsupported request hash version"
+                    ) from exc
+                if mapping["request_hash"] != replay_request_hash:
                     raise IdempotencyConflictError(execution_id)
                 if execution_id == candidate.execution_id:
                     if self._matches_exact_initial_record(
@@ -489,13 +540,14 @@ class ExecutionStore:
                 """
                 INSERT INTO execution_submissions (
                     requester_scope_hash, idempotency_key_hash, request_hash,
-                    execution_id, created_at
-                ) VALUES (?, ?, ?, ?, ?)
+                    request_hash_version, execution_id, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     identity.requester_scope_hash,
                     identity.idempotency_key_hash,
                     identity.request_hash,
+                    identity.request_hash_version,
                     result.execution_id,
                     result.created_at,
                 ),
@@ -632,7 +684,7 @@ class ExecutionStore:
             row = con.execute(
                 """
                 SELECT requester_scope_hash, idempotency_key_hash, request_hash,
-                       execution_id, created_at
+                       request_hash_version, execution_id, created_at
                 FROM execution_submissions
                 WHERE requester_scope_hash = ? AND idempotency_key_hash = ?
                 """,

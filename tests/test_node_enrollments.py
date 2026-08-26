@@ -30,7 +30,7 @@ CREDENTIAL_C = "enrollment-credential-C-0123456789abcdef"
 
 
 def _registration(node_id: str, **extra) -> dict:
-    return {
+    registration = {
         "node_id": node_id,
         "model": "qwen3.5:4b",
         "platform": "Linux",
@@ -38,6 +38,26 @@ def _registration(node_id: str, **extra) -> dict:
         "hostname": node_id,
         **extra,
     }
+    if registration.get("enrollment_action") in {"bootstrap", "returning"}:
+        registration.setdefault(
+            "capability_descriptor",
+            {
+                "executor": {"kind": "ollama", "worker_protocol_version": "1"},
+                "models": [{"provider": "ollama", "name": registration["model"]}],
+                "hardware": {
+                    "architecture": "x86_64",
+                    "logical_cpu_count": 4,
+                    "total_memory_bytes": 8 * 1024**3,
+                },
+                "features": ["code"],
+                "limits": {
+                    "max_concurrent_execution_units": 1,
+                    "max_output_bytes": 1_048_576,
+                },
+                "isolation": {"kind": "none"},
+            },
+        )
+    return registration
 
 
 def _bootstrap(client: TestClient, node_id: str, credential: str):
@@ -641,6 +661,8 @@ def test_compat_is_explicit_and_cannot_masquerade_as_enrollment(enrolled_server)
     assert legacy.json()["enrolled"] is False
     assert legacy.json()["enrollment_id"] is None
     assert legacy.json()["enrollment_action"] == "legacy_compat"
+    assert legacy.json()["capability_descriptor"] is None
+    assert legacy.json()["capability_descriptor_hash"] is None
     assert state.node_sessions.current("legacy").enrollment_id is None
 
     takeover = client.post(
