@@ -649,6 +649,13 @@ coordinator second, worker-attributable lease expiry or stale-node disconnect,
 candidate-local contract-floor pass/fail when the required floor ran to a
 terminal result, and paired sampled shape agreement. The two attributable
 terminal causes come from the bounded server-owned `terminal_cause` field.
+Deadline completion passes only when a non-empty output settles by the issued
+lease deadline. A timely worker-reported error or empty output remains a
+deadline-completion failure and is also retained in its settlement category.
+This definition is stored under the versioned subject key
+`nonempty_output_before_lease_v2`; current aggregates ignore the superseded
+`lifecycle` deadline subject, and startup reconciliation backfills the versioned
+observation without modifying append-only history.
 Each sampled attempt durably binds the exact production attempt it compares;
 sharing an execution ID and task class alone is insufficient.
 Payload or stream limits, caller cancellation, execution deadline, receipt

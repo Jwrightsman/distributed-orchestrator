@@ -84,7 +84,8 @@ following typed facts:
 
 - explicit accepted-settlement outcome: output, worker-reported error, or empty
   output;
-- completion before the server-issued lease deadline;
+- non-empty output settled before the server-issued lease deadline; a timely
+  worker error or empty output remains a deadline-completion failure;
 - coordinator wall time from attempt issuance to accepted settlement;
 - accepted UTF-8 output byte count and effective output bytes per coordinator
   second;
@@ -134,6 +135,12 @@ sample-pair IDs use separate domains. An exact duplicate is idempotent and
 returns the existing row. Reusing the deterministic ID for different immutable
 content raises a conflict. Database triggers reject update and delete of both
 observations and shadow decisions.
+
+The corrected deadline-success definition uses the versioned subject key
+`nonempty_output_before_lease_v2`. Earlier `lifecycle` deadline rows remain
+append-only history, are excluded from current aggregates, and are backfilled
+under the versioned key by bounded startup reconciliation. This evolves the
+meaning without rewriting a row or reusing its deterministic ID.
 
 Initial settlement projection runs inside the authoritative attempt transaction
 under a SQLite savepoint. If optional evidence validation or insertion fails,

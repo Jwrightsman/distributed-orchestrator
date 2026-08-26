@@ -153,14 +153,15 @@ bindings are excluded rather than inferred. A descriptor, selected model, task
 class, or role change therefore starts a cold scope instead of inheriting an old
 history.
 
-Recorded observations are accepted settlement outcome, completion before the
-issued lease deadline, coordinator wall time, output byte count and effective
-throughput, candidate-local contract-floor outcome when that check ran to a
-terminal result, worker-attributable lease expiry or stale-node disconnect, and
-paired sampled shape agreement. Fault attribution uses the server-owned terminal
-cause. Caller cancellation, execution deadline, coordinator restart, session
-replacement, enrollment reclaim, receipt-binding failure, payload/stream limits,
-supersession, and unknown causes are not charged to a worker scope.
+Recorded observations are accepted settlement outcome, non-empty output settled
+before the issued lease deadline, coordinator wall time, output byte count and
+effective throughput, candidate-local contract-floor outcome when that check ran
+to a terminal result, worker-attributable lease expiry or stale-node disconnect,
+and paired sampled shape agreement. A timely worker error or empty output is a
+deadline failure. Fault attribution uses the server-owned terminal cause. Caller
+cancellation, execution deadline, coordinator restart, session replacement,
+enrollment reclaim, receipt-binding failure, payload/stream limits, supersession,
+and unknown causes are not charged to a worker scope.
 Sampled attempts durably bind the exact production attempt they compare.
 
 `capability_evidence_mode` accepts only `off` or `shadow` and defaults to `off`.
@@ -180,7 +181,9 @@ Evidence recording is contained by a savepoint or best-effort boundary: its
 failure cannot reverse accepted settlement, receipt publication, or contribution
 credit. Missing-only attempt reconciliation and append-only contract-floor
 projection receipts provide bounded startup repair without completed rows
-starving later gaps.
+starving later gaps. Deadline-success semantics use a versioned subject key, so
+an upgrade backfills corrected evidence without mutating or double-counting
+superseded append-only rows.
 
 Viewer-protected `GET /v1/operator/capability-evidence` returns aggregates and
 shadow decision counts, never raw observations. Evidence rows contain no prompt,

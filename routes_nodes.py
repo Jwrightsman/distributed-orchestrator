@@ -726,7 +726,10 @@ async def list_capability_evidence(request: Request):
                     "worker_error_count": aggregate.settled_worker_error_count,
                     "empty_output_count": aggregate.settled_empty_output_count,
                 },
-                "deadline_success": binary(aggregate.deadline_completion),
+                "deadline_success": {
+                    **binary(aggregate.deadline_completion),
+                    "meaning": "nonempty_output_settled_before_lease_deadline",
+                },
                 "contract_floor": {
                     **binary(aggregate.contract_floor),
                     "meaning": "structural_contract_assurance_not_semantic_correctness",

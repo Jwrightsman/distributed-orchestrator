@@ -21,7 +21,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, cast, get_args
 
-from capability_evidence import CapabilityEvidenceStore
+from capability_evidence import (
+    DEADLINE_COMPLETION_SUBJECT,
+    CapabilityEvidenceStore,
+)
 from ledger import ensure_contribution_schema, insert_contribution_in_transaction
 from node_capabilities import (
     NodeCapabilityDescriptorV1,
@@ -1609,6 +1612,7 @@ class AttemptStore:
                           SELECT 1 FROM node_capability_observations AS observation
                           WHERE observation.attempt_id = attempts.attempt_id
                             AND observation.observation_type = 'deadline_completion'
+                            AND observation.subject_key = ?
                         )
                         OR NOT EXISTS (
                           SELECT 1 FROM node_capability_observations AS observation
@@ -1645,6 +1649,7 @@ class AttemptStore:
                           SELECT 1 FROM node_capability_observations AS observation
                           WHERE observation.attempt_id = attempts.attempt_id
                             AND observation.observation_type = 'deadline_completion'
+                            AND observation.subject_key = ?
                         )
                       )
                     )
@@ -1652,7 +1657,11 @@ class AttemptStore:
                 ORDER BY attempts.settled_at ASC, attempts.attempt_id ASC
                 LIMIT ?
                 """,
-                (limit,),
+                (
+                    DEADLINE_COMPLETION_SUBJECT,
+                    DEADLINE_COMPLETION_SUBJECT,
+                    limit,
+                ),
             ).fetchall()
         return [AttemptRecord.from_row(row) for row in rows]
 
