@@ -12,17 +12,33 @@ Usage:
 
 import argparse
 import asyncio
+import json
 import os
 import platform
+import subprocess
 import time
 from pathlib import Path
+from typing import Any
 
 import httpx
+from pydantic import Field, ValidationError, field_validator
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from rich import box
 
+from config import get as get_config
+from node_capabilities import (
+    CapabilityProtocolModel,
+    ExecutorDescriptorV1,
+    GpuDescriptorV1,
+    HardwareDescriptorV1,
+    IsolationDescriptorV1,
+    ModelDescriptorV1,
+    NodeCapabilityDescriptorV1,
+    NodeLimitDescriptorV1,
+    capability_descriptor_digest,
+)
 from ollama_client import generate_stream, check_ollama, DEFAULT_MODEL
 from worker_identity import (
     WorkerIdentity,
@@ -40,6 +56,42 @@ console = Console()
 
 _MAX_WORKER_OUTPUT_BYTES = 10_485_760
 _MAX_WORKER_ERROR_BYTES = 2048
+_MAX_CAPABILITY_OVERRIDE_BYTES = 65_536
+_GPU_PROBE_TIMEOUT_SECONDS = 3
+
+
+class WorkerCapabilityOverrides(CapabilityProtocolModel):
+    """Strict operator overrides layered over best-effort local detection.
+
+    These remain claims.  They are useful when a platform cannot expose a
+    value safely, but they do not turn registration into measurement or
+    attestation.  Model digests are intentionally absent: the stock worker
+    advertises one only when Ollama actually supplies it.
+    """
+
+    hardware: HardwareDescriptorV1 | None = None
+    features: list[str] | None = Field(default=None, max_length=32)
+    executor_version: str | None = Field(default=None, max_length=64)
+    model_context_tokens: int | None = Field(default=None, ge=1, le=16_777_216)
+    model_variant: str | None = Field(default=None, max_length=64)
+    max_context_tokens: int | None = Field(default=None, ge=1, le=16_777_216)
+
+    @field_validator("executor_version", "model_variant")
+    @classmethod
+    def bounded_override_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized or any(
+            ord(character) < 32 or ord(character) == 127
+            for character in normalized
+        ):
+            raise ValueError("capability override text must be nonblank and printable")
+        return normalized
+
+
+class WorkerCapabilityConfigurationError(RuntimeError):
+    """A local operator override cannot produce a safe stock-worker claim."""
 
 
 class NodeSessionRejected(RuntimeError):
@@ -67,30 +119,378 @@ class NodeRegistrationRejected(RuntimeError):
         return self.status_code == 429 or self.status_code >= 500
 
 
-def _hardware_info() -> dict:
-    """Collect basic hardware info to send on registration."""
-    info: dict = {
-        "cpu_count": os.cpu_count(),
-        "ram_gb": None,
-        "gpu": None,
-    }
+def _bounded_detected_text(value: object, maximum: int) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    if (
+        not normalized
+        or len(normalized) > maximum
+        or any(ord(character) < 32 or ord(character) == 127 for character in normalized)
+    ):
+        return None
+    return normalized
+
+
+def _bounded_positive_int(value: object, maximum: int) -> int | None:
+    if isinstance(value, bool):
+        return None
     try:
-        import psutil  # type: ignore
-        info["ram_gb"] = round(psutil.virtual_memory().total / 1024 ** 3, 1)
-    except ImportError:
-        pass
-    # Best-effort GPU detection — non-critical
+        parsed = int(value)  # local OS/runtime data; reject non-integral floats below
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if isinstance(value, float) and not value.is_integer():
+        return None
+    return parsed if 1 <= parsed <= maximum else None
+
+
+def _memory_from_sysconf() -> int | None:
     try:
-        import subprocess
-        r = subprocess.run(
-            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
-            capture_output=True, text=True, timeout=3,
+        pages = os.sysconf("SC_PHYS_PAGES")
+        page_size = os.sysconf("SC_PAGE_SIZE")
+    except (AttributeError, OSError, TypeError, ValueError):
+        return None
+    bounded_pages = _bounded_positive_int(pages, 2**52)
+    bounded_page_size = _bounded_positive_int(page_size, 2**30)
+    if bounded_pages is None or bounded_page_size is None:
+        return None
+    return _bounded_positive_int(bounded_pages * bounded_page_size, 2**60)
+
+
+def _memory_from_proc() -> int | None:
+    try:
+        with Path("/proc/meminfo").open("r", encoding="ascii", errors="strict") as handle:
+            for _index, line in zip(range(64), handle, strict=False):
+                if not line.startswith("MemTotal:"):
+                    continue
+                fields = line.split()
+                if len(fields) != 3 or fields[2].casefold() != "kb":
+                    return None
+                kibibytes = _bounded_positive_int(fields[1], 2**50)
+                return (
+                    _bounded_positive_int(kibibytes * 1024, 2**60)
+                    if kibibytes is not None
+                    else None
+                )
+    except (OSError, UnicodeError):
+        return None
+    return None
+
+
+def _memory_from_windows() -> int | None:
+    if platform.system() != "Windows":
+        return None
+    try:
+        import ctypes
+
+        class MemoryStatusEx(ctypes.Structure):
+            _fields_ = [
+                ("dwLength", ctypes.c_ulong),
+                ("dwMemoryLoad", ctypes.c_ulong),
+                ("ullTotalPhys", ctypes.c_ulonglong),
+                ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong),
+                ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong),
+                ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+            ]
+
+        status = MemoryStatusEx()
+        status.dwLength = ctypes.sizeof(status)
+        if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+            return None
+        return _bounded_positive_int(status.ullTotalPhys, 2**60)
+    except (AttributeError, OSError, TypeError, ValueError):
+        return None
+
+
+def _memory_from_macos_sysctl() -> int | None:
+    if platform.system() != "Darwin":
+        return None
+    try:
+        result = subprocess.run(
+            ["sysctl", "-n", "hw.memsize"],
+            capture_output=True,
+            text=True,
+            timeout=_GPU_PROBE_TIMEOUT_SECONDS,
+            check=False,
+            shell=False,
         )
-        if r.returncode == 0 and r.stdout.strip():
-            info["gpu"] = r.stdout.strip().splitlines()[0]
+    except (FileNotFoundError, OSError, UnicodeError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0 or len(result.stdout) > 64:
+        return None
+    return _bounded_positive_int(result.stdout.strip(), 2**60)
+
+
+def _total_memory_bytes() -> int | None:
+    """Return total physical memory without requiring a production dependency."""
+
+    for detector in (
+        _memory_from_sysconf,
+        _memory_from_windows,
+        _memory_from_proc,
+        _memory_from_macos_sysctl,
+    ):
+        if (detected := detector()) is not None:
+            return detected
+    return None
+
+
+def _detect_nvidia_gpus() -> list[GpuDescriptorV1] | None:
+    """Best-effort bounded NVIDIA claims; unavailable tooling means unknown."""
+
+    try:
+        result = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=name,memory.total",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=_GPU_PROBE_TIMEOUT_SECONDS,
+            check=False,
+            shell=False,
+        )
+    except (FileNotFoundError, OSError, UnicodeError, subprocess.SubprocessError):
+        return None
+    # Parsing is bounded even if a surprising local utility emits extra data.
+    if result.returncode != 0 or len(result.stdout.encode("utf-8")) > 16_384:
+        return None
+    claims: list[GpuDescriptorV1] = []
+    seen_claims: set[tuple[str, str, int | None]] = set()
+    for line in result.stdout.splitlines()[:8]:
+        fields = [field.strip() for field in line.split(",", maxsplit=1)]
+        if not fields:
+            continue
+        model = _bounded_detected_text(fields[0], 128)
+        if model is None:
+            continue
+        memory_bytes = None
+        if len(fields) == 2:
+            memory_mib = _bounded_positive_int(fields[1], 2**40)
+            if memory_mib is not None:
+                memory_bytes = _bounded_positive_int(memory_mib * 1024**2, 2**60)
+        try:
+            claim_key = ("nvidia", model, memory_bytes)
+            # The v1 descriptor is a set of bounded capability claims, not an
+            # inventory.  Identical boards collapse to one claim instead of
+            # making a common dual-GPU host fail strict descriptor validation.
+            if claim_key not in seen_claims:
+                claims.append(
+                    GpuDescriptorV1(
+                        vendor="nvidia",
+                        model=model,
+                        memory_bytes=memory_bytes,
+                    )
+                )
+                seen_claims.add(claim_key)
+        except ValidationError:
+            continue
+    return claims or None
+
+
+def _detected_hardware_descriptor() -> HardwareDescriptorV1:
+    return HardwareDescriptorV1(
+        architecture=_bounded_detected_text(platform.machine(), 64),
+        logical_cpu_count=_bounded_positive_int(os.cpu_count(), 4096),
+        total_memory_bytes=_total_memory_bytes(),
+        gpus=_detect_nvidia_gpus(),
+    )
+
+
+def _hardware_info(descriptor: NodeCapabilityDescriptorV1 | None = None) -> dict:
+    """Compatibility projection for coordinators that still read flat fields."""
+
+    hardware = descriptor.hardware if descriptor is not None else _detected_hardware_descriptor()
+    gpus = list(hardware.gpus or [])
+    return {
+        "cpu_count": hardware.logical_cpu_count,
+        "ram_gb": (
+            round(hardware.total_memory_bytes / 1024**3, 1)
+            if hardware.total_memory_bytes is not None
+            else None
+        ),
+        "gpu": gpus[0].model if gpus else None,
+    }
+
+
+def _merge_override_objects(base: dict[str, Any], newer: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in newer.items():
+        if key == "hardware" and isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = {**merged[key], **value}
+        else:
+            merged[key] = value
+    return merged
+
+
+def _read_capability_override_file(path: Path) -> dict[str, Any]:
+    try:
+        if path.stat().st_size > _MAX_CAPABILITY_OVERRIDE_BYTES:
+            raise WorkerCapabilityConfigurationError(
+                f"capability override file exceeds {_MAX_CAPABILITY_OVERRIDE_BYTES} bytes"
+            )
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+    except WorkerCapabilityConfigurationError:
+        raise
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise WorkerCapabilityConfigurationError(
+            f"capability override file cannot be read as JSON: {path}"
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise WorkerCapabilityConfigurationError("capability override JSON must be one object")
+    return parsed
+
+
+def _load_capability_overrides(
+    config_value: object,
+    override_file: Path | None,
+) -> WorkerCapabilityOverrides:
+    if config_value is None:
+        merged: dict[str, Any] = {}
+    elif isinstance(config_value, dict):
+        merged = dict(config_value)
+    else:
+        raise WorkerCapabilityConfigurationError(
+            "worker_capability_overrides in config.json must be an object"
+        )
+    if override_file is not None:
+        merged = _merge_override_objects(merged, _read_capability_override_file(override_file))
+    try:
+        return WorkerCapabilityOverrides.model_validate(merged)
+    except ValidationError as exc:
+        raise WorkerCapabilityConfigurationError(
+            f"invalid worker capability overrides: {exc}"
+        ) from exc
+
+
+async def _detect_ollama_metadata(
+    model: str,
+    ollama_url: str,
+) -> tuple[str | None, str | None, str | None]:
+    """Return runtime version, exact model digest, and quantization when supplied."""
+
+    executor_version = None
+    model_digest = None
+    model_variant = None
+    try:
+        async with httpx.AsyncClient(timeout=5, trust_env=False) as client:
+            try:
+                version_response = await client.get(f"{ollama_url}/api/version")
+                if version_response.status_code == 200:
+                    executor_version = _bounded_detected_text(
+                        version_response.json().get("version"), 64
+                    )
+            except Exception:
+                executor_version = None
+            try:
+                tags_response = await client.get(f"{ollama_url}/api/tags")
+                if tags_response.status_code == 200:
+                    records = tags_response.json().get("models", [])
+                    exact = [
+                        record
+                        for record in records[:256]
+                        if isinstance(record, dict)
+                        and model in {record.get("name"), record.get("model")}
+                    ] if isinstance(records, list) else []
+                    if len(exact) == 1:
+                        candidate = exact[0]
+                        raw_digest = candidate.get("digest")
+                        if isinstance(raw_digest, str):
+                            try:
+                                model_digest = ModelDescriptorV1(
+                                    provider="ollama",
+                                    name=model,
+                                    digest=raw_digest,
+                                ).digest
+                            except ValidationError:
+                                model_digest = None
+                        details = candidate.get("details")
+                        if isinstance(details, dict):
+                            model_variant = _bounded_detected_text(
+                                details.get("quantization_level"), 64
+                            )
+            except Exception:
+                model_digest = None
+                model_variant = None
     except Exception:
         pass
-    return info
+    return executor_version, model_digest, model_variant
+
+
+async def build_stock_capability_descriptor(
+    *,
+    model: str,
+    context_tokens: object,
+    ollama_url: str,
+    config_overrides: object = None,
+    override_file: Path | None = None,
+) -> NodeCapabilityDescriptorV1:
+    """Build one immutable process-session claim from detection plus overrides."""
+
+    # The legacy registration projection has a 96-character model bound; keep
+    # the typed and flat representations one atomic, server-valid claim.
+    normalized_model = _bounded_detected_text(model, 96)
+    if normalized_model is None:
+        raise WorkerCapabilityConfigurationError(
+            "configured model must be 1-96 printable characters"
+        )
+    overrides = _load_capability_overrides(config_overrides, override_file)
+    hardware = _detected_hardware_descriptor()
+    if overrides.hardware is not None:
+        update = {
+            name: getattr(overrides.hardware, name)
+            for name in overrides.hardware.model_fields_set
+        }
+        try:
+            hardware = HardwareDescriptorV1.model_validate(
+                {**hardware.model_dump(mode="python"), **update}
+            )
+        except ValidationError as exc:
+            raise WorkerCapabilityConfigurationError(
+                f"capability hardware is invalid after overrides: {exc}"
+            ) from exc
+
+    executor_version, model_digest, detected_variant = await _detect_ollama_metadata(
+        normalized_model,
+        ollama_url.rstrip("/"),
+    )
+    configured_context = _bounded_positive_int(context_tokens, 16_777_216)
+    model_context = overrides.model_context_tokens or configured_context
+    maximum_context = overrides.max_context_tokens or configured_context
+    try:
+        return NodeCapabilityDescriptorV1(
+            descriptor_version="1",
+            executor=ExecutorDescriptorV1(
+                kind="ollama",
+                version=overrides.executor_version or executor_version,
+                worker_protocol_version="1",
+            ),
+            models=[
+                ModelDescriptorV1(
+                    provider="ollama",
+                    name=normalized_model,
+                    digest=model_digest,
+                    context_tokens=model_context,
+                    variant=overrides.model_variant or detected_variant,
+                )
+            ],
+            hardware=hardware,
+            features=overrides.features or [],
+            limits=NodeLimitDescriptorV1(
+                max_concurrent_execution_units=1,
+                max_output_bytes=_MAX_WORKER_OUTPUT_BYTES,
+                max_context_tokens=maximum_context,
+            ),
+            isolation=IsolationDescriptorV1(kind="none"),
+        )
+    except ValidationError as exc:
+        raise WorkerCapabilityConfigurationError(
+            f"capability descriptor is invalid after overrides: {exc}"
+        ) from exc
 
 
 def _auth_headers(secret: str, session_token: str = "") -> dict:
@@ -187,12 +587,40 @@ async def register(
     node_id: str,
     secret: str = "",
     capabilities: list[str] | None = None,
+    capability_descriptor: NodeCapabilityDescriptorV1 | None = None,
+    model: str = DEFAULT_MODEL,
     session_token: str = "",
     enrollment_action: str | None = None,
     enrollment_credential: str = "",
 ) -> dict:
     """Register or idempotently refresh this node's server-issued session."""
-    hw = _hardware_info()
+    if capability_descriptor is None:
+        config = get_config()
+        configured_context = _bounded_positive_int(
+            config.get("context_tokens"), 16_777_216
+        )
+        capability_descriptor = NodeCapabilityDescriptorV1(
+            descriptor_version="1",
+            executor=ExecutorDescriptorV1(
+                kind="ollama", worker_protocol_version="1"
+            ),
+            models=[
+                ModelDescriptorV1(
+                    provider="ollama",
+                    name=model,
+                    context_tokens=configured_context,
+                )
+            ],
+            hardware=_detected_hardware_descriptor(),
+            features=[],
+            limits=NodeLimitDescriptorV1(
+                max_concurrent_execution_units=1,
+                max_output_bytes=_MAX_WORKER_OUTPUT_BYTES,
+                max_context_tokens=configured_context,
+            ),
+            isolation=IsolationDescriptorV1(kind="none"),
+        )
+    hw = _hardware_info(capability_descriptor)
 
     # Auto-detect capabilities if not provided
     caps = list(capabilities) if capabilities else []
@@ -204,11 +632,12 @@ async def register(
 
     info = {
         "node_id": node_id,
-        "model": DEFAULT_MODEL,
+        "model": model,
         "platform": platform.system(),
-        "machine": platform.machine(),
+        "machine": capability_descriptor.hardware.architecture or platform.machine(),
         "hostname": platform.node(),
         "capabilities": caps,
+        "capability_descriptor": capability_descriptor.model_dump(mode="json"),
         **hw,
     }
     if enrollment_action is not None:
@@ -240,6 +669,7 @@ def _apply_registration(
     *,
     identity: WorkerIdentity | None = None,
     identity_file: Path | str | None = None,
+    expected_descriptor: NodeCapabilityDescriptorV1 | None = None,
 ) -> str:
     """Install a registration grant and return the normalized node id."""
 
@@ -266,6 +696,21 @@ def _apply_registration(
                 "coordinator did not confirm the requested durable enrollment; "
                 "upgrade the coordinator instead of using a legacy session"
             )
+    if expected_descriptor is not None:
+        expected_hash = capability_descriptor_digest(expected_descriptor)
+        if (
+            registration.get("capability_descriptor_version")
+            != expected_descriptor.descriptor_version
+            or registration.get("capability_descriptor_hash") != expected_hash
+        ):
+            raise WorkerIdentityError(
+                "coordinator did not confirm the advertised capability descriptor; "
+                "upgrade the coordinator instead of using untyped registration"
+            )
+        session["capability_descriptor_version"] = (
+            expected_descriptor.descriptor_version
+        )
+        session["capability_descriptor_hash"] = expected_hash
     enrolled = enrollment_confirmation is True
     updated_identity = identity
     if enrolled:
@@ -343,7 +788,44 @@ def reconnect_delay(attempt: int, rng=None) -> float:
     return min(_RECONNECT_CAP_S, raw * (0.75 + rng.random() * 0.5))
 
 
-async def poll_and_execute(server: str, node_id: str, session: dict, secret: str = "") -> str | None:
+def _execution_model_for_task(
+    task: dict,
+    configured_model: str | None,
+    capability_descriptor: NodeCapabilityDescriptorV1 | None,
+) -> str | None:
+    """Validate a server model binding against this process's fixed claim."""
+
+    raw_binding = task.get("selected_model")
+    if raw_binding is None:
+        # Compatibility with task handouts from coordinators that predate model
+        # binding, including descriptor-less legacy sessions.
+        return configured_model
+    if capability_descriptor is None:
+        raise ValueError(
+            "server selected a model but this worker has no advertised descriptor"
+        )
+    selected = ModelDescriptorV1.model_validate(raw_binding)
+    if not any(
+        advertised.provider == selected.provider
+        and advertised.name == selected.name
+        and advertised.digest == selected.digest
+        for advertised in capability_descriptor.models
+    ):
+        raise ValueError(
+            "server-selected model is not in this worker's immutable "
+            "capability descriptor"
+        )
+    return selected.name
+
+
+async def poll_and_execute(
+    server: str,
+    node_id: str,
+    session: dict,
+    secret: str = "",
+    model: str | None = None,
+    capability_descriptor: NodeCapabilityDescriptorV1 | None = None,
+) -> str | None:
     """Poll the orchestrator for tasks, execute them, return task_id or None.
 
     The server long-polls up to 25s before returning 204, so this call
@@ -391,6 +873,9 @@ async def poll_and_execute(server: str, node_id: str, session: dict, secret: str
 
         start = time.time()
         try:
+            execution_model = _execution_model_for_task(
+                task, model, capability_descriptor
+            )
             # Stream tokens from Ollama, batch them, and relay to the orchestrator
             # so the dashboard shows live output from remote workers.
             _BATCH_TOKENS = 20      # flush after this many tokens …
@@ -442,7 +927,9 @@ async def poll_and_execute(server: str, node_id: str, session: dict, secret: str
                 return None
 
             async with httpx.AsyncClient(timeout=600, trust_env=False) as stream_client:
-                async for token in generate_stream(prompt, system=system):
+                async for token in generate_stream(
+                    prompt, system=system, model=execution_model
+                ):
                     token_bytes = len(token.encode("utf-8"))
                     if collected_bytes + token_bytes > max_output_bytes:
                         limit_error = "output_limit_exceeded"
@@ -593,8 +1080,26 @@ async def main():
             "issues a process-local node session"
         ),
     )
+    parser.add_argument(
+        "--model",
+        help=(
+            "Ollama model used for both execution and the capability claim "
+            "(default: config.json model)"
+        ),
+    )
+    parser.add_argument(
+        "--capability-overrides",
+        type=Path,
+        help=(
+            "Strict bounded JSON claim overrides layered over local detection; "
+            "model digests still come only from Ollama"
+        ),
+    )
     parser.add_argument("--capabilities", default="", help="Comma-separated capability tags, e.g. 'gpu,large-context' (auto-detected if omitted)")
     args = parser.parse_args()
+
+    config = get_config()
+    selected_model = str(args.model or config.get("model") or DEFAULT_MODEL)
 
     try:
         node_id = normalize_worker_node_id(args.node_id or platform.node())
@@ -617,6 +1122,25 @@ async def main():
         return
 
     try:
+        capability_descriptor = await build_stock_capability_descriptor(
+            model=selected_model,
+            context_tokens=config.get("context_tokens"),
+            ollama_url=str(config.get("ollama_url") or "http://localhost:11434"),
+            config_overrides=config.get("worker_capability_overrides"),
+            override_file=(
+                args.capability_overrides.expanduser()
+                if args.capability_overrides is not None
+                else None
+            ),
+        )
+    except WorkerCapabilityConfigurationError as exc:
+        console.print(
+            f"[red bold]Invalid capability configuration:[/red bold] {exc}"
+        )
+        return
+    descriptor_hash = capability_descriptor_digest(capability_descriptor)
+
+    try:
         # A new credential is durably written before the bootstrap request. If
         # the response is lost, the same credential makes the retry converge on
         # the enrollment already committed by the coordinator.
@@ -632,8 +1156,9 @@ async def main():
     _caps_display = ", ".join(capabilities) if capabilities else "[dim]auto-detect[/dim]"
     console.print(Panel(
         f"[bold]Node ID:[/bold]      {node_id}\n"
-        f"[bold]Model:[/bold]        {DEFAULT_MODEL}\n"
+        f"[bold]Model:[/bold]        {selected_model}\n"
         f"[bold]Capabilities:[/bold] {_caps_display}\n"
+        f"[bold]Descriptor:[/bold]   v{capability_descriptor.descriptor_version} {descriptor_hash[:12]}\n"
         f"[bold]Orchestrator:[/bold] {server}\n"
         f"[bold]Identity file:[/bold] {identity_file}",
         title="[bold cyan]Distributed AI Node[/bold cyan]",
@@ -652,6 +1177,8 @@ async def main():
         "enrollment_id": identity.enrollment_id,
         "enrolled": False,
         "worker_identity": identity,
+        "capability_descriptor_version": capability_descriptor.descriptor_version,
+        "capability_descriptor_hash": descriptor_hash,
     }
     try:
         enrollment_action = (
@@ -662,6 +1189,8 @@ async def main():
             node_id,
             secret=secret,
             capabilities=capabilities,
+            capability_descriptor=capability_descriptor,
+            model=selected_model,
             enrollment_action=enrollment_action,
             enrollment_credential=identity.enrollment_credential,
         )
@@ -670,6 +1199,7 @@ async def main():
             reg,
             identity=identity,
             identity_file=identity_file,
+            expected_descriptor=capability_descriptor,
         )
         identity = session["worker_identity"]
         # After registration the server may have added auto-detected caps (model:<name>, etc.)
@@ -719,6 +1249,8 @@ async def main():
                     node_id,
                     secret=secret,
                     capabilities=capabilities,
+                    capability_descriptor=capability_descriptor,
+                    model=selected_model,
                     session_token=str(session.get("session_token", "")),
                     enrollment_action=enrollment_action,
                     enrollment_credential=identity.enrollment_credential,
@@ -728,13 +1260,21 @@ async def main():
                     reg,
                     identity=identity,
                     identity_file=identity_file,
+                    expected_descriptor=capability_descriptor,
                 )
                 console.print(f"[green]Reconnected.[/green] {reg.get('message', '')}\n")
                 registered = True
 
             # Server long-polls up to 25s — this call already blocks while waiting.
             # No sleep needed between polls; just loop immediately.
-            await poll_and_execute(server, node_id, session, secret=secret)
+            await poll_and_execute(
+                server,
+                node_id,
+                session,
+                secret=secret,
+                model=selected_model,
+                capability_descriptor=capability_descriptor,
+            )
 
             attempt = 0  # a clean poll means the link is healthy again
 

@@ -438,6 +438,29 @@ def _register_node(
             "cpu_count": 2,
             "ram_gb": 8,
             "capabilities": ["code"],
+            "capability_descriptor": {
+                "executor": {
+                    "kind": "ollama",
+                    "worker_protocol_version": "1",
+                },
+                "models": [
+                    {
+                        "provider": "ollama",
+                        "name": "mycelium-harness-fake:latest",
+                    }
+                ],
+                "hardware": {
+                    "architecture": "harness",
+                    "logical_cpu_count": 2,
+                    "total_memory_bytes": 8 * 1024**3,
+                },
+                "features": ["code"],
+                "limits": {
+                    "max_concurrent_execution_units": 1,
+                    "max_output_bytes": 1_048_576,
+                },
+                "isolation": {"kind": "none"},
+            },
             "enrollment_action": "bootstrap",
             "enrollment_credential": enrollment_credential,
         },
