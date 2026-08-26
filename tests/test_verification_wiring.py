@@ -1,17 +1,11 @@
-"""Verification wired into the dispatcher — the parts that could break production.
+"""Sampled output agreement wired into the dispatcher.
 
-`tests/test_verification.py` covers the scoring module in isolation. This file
-covers what wiring it in changed: task routing, the duplicate task's placement,
-the /nodes payload, and — most importantly — that all of it is inert at the
-default verify_rate of 0.
-
-The bar for every test here is behaviour a real network would hit: a node that
-must not grade its own homework, and a node that must never be starved because
-it once disagreed.
+Duplicate sampling remains optional and detached. Process-local comparison
+records are private diagnostics and cannot alter eligibility, queue order, or
+which polling worker receives an assignment.
 """
 
 import asyncio
-import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -20,7 +14,7 @@ import routes_nodes
 import routes_pitch
 import server
 import server_state
-from verification import MIN_SAMPLES_FOR_ROUTING, VerificationPool
+from verification import VerificationPool
 from tests._node_session_helpers import enable_auto_node_sessions
 
 _CODE_A = "```python\nprint('hello world from a')\n```"
@@ -84,14 +78,14 @@ def _register(client, node_id: str):
     )
 
 
-def _degrade(node_id: str, disagreements: int = MIN_SAMPLES_FOR_ROUTING):
-    """Give a node a real, routing-eligible record of disagreement."""
+def _record_disagreements(node_id: str, disagreements: int = 5):
+    """Populate the legacy process-local agreement record."""
     identity_key = routes_nodes._verification_key(node_id)
     assert identity_key is not None
-    rep = server_state.verification_pool.reputation(identity_key)
+    record = server_state.verification_pool.agreement_record(identity_key)
     for _ in range(disagreements):
-        rep.record(False, "test")
-    return rep
+        record.record(False, "test")
+    return record
 
 
 # ── Off by default ───────────────────────────────────────────────────
@@ -100,6 +94,8 @@ def test_verify_rate_defaults_to_zero_and_disables_sampling():
     from config import DEFAULTS
 
     assert DEFAULTS["verify_rate"] == 0.0
+    assert DEFAULTS["capability_evidence_mode"] == "off"
+    assert DEFAULTS["capability_evidence_min_samples"] == 5
     assert server_state._refresh_verify_rate() == 0.0
     # Even with a large network, nothing gets duplicated.
     assert server_state.verification_pool.should_verify(available_nodes=25) is False
@@ -112,6 +108,23 @@ def test_refresh_clamps_nonsense_config(monkeypatch):
         monkeypatch.setattr(config, "get", lambda _raw=raw: {"verify_rate": _raw})
         monkeypatch.setattr(server_state, "get_config", lambda _raw=raw: {"verify_rate": _raw})
         assert server_state._refresh_verify_rate() == expected
+
+
+@pytest.mark.parametrize("evidence_mode", ["off", "shadow"])
+def test_capability_evidence_mode_does_not_control_sampling(
+    monkeypatch, evidence_mode
+):
+    monkeypatch.setattr(
+        server_state,
+        "get_config",
+        lambda: {
+            "deployment_mode": "local",
+            "verify_rate": 0.25,
+            "capability_evidence_mode": evidence_mode,
+        },
+    )
+
+    assert server_state._refresh_verify_rate() == 0.25
 
 
 def test_trusted_alpha_disables_process_local_sampled_verification(monkeypatch):
@@ -135,32 +148,41 @@ def test_single_node_never_verifies():
     assert server_state.verification_pool.should_verify(available_nodes=2) is True
 
 
-# ── /nodes surfaces the record ───────────────────────────────────────
+# /nodes does not publish process-local agreement records
 
-def test_nodes_endpoint_exposes_routing_weight(client):
+def test_nodes_endpoint_omits_sampled_agreement_data(client):
     _register(client, "alpha")
+    _record_disagreements("alpha")
     body = client.get("/nodes").json()
 
     node = body["nodes"][0]
     assert node["node_id"] == "alpha"
-    assert node["routing_weight"] == 1.0        # unmeasured nodes are not suspects
-    assert node["verified_samples"] == 0
-    assert node["trusted_for_routing"] is False
+    for forbidden in (
+        "routing_weight",
+        "trusted_for_routing",
+        "verified_samples",
+        "agreement_score",
+        "sampled_comparisons",
+        "agreement_rate",
+        "agreements",
+        "disagreements",
+    ):
+        assert forbidden not in node
     assert body["verify_rate"] == 0.0
     # The original node fields must survive the merge — the dashboard reads them.
     assert node["model"] == "qwen3.5:4b"
     assert node["tasks_completed"] == 0
 
 
-def test_reputation_survives_a_node_disconnecting(client):
+def test_nodes_endpoint_stays_agreement_free_after_reconnect(client):
     _register(client, "alpha")
-    _degrade("alpha")
-    server.nodes.clear()          # node drops off the network
-    _register(client, "alpha")    # ...and comes back
+    _record_disagreements("alpha")
+    server.nodes.clear()
+    _register(client, "alpha")
 
     node = client.get("/nodes").json()["nodes"][0]
-    assert node["verified_samples"] == MIN_SAMPLES_FOR_ROUTING
-    assert node["routing_weight"] < 1.0
+    assert "sampled_comparisons" not in node
+    assert "routing_weight" not in node
 
 
 # ── The duplicate must not land on the node it is checking ───────────
@@ -193,64 +215,53 @@ def test_ordinary_task_is_unaffected_by_exclusion_logic(client):
     assert got.json()["task_id"] == "build_1"
 
 
-# ── Routing preference: first refusal, never exclusion ───────────────
+# Sampled agreement never affects assignment
 
-def test_no_deferral_when_verification_is_off():
-    """Every weight is 1.0, so there is nothing to rank — must be a no-op."""
-    now = time.time()
-    server_state.waiting_nodes.update({"alpha": now, "beta": now})
-    assert routes_nodes._should_defer("alpha", now) is False
-    assert routes_nodes._should_defer("beta", now) is False
+def test_deprecated_deferral_hook_is_always_a_noop(client):
+    _register(client, "alpha")
+    _record_disagreements("alpha", disagreements=100)
+
+    assert routes_nodes._should_defer("alpha", 0.0) is False
 
 
-def test_worse_node_defers_to_better_one(client):
+@pytest.mark.parametrize("evidence_mode", ["off", "shadow"])
+def test_sampled_agreement_cannot_change_real_assignment(
+    client, monkeypatch, evidence_mode
+):
     _register(client, "alpha")
     _register(client, "beta")
-    now = time.time()
-    server_state.waiting_nodes.update({"alpha": now, "beta": now})
-    _degrade("beta")
+    alpha_key = routes_nodes._verification_key("alpha")
+    assert alpha_key is not None
+    for _ in range(20):
+        server_state.verification_pool.agreement_record(alpha_key).record(True)
+    _record_disagreements("beta", disagreements=20)
+    monkeypatch.setattr(
+        server_state,
+        "get_config",
+        lambda: {
+            "deployment_mode": "local",
+            "verify_rate": 1.0,
+            "capability_evidence_mode": evidence_mode,
+        },
+    )
 
-    assert routes_nodes._should_defer("beta", now) is True    # worse waits
-    assert routes_nodes._should_defer("alpha", now) is False  # better proceeds
+    def fail_if_consulted(*_args):
+        raise AssertionError("sampled agreement was consulted during assignment")
 
-
-def test_worse_node_is_never_starved(client):
-    """After the grace period it takes the work regardless of reputation."""
-    _register(client, "alpha")
-    _register(client, "beta")
-    now = time.time()
-    server_state.waiting_nodes.update({"alpha": now, "beta": now})
-    _degrade("beta")
-
-    stale = now - server_state._ROUTING_DEFER - 0.01
-    assert routes_nodes._should_defer("beta", stale) is False
-
-
-def test_lone_worse_node_does_not_defer_to_an_absent_better_one(client):
-    _register(client, "beta")
-    now = time.time()
-    _degrade("beta")
-    server_state.waiting_nodes.update({"beta": now})           # alpha is not polling
-    assert routes_nodes._should_defer("beta", now) is False
-
-    # ...nor to one whose poll went stale.
-    server_state.waiting_nodes["alpha"] = now - server_state._WAITING_FRESH - 1
-    assert routes_nodes._should_defer("beta", now) is False
-
-
-def test_deferral_does_not_block_the_only_available_node(client):
-    """End to end: a degraded node still gets work when it is alone."""
-    _register(client, "beta")
-    _degrade("beta")
-    server.task_queue.append({"task_id": "build_9", "title": "t", "prompt": "p", "system": "s"})
+    monkeypatch.setattr(routes_nodes, "_should_defer", fail_if_consulted)
+    server.task_queue.append(
+        {"task_id": "build_9", "title": "t", "prompt": "p", "system": "s"}
+    )
 
     got = client.get("/tasks/next", params={"node_id": "beta"})
+
     assert got.status_code == 200
     assert got.json()["task_id"] == "build_9"
+    assert got.json()["assigned_to"] == "beta"
 
 
 def test_waiting_registry_is_cleared_after_a_poll(client):
-    """A leaked entry would make an absent node look like a live contender."""
+    """The compatibility poll registry is still cleaned up after each request."""
     _register(client, "alpha")
     server.task_queue.append({"task_id": "build_2", "title": "t", "prompt": "p", "system": "s"})
     client.get("/tasks/next", params={"node_id": "alpha"})
@@ -276,16 +287,16 @@ async def test_comparison_records_in_the_background_without_blocking():
         slow_duplicate, pool, primary_enrollment_id="enrollment-alpha",
     )
     # The pipeline has already moved on: nothing recorded yet.
-    assert pool.reputation("enrollment:enrollment-alpha").total == 0
+    assert pool.agreement_record("enrollment:enrollment-alpha").total == 0
 
     await asyncio.sleep(0.2)
-    assert pool.reputation("enrollment:enrollment-alpha").total == 1
-    assert pool.reputation("enrollment:enrollment-beta").total == 1
-    assert pool.reputation("enrollment:enrollment-alpha").agreed == 1
+    assert pool.agreement_record("enrollment:enrollment-alpha").total == 1
+    assert pool.agreement_record("enrollment:enrollment-beta").total == 1
+    assert pool.agreement_record("enrollment:enrollment-alpha").agreed == 1
 
 
 @pytest.mark.asyncio
-async def test_disagreement_lowers_both_nodes():
+async def test_disagreement_is_recorded_for_both_nodes():
     pool = server_state.verification_pool
 
     async def prose_duplicate(_tid, _budget):
@@ -300,8 +311,8 @@ async def test_disagreement_lowers_both_nodes():
         prose_duplicate, pool, primary_enrollment_id="enrollment-alpha",
     )
     await asyncio.sleep(0.1)
-    assert pool.reputation("enrollment:enrollment-alpha").disagreed == 1
-    assert pool.reputation("enrollment:enrollment-beta").disagreed == 1
+    assert pool.agreement_record("enrollment:enrollment-alpha").disagreed == 1
+    assert pool.agreement_record("enrollment:enrollment-beta").disagreed == 1
 
 
 @pytest.mark.asyncio
@@ -319,7 +330,7 @@ async def test_absent_or_failed_duplicate_records_nothing(outcome):
         "verify_3", "subtask", "job_1", "trace_1", "alpha", _CODE_A, duplicate, pool,
     )
     await asyncio.sleep(0.1)
-    assert pool.reputation("alpha").total == 0
+    assert pool.agreement_records == {}
 
 
 @pytest.mark.asyncio
@@ -333,4 +344,4 @@ async def test_a_broken_spot_check_cannot_fail_the_deliverable():
         "verify_4", "subtask", "job_1", "trace_1", "alpha", _CODE_A, exploding, pool,
     )
     await asyncio.sleep(0.1)  # must not propagate
-    assert pool.reputation("alpha").total == 0
+    assert pool.agreement_records == {}

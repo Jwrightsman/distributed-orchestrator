@@ -27,6 +27,7 @@ boundary.
 | Node enrollments | SQLite identity/status/credential digest plus worker-owned plaintext identity file | credential theft, label takeover, failed revocation, or false attribution |
 | Node sessions | process memory plus session identifiers/digests attached to node and attempt state | stale incarnation use, bearer-token disclosure, or restart invalidation |
 | Capability claims and snapshots | live registry plus canonical enrollment-scoped SQLite snapshots; descriptor/requirement digests on attempts | false hardware/model/isolation claims, private inventory disclosure, or assigning work under the wrong snapshot |
+| Scoped capability observations and shadow decisions | append-only SQLite rows derived from coordinator-owned attempt state | false attribution, replay conflict, evidence poisoning, private inventory disclosure, or accidental use in production routing |
 | Viewer, pitch, and admission secrets | local config/environment and HTTP headers | private reads, unwanted compute use, or initial worker admission |
 | Canonical submission identity | digest-only SQLite mapping to an execution | duplicate execution after retry, key conflict, or a mapping whose execution is missing |
 | Artifact integrity baseline | sealed manifest rows/hash in SQLite plus files on disk | ordinary file drift, database/file loss, or host-level joint tampering |
@@ -79,6 +80,7 @@ Requester ── pitch_key + optional scoped retry key ──▶ ORCHESTRATOR
 | Digest-only enrollment credentials | durable per-node attribution, returning registration, independent revocation/rotation | physical-machine identity, attestation, or Sybil resistance |
 | Digest-only node sessions | one live enrollment incarnation, stale reclaim, and restart invalidation | durable scheduling or identity by themselves |
 | Versioned capability claims and one hard matcher | bounded deterministic eligibility, immutable per-session descriptor identity, and exact descriptor/requirement binding on attempts | truth of any claim, attestation, performance evidence, trust, correctness, or ranking among eligible nodes |
+| Scoped capability evidence | exact enrollment/descriptor/executor/model/task-class/role scopes, bounded typed observations, append-only replay-safe rows, protected aggregates, and shadow-only counterfactuals | descriptor truth, semantic correctness, trust, reputation, Sybil resistance, or production routing |
 | Server-owned attempts | active lease and exact task/execution/unit/kind/enrollment/node/session/version/nonce/output-cap binding | truthfulness or quality of the returned model output |
 | Atomic settlement | one accepted attempt transition, receipt, response, and compute contribution; durable exact-replay state across database reopen | durable scheduling, worker resumption, or reuse of a restart-invalidated node session |
 | Worker I/O bounds | per-attempt result/stream byte cap, error cap, cumulative stream batch/rate limits, bounded fanout | semantic safety of allowed output or transport-level denial of service |
@@ -93,7 +95,7 @@ Requester ── pitch_key + optional scoped retry key ──▶ ORCHESTRATOR
 | SQLite contribution ledger | concurrent-safe, idempotent non-monetary records | tamper evidence against the host operator |
 | SQLite/ownership policy | one OS-locked coordinator, WAL/foreign keys/busy timeout/bounded retry, serialized migrations, transactional boundaries | multi-coordinator operation or failover |
 | Verified backup/restore | SQLite online snapshot plus bounded archive manifest/checksums and validate-before-install restore | live process state, independent attestation, or off-site backup scheduling |
-| Post-hoc status fields | explicit report that trusted-alpha duplicate verification is disabled | duplicate execution or stronger correctness evidence |
+| Legacy post-hoc status fields | explicit report that trusted-alpha execution-level duplicate verification is disabled | scoped operational evidence, duplicate execution, or stronger correctness evidence |
 
 Secret comparisons use constant-time comparison where static credentials or
 signatures are checked. This reduces one narrow side channel. It does not make a
@@ -383,7 +385,55 @@ token, wallet, transfer, redemption, price, or payment. The host operator can
 still alter SQLite or its compatibility file; the ledger is concurrent-safe and
 idempotent, not tamper-evident against the machine owner.
 
-## 12. Keyless public pitch
+## 12. Scoped capability evidence is not reputation
+
+The evidence subsystem records coordinator-observed operational outcomes. Its
+scope includes the immutable enrollment and descriptor, executor and worker
+protocol, selected model including optional digest/variant, task class, and
+evidence role. Missing, corrupt, historical-only, or inconsistent bindings are
+excluded rather than guessed. Descriptor, selected-model, task-class, and role
+changes therefore cold-start a new scope. This limits accidental history mixing;
+it does not stop an admitted worker from lying in a descriptor, changing claims
+between sessions, or deliberately shaping its output to game future observations.
+
+Only bounded server-owned facts are recorded: settlement category, deadline
+completion, wall time, output bytes/effective throughput, terminal contract-floor
+outcome, sampled output-shape agreement, lease expiry, and stale-node disconnect.
+The last two are the only worker-attributable terminal failures. Payload/stream
+limits, caller cancellation, execution deadline, receipt-binding failure,
+enrollment reclaim, session replacement, coordinator restart, supersession,
+unknown causes, and free-form error text are excluded. This conservative
+attribution avoids charging coordinator or caller failures to a worker, but can
+also omit real worker harm whose cause cannot be proven from typed state.
+Sampled comparison additionally requires a durable exact primary-attempt
+binding; another unit in the same execution is not an interchangeable pair.
+
+Deterministic domain-separated IDs make exact replay idempotent and conflicting
+content an error; SQLite triggers reject update/delete. Evidence failure is
+contained so it cannot roll back accepted settlement, receipt, or contribution
+credit. Bounded repair selects missing attributable observations and terminal
+executions lacking an append-only contract-floor projection receipt, so
+already-complete rows do not starve the batch. These properties defend against
+ordinary retries and partial failures, not a malicious coordinator host that
+can alter SQLite or code.
+
+`capability_evidence_mode` is `off` by default and permits only `off` or
+`shadow`. Shadow evaluation runs after real assignment, considers only
+hard-eligible candidates, freezes their exact descriptor/model scopes at
+assignment time, uses an assignment-time evidence cutoff, and never changes
+production routing. Below the configured minimum (default 5), evidence
+is explicitly insufficient. Sampled agreement is shape agreement, not truth,
+and is not a preference dimension. The circuit breaker remains separate.
+
+Viewer-protected `GET /v1/operator/capability-evidence` exposes aggregates and
+grouped shadow counts, not raw rows. `GET /nodes`, `/health`, and `/status.json`
+carry no evidence score, reputation, trust flag, or routing weight. Evidence
+rows omit prompts, output bodies, worker-error text, free-form reasons,
+credentials, nonces, session secrets, and arbitrary telemetry, but their scoped
+hardware/model and timing aggregates remain private operational inventory and
+are included in coordinator backups.
+
+## 13. Keyless public pitch
 
 The optional public endpoint is off by default. When enabled it accepts only a
 short task and rejects caller-controlled strategy, candidates, placement,
@@ -397,7 +447,7 @@ is derived from the request IP as seen by the application and can be distorted
 by proxy configuration. The content filter is a coarse substring filter. A
 request-count and concurrency cap reduce abuse; they do not eliminate it.
 
-## 13. Remaining weaknesses
+## 14. Remaining weaknesses
 
 - Shared static secrets still provide instance-wide bootstrap, pitch, or viewer
   authority within their separate roles.
@@ -413,10 +463,10 @@ request-count and concurrency cap reduce abuse; they do not eliminate it.
 - One orchestrator and no failover.
 - No Sybil resistance or trustworthy worker hardware attestation.
 - Capability descriptors and their SHA-256 hashes are node claims, not
-  observed evidence, hardware/model attestation, or trust. Theme 2B's matcher
-  only excludes. The separate pre-existing local sampled-verification pool can
-  defer first refusal when explicitly enabled, but is off by default and forced
-  off in trusted-alpha mode.
+  observed evidence, hardware/model attestation, or trust. The matcher only
+  excludes, and scoped observations do not validate the claim.
+- Evidence can be sparse, strategically gamed, or omitted by conservative fault
+  attribution. It is diagnostic only and never changes production routing.
 - Structural/deterministic contract validation does not prove arbitrary
   behavioral correctness.
 - Viewer auth is one role for the whole instance, not multi-user authorization.
@@ -427,10 +477,11 @@ request-count and concurrency cap reduce abuse; they do not eliminate it.
 - Share revocation cannot retract already downloaded content.
 - Uvicorn/reverse-proxy access logs can expose share URLs unless configured.
 - Sealed manifests are local baselines, not externally anchored attestations.
-- Trusted-alpha post-hoc duplicate verification is explicitly disabled.
+- Trusted-alpha execution-level post-hoc duplicate verification is explicitly
+  disabled; sampled shape agreement, when separately enabled, is not correctness.
 - The orchestrator host can alter SQLite, artifacts, or configuration.
 
-## 14. Safe deployment posture
+## 15. Safe deployment posture
 
 Run Mycelium on hardware you control, or among a small invited group whose node
 operators you trust. Use `deployment_mode=trusted_alpha`, run preflight, set

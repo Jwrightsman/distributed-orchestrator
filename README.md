@@ -360,6 +360,7 @@ See **[docs/DEPLOY.md](docs/DEPLOY.md)** for local, private-overlay, and reverse
 | `/projects*` | GET/POST | Private persistent project APIs |
 | `/nodes` | GET | Private connected-worker details |
 | `/v1/operator/node-enrollments` | GET | Private secret-free durable enrollment status and accounting |
+| `/v1/operator/capability-evidence` | GET | Private scoped operational aggregates and shadow-policy counts |
 | `/nodes/register` | POST | Worker node registration |
 | `/nodes/{id}/heartbeat`, `/drain` | POST | Session-bound worker liveness and drain control |
 | `/tasks/next` | GET | Session-bound worker poll (long-polls 25s) |
@@ -379,6 +380,7 @@ This is a **Phase 0 private trusted-alpha system**. Here's exactly what's durabl
 | Keyed canonical submission mappings | Yes | Digest-only SQLite rows retained during trusted alpha; matching retries return one execution ID |
 | Attempt settlement and accepted receipts | Yes | SQLite — exact replay survives restart; active attempts interrupt on restart |
 | Node enrollment identity/revocation | Yes | SQLite stores immutable IDs and credential digests, never plaintext credentials |
+| Scoped capability observations | Yes | Append-only SQLite rows; deterministic IDs make settlement replay and restart repair idempotent |
 | Contribution records | Yes | SQLite plus a regenerated JSON compatibility projection; enrolled compute is keyed by enrollment ID |
 | Share records and token hashes | Yes | SQLite — expiry and revocation survive restart |
 | Artifact manifests | Yes | Terminal baselines, roles, hashes, and seal state in SQLite; files remain under registered roots |
@@ -389,6 +391,8 @@ This is a **Phase 0 private trusted-alpha system**. Here's exactly what's durabl
 **Execution guarantees:** Required execution snapshots commit before live, event, callback, project-memory/legacy mirrors, response, and terminal artifact/share publication. Current execution-linked history/run/gallery/download/demo surfaces require that durable terminal state and its sealed artifact binding; staged files are not completion authority. A keyed canonical retry converges on one durable execution ID; a changed request conflicts. Distributed compute may still be attempted more than once after expiry or reclaim, but only the current active server-issued attempt can settle. Settlement, its accepted receipt, replay response, and compute contribution are atomic and durable. Changed, unknown, queued-but-unleased, expired, reclaimed, cancelled, interrupted, or mismatched results are rejected and kept only in a bounded diagnostic quarantine. The queue itself remains process-local, and these controls are not an exactly-once external-side-effect guarantee.
 
 **Trust model:** `node_secret` authorizes initial bootstrap, a distinct per-node bearer credential authenticates durable enrollment, `pitch_key` admits task submissions, and `viewer_key` protects task-, result-, project-, event-, artifact-, and machine-sensitive routes. All pitch-key holders share one idempotency scope; open development mode uses the direct peer address as a best-effort scope, not user identity. Explicit share tokens expose one allowlisted redacted result instead of making every execution public. **Require durable enrollment and use TLS or a private authenticated overlay before trusted-alpha exposure.** Enrollment/attempt binding provides attribution and lease integrity, not machine attestation or output correctness. Full details: [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
+
+**Observed capability evidence is experimental and shadow-only.** Coordinator-recorded deadline outcomes, bounded latency/throughput, candidate-local contract-floor results, and sampled output agreement are kept in separate exact scopes: enrollment, descriptor, executor/model, task class, and evidence role. A changed descriptor or model starts cold; unrelated history is not inherited. `capability_evidence_mode` is `off` by default and accepts only `off` or `shadow`. Shadow mode evaluates a hypothetical preference after the actual handout is durable and cannot change hard eligibility, queue order, or assignment. Fewer than `capability_evidence_min_samples` deadline samples remains insufficient evidence; every rate includes its sample count and Wilson interval. Agreement is not correctness, contract-floor validation is task-specific assurance, contribution points are not reputation, and no global score or active evidence routing exists. See [ADR 0012](docs/adr/0012-observed-capability-evidence-shadow-only.md) and the [experiment report](docs/experiments/capability-evidence-shadow.md).
 
 `scripts/trusted_alpha_harness.py`, `scripts/restart_recovery.py`, and `scripts/soak_test.py` are reproducible operational checks, but do not copy an old pass count into a current claim: rerun them against the commit being deployed. The bounded trusted-alpha harness uses fake executors/workers and no live model. Canonical startup reconciliation truthfully interrupts non-resumable queued/running state rather than leaving it active indefinitely.
 
@@ -442,7 +446,7 @@ Stated plainly, because you'll find them anyway:
 - **Generated code is not sandboxed.** The pipeline writes runnable files to `output/`. It checks that Python parses and HTML is structurally sound, but *you* are responsible for reading anything before you run it.
 - **The full threat model is written down**, including the deliberate public allowlist, viewer-protected surfaces, share capabilities, malicious-worker limits, and what still blocks a permissionless network: [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md). Reporting a vulnerability: [SECURITY.md](SECURITY.md).
 - **It's a trusted network, not a trustless one.** Per-node bearer enrollment supports stable attribution and individual revocation; a short-lived server session identifies one incarnation. Neither proves a physical machine, honest operator, model bytes, or Sybil resistance. An authenticated node can still return plausible-looking garbage. Experimental sampled redundant execution remains available only in local mode; trusted-alpha mode disables it until post-hoc evidence has durable semantics. Shape agreement is not proof of correctness.
-- **Capability descriptors are claims, not evidence.** Typed CPU, memory, GPU, model, context, feature, executor, and isolation fields make hard routing deterministic, but an admitted worker can lie about them. A descriptor digest identifies the exact claim used for an attempt; it is not hardware or model attestation. Theme 2B adds no descriptor- or evidence-based ordering: its matcher only excludes ineligible nodes. Separately, the pre-existing optional local sampled-verification pool can defer first refusal among already eligible nodes; `verify_rate` is off by default and trusted-alpha mode disables it.
+- **Capability descriptors are claims, not evidence.** Typed CPU, memory, GPU, model, context, feature, executor, and isolation fields make hard routing deterministic, but an admitted worker can lie about them. A descriptor digest identifies the exact claim used for an attempt; it is not hardware or model attestation. The matcher only excludes ineligible nodes. Optional `verify_rate` sampling is off by default and never changes assignment order; its bounded agreement observations remain separate from correctness and availability. Experimental capability evidence is likewise `off` or shadow-only, never active routing.
 - **One orchestrator, no failover.** DAG planning/review remain on the coordinator; DAG builder units and complete ensemble candidates may run on workers. If the orchestrator goes down, the swarm stops. Durable records reconcile truthfully on restart, but process-local work is not resumed. Reusing an idempotency key returns the same interrupted record; it does not restart it.
 - **No HTTPS, no accounts, no multi-tenancy.** This is a prototype you run for yourself or a group you know.
 
@@ -479,12 +483,13 @@ a reference, not a promise of dates.
 - [x] Durable non-monetary compute-contribution points and compatibility standings
 - [x] Worker node hardware reporting (CPU, RAM, GPU) and auto-reconnect
 - [x] Versioned typed capability claims, immutable enrollment snapshots, deterministic hard requirements, and attempt descriptor binding
+- [x] Replay-safe scoped operational evidence, protected aggregates, and deterministic shadow-only evaluation (`capability_evidence_mode`, off by default)
 - [x] `/metrics` endpoint — queue depth, latency, blacklisted nodes, job status
 - [x] Schema-enforced planner output (Ollama structured outputs, with text-parsing fallback)
 - [x] Trusted-alpha access controls — separate node, pitch, and viewer credentials; rate/admission limits; output caps
 - [x] Docker + docker-compose deployment; model-free regression suite + CI
 - [x] **MCP server interface** — five tools, so any agent app (Claude Desktop etc.) can delegate a build to the swarm ([docs/MCP.md](docs/MCP.md))
-- [x] Experimental sampled verification in local mode (`verify_rate`, off by default); trusted-alpha mode disables detached sampling until post-hoc evidence is durable
+- [x] Experimental sampled agreement in local mode (`verify_rate`, off by default); it records bounded comparisons without affecting routing or claiming correctness
 
 **What comes next is in [ROADMAP.md](ROADMAP.md)** — the long-term vision, the deferred
 engineering, and the findings from an external review in August 2026, each one gated on the

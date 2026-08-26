@@ -1,0 +1,250 @@
+{
+  "fixture_version": "1",
+  "minimum_samples": 5,
+  "decision_at": 1700000000,
+  "cases": [
+    {
+      "case_id": "sufficient-deadline-evidence",
+      "scenario": "sufficient_evidence",
+      "actual_candidate_id": "sufficient-a",
+      "candidates": [
+        {
+          "candidate_id": "sufficient-a",
+          "hard_eligible": true,
+          "scope": {"enrollment_id": "enrollment-sufficient-a", "descriptor_seed": "descriptor-sufficient-a", "model_name": "qwen:4b", "model_digest_seed": "model-sufficient-a", "task_class": "candidate"},
+          "evidence": {"deadline": {"samples": 6, "successes": 3}, "contract_floor": {"samples": 6, "passes": 4}},
+          "labels": {"deadline_success": false, "contract_floor_pass": false}
+        },
+        {
+          "candidate_id": "sufficient-b",
+          "hard_eligible": true,
+          "scope": {"enrollment_id": "enrollment-sufficient-b", "descriptor_seed": "descriptor-sufficient-b", "model_name": "qwen:4b", "model_digest_seed": "model-sufficient-b", "task_class": "candidate"},
+          "evidence": {"deadline": {"samples": 6, "successes": 6}, "contract_floor": {"samples": 6, "passes": 5}},
+          "labels": {"deadline_success": true, "contract_floor_pass": true}
+        }
+      ],
+      "expected": {"eligible_candidate_ids": ["sufficient-a", "sufficient-b"], "outcome": "different", "preferred_candidate_id": "sufficient-b", "rationale_code": "evidence_preferred_alternative"}
+    },
+    {
+      "case_id": "contract-floor-tiebreak",
+      "scenario": "contract_floor_tiebreak",
+      "actual_candidate_id": "contract-a",
+      "candidates": [
+        {
+          "candidate_id": "contract-a",
+          "hard_eligible": true,
+          "scope": {"enrollment_id": "enrollment-contract-a", "descriptor_seed": "descriptor-contract-a", "model_name": "qwen:4b", "model_digest_seed": "model-contract-a", "task_class": "candidate"},
+          "evidence": {"deadline": {"samples": 10, "successes": 8}, "contract_floor": {"samples": 10, "passes": 5}},
+          "labels": {"deadline_success": true, "contract_floor_pass": false}
+        },
+        {
+          "candidate_id": "contract-b",
+          "hard_eligible": true,
+          "scope": {"enrollment_id": "enrollment-contract-b", "descriptor_seed": "descriptor-contract-b", "model_name": "qwen:4b", "model_digest_seed": "model-contract-b", "task_class": "candidate"},
+          "evidence": {"deadline": {"samples": 10, "successes": 8}, "contract_floor": {"samples": 10, "passes": 9}},
+          "labels": {"deadline_success": true, "contract_floor_pass": true}
+        }
+      ],
+      "expected": {"eligible_candidate_ids": ["contract-a", "contract-b"], "outcome": "different", "preferred_candidate_id": "contract-b", "rationale_code": "evidence_preferred_alternative"}
+    },
+    {
+      "case_id": "cold-start-no-preference",
+      "scenario": "cold_start",
+      "actual_candidate_id": "cold-fresh",
+      "candidates": [
+        {
+          "candidate_id": "cold-fresh",
+          "hard_eligible": true,
+          "scope": {"enrollment_id": "enrollment-cold-fresh", "descriptor_seed": "descriptor-cold-fresh", "model_name": "qwen:4b", "model_digest_seed": "model-cold-fresh", "task_class": "candidate"},
+          "evidence": {"deadline": {"samples": 0, "successes": 0}, "contract_floor": {"samples": 0, "passes": 0}},
+          "labels": {"deadline_success": true, "contract_floor_pass": true}
+        },
+        {
+          "candidate_id": "cold-mature",
+          "hard_eligible": true,
+          "scope": {"enrollment_id": "enrollment-cold-mature", "descriptor_seed": "descriptor-cold-mature", "model_name": "qwen:4b", "model_digest_seed": "model-cold-mature", "task_class": "candidate"},
+          "evidence": {"deadline": {"samples": 10, "successes": 10}, "contract_floor": {"samples": 10, "passes": 10}},
+          "labels": {"deadline_success": true, "contract_floor_pass": true}
+        }
+      ],
+      "expected": {"eligible_candidate_ids": ["cold-fresh", "cold-mature"], "outcome": "no_preference", "preferred_candidate_id": null, "rationale_code": "insufficient_deadline_evidence"}
+    },
+    {
+      "case_id": "descriptor-reset-no-inheritance",
+      "scenario": "descriptor_reset",
+      "actual_candidate_id": "descriptor-reset",
+      "candidates": [
+        {
+          "candidate_id": "descriptor-reset",
+          "hard_eligible": true,
+          "scope": {"enrollment_id": "enrollment-descriptor-reset", "descriptor_seed": "descriptor-new", "model_name": "qwen:4b", "model_digest_seed": "model-descriptor-reset", "task_class": "candidate"},
+          "evidence": {"deadline": {"samples": 0, "successes": 0}, "contract_floor": {"samples": 0, "passes": 0}},
+          "labels": {"deadline_success": true, "contract_floor_pass": true},
+          "prior_scope_evidence": {
+            "changed_dimension": "descriptor_hash",
+            "scope": {"enrollment_id": "enrollment-descriptor-reset", "descriptor_seed": "descriptor-old", "model_name": "qwen:4b", "model_digest_seed": "model-descriptor-reset", "task_class": "candidate"},
+            "evidence": {"deadline": {"samples": 20, "successes": 20}, "contract_floor": {"samples": 20, "passes": 20}}
+          }
+        },
+        {
+          "candidate_id": "descriptor-steady",
+          "hard_eligible": true,
+          "scope": {"enrollment_id": "enrollment-descriptor-steady", "descriptor_seed": "descriptor-steady", "model_name": "qwen:4b", "model_digest_seed": "model-descriptor-steady", "task_class": "candidate"},
+          "evidence": {"deadline": {"samples": 5, "successes": 5}, "contract_floor": {"samples": 5, "passes": 5}},
+          "labels": {"deadline_success": false, "contract_floor_pass": false}
+        }
+      ],
+      "expected": {"eligible_candidate_ids": ["descriptor-reset", "descriptor-steady"], "outcome": "no_preference", "preferred_candidate_id": null, "rationale_code": "insufficient_deadline_evidence"}
+    },
+    {
+      "case_id": "model-reset-no-inheritance",
+      "scenario": "model_reset",
+      "actual_candidate_id": "model-reset",
+      "candidates": [
+        {
+          "candidate_id": "model-reset",
+          "hard_eligible": true,
+          "scope": {"enrollment_id": "enrollment-model-reset", "descriptor_seed": "descriptor-model-reset", "model_name": "qwen:new", "model_digest_seed": "model-new", "task_class": "candidate"},
+          "evidence": {"deadline": {"samples": 0, "successes": 0}, "contract_floor": {"samples": 0, "passes": 0}},
+          "labels": {"deadline_success": true, "contract_floor_pass": true},
+          "prior_scope_evidence": {
+            "changed_dimension": "model",
+            "scope": {"enrollment_id": "enrollment-model-reset", "descriptor_seed": "descriptor-model-reset", "model_name": "qwen:old", "model_digest_seed": "model-old", "task_class": "candidate"},
+            "evidence": {"deadline": {"samples": 20, "successes": 20}, "contract_floor": {"samples": 20, "passes": 20}}
+          }
+        },
+        {
+          "candidate_id": "model-steady",
+          "hard_eligible": true,
+          "scope": {"enrollment_id": "enrollment-model-steady", "descriptor_seed": "descriptor-model-steady", "model_name": "qwen:4b", "model_digest_seed": "model-steady", "task_class": "candidate"},
+          "evidence": {"deadline": {"samples": 5, "successes": 5}, "contract_floor": {"samples": 5, "passes": 5}},
+          "labels": {"deadline_success": false, "contract_floor_pass": false}
+        }
+      ],
+      "expected": {"eligible_candidate_ids": ["model-reset", "model-steady"], "outcome": "no_preference", "preferred_candidate_id": null, "rationale_code": "insufficient_deadline_evidence"}
+    },
+    {
+      "case_id": "task-class-reset-no-inheritance",
+      "scenario": "task_class_reset",
+      "actual_candidate_id": "task-reset",
+      "candidates": [
+        {
+          "candidate_id": "task-reset",
+          "hard_eligible": true,
+          "scope": {"enrollment_id": "enrollment-task-reset", "descriptor_seed": "descriptor-task-reset", "model_name": "qwen:4b", "model_digest_seed": "model-task-reset", "task_class": "candidate"},
+          "evidence": {"deadline": {"samples": 0, "successes": 0}, "contract_floor": {"samples": 0, "passes": 0}},
+          "labels": {"deadline_success": true, "contract_floor_pass": true},
+          "prior_scope_evidence": {
+            "changed_dimension": "task_class",
+            "scope": {"enrollment_id": "enrollment-task-reset", "descriptor_seed": "descriptor-task-reset", "model_name": "qwen:4b", "model_digest_seed": "model-task-reset", "task_class": "dag_subtask"},
+            "evidence": {"deadline": {"samples": 20, "successes": 20}, "contract_floor": {"samples": 20, "passes": 20}}
+          }
+        },
+        {
+          "candidate_id": "task-steady",
+          "hard_eligible": true,
+          "scope": {"enrollment_id": "enrollment-task-steady", "descriptor_seed": "descriptor-task-steady", "model_name": "qwen:4b", "model_digest_seed": "model-task-steady", "task_class": "candidate"},
+          "evidence": {"deadline": {"samples": 5, "successes": 5}, "contract_floor": {"samples": 5, "passes": 5}},
+          "labels": {"deadline_success": false, "contract_floor_pass": false}
+        }
+      ],
+      "expected": {"eligible_candidate_ids": ["task-reset", "task-steady"], "outcome": "no_preference", "preferred_candidate_id": null, "rationale_code": "insufficient_deadline_evidence"}
+    },
+    {
+      "case_id": "few-failures-do-not-dominate",
+      "scenario": "few_failures",
+      "actual_candidate_id": "few-baseline",
+      "candidates": [
+        {
+          "candidate_id": "few-baseline",
+          "hard_eligible": true,
+          "scope": {"enrollment_id": "enrollment-few-baseline", "descriptor_seed": "descriptor-few-baseline", "model_name": "qwen:4b", "model_digest_seed": "model-few-baseline", "task_class": "candidate"},
+          "evidence": {"deadline": {"samples": 5, "successes": 5}, "contract_floor": {"samples": 5, "passes": 5}},
+          "labels": {"deadline_success": false, "contract_floor_pass": false}
+        },
+        {
+          "candidate_id": "few-observed",
+          "hard_eligible": true,
+          "scope": {"enrollment_id": "enrollment-few-observed", "descriptor_seed": "descriptor-few-observed", "model_name": "qwen:4b", "model_digest_seed": "model-few-observed", "task_class": "candidate"},
+          "evidence": {"deadline": {"samples": 20, "successes": 18}, "contract_floor": {"samples": 20, "passes": 18}},
+          "labels": {"deadline_success": true, "contract_floor_pass": true}
+        }
+      ],
+      "expected": {"eligible_candidate_ids": ["few-baseline", "few-observed"], "outcome": "different", "preferred_candidate_id": "few-observed", "rationale_code": "evidence_preferred_alternative"}
+    },
+    {
+      "case_id": "excluded-causes-do-not-damage",
+      "scenario": "excluded_non_node_causes",
+      "actual_candidate_id": "excluded-protected",
+      "candidates": [
+        {
+          "candidate_id": "excluded-baseline",
+          "hard_eligible": true,
+          "scope": {"enrollment_id": "enrollment-excluded-baseline", "descriptor_seed": "descriptor-excluded-baseline", "model_name": "qwen:4b", "model_digest_seed": "model-excluded-baseline", "task_class": "candidate"},
+          "evidence": {"deadline": {"samples": 10, "successes": 6}, "contract_floor": {"samples": 10, "passes": 6}},
+          "labels": {"deadline_success": false, "contract_floor_pass": false}
+        },
+        {
+          "candidate_id": "excluded-protected",
+          "hard_eligible": true,
+          "scope": {"enrollment_id": "enrollment-excluded-protected", "descriptor_seed": "descriptor-excluded-protected", "model_name": "qwen:4b", "model_digest_seed": "model-excluded-protected", "task_class": "candidate"},
+          "evidence": {"deadline": {"samples": 10, "successes": 8}, "contract_floor": {"samples": 10, "passes": 8}},
+          "labels": {"deadline_success": true, "contract_floor_pass": true},
+          "excluded_causes": ["caller_cancellation", "coordinator_shutdown", "coordinator_persistence_failure"]
+        }
+      ],
+      "expected": {"eligible_candidate_ids": ["excluded-baseline", "excluded-protected"], "outcome": "same", "preferred_candidate_id": "excluded-protected", "rationale_code": "evidence_preferred_actual"}
+    },
+    {
+      "case_id": "hard-ineligible-candidate-filtered",
+      "scenario": "hard_ineligible_exclusion",
+      "actual_candidate_id": "eligible-a",
+      "candidates": [
+        {
+          "candidate_id": "eligible-a",
+          "hard_eligible": true,
+          "scope": {"enrollment_id": "enrollment-eligible-a", "descriptor_seed": "descriptor-eligible-a", "model_name": "qwen:4b", "model_digest_seed": "model-eligible-a", "task_class": "candidate"},
+          "evidence": {"deadline": {"samples": 10, "successes": 5}, "contract_floor": {"samples": 10, "passes": 5}},
+          "labels": {"deadline_success": false, "contract_floor_pass": false}
+        },
+        {
+          "candidate_id": "eligible-b",
+          "hard_eligible": true,
+          "scope": {"enrollment_id": "enrollment-eligible-b", "descriptor_seed": "descriptor-eligible-b", "model_name": "qwen:4b", "model_digest_seed": "model-eligible-b", "task_class": "candidate"},
+          "evidence": {"deadline": {"samples": 10, "successes": 8}, "contract_floor": {"samples": 10, "passes": 8}},
+          "labels": {"deadline_success": true, "contract_floor_pass": true}
+        },
+        {
+          "candidate_id": "ineligible-super",
+          "hard_eligible": false,
+          "scope": {"enrollment_id": "enrollment-ineligible-super", "descriptor_seed": "descriptor-ineligible-super", "model_name": "qwen:72b", "model_digest_seed": "model-ineligible-super", "task_class": "candidate"},
+          "evidence": {"deadline": {"samples": 100, "successes": 100}, "contract_floor": {"samples": 100, "passes": 100}},
+          "labels": {"deadline_success": true, "contract_floor_pass": true}
+        }
+      ],
+      "expected": {"eligible_candidate_ids": ["eligible-a", "eligible-b"], "outcome": "different", "preferred_candidate_id": "eligible-b", "rationale_code": "evidence_preferred_alternative"}
+    },
+    {
+      "case_id": "held-out-distribution-shift",
+      "scenario": "distribution_shift",
+      "actual_candidate_id": "shift-baseline",
+      "candidates": [
+        {
+          "candidate_id": "shift-baseline",
+          "hard_eligible": true,
+          "scope": {"enrollment_id": "enrollment-shift-baseline", "descriptor_seed": "descriptor-shift-baseline", "model_name": "qwen:4b", "model_digest_seed": "model-shift-baseline", "task_class": "candidate"},
+          "evidence": {"deadline": {"samples": 10, "successes": 5}, "contract_floor": {"samples": 10, "passes": 5}},
+          "labels": {"deadline_success": true, "contract_floor_pass": true}
+        },
+        {
+          "candidate_id": "shift-historical",
+          "hard_eligible": true,
+          "scope": {"enrollment_id": "enrollment-shift-historical", "descriptor_seed": "descriptor-shift-historical", "model_name": "qwen:4b", "model_digest_seed": "model-shift-historical", "task_class": "candidate"},
+          "evidence": {"deadline": {"samples": 10, "successes": 9}, "contract_floor": {"samples": 10, "passes": 9}},
+          "labels": {"deadline_success": false, "contract_floor_pass": false}
+        }
+      ],
+      "expected": {"eligible_candidate_ids": ["shift-baseline", "shift-historical"], "outcome": "different", "preferred_candidate_id": "shift-historical", "rationale_code": "evidence_preferred_alternative"}
+    }
+  ]
+}

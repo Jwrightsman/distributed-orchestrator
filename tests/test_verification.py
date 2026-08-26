@@ -1,10 +1,8 @@
-"""Tests for verification and node reputation.
+"""Tests for process-local sampled output agreement.
 
-The thing being defended against is a node that returns *plausible* garbage —
-the failure the circuit breaker explicitly cannot catch. The tests below care
-most about two properties: real disagreement is caught, and honest variation
-between two small models is NOT treated as disagreement. A verifier that flags
-everything is worse than none, because it would penalise every honest node.
+The comparison is deliberately coarse and observational: it records shape
+agreement without treating either output as correct and without affecting task
+assignment.
 """
 
 import random
@@ -12,8 +10,7 @@ import random
 import pytest
 
 from verification import (
-    MIN_SAMPLES_FOR_ROUTING,
-    NodeReputation,
+    SampledAgreementRecord,
     VerificationPool,
     compare_outputs,
     verification_identity_key,
@@ -79,37 +76,36 @@ class TestRealDisagreementIsCaught:
         assert not agreed
 
 
-class TestReputationScoring:
-    def test_unmeasured_node_is_not_a_suspect(self):
-        rep = NodeReputation("fresh")
-        assert rep.score == 1.0
-        assert rep.routing_weight == 1.0
+class TestAgreementRecording:
+    def test_unmeasured_record_has_no_rate(self):
+        record = SampledAgreementRecord("fresh")
+        assert record.agreement_rate is None
 
-    def test_score_is_agreement_ratio(self):
-        rep = NodeReputation("n")
+    def test_rate_is_agreement_ratio(self):
+        record = SampledAgreementRecord("n")
         for _ in range(3):
-            rep.record(True)
-        rep.record(False)
-        assert rep.score == pytest.approx(0.75)
+            record.record(True)
+        record.record(False)
+        assert record.agreement_rate == pytest.approx(0.75)
 
-    def test_routing_weight_ignored_until_enough_samples(self):
-        rep = NodeReputation("n")
-        rep.record(False)
-        # One bad sample must not demote a node — it may have been the peer
-        assert rep.total < MIN_SAMPLES_FOR_ROUTING
-        assert rep.routing_weight == 1.0
+    def test_serialized_record_uses_agreement_terms_only(self):
+        record = SampledAgreementRecord("n")
+        record.record(False)
 
-    def test_routing_weight_has_a_floor(self):
-        rep = NodeReputation("n")
-        for _ in range(10):
-            rep.record(False)
-        assert rep.routing_weight >= 0.25, "a node must never be starved to zero by disagreement"
+        payload = record.as_dict()
+
+        assert payload["sampled_comparisons"] == 1
+        assert payload["disagreements"] == 1
+        assert payload["agreement_rate"] == 0.0
+        assert "routing_weight" not in payload
+        assert "trusted_for_routing" not in payload
+        assert "agreement_score" not in payload
 
     def test_sample_history_is_bounded(self):
-        rep = NodeReputation("n")
+        record = SampledAgreementRecord("n")
         for _ in range(50):
-            rep.record(True, "x")
-        assert len(rep.samples) <= 20
+            record.record(True, "x")
+        assert len(record.samples) <= 20
 
 
 class TestVerificationSampling:
@@ -132,29 +128,28 @@ class TestVerificationSampling:
         assert 150 < hits < 250, f"expected ~200 of 400, got {hits}"
 
 
-class TestComparisonCreditsBothNodes:
-    def test_agreement_raises_both(self):
+class TestComparisonRecordsBothNodes:
+    def test_agreement_is_recorded_for_both(self):
         pool = VerificationPool(verify_rate=1.0)
         key_a, key_b = _enrollment_key("a"), _enrollment_key("b")
         pool.record_comparison(
             "a", PY_A, "b", PY_B, identity_a=key_a, identity_b=key_b
         )
-        assert pool.reputation(key_a).agreed == 1
-        assert pool.reputation(key_b).agreed == 1
+        assert pool.agreement_record(key_a).agreed == 1
+        assert pool.agreement_record(key_b).agreed == 1
 
-    def test_disagreement_lowers_both(self):
-        """We cannot tell which one was wrong, so neither is credited."""
+    def test_disagreement_is_recorded_for_both(self):
+        """The observation does not decide which output, if either, was wrong."""
         pool = VerificationPool(verify_rate=1.0)
         key_a, key_b = _enrollment_key("a"), _enrollment_key("b")
         result = pool.record_comparison(
             "a", PY_A, "b", REFUSAL, identity_a=key_a, identity_b=key_b
         )
         assert not result["agreed"]
-        assert pool.reputation(key_a).disagreed == 1
-        assert pool.reputation(key_b).disagreed == 1
+        assert pool.agreement_record(key_a).disagreed == 1
+        assert pool.agreement_record(key_b).disagreed == 1
 
-    def test_bad_node_separates_over_many_samples(self):
-        """The point of the design: one liar, many honest peers."""
+    def test_many_disagreements_remain_diagnostics_only(self):
         pool = VerificationPool(verify_rate=1.0)
         for peer in ("good1", "good2", "good3"):
             for _ in range(4):
@@ -176,9 +171,11 @@ class TestComparisonCreditsBothNodes:
                 identity_b=_enrollment_key("good2"),
             )
 
-        liar = pool.reputation(_enrollment_key("liar")).routing_weight
-        honest = pool.reputation(_enrollment_key("good1")).routing_weight
-        assert liar < honest, f"liar {liar} should rank below honest {honest}"
+        compared = pool.agreement_record(_enrollment_key("liar"))
+        assert compared.disagreed == 12
+        assert not hasattr(compared, "routing_weight")
+        assert not hasattr(pool, "rank")
+        assert not hasattr(pool, "rank_nodes")
 
     def test_same_label_does_not_share_enrollment_or_legacy_session_record(self):
         pool = VerificationPool(verify_rate=1.0)
@@ -188,35 +185,14 @@ class TestComparisonCreditsBothNodes:
         legacy_b = verification_identity_key(session_id="session-b")
         assert None not in {enrolled_a, enrolled_b, legacy_a, legacy_b}
 
-        pool.reputation(str(enrolled_a), node_id="shared").record(False)
-        pool.reputation(str(legacy_a), node_id="shared").record(False)
+        pool.agreement_record(str(enrolled_a), node_id="shared").record(False)
+        pool.agreement_record(str(legacy_a), node_id="shared").record(False)
 
-        assert pool.reputation(str(enrolled_b), node_id="shared").total == 0
-        assert pool.reputation(str(legacy_b), node_id="shared").total == 0
+        assert pool.agreement_record(str(enrolled_b), node_id="shared").total == 0
+        assert pool.agreement_record(str(legacy_b), node_id="shared").total == 0
 
     def test_comparison_without_identity_is_not_attributed_to_labels(self):
         pool = VerificationPool(verify_rate=1.0)
         verdict = pool.record_comparison("same-label", PY_A, "peer", PY_B)
         assert verdict["recorded"] is False
-        assert pool.reputations == {}
-
-
-class TestRouting:
-    def test_rank_prefers_higher_weight(self):
-        pool = VerificationPool(verify_rate=1.0)
-        for _ in range(MIN_SAMPLES_FOR_ROUTING + 1):
-            pool.reputation("bad").record(False)
-            pool.reputation("good").record(True)
-        assert pool.rank(["bad", "good"]) == ["good", "bad"]
-
-    def test_rank_is_stable_for_equal_weights(self):
-        pool = VerificationPool()
-        assert pool.rank(["c", "a", "b"]) == ["a", "b", "c"]
-
-    def test_unranked_nodes_are_not_penalised(self):
-        """A brand-new node must not be sent to the back of the queue."""
-        pool = VerificationPool(verify_rate=1.0)
-        for _ in range(MIN_SAMPLES_FOR_ROUTING + 1):
-            pool.reputation("proven").record(True)
-        assert pool.rank(["fresh", "proven"])[0] in ("fresh", "proven")
-        assert pool.reputation("fresh").routing_weight == 1.0
+        assert pool.agreement_records == {}

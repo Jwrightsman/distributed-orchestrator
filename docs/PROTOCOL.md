@@ -389,12 +389,11 @@ adapter payloads for compatibility and must not be copied into public shares.
 `posthoc_verification_status` is a separate field, not a replacement for
 terminal validation or assurance. It can be `disabled`, `not_requested`,
 `pending`, `running`, `completed`, or `failed`, with bounded timestamps,
-agreement, and reason fields. Trusted-alpha RC1 reports it as `disabled`
-because its detached duplicate-verification path does not have accepted durable
-post-hoc evidence semantics. Canonical submission idempotency does not run or
-authorize duplicate verification. A UI MUST NOT render disabled or failed
-post-hoc verification as evidence that a result passed or failed its original
-validators.
+agreement, and reason fields. Trusted-alpha reports this legacy execution-level
+field as `disabled`; it is not the scoped capability-evidence aggregate described
+below. Canonical submission idempotency does not run or authorize duplicate
+verification. A UI MUST NOT render disabled, failed, or shape-agreement state as
+evidence that a result passed or failed its original validators.
 
 ## Node registration sessions and bounded worker I/O
 
@@ -552,8 +551,12 @@ Assignment creates an active attempt with:
 - the enrollment credential version for a newly enrolled assignment;
 - the assigned capability-descriptor version and hash (nullable for historical
   or descriptor-less compatibility work);
+- the selected model provider, name, and optional digest; the evidence scope
+  resolves the variant from that exact model in the immutable descriptor;
 - the resource-requirement version and canonical digest, covering typed and
   legacy hard constraints;
+- the task class (`dag_subtask` or `candidate`) and evidence role (`production`
+  or `sampled_comparison`);
 - contract version;
 - unguessable attempt identifier;
 - a high-entropy nonce whose digest, not plaintext, is stored;
@@ -623,6 +626,69 @@ New per-node summaries group by immutable enrollment ID and retain the node
 label as metadata. Historical node-label-only rows remain readable with missing
 enrollment attribution; they are not backfilled or inherited by a new session.
 
+## Scoped capability evidence and shadow evaluation
+
+Capability evidence is coordinator-recorded operational history, not a worker
+claim, assurance result, correctness judgment, trust score, reputation, or
+production routing input. Its immutable scope consists of:
+
+- enrollment ID and descriptor version/hash;
+- executor kind, executor version, and worker-protocol version;
+- selected model provider, name, optional digest, and variant;
+- task class (`dag_subtask` or `candidate`); and
+- evidence role (`production` or `sampled_comparison`).
+
+An observation is excluded when any required attempt binding or immutable
+descriptor snapshot is missing, corrupt, historical-only, or inconsistent. The
+coordinator never guesses a model or merges scopes by node label. Changing the
+descriptor, selected model, task class, or evidence role creates a cold scope.
+
+Typed observations are accepted settlement outcome, deadline completion,
+coordinator wall seconds, UTF-8 output bytes, effective output bytes per
+coordinator second, worker-attributable lease expiry or stale-node disconnect,
+candidate-local contract-floor pass/fail when the required floor ran to a
+terminal result, and paired sampled shape agreement. The two attributable
+terminal causes come from the bounded server-owned `terminal_cause` field.
+Each sampled attempt durably binds the exact production attempt it compares;
+sharing an execution ID and task class alone is insufficient.
+Payload or stream limits, caller cancellation, execution deadline, receipt
+binding, enrollment reclaim, session replacement, coordinator restart,
+supersession, unknown causes, and free-form error text are not worker evidence.
+Exclusion means the policy declined attribution; it does not mean success.
+
+Binary aggregates expose numerator, denominator, rate, and a Wilson interval.
+Latency and effective throughput expose total sample counts and bounded recent
+medians. A scope below `capability_evidence_min_samples` is explicitly
+`insufficient_evidence`, not poor evidence. Contract-floor outcome describes
+structural contract assurance, not semantic correctness. Sampled agreement
+describes output shape only, never correctness or trust, and is not used by the
+shadow preference policy.
+
+`capability_evidence_mode` is strictly `off` or `shadow` and defaults to `off`.
+`capability_evidence_min_samples` defaults to 5 and must be an integer from 1 to
+1000. `shadow` schedules a bounded counterfactual after the production handout
+is durable. It freezes the exact hard-matched descriptor/model scopes at
+assignment time, then the background evaluator reads only that immutable set
+and observations recorded by the assignment cutoff. It never waits on evidence
+or changes eligibility, queue order, assignment, settlement, contribution
+credit, or the circuit breaker. There is no active evidence-routing mode.
+`verify_rate` is an independent, default-off sampled-comparison control.
+
+Observation, pair, and shadow-decision IDs are deterministic and
+domain-separated. An exact duplicate is idempotent; reuse of the same ID for
+different immutable content conflicts. SQLite triggers reject update and delete
+of evidence rows. Settlement evidence is attempted under a savepoint, so an
+evidence failure cannot overturn attempt settlement, its receipt, or contribution
+credit. Startup selects only attributable attempts missing expected observations.
+Contract-floor observations and an append-only, content-free projection receipt
+commit together; terminal executions lacking that receipt are the bounded retry
+set. Complete and non-attributable rows therefore cannot starve later gaps.
+
+The protected aggregate endpoint exposes no raw observations or metadata. The
+evidence store contains no prompt, output body, worker-error text, free-form
+reason, credential, nonce, session secret, or arbitrary telemetry. It is part of
+`events.db` and therefore part of coordinator backup and restore.
+
 ## Canonical REST API
 
 | Method and path | Meaning |
@@ -641,6 +707,7 @@ enrollment attribution; they are not backfilled or inherited by a new session.
 | `DELETE /v1/executions/{id}/shares` | Revoke all shares for an execution |
 | `GET /v1/shares/{token}` | Read one redacted public share |
 | `GET /v1/operator/health` | Read private deployment mode, instance, lock, and preflight state |
+| `GET /v1/operator/capability-evidence` | Read protected scoped aggregates and shadow-only decision counts; never raw observations |
 
 Read, artifact, cancellation, and share-management routes require viewer access
 when `viewer_key` is configured. Canonical submission uses the separate
@@ -763,6 +830,15 @@ hard-requirement match diagnostics. Its optional bounded
 `resource_requirements` and repeated `required_capability` query parameters are
 diagnostic only. Public `/health` and `/status.json` expose none of this detail.
 
+Viewer-protected `GET /v1/operator/capability-evidence` accepts `limit` from 1
+through 200 (default 100), plus optional `enrollment_id`, `descriptor_hash`,
+`task_class`, and `evidence_role` filters. The evidence role defaults to
+`production`. It returns the configured mode and minimum, scoped aggregates,
+grouped shadow outcomes, category meanings, and `affects_routing=false`. It
+never exposes raw observation records, prompts, outputs, errors, or credentials.
+`GET /nodes`
+contains no capability-evidence score, reputation, trust flag, or routing weight.
+
 ## Deployment, SQLite, and coordinator ownership
 
 `deployment_mode=local` preserves fail-open developer defaults.
@@ -776,7 +852,8 @@ mode, held lock, and preflight warnings.
 
 Exactly one coordinator may own a state directory. An operating-system lock is
 acquired before migrations and background work; a second process fails closed.
-All production `events.db` access uses the shared SQLite policy: WAL mode,
+All production `events.db` access, including append-only capability observations
+and shadow decisions, uses the shared SQLite policy: WAL mode,
 foreign keys on, a 10-second busy timeout, `synchronous=NORMAL`, bounded busy
 retry, per-path migration serialization, and explicit immediate transactions at
 integrity boundaries. This improves one-process concurrency; it is not a
@@ -827,8 +904,8 @@ built-in TLS, multi-user accounts, a general network-policy enforcement layer,
 process isolation,
 generated-code sandboxing, malicious-output detection, permissionless
 settlement, Sybil resistance, externally anchored artifact attestation, durable
-post-hoc duplicate verification, or proof that arbitrary generated output is
-correct. One coordinator process is the only supported owner of a state
+execution-level post-hoc verification, or proof that arbitrary generated output
+is correct. One coordinator process is the only supported owner of a state
 directory. It is intended for a small private group whose operators and node
 holders are known and trusted. These limitations must not be represented as
 solved by the normalized API. Idempotent canonical submission is not durable
@@ -837,8 +914,7 @@ external effects.
 
 Capability descriptors are self-reported claims, not observed performance,
 trust, correctness, physical-machine identity, or hardware/model attestation.
-The hard matcher does not rank eligible nodes, and Theme 2B adds neither an
-arbitrary scheduling-policy language nor descriptor/evidence weighting. The
-older optional local sampled-verification pool can defer first refusal among
-already eligible nodes when `verify_rate` is explicitly enabled; it is off by
-default and disabled in trusted-alpha mode.
+The hard matcher excludes but does not rank. Scoped operational evidence and
+sampled shape agreement do not verify the descriptor or result. Production
+routing is unchanged in every evidence mode: there is no first-refusal weight,
+trusted score, reputation rank, or active evidence policy.

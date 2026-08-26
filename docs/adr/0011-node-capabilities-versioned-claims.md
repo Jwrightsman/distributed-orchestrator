@@ -5,6 +5,13 @@
 - Decision scope: worker capability registration, hard resource eligibility,
   attempt attribution, and canonical request-hash evolution
 
+> **Partial supersession (2026-08-26):**
+> [ADR 0012](0012-observed-capability-evidence-shadow-only.md) supersedes only
+> this ADR's historical description of a sampled-verification routing weight and
+> first-refusal deferral. Production routing no longer consumes that signal in
+> any mode. The versioned-claim, immutable-snapshot, hard-matching, and attempt-
+> binding decisions below remain current.
+
 ## Context
 
 Mycelium originally routed distributed work with free-form strings such as
