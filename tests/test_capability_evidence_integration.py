@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 import access_control
 from capability_evidence import (
+    DEADLINE_COMPLETION_SUBJECT,
     CapabilityEvidenceStore,
     CapabilityShadowDecisionStore,
 )
@@ -279,14 +280,15 @@ def _settle_scoped_attempt(
     enrollment,
     registration: dict,
     *,
-    output: str = "complete output",
+    output: str | None = "complete output",
+    error: str | None = None,
     settled_at: float = 110,
 ):
     return state.attempt_store.settle(
         task_id=task["task_id"],
         node_id=enrollment.node_id,
         output=output,
-        error=None,
+        error=error,
         elapsed_seconds=1.0,
         contract_version="1",
         attempt_id=record.attempt_id,
@@ -488,6 +490,66 @@ def test_typed_fault_attribution_excludes_caller_coordinator_and_bounded_executi
     assert _observations(database, attempt_id=deadline_record.attempt_id) == []
 
 
+def test_coordinator_restart_persistence_failure_never_projects_node_failure(
+    evidence_server,
+):
+    client, database, _settings = evidence_server
+    descriptor = _descriptor()
+    registration = _register(client, "worker", descriptor)
+    _task, record, _nonce, _enrollment = _issue_scoped_attempt(
+        registration,
+        descriptor,
+        task_id="coordinator-persistence-failure",
+    )
+    diagnostic_reason = (
+        "lease_expired node_stale worker missed deadline; text is not attribution"
+    )
+
+    with sqlite3.connect(database) as con:
+        con.execute(
+            """
+            CREATE TRIGGER fail_coordinator_attempt_persistence
+            BEFORE UPDATE OF state ON attempts
+            WHEN OLD.attempt_id = 'attempt-coordinator-persistence-failure'
+            BEGIN
+                SELECT RAISE(ABORT, 'synthetic coordinator persistence failure');
+            END
+            """
+        )
+        con.commit()
+
+    with pytest.raises(
+        sqlite3.DatabaseError,
+        match="synthetic coordinator persistence failure",
+    ):
+        state.attempt_store.interrupt_active(diagnostic_reason)
+
+    unchanged = state.attempt_store.get(record.attempt_id)
+    assert unchanged is not None
+    assert unchanged.state == "active"
+    assert unchanged.terminal_cause is None
+    assert _observations(database, attempt_id=record.attempt_id) == []
+
+    with sqlite3.connect(database) as con:
+        con.execute("DROP TRIGGER fail_coordinator_attempt_persistence")
+        con.commit()
+
+    assert state.attempt_store.interrupt_active(diagnostic_reason) == 1
+    interrupted = state.attempt_store.get(record.attempt_id)
+    assert interrupted is not None
+    assert interrupted.state == "interrupted"
+    assert interrupted.terminal_cause == "coordinator_restart"
+
+    state._reconcile_capability_evidence()
+
+    rows = _observations(database, attempt_id=record.attempt_id)
+    assert rows == []
+    assert not {
+        "terminal_outcome",
+        "deadline_completion",
+    }.intersection(row["observation_type"] for row in rows)
+
+
 def test_reopen_preserves_observations_and_startup_reconciliation_repairs_missing_row(
     evidence_server, monkeypatch
 ):
@@ -528,6 +590,115 @@ def test_reopen_preserves_observations_and_startup_reconciliation_repairs_missin
         for row in _observations(database, attempt_id=task["attempt_id"])
     }
     assert repaired_ids == original_ids
+
+
+def test_startup_reconciliation_upgrades_legacy_deadline_success_semantics(
+    evidence_server,
+):
+    _client, database, _settings = evidence_server
+    descriptor = _descriptor()
+    registration = _register(_client, "worker", descriptor)
+    task, attempt, nonce, enrollment = _issue_scoped_attempt(
+        registration,
+        descriptor,
+        task_id="legacy-deadline-upgrade",
+    )
+    _settle_scoped_attempt(
+        task,
+        attempt,
+        nonce,
+        enrollment,
+        registration,
+        output=None,
+        error="worker-reported failure",
+    )
+    settled = state.attempt_store.get(attempt.attempt_id)
+    assert settled is not None
+    assert settled.terminal_cause == "settled_worker_error"
+
+    with sqlite3.connect(database) as con:
+        con.row_factory = sqlite3.Row
+        current = con.execute(
+            "SELECT observed_at, recorded_at "
+            "FROM node_capability_observations "
+            "WHERE attempt_id = ? AND observation_type = 'deadline_completion' "
+            "AND subject_key = ?",
+            (attempt.attempt_id, DEADLINE_COMPLETION_SUBJECT),
+        ).fetchone()
+        assert current is not None
+        con.execute("DROP TRIGGER trg_capability_observations_no_delete")
+        con.execute(
+            "DELETE FROM node_capability_observations "
+            "WHERE attempt_id = ? AND observation_type = 'deadline_completion'",
+            (attempt.attempt_id,),
+        )
+        resolution = CapabilityEvidenceStore.resolve_scope_in_transaction(
+            con, settled
+        )
+        assert resolution.context is not None
+        CapabilityEvidenceStore._append_one(
+            con,
+            resolution.context,
+            observation_type="deadline_completion",
+            subject_key="lifecycle",
+            outcome="pass",
+            numeric_value=None,
+            metadata=None,
+            observed_at=float(current["observed_at"]),
+            recorded_at=float(current["recorded_at"]),
+        )
+        con.commit()
+    state.capability_evidence_store.migrate()
+
+    before = _observations(database, attempt_id=attempt.attempt_id)
+    legacy_before = [
+        row
+        for row in before
+        if row["observation_type"] == "deadline_completion"
+    ]
+    assert [(row["subject_key"], row["outcome"]) for row in legacy_before] == [
+        ("lifecycle", "pass")
+    ]
+    legacy_fingerprint = tuple(legacy_before[0])
+    assert attempt.attempt_id in {
+        item.attempt_id
+        for item in state.attempt_store.list_evidence_reconciliation_candidates()
+    }
+
+    state._reconcile_capability_evidence()
+
+    after = _observations(database, attempt_id=attempt.attempt_id)
+    deadline_rows = [
+        row
+        for row in after
+        if row["observation_type"] == "deadline_completion"
+    ]
+    assert {
+        (row["subject_key"], row["outcome"]) for row in deadline_rows
+    } == {
+        ("lifecycle", "pass"),
+        (DEADLINE_COMPLETION_SUBJECT, "fail"),
+    }
+    assert tuple(
+        next(row for row in deadline_rows if row["subject_key"] == "lifecycle")
+    ) == legacy_fingerprint
+    resolution = state.capability_evidence_store.resolve_scope(settled)
+    assert resolution.context is not None
+    aggregate = state.capability_evidence_store.aggregate(
+        resolution.context.scope,
+        minimum_samples=1,
+    )
+    assert aggregate.deadline_completion.sample_count == 1
+    assert aggregate.deadline_completion.positive_count == 0
+    assert aggregate.deadline_completion.negative_count == 1
+    assert attempt.attempt_id not in {
+        item.attempt_id
+        for item in state.attempt_store.list_evidence_reconciliation_candidates()
+    }
+
+    state._reconcile_capability_evidence()
+
+    assert _observations(database, attempt_id=attempt.attempt_id) == after
 
 
 def test_sampled_agreement_persists_for_real_attempts_and_replays_without_duplicates(
@@ -788,6 +959,9 @@ def test_operator_evidence_requires_viewer_and_exposes_only_safe_aggregates(
     assert payload["categories"]["reputation"] == "not_implemented"
     assert payload["scopes"][0]["contract_floor"]["meaning"] == (
         "structural_contract_assurance_not_semantic_correctness"
+    )
+    assert payload["scopes"][0]["deadline_success"]["meaning"] == (
+        "nonempty_output_settled_before_lease_deadline"
     )
     serialized = response.text
     for secret in (
