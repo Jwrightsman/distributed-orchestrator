@@ -143,6 +143,26 @@ heartbeat, streaming, result, and drain calls. After restart/reconnect it uses
 the identity-file credential, not `node_secret`, to obtain a new session for
 the same enrollment.
 
+Before joining, set the intended `model` in the worker's `config.json`. If
+best-effort detection needs correction, add a strict
+`worker_capability_overrides` object there; `join.py` passes through the worker
+configuration when it starts `node.py`. A direct node start may instead layer
+`--capability-overrides PATH` and `--model MODEL`; `--capabilities` remains the
+legacy tag flag. Overrides may contain `hardware`, `features`,
+`executor_version`, `model_context_tokens`, `model_variant`, and
+`max_context_tokens`. Never add serial numbers, MAC addresses, enrollment
+secrets, or an invented model digest.
+
+The worker displays the resulting descriptor version and hash. It reuses that
+one claim across reconnects in the same process. Architecture, CPU, memory,
+bounded GPU data, and exact Ollama metadata are best-effort; unavailable values
+remain unknown. Detection and overrides are claims, not measurement,
+attestation, trust, or correctness.
+
+Trusted-alpha enrolled registration requires this descriptor. Do not use local
+descriptorless compatibility as an enrollment workaround; upgrade the worker
+if the coordinator returns `node_capability_descriptor_required`.
+
 Protect and back up the worker identity file separately. POSIX mode must be
 `0600`; a malformed, wrong-coordinator, wrong-label, or dangerously permissive
 file fails closed. Windows file protection is best effort through the current
@@ -168,6 +188,12 @@ until it says it is waiting for tasks, then press Ctrl+C. Closing a worker that
 still holds work causes the lease to be reclaimed and reassigned after the
 coordinator detects staleness.
 
+Changing a capability descriptor requires the same drain/stop procedure and a
+fresh process session. A `409 node_capability_descriptor_conflict` is not a
+retry signal for the old session. Confirm `current_task` is empty, stop the
+worker, change its configuration, then restart it and verify the new descriptor
+hash in the protected operator view. Historical attempts keep the prior hash.
+
 ## 7. Check health and logs
 
 Public sanitized checks:
@@ -187,7 +213,11 @@ curl -fsS -b viewer.cookies "$BASE_URL/v1/operator/node-enrollments"
 ```
 
 It should report `single_coordinator_lock: true`, the expected mode, and one
-instance ID. Read container logs without copying config into the transcript:
+instance ID. Enrollment entries expose the descriptor version/hash, normalized
+claim, snapshot count, legacy worker/server tag provenance, and
+`hard_requirement_eligibility` with stable `reason_codes`. This view is
+viewer-protected; `/health` and `/status.json` deliberately omit full hardware
+and model claims. Read container logs without copying config into the transcript:
 
 ```bash
 docker compose ps
@@ -416,6 +446,10 @@ include `config.json`, viewer cookies, share URLs/tokens, the raw database,
 backups, prompts, or generated artifacts unless the recipient is authorized
 and the bundle is encrypted. Record timestamps, build fingerprint, OS, Python,
 Docker, and reproduction steps separately.
+
+Treat normalized capability descriptors as private hardware/model inventory.
+Do not add the protected enrollment response or override JSON to a shareable
+bundle unless the recipient is authorized and the inventory is necessary.
 
 Do not add idempotency keys, attempt nonces, or node session tokens to the
 bundle. Persistence failure logs should identify only the execution, commit

@@ -26,6 +26,7 @@ boundary.
 | Attempt authority | SQLite attempt rows and accepted receipts | an unbound, late, or duplicate result entering execution or earning points |
 | Node enrollments | SQLite identity/status/credential digest plus worker-owned plaintext identity file | credential theft, label takeover, failed revocation, or false attribution |
 | Node sessions | process memory plus session identifiers/digests attached to node and attempt state | stale incarnation use, bearer-token disclosure, or restart invalidation |
+| Capability claims and snapshots | live registry plus canonical enrollment-scoped SQLite snapshots; descriptor/requirement digests on attempts | false hardware/model/isolation claims, private inventory disclosure, or assigning work under the wrong snapshot |
 | Viewer, pitch, and admission secrets | local config/environment and HTTP headers | private reads, unwanted compute use, or initial worker admission |
 | Canonical submission identity | digest-only SQLite mapping to an execution | duplicate execution after retry, key conflict, or a mapping whose execution is missing |
 | Artifact integrity baseline | sealed manifest rows/hash in SQLite plus files on disk | ordinary file drift, database/file loss, or host-level joint tampering |
@@ -77,6 +78,7 @@ Requester ── pitch_key + optional scoped retry key ──▶ ORCHESTRATOR
 | `node_secret` | instance-wide permission to bootstrap a previously unused enrollment | returning identity, label replacement, or normal enrolled operations |
 | Digest-only enrollment credentials | durable per-node attribution, returning registration, independent revocation/rotation | physical-machine identity, attestation, or Sybil resistance |
 | Digest-only node sessions | one live enrollment incarnation, stale reclaim, and restart invalidation | durable scheduling or identity by themselves |
+| Versioned capability claims and one hard matcher | bounded deterministic eligibility, immutable per-session descriptor identity, and exact descriptor/requirement binding on attempts | truth of any claim, attestation, performance evidence, trust, correctness, or ranking among eligible nodes |
 | Server-owned attempts | active lease and exact task/execution/unit/kind/enrollment/node/session/version/nonce/output-cap binding | truthfulness or quality of the returned model output |
 | Atomic settlement | one accepted attempt transition, receipt, response, and compute contribution; durable exact-replay state across database reopen | durable scheduling, worker resumption, or reuse of a restart-invalidated node session |
 | Worker I/O bounds | per-attempt result/stream byte cap, error cap, cumulative stream batch/rate limits, bounded fanout | semantic safety of allowed output or transport-level denial of service |
@@ -206,6 +208,14 @@ low-quality text. Attempt binding proves which active lease admitted a byte
 sequence; it does not prove who physically controlled the node or whether the
 bytes satisfy the user's intent.
 
+Likewise, a descriptor hash proves which canonical self-reported claim was used
+for eligibility and assignment. It does not prove that claimed CPUs, memory,
+GPUs, executor/model version or digest, context capacity, features, limits, or
+isolation exist. Best-effort stock-worker detection and operator overrides are
+both inside the worker's trust boundary. Unknown data is safer than invention,
+but an actively malicious admitted worker may still submit a syntactically
+valid lie.
+
 Bootstrap consumes shared admission plus a worker-generated high-entropy
 credential and creates an immutable enrollment. Returning registration proves
 that per-node bearer without the shared secret. The coordinator stores only a
@@ -232,6 +242,7 @@ It can:
 - hold work until its lease expires and waste capacity;
 - bootstrap many unused labels while holding the shared admission secret;
 - report misleading hardware/capability metadata;
+- change claims between new sessions to seek different hard-constraint work;
 - send bounded but high-rate model text up to the enforced protocol limits;
 - consume operator time through repeated failures or plausible bad output.
 
@@ -401,6 +412,11 @@ request-count and concurrency cap reduce abuse; they do not eliminate it.
 - Process-local scheduler, node sessions, connected-node state, and breaker state.
 - One orchestrator and no failover.
 - No Sybil resistance or trustworthy worker hardware attestation.
+- Capability descriptors and their SHA-256 hashes are node claims, not
+  observed evidence, hardware/model attestation, or trust. Theme 2B's matcher
+  only excludes. The separate pre-existing local sampled-verification pool can
+  defer first refusal when explicitly enabled, but is off by default and forced
+  off in trusted-alpha mode.
 - Structural/deterministic contract validation does not prove arbitrary
   behavioral correctness.
 - Viewer auth is one role for the whole instance, not multi-user authorization.
