@@ -138,6 +138,7 @@ def _reclaim_replaced_session(node_id: str, replaced_session_id: str) -> None:
                         attempt_id=attempt_id,
                         state="reclaimed",
                         reason="assigned node session was replaced after staleness",
+                        terminal_cause="session_replaced",
                     )
                 )
             except Exception as exc:
@@ -169,7 +170,7 @@ def _reclaim_replaced_session(node_id: str, replaced_session_id: str) -> None:
 
 
 def _verification_key(node_id: str) -> str | None:
-    """Return the trust key for routing without treating a label as enrollment."""
+    """Return the legacy sampled-agreement key for this live identity."""
 
     node = nodes.get(node_id, {})
     try:
@@ -228,39 +229,10 @@ def _raise_enrollment_http_error(exc: NodeEnrollmentError) -> None:
     ) from exc
 
 
-def _should_defer(node_id: str, waiting_since: float) -> bool:
-    """Should this node hold back and let a better-rated one take the work?
+def _should_defer(_node_id: str, _waiting_since: float) -> bool:
+    """Deprecated compatibility hook; sampled agreement never defers work."""
 
-    Reputation orders who gets *first refusal*, never who is eligible: after a
-    short grace period this node takes the task regardless. A poorly-rated node
-    is offered work last, not never — exclusion is the circuit breaker's job.
-
-    Returns False whenever every waiting node has the same routing weight,
-    which is always the case while verification is off. That keeps
-    verify_rate=0 a genuine no-op rather than a silent reordering.
-    """
-    if time.time() - waiting_since >= state._ROUTING_DEFER:
-        return False  # waited long enough — never starve a node
-    now = time.time()
-    contenders = [node_id] + [
-        n for n, ts in state.waiting_nodes.items()
-        if n != node_id and now - ts < state._WAITING_FRESH
-    ]
-    if len(contenders) < 2:
-        return False
-    pool = state.verification_pool
-    keyed = [
-        (candidate, identity_key)
-        for candidate in contenders
-        if (identity_key := _verification_key(candidate)) is not None
-    ]
-    if len(keyed) < 2 or not any(candidate == node_id for candidate, _key in keyed):
-        return False
-    if len({pool.reputation(key).routing_weight for _node, key in keyed}) < 2:
-        return False  # nothing to choose between
-    if hasattr(pool, "rank_nodes"):
-        return pool.rank_nodes(keyed)[0] != node_id
-    return pool.rank(contenders)[0] != node_id
+    return False
 
 
 @router.post("/nodes/register")
@@ -518,37 +490,25 @@ async def register_node(reg: NodeRegistration, request: Request):
 
 @router.get("/nodes")
 async def list_nodes():
-    """Connected nodes, each with its verification record attached.
+    """Connected nodes without process-local sampled-agreement records."""
 
-    Reputation is merged in here rather than stored on the node record so a
-    node that disconnects and comes back does not reset its history.
-    """
-    pool = state.verification_pool
     out = []
     for n in nodes.values():
         lifetime = _lifetime_summary(
             n["node_id"], n.get("enrollment_id"), n.get("session_id")
         )
         n.update(lifetime)
-        identity_key = _verification_key(n["node_id"])
-        rep = (
-            pool.reputation(
-                identity_key,
-                node_id=n["node_id"],
-                enrollment_id=n.get("enrollment_id"),
-            ).as_dict()
-            if identity_key is not None
-            else {}
-        )
         safe_node = {
             key: value
             for key, value in n.items()
             if key != "capability_descriptor"
         }
-        out.append(
-            {**safe_node, **{k: v for k, v in rep.items() if k != "node_id"}}
-        )
-    return {"nodes": out, "count": len(nodes), "verify_rate": pool.verify_rate}
+        out.append(safe_node)
+    return {
+        "nodes": out,
+        "count": len(nodes),
+        "verify_rate": state.verification_pool.verify_rate,
+    }
 
 
 @router.get("/v1/operator/node-enrollments")
@@ -684,6 +644,146 @@ async def list_node_enrollments(request: Request):
     }
 
 
+@router.get("/v1/operator/capability-evidence")
+async def list_capability_evidence(request: Request):
+    """Protected aggregate observations and shadow-only diagnostics."""
+
+    require_viewer(request)
+    try:
+        raw_limit = request.query_params.get("limit", "100")
+        limit = int(raw_limit)
+        enrollment_id = request.query_params.get("enrollment_id")
+        descriptor_hash = request.query_params.get("descriptor_hash")
+        task_class = request.query_params.get("task_class")
+        evidence_role = request.query_params.get("evidence_role", "production")
+        cfg = state.get_config()
+        minimum_samples = int(cfg.get("capability_evidence_min_samples", 5))
+        summaries = state.capability_evidence_store.list_scope_aggregates(
+            enrollment_id=enrollment_id,
+            descriptor_hash=descriptor_hash,
+            task_class=task_class,
+            role=evidence_role,
+            limit=limit,
+            minimum_samples=minimum_samples,
+        )
+        shadow = (
+            state.capability_shadow_decision_store.aggregate_counts_for_scope_keys(
+                [summary.scope.scope_key for summary in summaries]
+            )
+        )
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "invalid_capability_evidence_query",
+                "message": str(exc),
+            },
+        ) from exc
+
+    shadow_by_scope = {item.actual_scope_key: item for item in shadow}
+
+    def binary(item):
+        return {
+            "sample_count": item.sample_count,
+            "positive_count": item.positive_count,
+            "negative_count": item.negative_count,
+            "rate": item.rate,
+            "wilson_interval": {
+                "low": item.wilson_low,
+                "high": item.wilson_high,
+            },
+        }
+
+    scopes = []
+    for summary in summaries:
+        scope = summary.scope
+        aggregate = summary.aggregate
+        shadow_counts = shadow_by_scope.get(scope.scope_key)
+        scopes.append(
+            {
+                "scope_key": scope.scope_key,
+                "enrollment_id": scope.enrollment_id,
+                "node_label": summary.node_id,
+                "descriptor_version": scope.descriptor_version,
+                "descriptor_hash": scope.descriptor_hash,
+                "executor": {
+                    "kind": scope.executor_kind,
+                    "version": scope.executor_version,
+                    "worker_protocol_version": scope.worker_protocol_version,
+                },
+                "model": {
+                    "provider": scope.model_provider,
+                    "name": scope.model_name,
+                    "digest": scope.model_digest,
+                    "variant": scope.model_variant,
+                },
+                "task_class": scope.task_class,
+                "evidence_role": scope.evidence_role,
+                "observation_count": aggregate.observation_count,
+                "settlement": {
+                    "sample_count": aggregate.settlement_count,
+                    "output_count": aggregate.settled_output_count,
+                    "worker_error_count": aggregate.settled_worker_error_count,
+                    "empty_output_count": aggregate.settled_empty_output_count,
+                },
+                "deadline_success": binary(aggregate.deadline_completion),
+                "contract_floor": {
+                    **binary(aggregate.contract_floor),
+                    "meaning": "structural_contract_assurance_not_semantic_correctness",
+                },
+                "sampled_agreement": {
+                    **binary(aggregate.sampled_agreement),
+                    "meaning": "output_shape_agreement_not_correctness",
+                },
+                "lease_expiration_count": aggregate.lease_expiration_count,
+                "worker_disconnect_count": aggregate.worker_disconnect_count,
+                "latency": {
+                    "sample_count": aggregate.latency_sample_count,
+                    "recent_median_coordinator_wall_seconds": (
+                        aggregate.recent_median_latency_seconds
+                    ),
+                },
+                "throughput": {
+                    "sample_count": aggregate.throughput_sample_count,
+                    "recent_median_effective_output_bytes_per_second": (
+                        aggregate.recent_median_output_bytes_per_second
+                    ),
+                },
+                "minimum_samples": aggregate.minimum_samples,
+                "insufficient_evidence": aggregate.insufficient_evidence,
+                "last_observed_at": summary.last_observed_at,
+                "shadow_policy": {
+                    "decision_count": shadow_counts.decision_count if shadow_counts else 0,
+                    "same_count": shadow_counts.same_count if shadow_counts else 0,
+                    "different_count": (
+                        shadow_counts.different_count if shadow_counts else 0
+                    ),
+                    "no_preference_count": (
+                        shadow_counts.no_preference_count if shadow_counts else 0
+                    ),
+                    "last_decision_at": (
+                        shadow_counts.last_decision_at if shadow_counts else None
+                    ),
+                },
+                "affects_routing": False,
+            }
+        )
+    return {
+        "mode": str(cfg.get("capability_evidence_mode", "off")),
+        "minimum_samples": minimum_samples,
+        "affects_routing": False,
+        "categories": {
+            "claim": "node_advertised_descriptor",
+            "observation": "coordinator_recorded_operational_outcome",
+            "agreement": "bounded_output_comparison_not_correctness",
+            "assurance": "task_specific_contract_validation",
+            "reputation": "not_implemented",
+        },
+        "scopes": scopes,
+        "count": len(scopes),
+    }
+
+
 @router.post("/nodes/{node_id}/heartbeat")
 async def heartbeat_node(node_id: str, request: Request):
     """Refresh one registered worker session without polling for work."""
@@ -805,8 +905,8 @@ async def next_task(node_id: str, request: Request):
     def _find_task() -> tuple[int, node_capabilities.CapabilityMatchResultV1] | None:
         """Index and exact match decision for the first task this node may take.
 
-        Peeks rather than pops: whether this node is *allowed* to take it may
-        still depend on which other nodes are waiting.
+        Peeks rather than pops because the match is rechecked while holding the
+        queue lock immediately before assignment.
         """
         current_node_caps = list(nodes.get(node_id, {}).get("capabilities", []))
         for i, t in enumerate(task_queue):
@@ -830,14 +930,12 @@ async def next_task(node_id: str, request: Request):
 
     # Long-poll: wait up to _LONG_POLL_TIMEOUT for a task to appear
     deadline = time.time() + state._LONG_POLL_TIMEOUT
-    waiting_since = time.time()
-    state.waiting_nodes[node_id] = waiting_since
+    state.waiting_nodes[node_id] = time.time()
     try:
         while True:
-            state.waiting_nodes[node_id] = time.time()  # liveness, not wait start
+            state.waiting_nodes[node_id] = time.time()
             found = _find_task()
-            idx = found[0] if found is not None else None
-            if found is not None and not _should_defer(node_id, waiting_since):
+            if found is not None:
                 # The token may reach its absolute expiry while this request is
                 # held in a long poll.  Recheck immediately before handout.
                 session_record = _check_node_session(request, node_id)
@@ -923,7 +1021,7 @@ async def next_task(node_id: str, request: Request):
                                     "canonical task requirements"
                                 )
                             task[field] = expected
-                        state.attempt_store.issue(
+                        attempt_record = state.attempt_store.issue(
                             task,
                             assigned_node_id=node_id,
                             attempt_id=task["attempt_id"],
@@ -988,13 +1086,23 @@ async def next_task(node_id: str, request: Request):
                         ),
                         "placement": "distributed",
                     })
+                    # The handout is already fixed and durable. Shadow mode only
+                    # schedules a post-assignment counterfactual; it cannot
+                    # reorder the queue, change eligibility, or delay on evidence.
+                    state.schedule_capability_shadow_evaluation(
+                        attempt_record,
+                        actual_descriptor=node_descriptor,
+                        resource_requirements=task.get("resource_requirements"),
+                        required_capabilities=task.get("requires", []),
+                        eligible_node_ids=task.get("eligible_nodes", []),
+                        decision_at=task["assigned_at"],
+                    )
                     return task
 
             if time.time() >= deadline:
                 return Response(status_code=204)
 
-            # Poll faster while deferring so the grace period costs little.
-            await asyncio.sleep(0.25 if idx is not None else 0.5)
+            await asyncio.sleep(0.5)
     finally:
         state.waiting_nodes.pop(node_id, None)
 

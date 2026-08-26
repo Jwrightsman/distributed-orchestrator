@@ -12,8 +12,8 @@ from typing import Any, Awaitable, Callable
 import node_capabilities
 import server_state as state
 from execution.contracts import ExecutionRequestV1, SelectedPlacementV1
-from execution.attempts import ReceiptBindingError
-from verification import verification_identity_key
+from execution.attempts import ReceiptBindingError, TerminalCause
+from verification import SAMPLED_AGREEMENT_METHOD_VERSION, verification_identity_key
 
 
 class PlacementUnavailable(RuntimeError):
@@ -57,6 +57,11 @@ class DispatchResult:
     session_id: str | None = None
     capability_descriptor_version: str | None = None
     capability_descriptor_hash: str | None = None
+    attempt_id: str | None = None
+    selected_model_provider: str | None = None
+    selected_model_name: str | None = None
+    selected_model_digest: str | None = None
+    evidence_role: str | None = None
     fallback_reason: str | None = None
     error: str | None = None
     duration_ms: int = 0
@@ -254,7 +259,11 @@ class Dispatcher:
         state._refresh_verify_rate()
         alternatives = tuple(node for node in decision.qualifying_nodes if node != primary.node_id)
         pool = state.verification_pool
-        if not alternatives or not pool.should_verify(len(decision.qualifying_nodes)):
+        if (
+            not primary.attempt_id
+            or not alternatives
+            or not pool.should_verify(len(decision.qualifying_nodes))
+        ):
             return
 
         duplicate = ExecutionUnit(
@@ -264,7 +273,11 @@ class Dispatcher:
             prompt=unit.prompt,
             system=unit.system,
             depends_on=unit.depends_on,
-            metadata={**unit.metadata, "verification_of": unit.unit_id},
+            metadata={
+                **unit.metadata,
+                "verification_of": unit.unit_id,
+                "comparison_primary_attempt_id": primary.attempt_id,
+            },
         )
         verification_decision = PlacementDecision(
             selected="distributed",
@@ -304,6 +317,17 @@ class Dispatcher:
                 enrollment_id_a=primary.enrollment_id,
                 enrollment_id_b=secondary.enrollment_id,
             )
+            if primary.attempt_id and secondary.attempt_id:
+                primary_attempt = state.attempt_store.get(primary.attempt_id)
+                sampled_attempt = state.attempt_store.get(secondary.attempt_id)
+                if primary_attempt is not None and sampled_attempt is not None:
+                    state.capability_evidence_store.best_effort(
+                        state.capability_evidence_store.record_sampled_agreement,
+                        primary_attempt,
+                        sampled_attempt,
+                        agreed=bool(verdict["agreed"]),
+                        method_version=SAMPLED_AGREEMENT_METHOD_VERSION,
+                    )
             self.emit(
                 "verification",
                 {
@@ -476,6 +500,14 @@ class Dispatcher:
             "strategy": strategy,
             "execution_unit_id": unit.unit_id,
             "execution_unit_kind": unit.kind,
+            "evidence_role": (
+                "sampled_comparison"
+                if unit.metadata.get("verification_of")
+                else "production"
+            ),
+            "comparison_primary_attempt_id": unit.metadata.get(
+                "comparison_primary_attempt_id"
+            ),
             "output_contract": contract_summary,
             "verification_policy": verification_summary,
             "max_output_bytes": request.max_output_bytes,
@@ -521,7 +553,11 @@ class Dispatcher:
                         contract_version="1",
                     )
                 except ReceiptBindingError as exc:
-                    self._cancel(task_id, reason=str(exc))
+                    self._cancel(
+                        task_id,
+                        reason=str(exc),
+                        terminal_cause="receipt_binding_failure",
+                    )
                     attempts = state.attempt_store.count_attempts(task_id)
                     return DispatchResult(
                         unit=unit,
@@ -537,11 +573,19 @@ class Dispatcher:
                 if receipt is not None:
                     break
                 if cancel_event and cancel_event.is_set():
-                    self._cancel(task_id, reason="execution cancellation requested")
+                    self._cancel(
+                        task_id,
+                        reason="execution cancellation requested",
+                        terminal_cause="execution_cancelled",
+                    )
                     raise asyncio.CancelledError
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    cancelled = self._cancel(task_id, reason="execution deadline exceeded")
+                    cancelled = self._cancel(
+                        task_id,
+                        reason="execution deadline exceeded",
+                        terminal_cause="execution_deadline",
+                    )
                     if not cancelled:
                         # Settlement and cancellation can meet at the deadline.
                         # If settlement won the database race, consume it.
@@ -559,7 +603,11 @@ class Dispatcher:
                     break
                 await asyncio.sleep(min(0.05, remaining))
         except asyncio.CancelledError:
-            self._cancel(task_id, reason="dispatcher task cancelled")
+            self._cancel(
+                task_id,
+                reason="dispatcher task cancelled",
+                terminal_cause="execution_cancelled",
+            )
             raise
 
         # Remove only the compatibility mirror. The immutable receipt remains
@@ -583,6 +631,11 @@ class Dispatcher:
             session_id=(attempt_record.assigned_session_id if attempt_record else None),
             capability_descriptor_version=receipt.assigned_descriptor_version,
             capability_descriptor_hash=receipt.assigned_descriptor_hash,
+            attempt_id=receipt.attempt_id,
+            selected_model_provider=receipt.assigned_model_provider,
+            selected_model_name=receipt.assigned_model_name,
+            selected_model_digest=receipt.assigned_model_digest,
+            evidence_role=receipt.evidence_role,
             error=str(error)[:500] if error else (None if output else "worker returned empty output"),
             duration_ms=duration,
             attempt_count=attempts,
@@ -592,7 +645,12 @@ class Dispatcher:
         )
 
     @staticmethod
-    def _cancel(task_id: str, *, reason: str) -> bool:
+    def _cancel(
+        task_id: str,
+        *,
+        reason: str,
+        terminal_cause: TerminalCause = "execution_cancelled",
+    ) -> bool:
         """Remove queued work or durably cancel one active attempt."""
         with state._task_queue_lock:
             if state.remove_queued_task(task_id):
@@ -607,6 +665,7 @@ class Dispatcher:
                     attempt_id=attempt_id,
                     state="cancelled",
                     reason=reason,
+                    terminal_cause=terminal_cause,
                 )
             )
             record = state.attempt_store.get(attempt_id) if attempt_id else None
@@ -620,7 +679,12 @@ class Dispatcher:
             return changed or not attempt_id or terminal_without_receipt
 
     @staticmethod
-    def cancel_execution(execution_id: str, *, reason: str = "execution cancelled") -> int:
+    def cancel_execution(
+        execution_id: str,
+        *,
+        reason: str = "execution cancelled",
+        terminal_cause: TerminalCause = "execution_cancelled",
+    ) -> int:
         """Cancel all queued and leased units belonging to an execution."""
         with state._task_queue_lock:
             queued = [
@@ -631,7 +695,11 @@ class Dispatcher:
             for task_id in queued:
                 if task_id:
                     state.remove_queued_task(task_id)
-            active_task_ids = state.attempt_store.cancel_execution(execution_id, reason)
+            active_task_ids = state.attempt_store.cancel_execution(
+                execution_id,
+                reason,
+                terminal_cause=terminal_cause,
+            )
             for task_id in active_task_ids:
                 state.task_inflight.pop(task_id, None)
         return len(queued) + len(active_task_ids)

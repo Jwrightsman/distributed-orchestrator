@@ -593,9 +593,6 @@ button.node-card:hover { border-color: var(--border-strong); background: var(--s
   font-family: var(--mono);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.node-rep { margin-top: 3px; }
-.node-rep .is-trusted { color: var(--accent-text); }
-.node-rep .is-sampling { color: var(--warn); }
 .node-breaker-badge {
   display: inline-block;
   font-family: var(--mono);

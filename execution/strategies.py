@@ -81,6 +81,11 @@ def _unit_summary(result: DispatchResult) -> dict[str, Any]:
         "enrollment_id": result.enrollment_id,
         "capability_descriptor_version": result.capability_descriptor_version,
         "capability_descriptor_hash": result.capability_descriptor_hash,
+        "attempt_id": result.attempt_id,
+        "selected_model_provider": result.selected_model_provider,
+        "selected_model_name": result.selected_model_name,
+        "selected_model_digest": result.selected_model_digest,
+        "evidence_role": result.evidence_role,
         "attempt_count": result.attempt_count,
         "duration_ms": result.duration_ms,
         "fallback_reason": result.fallback_reason,
@@ -558,6 +563,11 @@ class EnsembleStrategy(ExecutionStrategy):
                     "capability_descriptor_hash": (
                         dispatched.capability_descriptor_hash
                     ),
+                    "attempt_id": dispatched.attempt_id,
+                    "selected_model_provider": dispatched.selected_model_provider,
+                    "selected_model_name": dispatched.selected_model_name,
+                    "selected_model_digest": dispatched.selected_model_digest,
+                    "evidence_role": dispatched.evidence_role,
                     "generation_duration_ms": dispatched.duration_ms,
                     "validation_duration_ms": sum(item.duration_ms for item in evidence),
                     "validation": [item.model_dump(mode="json") for item in evidence],

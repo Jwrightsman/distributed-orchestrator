@@ -269,16 +269,6 @@ function renderNodes(nodes) {
     const capsRow = visibleCaps.length
       ? `<div class="node-meta">${visibleCaps.map(c => `<span class="chip">${escHtml(c)}</span>`).join('')}</div>`
       : '';
-    // Verification record. Hidden entirely until this node has actually been
-    // spot-checked, so a server with verify_rate=0 looks exactly as before.
-    const samples = n.verified_samples || 0;
-    const weight = (n.routing_weight != null) ? n.routing_weight : 1;
-    const repHtml = samples > 0
-      ? `<div class="node-meta node-rep" title="Sampled tasks are run on two nodes and the answers compared. Routing weight decides who is offered work first; it never excludes a node.">
-           <span class="${weight >= 0.9 ? 'is-trusted' : 'is-sampling'}">&#9670; ${weight.toFixed(2)} routing weight</span>
-           <span> &middot; ${Math.round((n.agreement_score != null ? n.agreement_score : 1) * 100)}% agreement over ${samples} check${samples === 1 ? '' : 's'}${n.trusted_for_routing ? '' : ' (still sampling)'}</span>
-         </div>`
-      : '';
     return `
       <button type="button" class="node-card active" id="nodecard-${escHtml(n.node_id)}"
               data-node="${escHtml(JSON.stringify(n))}">
@@ -287,7 +277,6 @@ function renderNodes(nodes) {
         <div class="node-meta">${escHtml(n.model)}</div>
         ${hwHtml}${capsRow}
         <div class="node-tasks">${n.tasks_completed} tasks &middot; ${n.credits_earned || 0} credits</div>
-        ${repHtml}
         ${activeHtml}
       </button>`;
   }).join('');

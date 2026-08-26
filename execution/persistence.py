@@ -18,6 +18,10 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from capability_evidence import (
+    CONTRACT_FLOOR_PROJECTION_VERSION,
+    CapabilityEvidenceStore,
+)
 from execution.contracts import ExecutionRequestV1, ExecutionResultV1
 from execution.idempotency import (
     RequestHashVersionIncompatible,
@@ -660,6 +664,40 @@ class ExecutionStore:
         if not row:
             return None
         return ExecutionResultV1.model_validate_json(row[0])
+
+    def list_contract_floor_reconciliation_candidates(
+        self,
+        *,
+        limit: int = 1000,
+    ) -> list[ExecutionResultV1]:
+        """Return terminal results lacking the durable assurance projection receipt."""
+
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:
+            raise ValueError("limit must be an integer between 1 and 1000")
+        self.migrate()
+        CapabilityEvidenceStore(self.path).migrate()
+        with self._lock, connection(self.path, row_factory=sqlite3.Row) as con:
+            rows = con.execute(
+                """
+                SELECT executions.result_json
+                FROM executions
+                LEFT JOIN capability_evidence_projection_receipts AS projection
+                  ON projection.execution_id = executions.execution_id
+                 AND projection.projection_version = ?
+                WHERE projection.execution_id IS NULL
+                  AND COALESCE(executions.lifecycle_status, executions.status) IN (
+                    'completed', 'unverified', 'failed', 'cancelled', 'interrupted'
+                  )
+                ORDER BY COALESCE(executions.completed_at, executions.created_at) DESC,
+                         executions.execution_id ASC
+                LIMIT ?
+                """,
+                (CONTRACT_FLOOR_PROJECTION_VERSION, limit),
+            ).fetchall()
+        return [
+            ExecutionResultV1.model_validate_json(row["result_json"])
+            for row in rows
+        ]
 
     def raw_record(self, execution_id: str) -> dict[str, Any] | None:
         """Return the stored row for diagnostics and migration tests."""

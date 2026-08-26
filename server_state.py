@@ -23,6 +23,13 @@ from typing import Any, Literal
 from fastapi import HTTPException, Request, WebSocket
 from pydantic import BaseModel, Field, field_validator
 
+from capability_evidence import (
+    CapabilityEvidenceStore,
+    CapabilityShadowDecisionStore,
+    EligibleShadowCandidate,
+    EvidenceScope,
+    evaluate_shadow_preference,
+)
 from config import get as get_config
 from execution.attempts import AcceptedResultBroker, AttemptStore
 from execution.contracts import (
@@ -57,6 +64,8 @@ from node_sessions import (
 from node_capabilities import (
     NodeCapabilityDescriptorV1,
     NodeCapabilitySnapshotStore,
+    capability_descriptor_digest,
+    match_node_requirements,
 )
 
 logger = logging.getLogger("mycelium.diagnostics")
@@ -175,20 +184,20 @@ def remove_queued_task(task_id: str) -> bool:
 node_failure_count: dict[str, int] = {}   # node_id -> consecutive failure count
 node_blacklist: dict[str, float] = {}     # node_id -> blacklist_until timestamp
 
-# ── Verification & reputation ─────────────────────────────────────────
+# Sampled output agreement
 # One pool for the process. verify_rate is read from config at first use rather
 # than captured at import, so a config edit takes effect on the next pitch
 # instead of needing a restart.
 verification_pool = VerificationPool(verify_rate=0.0)
 
-# node_id -> timestamp it started waiting in GET /tasks/next. Used to give
-# better-rated nodes first refusal on a task without ever starving a worse one.
-waiting_nodes: dict[str, float] = {}
+# Capability evidence is append-only and observational. Shadow jobs operate on
+# already-issued attempts and have no reference to the queue mutation APIs.
+_CAPABILITY_SHADOW_TASK_LIMIT = 64
+_capability_shadow_tasks: set[asyncio.Task] = set()
 
-# A node counts as "currently waiting" only if it polled within this window.
-_WAITING_FRESH = 3.0
-# How long a lower-rated node defers before taking the work anyway.
-_ROUTING_DEFER = 1.5
+# Compatibility registry for active GET /tasks/next polls. Sampled agreement
+# does not read it and it has no effect on assignment order.
+waiting_nodes: dict[str, float] = {}
 
 
 def touch_node(node_id: str) -> bool:
@@ -206,7 +215,7 @@ def touch_node(node_id: str) -> bool:
 
 
 def _refresh_verify_rate() -> float:
-    """Sync the pool's sample rate with config. Returns the active rate."""
+    """Sync the independent sample rate with config and return it."""
     cfg = get_config()
     # Sampled duplicates are detached, process-local work today.  Until their
     # evidence and terminal state are durable, trusted-alpha mode disables them
@@ -242,8 +251,274 @@ _db_lock = threading.Lock()
 attempt_store = AttemptStore(_DB_PATH)
 enrollment_store = NodeEnrollmentStore(_DB_PATH)
 capability_snapshot_store = NodeCapabilitySnapshotStore(_DB_PATH)
+capability_evidence_store = CapabilityEvidenceStore(_DB_PATH)
+capability_shadow_decision_store = CapabilityShadowDecisionStore(_DB_PATH)
 accepted_result_broker = AcceptedResultBroker(attempt_store)
 _COORDINATOR_RESTART_MARKER = f"restart-{secrets.token_hex(12)}"
+
+
+def _record_terminal_capability_evidence(attempt_id: str | None) -> None:
+    """Best-effort projection after an authoritative terminal transition."""
+
+    if not attempt_id:
+        return
+    record = attempt_store.get(attempt_id)
+    if record is None or record.settled_at is None:
+        return
+    capability_evidence_store.best_effort(
+        capability_evidence_store.record_terminal,
+        record,
+        terminal_at=record.settled_at,
+    )
+
+
+def _reconcile_capability_evidence() -> None:
+    """Replay bounded terminal truth into the idempotent observation store."""
+
+    for record in attempt_store.list_evidence_reconciliation_candidates(limit=1000):
+        if record.state == "settled":
+            receipt = attempt_store.get_receipt_for_task(record.task_id)
+            if receipt is None or receipt.attempt_id != record.attempt_id:
+                continue
+            output_bytes = len((receipt.output or "").encode("utf-8"))
+            capability_evidence_store.best_effort(
+                capability_evidence_store.record_settlement,
+                record,
+                accepted_at=receipt.accepted_at,
+                output_bytes=output_bytes,
+            )
+        elif record.settled_at is not None:
+            capability_evidence_store.best_effort(
+                capability_evidence_store.record_terminal,
+                record,
+                terminal_at=record.settled_at,
+            )
+
+
+def _shadow_task_done(task: asyncio.Task) -> None:
+    _capability_shadow_tasks.discard(task)
+    try:
+        task.result()
+    except asyncio.CancelledError:
+        pass
+    except Exception as exc:  # pragma: no cover - final containment boundary
+        logger.warning(
+            "capability shadow evaluation failed error_type=%s",
+            type(exc).__name__,
+        )
+
+
+def _capture_capability_shadow_scopes(
+    *,
+    actual_attempt: Any,
+    actual_descriptor: NodeCapabilityDescriptorV1,
+    resource_requirements: dict[str, Any] | None,
+    required_capabilities: tuple[str, ...],
+    eligible_node_ids: tuple[str, ...],
+    captured_at: float,
+) -> tuple[EvidenceScope, ...]:
+    """Freeze already-matched claim/model scopes before background work starts."""
+
+    if getattr(actual_attempt, "evidence_role", None) != "production":
+        raise ValueError("shadow evaluation requires a production attempt")
+    if getattr(actual_attempt, "execution_unit_kind", None) not in {
+        "dag_subtask",
+        "candidate",
+    }:
+        raise ValueError("shadow evaluation requires a bounded task class")
+    descriptor_hash = capability_descriptor_digest(actual_descriptor)
+    if (
+        actual_descriptor.descriptor_version
+        != getattr(actual_attempt, "assigned_descriptor_version", None)
+        or descriptor_hash
+        != getattr(actual_attempt, "assigned_descriptor_hash", None)
+    ):
+        raise ValueError("actual shadow descriptor does not match the issued attempt")
+    actual_models = [
+        model
+        for model in actual_descriptor.models
+        if model.provider == getattr(actual_attempt, "assigned_model_provider", None)
+        and model.name == getattr(actual_attempt, "assigned_model_name", None)
+        and model.digest == getattr(actual_attempt, "assigned_model_digest", None)
+    ]
+    if len(actual_models) != 1:
+        raise ValueError("actual shadow model does not match the issued attempt")
+    actual_model = actual_models[0]
+    actual_scope = EvidenceScope(
+        enrollment_id=str(actual_attempt.assigned_enrollment_id),
+        descriptor_version=actual_descriptor.descriptor_version,
+        descriptor_hash=descriptor_hash,
+        executor_kind=actual_descriptor.executor.kind,
+        executor_version=actual_descriptor.executor.version,
+        worker_protocol_version=(
+            actual_descriptor.executor.worker_protocol_version
+        ),
+        model_provider=actual_model.provider,
+        model_name=actual_model.name,
+        model_digest=actual_model.digest,
+        model_variant=actual_model.variant,
+        task_class=actual_attempt.execution_unit_kind,
+        evidence_role="production",
+    )
+
+    scopes: dict[str, EvidenceScope] = {actual_scope.scope_key: actual_scope}
+    actual_node_id = str(actual_attempt.assigned_node_id)
+    for node_id in eligible_node_ids:
+        if len(scopes) >= 64:
+            break
+        if node_id == actual_node_id:
+            continue
+        node = nodes.get(node_id)
+        if not node or node.get("draining"):
+            continue
+        if node_blacklist.get(node_id, 0) > captured_at:
+            continue
+        enrollment_id = node.get("enrollment_id")
+        descriptor_payload = node.get("capability_descriptor")
+        descriptor_hash = node.get("capability_descriptor_hash")
+        descriptor_version = node.get("capability_descriptor_version")
+        session = node_sessions.current(node_id)
+        if (
+            not enrollment_id
+            or descriptor_payload is None
+            or not descriptor_hash
+            or not descriptor_version
+            or session is None
+            or session.enrollment_id != enrollment_id
+            or session.capability_descriptor_hash != descriptor_hash
+        ):
+            continue
+        try:
+            descriptor = NodeCapabilityDescriptorV1.model_validate(descriptor_payload)
+            if (
+                descriptor.descriptor_version != descriptor_version
+                or capability_descriptor_digest(descriptor) != descriptor_hash
+            ):
+                continue
+            match = match_node_requirements(
+                resource_requirements,
+                required_capabilities,
+                descriptor,
+                node.get("capabilities", []),
+                preferred_model_name=node.get("model"),
+            )
+            model = match.selected_model
+            if not match.eligible or model is None:
+                continue
+            scope = EvidenceScope(
+                enrollment_id=str(enrollment_id),
+                descriptor_version=descriptor.descriptor_version,
+                descriptor_hash=str(descriptor_hash),
+                executor_kind=descriptor.executor.kind,
+                executor_version=descriptor.executor.version,
+                worker_protocol_version=descriptor.executor.worker_protocol_version,
+                model_provider=model.provider,
+                model_name=model.name,
+                model_digest=model.digest,
+                model_variant=model.variant,
+                task_class=actual_scope.task_class,
+                evidence_role="production",
+            )
+        except Exception:
+            continue
+        scopes.setdefault(scope.scope_key, scope)
+
+    return tuple(sorted(scopes.values(), key=lambda item: item.scope_key))
+
+
+def _evaluate_capability_shadow(
+    *,
+    actual_attempt_id: str,
+    actual_scope_key: str,
+    candidate_scopes: tuple[EvidenceScope, ...],
+    minimum_samples: int,
+    decision_at: float,
+) -> None:
+    """Evaluate immutable assignment-time candidates without live-node access."""
+
+    candidates = [
+        EligibleShadowCandidate(
+            candidate_id=scope.scope_key,
+            aggregate=capability_evidence_store.aggregate(
+                scope,
+                minimum_samples=minimum_samples,
+                recorded_before=decision_at,
+            ),
+        )
+        for scope in candidate_scopes
+    ]
+    evaluation = evaluate_shadow_preference(
+        actual_attempt_id=actual_attempt_id,
+        actual_candidate_id=actual_scope_key,
+        candidates=candidates,
+        minimum_samples=minimum_samples,
+        decision_at=decision_at,
+    )
+    capability_shadow_decision_store.record(evaluation)
+
+
+def schedule_capability_shadow_evaluation(
+    actual_attempt: Any,
+    *,
+    actual_descriptor: NodeCapabilityDescriptorV1,
+    resource_requirements: dict[str, Any] | None,
+    required_capabilities: list[str] | tuple[str, ...],
+    eligible_node_ids: list[str] | tuple[str, ...],
+    decision_at: float,
+) -> bool:
+    """Schedule a bounded post-assignment diagnostic; never await evidence."""
+
+    try:
+        cfg = get_config()
+        if str(cfg.get("capability_evidence_mode", "off")) != "shadow":
+            return False
+        minimum_samples = int(cfg.get("capability_evidence_min_samples", 5))
+        if getattr(actual_attempt, "evidence_role", None) != "production":
+            return False
+        if len(_capability_shadow_tasks) >= _CAPABILITY_SHADOW_TASK_LIMIT:
+            return False
+        loop = asyncio.get_running_loop()
+        candidates = tuple(
+            sorted(
+                {
+                    str(node_id)
+                    for node_id in eligible_node_ids
+                    if isinstance(node_id, str) and node_id
+                }
+            )[:64]
+        )
+        candidate_scopes = _capture_capability_shadow_scopes(
+            actual_attempt=actual_attempt,
+            actual_descriptor=actual_descriptor,
+            resource_requirements=resource_requirements,
+            required_capabilities=tuple(required_capabilities),
+            eligible_node_ids=candidates,
+            captured_at=float(decision_at),
+        )
+        actual_scope = next(
+            scope
+            for scope in candidate_scopes
+            if scope.enrollment_id == actual_attempt.assigned_enrollment_id
+            and scope.descriptor_hash == actual_attempt.assigned_descriptor_hash
+            and scope.model_provider == actual_attempt.assigned_model_provider
+            and scope.model_name == actual_attempt.assigned_model_name
+            and scope.model_digest == actual_attempt.assigned_model_digest
+        )
+        task = loop.create_task(
+            asyncio.to_thread(
+                _evaluate_capability_shadow,
+                actual_attempt_id=str(actual_attempt.attempt_id),
+                actual_scope_key=actual_scope.scope_key,
+                candidate_scopes=candidate_scopes,
+                minimum_samples=minimum_samples,
+                decision_at=float(decision_at),
+            )
+        )
+        _capability_shadow_tasks.add(task)
+        task.add_done_callback(_shadow_task_done)
+        return True
+    except Exception:
+        return False
 
 
 def node_enrollment_required() -> bool:
@@ -747,6 +1022,8 @@ def _init_db() -> None:
     enrollment_store.migrate()
     capability_snapshot_store.migrate()
     attempt_store.migrate()
+    capability_evidence_store.migrate()
+    capability_shadow_decision_store.migrate()
     # Redact legacy free-form contribution metadata and regenerate the JSON
     # projection before any read route can expose it.
     from ledger import sync_compatibility_ledger
@@ -758,6 +1035,7 @@ def _init_db() -> None:
     attempt_store.interrupt_active(
         "coordinator restarted; process-local worker task is no longer resumable"
     )
+    _reconcile_capability_evidence()
     accepted_result_broker.clear()
 
 
@@ -1401,12 +1679,22 @@ def _cleanup_pass():
             assigned_enrollment = task.get("assigned_enrollment_id")
             try:
                 if attempt_id:
-                    attempt_store.transition_active(
+                    attempt_record = attempt_store.get(attempt_id)
+                    expiry_cause = (
+                        "execution_deadline"
+                        if attempt_record is not None
+                        and attempt_record.lease_deadline_kind == "execution_deadline"
+                        else "lease_expired"
+                    )
+                    changed = attempt_store.transition_active(
                         attempt_id=attempt_id,
                         state="expired",
                         reason="lease expired",
+                        terminal_cause=expiry_cause,
                         now=now,
                     )
+                    if changed:
+                        _record_terminal_capability_evidence(attempt_id)
             except Exception as exc:
                 _safe_diagnostic_emit(
                     "attempt_expiry_failed",
@@ -1495,12 +1783,15 @@ def _cleanup_pass():
                 enrollment_id = task.get("assigned_enrollment_id")
                 try:
                     if attempt_id:
-                        attempt_store.transition_active(
+                        changed = attempt_store.transition_active(
                             attempt_id=attempt_id,
                             state="reclaimed",
                             reason=f"assigned node {nid} became stale",
+                            terminal_cause="node_stale",
                             now=now,
                         )
+                        if changed:
+                            _record_terminal_capability_evidence(attempt_id)
                 except Exception as exc:
                     # Fail closed: without a durable terminal transition, the
                     # old worker could still settle. Leave the task in-flight

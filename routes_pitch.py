@@ -50,9 +50,9 @@ generate = _generate
 
 router = APIRouter()
 
-# Strong references to in-flight verification collectors. This helper remains
-# for the sampled node-reputation mechanism; canonical output validation is a
-# separate registry under execution/validators.py.
+# Strong references to in-flight sampled-agreement collectors. This legacy
+# diagnostic is not correctness or a routing signal; canonical output
+# validation is a separate registry under execution/validators.py.
 _verify_tasks: set = set()
 _PUBLIC_INFERENCE_SEMAPHORE = asyncio.Semaphore(1)
 _LEGACY_MIRROR_PERSISTENCE_ATTEMPTS = 3
