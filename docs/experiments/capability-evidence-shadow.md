@@ -17,6 +17,10 @@ express a preference for cold or changed scopes, exclude hard-ineligible
 candidates, ignore non-node-attributable failures, and remain deterministic
 without affecting the real assignment.
 
+Here, deadline success means that a non-empty output settled by its issued lease
+deadline. A timely worker-reported error or empty output is a deadline failure;
+its separate settlement category remains observable.
+
 This experiment does not test semantic correctness, hardware attestation,
 global node quality, or reputation. Sampled output-shape agreement is not a
 truth label and is not a preference dimension.

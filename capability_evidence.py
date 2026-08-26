@@ -31,6 +31,7 @@ from sqlite_store import connection, migration_lock
 EVIDENCE_SCHEMA_VERSION = "1"
 SHADOW_POLICY_VERSION = "1"
 CONTRACT_FLOOR_PROJECTION_VERSION = "contract-floor-v1"
+DEADLINE_COMPLETION_SUBJECT = "nonempty_output_before_lease_v2"
 MAX_IDENTIFIER_LENGTH = 256
 MAX_METADATA_JSON_BYTES = 1024
 MAX_RECENT_SAMPLES = 1000
@@ -1006,6 +1007,9 @@ class CapabilityEvidenceStore:
             raise ValueError("output_bytes is outside the evidence limit")
         written_at = time.time() if recorded_at is None else recorded_at
         wall_seconds = accepted - issued
+        completed_before_deadline = (
+            cause == "settled_output" and accepted <= deadline
+        )
         context = resolution.context
         observations = [
             cls._append_one(
@@ -1023,8 +1027,8 @@ class CapabilityEvidenceStore:
                 con,
                 context,
                 observation_type="deadline_completion",
-                subject_key="lifecycle",
-                outcome="pass" if accepted <= deadline else "fail",
+                subject_key=DEADLINE_COMPLETION_SUBJECT,
+                outcome="pass" if completed_before_deadline else "fail",
                 numeric_value=None,
                 metadata=None,
                 observed_at=accepted,
@@ -1132,7 +1136,7 @@ class CapabilityEvidenceStore:
                 con,
                 context,
                 observation_type="deadline_completion",
-                subject_key="lifecycle",
+                subject_key=DEADLINE_COMPLETION_SUBJECT,
                 outcome="fail",
                 numeric_value=None,
                 metadata=None,
@@ -1458,6 +1462,11 @@ class CapabilityEvidenceStore:
         if cutoff is not None:
             where += " AND recorded_at <= ?"
             parameters.append(cutoff)
+        where += (
+            " AND (observation_type != 'deadline_completion' "
+            "OR subject_key = ?)"
+        )
+        parameters.append(DEADLINE_COMPLETION_SUBJECT)
         count_rows = con.execute(
             f"SELECT observation_type, outcome, COUNT(*) AS sample_count "
             f"FROM node_capability_observations WHERE {where} "

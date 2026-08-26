@@ -13,6 +13,7 @@ from capability_evidence import (
     BinaryAggregate,
     CapabilityEvidenceStore,
     CapabilityShadowDecisionStore,
+    DEADLINE_COMPLETION_SUBJECT,
     EligibleShadowCandidate,
     EvidenceConflict,
     EvidenceScope,
@@ -250,6 +251,130 @@ def test_settlement_is_append_only_deterministic_replay_safe_and_secret_free(tmp
             )
         with pytest.raises(sqlite3.DatabaseError, match="append-only"):
             con.execute("DELETE FROM node_capability_observations")
+
+
+def test_only_timely_settled_output_passes_deadline_completion(tmp_path):
+    database = tmp_path / "settlement-deadline-outcomes.db"
+    enrollment, snapshot = _register(database, "worker-a")
+    store = CapabilityEvidenceStore(database)
+    attempts = []
+
+    for index, (terminal_cause, accepted_at, expected_deadline) in enumerate(
+        (
+            ("settled_output", 110, "pass"),
+            ("settled_output", 201, "fail"),
+            ("settled_worker_error", 110, "fail"),
+            ("settled_empty_output", 110, "fail"),
+        ),
+        start=1,
+    ):
+        attempt = _attempt(
+            enrollment,
+            snapshot,
+            suffix=f"deadline-{index}-{terminal_cause}",
+            terminal_cause=terminal_cause,
+            settled_at=accepted_at,
+        )
+        attempts.append(attempt)
+        result = store.record_settlement(
+            attempt,
+            accepted_at=accepted_at,
+            output_bytes=10 if terminal_cause == "settled_output" else 0,
+            recorded_at=accepted_at + 10,
+        )
+
+        deadline = next(
+            observation
+            for observation in result.observations
+            if observation.observation_type == "deadline_completion"
+        )
+        assert deadline.subject_key == DEADLINE_COMPLETION_SUBJECT
+        assert deadline.outcome == expected_deadline
+
+    aggregate = store.aggregate(
+        _resolved_scope(store, attempts[0]), minimum_samples=4
+    )
+    assert aggregate.deadline_completion.sample_count == 4
+    assert aggregate.deadline_completion.positive_count == 1
+    assert aggregate.deadline_completion.negative_count == 3
+
+
+def test_legacy_deadline_row_is_backfilled_by_v2_without_conflict_or_double_count(
+    tmp_path,
+):
+    database = tmp_path / "deadline-subject-upgrade.db"
+    enrollment, snapshot = _register(database, "worker-a")
+    store = CapabilityEvidenceStore(database)
+    attempt = _attempt(
+        enrollment,
+        snapshot,
+        suffix="deadline-upgrade",
+        terminal_cause="settled_worker_error",
+        settled_at=110,
+    )
+
+    store.migrate()
+    with sqlite3.connect(database) as con:
+        con.row_factory = sqlite3.Row
+        resolution = store.resolve_scope_in_transaction(con, attempt)
+        assert resolution.context is not None
+        legacy = store._append_one(
+            con,
+            resolution.context,
+            observation_type="deadline_completion",
+            subject_key="lifecycle",
+            outcome="pass",
+            numeric_value=None,
+            metadata=None,
+            observed_at=110,
+            recorded_at=120,
+        )
+        con.commit()
+
+    backfill = store.record_settlement(
+        attempt,
+        accepted_at=110,
+        output_bytes=0,
+        recorded_at=121,
+    )
+    replay = store.record_settlement(
+        attempt,
+        accepted_at=110,
+        output_bytes=0,
+        recorded_at=999,
+    )
+    v2 = next(
+        observation
+        for observation in backfill.observations
+        if observation.observation_type == "deadline_completion"
+    )
+
+    assert legacy.subject_key == "lifecycle"
+    assert legacy.outcome == "pass"
+    assert v2.subject_key == DEADLINE_COMPLETION_SUBJECT
+    assert v2.outcome == "fail"
+    assert v2.observation_id != legacy.observation_id
+    assert [item.observation_id for item in replay.observations] == [
+        item.observation_id for item in backfill.observations
+    ]
+
+    with sqlite3.connect(database) as con:
+        deadline_rows = con.execute(
+            "SELECT subject_key, outcome FROM node_capability_observations "
+            "WHERE attempt_id = ? AND observation_type = 'deadline_completion' "
+            "ORDER BY subject_key",
+            (attempt["attempt_id"],),
+        ).fetchall()
+    assert deadline_rows == [
+        ("lifecycle", "pass"),
+        (DEADLINE_COMPLETION_SUBJECT, "fail"),
+    ]
+
+    aggregate = store.aggregate(_resolved_scope(store, attempt), minimum_samples=1)
+    assert aggregate.deadline_completion.sample_count == 1
+    assert aggregate.deadline_completion.positive_count == 0
+    assert aggregate.deadline_completion.negative_count == 1
+    assert aggregate.observation_count == len(backfill.observations)
 
 
 @pytest.mark.parametrize(
@@ -535,6 +660,68 @@ def test_aggregation_never_crosses_model_role_task_or_recording_cutoff(tmp_path)
     assert before.insufficient_evidence is True
     assert after.observation_count == 5
     assert after.insufficient_evidence is False
+
+
+def test_descriptor_snapshot_change_starts_a_new_durable_scope(tmp_path):
+    database = tmp_path / "descriptor-scope-reset.db"
+    enrollment, first_snapshot = _register(database, "worker-a")
+    second_snapshot = NodeCapabilitySnapshotStore(database).remember(
+        enrollment.enrollment_id,
+        _descriptor(executor_version="0.12.0"),
+        now=3,
+    )
+    store = CapabilityEvidenceStore(database)
+    first_attempt = _attempt(
+        enrollment,
+        first_snapshot,
+        suffix="descriptor-first",
+    )
+    second_attempt = _attempt(
+        enrollment,
+        second_snapshot,
+        suffix="descriptor-second",
+    )
+
+    store.record_settlement(
+        first_attempt, accepted_at=110, output_bytes=10, recorded_at=120
+    )
+    store.record_settlement(
+        second_attempt, accepted_at=110, output_bytes=10, recorded_at=121
+    )
+
+    first_scope = _resolved_scope(store, first_attempt)
+    second_scope = _resolved_scope(store, second_attempt)
+    assert first_scope.enrollment_id == second_scope.enrollment_id
+    assert first_scope.descriptor_hash != second_scope.descriptor_hash
+    assert first_scope.scope_key != second_scope.scope_key
+    assert store.aggregate(
+        first_scope, minimum_samples=2
+    ).deadline_completion.sample_count == 1
+    assert store.aggregate(
+        second_scope, minimum_samples=2
+    ).deadline_completion.sample_count == 1
+
+    reopened = CapabilityEvidenceStore(database)
+    summaries = reopened.list_scope_aggregates(
+        enrollment_id=enrollment.enrollment_id,
+        minimum_samples=2,
+    )
+    assert len(summaries) == 2
+    assert {item.scope.descriptor_hash for item in summaries} == {
+        first_snapshot.descriptor_hash,
+        second_snapshot.descriptor_hash,
+    }
+    assert {item.aggregate.settlement_count for item in summaries} == {1}
+    assert all(item.aggregate.insufficient_evidence for item in summaries)
+    with sqlite3.connect(database) as con:
+        grouped = con.execute(
+            "SELECT descriptor_hash, COUNT(*) "
+            "FROM node_capability_observations GROUP BY descriptor_hash"
+        ).fetchall()
+    assert set(grouped) == {
+        (first_snapshot.descriptor_hash, 5),
+        (second_snapshot.descriptor_hash, 5),
+    }
 
 
 def test_operator_scope_summaries_are_bounded_filtered_and_privacy_safe(tmp_path):
@@ -978,6 +1165,105 @@ def test_shadow_operator_counts_group_by_actual_candidate_and_exact_scope(tmp_pa
         store.aggregate_counts(limit=201)
     with pytest.raises(ValueError, match="SHA-256"):
         store.aggregate_counts(actual_scope_key="not-a-scope")
+
+
+def test_schema_migration_is_idempotent_and_preserves_all_evidence_state(tmp_path):
+    database = tmp_path / "evidence-migration.db"
+    enrollment, snapshot = _register(database, "worker-a")
+    evidence_store = CapabilityEvidenceStore(database)
+    shadow_store = CapabilityShadowDecisionStore(database)
+
+    for _ in range(2):
+        evidence_store.migrate()
+        shadow_store.migrate()
+
+    attempt = _attempt(enrollment, snapshot, suffix="migration")
+    settlement = evidence_store.record_settlement(
+        attempt, accepted_at=110, output_bytes=10, recorded_at=120
+    )
+    projection = evidence_store.record_contract_floor_projection(
+        execution_id=attempt["execution_id"],
+        projections=((attempt, True),),
+        method_version="validator-v1",
+        recorded_at=121,
+    )
+    scope = _resolved_scope(evidence_store, attempt)
+    evaluation = evaluate_shadow_preference(
+        actual_attempt_id=attempt["attempt_id"],
+        actual_candidate_id="worker-a",
+        candidates=(
+            EligibleShadowCandidate(
+                "worker-a",
+                _shadow_aggregate(
+                    scope, deadline_samples=5, deadline_low=0.5
+                ),
+            ),
+        ),
+        minimum_samples=5,
+        decision_at=122,
+    )
+    shadow = shadow_store.record(evaluation, recorded_at=123)
+
+    table_names = {
+        "node_capability_observations",
+        "capability_evidence_projection_receipts",
+        "capability_shadow_decisions",
+    }
+    trigger_names = {
+        "trg_capability_observations_no_update",
+        "trg_capability_observations_no_delete",
+        "trg_capability_evidence_projections_no_update",
+        "trg_capability_evidence_projections_no_delete",
+        "trg_capability_shadow_decisions_no_update",
+        "trg_capability_shadow_decisions_no_delete",
+    }
+
+    def persisted_state():
+        with sqlite3.connect(database) as con:
+            tables = {
+                row[0]
+                for row in con.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            }
+            triggers = {
+                row[0]
+                for row in con.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'trigger'"
+                )
+            }
+            observations = con.execute(
+                "SELECT observation_id, observation_type, outcome "
+                "FROM node_capability_observations ORDER BY observation_id"
+            ).fetchall()
+            projections = con.execute(
+                "SELECT execution_id, projection_version, source_digest "
+                "FROM capability_evidence_projection_receipts"
+            ).fetchall()
+            decisions = con.execute(
+                "SELECT decision_id, outcome, actual_scope_key "
+                "FROM capability_shadow_decisions"
+            ).fetchall()
+        return tables, triggers, observations, projections, decisions
+
+    before = persisted_state()
+    assert table_names <= before[0]
+    assert trigger_names <= before[1]
+    assert len(before[2]) == len(settlement.observations) + len(
+        projection.observations
+    )
+    assert before[3] == [
+        (attempt["execution_id"], "contract-floor-v1", projection.source_digest)
+    ]
+    assert before[4] == [
+        (shadow.evaluation.decision_id, "no_preference", scope.scope_key)
+    ]
+
+    for _ in range(3):
+        CapabilityEvidenceStore(database).migrate()
+        CapabilityShadowDecisionStore(database).migrate()
+
+    assert persisted_state() == before
 
 
 def test_aggregate_surface_has_no_global_score_or_routing_label():

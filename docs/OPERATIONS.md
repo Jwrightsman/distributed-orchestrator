@@ -359,6 +359,9 @@ Only server-owned `lease_expired` and `node_stale` terminal causes are charged
 as worker failures. Caller cancellation, execution deadline, payload/stream
 limits, receipt binding, enrollment reclaim, session replacement, coordinator
 restart, supersession, unknown causes, and free-form errors are excluded.
+Deadline success requires a non-empty output settled by the issued lease
+deadline; a timely worker-reported error or empty output is still a deadline
+failure and remains visible in its separate settlement category.
 Contract-floor results are structural assurance; sampled agreement compares
 output shape. A sampled attempt names its exact production primary; an execution
 ID and task class do not establish a pair. Neither is semantic correctness.
@@ -367,7 +370,10 @@ Startup reconciliation selects only attributable attempts missing expected
 observations. Candidate-local contract-floor observations commit atomically with
 an append-only, content-free projection receipt; terminal executions without a
 receipt are retried. Completed and excluded rows do not consume the bounded
-repair batch.
+repair batch. It also backfills the versioned
+`nonempty_output_before_lease_v2` deadline observation when an upgraded database
+contains only the superseded `lifecycle` definition; current aggregates ignore
+the old subject rather than rewriting append-only history.
 
 The endpoint returns aggregates and grouped shadow outcomes, not raw records.
 The store omits prompt/output bodies, worker error text, free-form reasons,
