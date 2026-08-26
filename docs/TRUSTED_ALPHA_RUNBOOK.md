@@ -228,6 +228,49 @@ Logs and events can contain operational identifiers and failure details; task
 content may be sensitive. Share only the minimum necessary excerpt. Reverse
 proxy access logs must redact share-token path segments.
 
+### Inspect scoped capability evidence
+
+Operational observations are recorded independently of policy mode. Shadow
+evaluation is off by default. To enable shadow diagnostics, add these bounded
+settings to `data/config.json`, run preflight, and restart the one coordinator
+process:
+
+```json
+{
+  "capability_evidence_mode": "shadow",
+  "capability_evidence_min_samples": 5
+}
+```
+
+The only modes are `off` and `shadow`; there is no active routing mode. The
+minimum must be an integer from 1 through 1000. Shadow work starts only after
+the real assignment, freezes assignment-time candidate scopes, never waits for
+evidence, and cannot rank, reorder, or replace it. `verify_rate` is a separate
+default-off sampled-comparison control; trusted-alpha keeps that duplicate path
+disabled.
+
+Read the protected aggregates with the same viewer cookie:
+
+```bash
+curl -fsS -b viewer.cookies \
+  "$BASE_URL/v1/operator/capability-evidence?limit=100&evidence_role=production"
+```
+
+Optional filters are `enrollment_id`, `descriptor_hash`, `task_class`, and
+`evidence_role`. Confirm the response says `affects_routing: false`. Treat
+`insufficient_evidence: true` as cold start, not a bad worker. Descriptor,
+selected-model, task-class, and evidence-role changes deliberately start a new
+scope. Contract-floor rates describe structural assurance; sampled agreement
+describes output shape, not correctness or trust. A durable comparison binds an
+exact primary attempt rather than any unit sharing the execution.
+
+Only `lease_expired` and `node_stale` are worker-attributable terminal failures.
+Caller cancellation, execution deadline, payload/stream limits, receipt binding,
+enrollment reclaim, session replacement, coordinator restart, supersession, and
+unknown causes are excluded. Contribution points remain separate accepted-compute
+records. To stop shadow evaluation, set `capability_evidence_mode` back to `off`,
+run preflight, and restart; stored observations remain available for diagnosis.
+
 ## 8. Rotate credentials
 
 Back up first. Rotate one authority at a time with a local command that writes
@@ -301,8 +344,9 @@ python scripts/backup.py \
 
 The versioned ZIP includes a consistent `events.db` snapshot, config, projects,
 output, execution artifacts, compatibility ledger when present, build metadata,
-and a SHA-256 index. Enrollment IDs, digests, revocation, attribution, and
-rotation version are in SQLite. The tool does not print configuration values.
+and a SHA-256 index. Enrollment IDs, digests, revocation, attribution, rotation
+version, scoped capability observations, and shadow decisions are in SQLite. The
+tool does not print configuration values.
 Store the ZIP as sensitive data: it contains private prompts/results, artifacts,
 static credentials, and authentication digests. Copy it off-host and test
 restore periodically.
@@ -450,6 +494,12 @@ Docker, and reproduction steps separately.
 Treat normalized capability descriptors as private hardware/model inventory.
 Do not add the protected enrollment response or override JSON to a shareable
 bundle unless the recipient is authorized and the inventory is necessary.
+
+Treat the protected capability-evidence response the same way. It omits prompts,
+output bodies, worker errors, free-form reasons, credentials, nonces, and session
+secrets, but its scoped model, timing, and outcome aggregates are still private
+operational inventory. Do not include the raw database or evidence response in a
+shareable bundle.
 
 Do not add idempotency keys, attempt nonces, or node session tokens to the
 bundle. Persistence failure logs should identify only the execution, commit

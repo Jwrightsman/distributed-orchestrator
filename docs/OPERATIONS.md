@@ -37,6 +37,7 @@ coordinator on a local filesystem serving a small private trusted alpha.
 | Attempt authority, nonce digests, settlement receipts, quarantine | SQLite | Retained; active attempts become `interrupted`; exact settled replay remains durable |
 | Node enrollment IDs, credential digests, status, rotation/revocation | SQLite | Retained; sessions are reacquired after restart |
 | Enrolled capability descriptor snapshots | SQLite | Immutable canonical claim JSON retained by enrollment/hash; attempts keep version/hash references |
+| Scoped capability observations, projection receipts, and shadow decisions | SQLite | Append-only operational records retained; bounded missing-only startup reconciliation repairs missed projections without changing settlement |
 | Shares and revocation metadata | SQLite | Retained; plaintext share token is never stored |
 | Contribution records | SQLite | Authoritative; JSON ledger is only a compatibility projection |
 | Artifact roots, entries, hashes, roles, seal state | SQLite plus files | Retained if both database and artifact trees are restored together |
@@ -257,8 +258,9 @@ Coordinator restart clears sessions and active scheduler state, but the same
 enrollment credential obtains a new session with the same enrollment ID.
 `node_enrollment_mode=required` is mandatory in trusted alpha. Explicit local
 `compat` mode may issue an unenrolled legacy session, but it cannot claim a
-label found in the enrollment table and its contributions/verification are
-session-scoped rather than inherited by label.
+label found in the enrollment table. Its contributions remain session-scoped
+rather than inherited by label, and it is excluded from scoped capability
+evidence because it lacks the required immutable enrollment/descriptor binding.
 
 This is stable, independently revocable bearer attribution. It is not a
 per-node public key, certificate, physical-machine proof, remote attestation,
@@ -306,6 +308,71 @@ version-1 JSON object in `resource_requirements` and/or repeat
 omits descriptor JSON; `/health` and `/status.json` expose neither descriptors
 nor matching details. Treat the full claim and hostname as private inventory
 when collecting or sharing diagnostics.
+
+### Capability evidence and shadow operation
+
+Capability evidence is durable, coordinator-recorded operational history. It is
+not descriptor verification, semantic correctness, trust, reputation, assurance,
+contribution credit, or a routing score. Production assignment uses only the
+existing hard matcher, queue, and circuit breaker. Neither sampled agreement nor
+any aggregate delays, ranks, or reorders a real handout.
+
+The supported configuration is:
+
+```json
+{
+  "capability_evidence_mode": "off",
+  "capability_evidence_min_samples": 5
+}
+```
+
+The mode is strictly `off` or `shadow`; `off` is the default and there is no
+active mode. The minimum must be an integer from 1 through 1000. In strict or
+trusted-alpha configuration an invalid value fails loading; local compatibility
+logs a warning and uses the default. `verify_rate` is independent and defaults
+to zero.
+
+`shadow` runs only a bounded post-assignment counterfactual over candidates that
+already passed the same hard requirements. Their exact descriptor/model scopes
+are frozen at assignment time before asynchronous aggregation, which uses
+evidence recorded no later than assignment. It cannot mutate the queue,
+eligibility, actual assignment, settlement, contributions, or breaker state. An
+evidence write or evaluation failure is contained and never overturns accepted
+work.
+
+Use viewer authentication to inspect aggregates:
+
+```bash
+curl -fsS -b viewer.cookies \
+  "$BASE_URL/v1/operator/capability-evidence?limit=100&evidence_role=production"
+```
+
+Optional filters are `enrollment_id`, `descriptor_hash`, `task_class`
+(`dag_subtask` or `candidate`), and `evidence_role` (`production` or
+`sampled_comparison`). The response always states `affects_routing=false`.
+Binary dimensions include sample counts and Wilson intervals; latency and
+throughput are bounded recent medians. Below the configured minimum, read
+`insufficient_evidence` as cold start, never as failure. Descriptor, selected
+model, task class, and evidence-role changes create separate cold scopes.
+
+Only server-owned `lease_expired` and `node_stale` terminal causes are charged
+as worker failures. Caller cancellation, execution deadline, payload/stream
+limits, receipt binding, enrollment reclaim, session replacement, coordinator
+restart, supersession, unknown causes, and free-form errors are excluded.
+Contract-floor results are structural assurance; sampled agreement compares
+output shape. A sampled attempt names its exact production primary; an execution
+ID and task class do not establish a pair. Neither is semantic correctness.
+
+Startup reconciliation selects only attributable attempts missing expected
+observations. Candidate-local contract-floor observations commit atomically with
+an append-only, content-free projection receipt; terminal executions without a
+receipt are retried. Completed and excluded rows do not consume the bounded
+repair batch.
+
+The endpoint returns aggregates and grouped shadow outcomes, not raw records.
+The store omits prompt/output bodies, worker error text, free-form reasons,
+credentials, nonces, session secrets, and arbitrary telemetry. It is still
+private operational inventory and is included in `events.db` backups.
 
 Session counters and durable lifetime contribution counters are distinct:
 
@@ -498,10 +565,11 @@ preflight command. Stop the coordinator before restore.
 
 The SQLite snapshot includes node enrollment IDs, credential digests,
 revocation/rotation state, immutable capability-claim snapshots, and nullable
-attempt/receipt descriptor and requirement bindings plus contribution attribution. It
-contains no plaintext enrollment credential. Worker identity files live on the
-workers and are deliberately outside the coordinator backup; each worker
-operator must protect and back them up separately.
+attempt/receipt descriptor and requirement bindings, scoped capability
+observations and shadow decisions, plus contribution attribution. It contains no
+plaintext enrollment credential. Worker identity files live on the workers and
+are deliberately outside the coordinator backup; each worker operator must
+protect and back them up separately.
 
 A restore is point-in-time, not an offboarding log. Only revocations and
 rotations already present in that snapshot survive. Restoring an older snapshot
@@ -531,6 +599,7 @@ fields directly:
 | --- | --- | --- |
 | Enrollment/session | Private `GET /v1/operator/node-enrollments` and `GET /nodes`: `enrollment_id`, `node_id`, `status`, timestamps, live session/drain state, and session/lifetime totals | Use enrollment ID as trust/accounting key and node ID as label; never request or render credential material or `session_token` |
 | Capability claim | Private operator enrollment view: descriptor/version/hash, legacy tag provenance, `hard_requirement_eligibility.reason_codes`; `/nodes` has hash/version only | Say “claimed” and “eligible,” never measured, verified, trusted, or attested; keep full hardware/model inventory off public views |
+| Capability evidence | Private `GET /v1/operator/capability-evidence`: scoped counts/rates/intervals, recent medians, `insufficient_evidence`, grouped shadow outcomes, `affects_routing` | Say “observed operational history”; agreement means shape only; never display correctness, trust, reputation, routing weight, or a global score |
 | Deployment protection | Public `/health.private_routes_protected` and `warnings`; private `/v1/operator/health`: `deployment_mode`, `instance_id`, `single_coordinator_lock`, `preflight_warnings` | “Protected” requires the boolean true; do not treat HTTP 200 alone as safe |
 | Artifact role | Manifest entry `role` | Label deliverable separately from provenance/log/candidate/internal |
 | Manifest integrity | Execution `artifact_integrity_mode`, `sealed_manifest_hash`; manifest `integrity_mode`, `manifest_hash`, `sealed_at` | Say “sealed local hash baseline,” not signed/verified; explain legacy/active/invalid states |
@@ -539,7 +608,7 @@ fields directly:
 | Submission replay | `Idempotency-Replayed` response header; structured 409/422/503 `detail.code` values | Preserve the key only with its logical request; never display it as a user identity or an exactly-once guarantee |
 | Validation | `validation_outcome`, `validation_summary`, `validation_evidence` | Show passed, failed, skipped, and not-run checks; “partial” is not “correct” |
 | Assurance | `assurance_level` plus each evidence item's level and `proves_behavioral_correctness` | Suggested labels: Not checked, Structure checked, Contract validated, Behavior tested, AI reviewed; avoid a generic badge |
-| Post-hoc verification | `posthoc_verification_status`, `_started_at`, `_completed_at`, `_agreement`, `_reason` | Separate from terminal validation; trusted-alpha currently reports `disabled`, not silently pending |
+| Legacy post-hoc verification | `posthoc_verification_status`, `_started_at`, `_completed_at`, `_agreement`, `_reason` | Separate from terminal validation and scoped capability evidence; trusted-alpha reports `disabled`, not silently pending |
 | Share administration | Private list: `share_id`, `created_at`, `expires_at`, `revoked_at`, `last_accessed_at`, artifact/candidate/node-redaction flags | Plaintext token appears only in create response; never expect it from list or persist it in analytics/logs |
 
 Public share responses are a separate redacted model. Do not hydrate private UI
@@ -553,14 +622,13 @@ The trusted-alpha controls make private invited operation reviewable; they do
 not provide public-network readiness. Remaining structural limits include shared
 instance-wide keys, process-local scheduling and node sessions, no public-key
 node identity, no coordinator HA, no generated-code sandbox, no remote
-attestation, self-reported capability descriptors with no Theme-2B evidence
-ranking, no signed artifact provenance, and provisional model quality with
+attestation, self-reported capability descriptors, no evidence-driven production
+routing, no signed artifact provenance, and provisional model quality with
 high run-to-run variance. Open-mode peer scoping is not durable identity, and
 idempotent submission does not make model, worker, callback, or filesystem side
 effects exactly once.
 
-The older process-local sampled-verification pool is a separate caveat: in
-local mode, explicitly setting `verify_rate` may change first-refusal order
-among nodes that already satisfy hard requirements. It is off by default and
-trusted-alpha mode forces it off. Descriptor claims and their hashes do not
-feed that pool in Theme 2B.
+Sampled comparison remains optional and default-off. Its agreement signal is
+diagnostic output-shape agreement only. Production polling never defers first
+refusal or changes queue order from verification or capability evidence, in any
+deployment or evidence mode.

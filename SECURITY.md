@@ -58,13 +58,20 @@ Known and documented, so probably not news:
   viewer, and share credentials require TLS or an authenticated private overlay.
 - **Credits are contribution points, not currency.** No token, no wallet, no
   monetary value, so no credit bug costs anyone money.
+- **Capability evidence is diagnostic, not trust or correctness.** It records
+  scoped coordinator-observed operational outcomes. Sampled agreement compares
+  output shape only. It does not attest a descriptor, detect plausible bad
+  output, establish reputation, or change production routing.
 
 **Still worth reporting even though they are listed:** a way to make any of
 these *worse* than documented — reading data the threat model says is private,
 getting a node to execute something, getting credit settled for work not done,
 bypassing `pitch_key` on a write endpoint, causing remote code execution on the
 orchestrator, or extracting any admission, enrollment, session, pitch, viewer,
-attempt, or share credential from outside the box.
+attempt, or share credential from outside the box. Also report any path that
+lets evidence delay, rank, reorder, or exclude production work, attributes a
+caller/coordinator fault to a worker, mutates append-only evidence, or exposes
+raw evidence outside viewer protection.
 
 **Definitely report** anything the threat model does not mention at all. A gap
 in that document is itself the finding.
@@ -83,6 +90,34 @@ are available only through viewer-protected operator diagnostics; public health
 and status surfaces must remain descriptor-free. Reports should include a
 descriptor hash and stable exclusion/error code when sufficient, not the full
 claim, hostname, override file, enrollment credential, or session token.
+
+Capability observations are scoped by enrollment, descriptor, executor,
+selected model, task class, and evidence role. Missing or inconsistent bindings
+are excluded, and a descriptor/model/task-class/role change starts a cold scope.
+Only server-owned typed outcomes are attributable: accepted settlement facts,
+contract-floor outcome, sampled shape agreement, and worker terminal causes
+`lease_expired` or `node_stale`. Caller cancellation, execution deadline,
+payload/stream limits, receipt binding, enrollment reclaim, session replacement,
+coordinator restart, supersession, unknown causes, and free-form error text are
+not worker evidence.
+Sampled comparisons require a durable exact primary-attempt binding.
+
+`capability_evidence_mode` permits only `off` or `shadow` and defaults to `off`.
+Shadow evaluation runs after real assignment over already hard-eligible
+candidates, freezes their exact descriptor/model scopes before background work,
+and cannot affect queue order, eligibility, settlement, contribution credit, or
+the circuit breaker. Below the configured sample minimum, evidence is
+insufficient rather than adverse. Exact observation replay is idempotent;
+conflicting immutable content is rejected. Missing-only reconciliation and
+content-free contract-floor projection receipts prevent completed rows from
+starving bounded startup repair.
+
+Viewer-protected `GET /v1/operator/capability-evidence` returns aggregates, not
+raw observations. Evidence rows contain no prompt, output body, worker-error
+text, free-form reason, credential, nonce, session secret, or arbitrary
+telemetry. They still reveal scoped operational inventory and are stored in
+`events.db`, so database backups and exports must be protected. Contribution
+points are separate from evidence, assurance, correctness, and routing.
 
 **In scope:** this repository, and the orchestrator, node, MCP server and
 installers it contains.

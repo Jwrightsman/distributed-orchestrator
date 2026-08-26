@@ -164,6 +164,8 @@ valid credentials and must never be deployed literally:
   "node_secret": "<independent-random-node-authority-at-least-32-chars>",
   "public_pitch": false,
   "public_pitch_acknowledged": false,
+  "capability_evidence_mode": "off",
+  "capability_evidence_min_samples": 5,
   "https_enabled": false,
   "viewer_cookie_secure": false,
   "trust_proxy_headers": false
@@ -200,6 +202,10 @@ transport, public-pitch acknowledgement, HTTPS/cookie coherence, writable
 SQLite/artifact/output/project paths, database integrity when one exists, and
 availability of the single-coordinator OS lock. `private_overlay=true` is an
 operator assertion; preflight cannot inspect Tailscale/WireGuard ACLs.
+
+Configuration loading also validates `capability_evidence_mode` as exactly
+`off` or `shadow` and `capability_evidence_min_samples` as an integer from 1
+through 1000. The deployment generator leaves evidence mode `off`.
 
 An active coordinator legitimately holds the lock. Use
 `--skip-lock-check` only to validate its other settings while it is running;
@@ -265,6 +271,36 @@ curl -fsS http://127.0.0.1:8000/status.json
 preflight warnings, and whether the coordinator lock is held. It contains no
 credential values.
 
+## Optional capability-evidence shadow mode
+
+Set `capability_evidence_mode` to `shadow` only when you want protected
+counterfactual diagnostics. The coordinator records scoped operational evidence
+in either mode; shadow mode additionally evaluates already hard-eligible
+candidates after the real assignment. It freezes their assignment-time scopes,
+never waits for evidence, and cannot rank, reorder, exclude, or replace
+production work. There is no active evidence-routing mode, and
+`verify_rate` remains an independent default-off sampled-comparison setting.
+
+After preflight and restart, inspect the viewer-protected aggregate endpoint:
+
+```bash
+curl -fsS -b viewer.cookies \
+  "$BASE_URL/v1/operator/capability-evidence?limit=100&evidence_role=production"
+```
+
+The response reports the configured minimum, cold scopes as
+`insufficient_evidence`, and `affects_routing: false`. Agreement means bounded
+output-shape agreement, not correctness or trust. Descriptor, selected model,
+task class, and evidence-role changes create separate scopes. Only server-owned
+lease-expiry and stale-node terminal causes are attributed to workers; caller or
+coordinator causes are excluded.
+
+This endpoint is private operational inventory. It returns aggregates rather
+than raw observations and the evidence store omits prompt/output bodies, worker
+error text, free-form reasons, credentials, nonces, and session secrets. The
+rows still live in `events.db` and are included in backups. Contribution points
+remain separate accepted-compute records and are never capability evidence.
+
 ## Public pitch is an explicit exception
 
 `public_pitch` lets unauthenticated visitors spend compute through the bounded
@@ -304,6 +340,8 @@ documented there and in [Operations](OPERATIONS.md).
 | Registration returns 409 | The label or credential belongs to another durable enrollment; do not delete history or reuse the label—inspect the protected enrollment list |
 | Registration returns `node_capability_descriptor_conflict` | The live session attempted to change its immutable claim; drain or let current work finish, stop that worker process, and register a fresh session with the intended descriptor |
 | A typed task excludes a worker | Inspect viewer-protected `/v1/operator/node-enrollments` with the same bounded requirements and use its stable `reason_codes`; do not infer trust from an eligible result or publish the full descriptor |
+| Capability evidence shows `insufficient_evidence` | This is the configured cold-start state, not a negative score; confirm descriptor/model/task-class/role scope and collect more eligible observations without changing routing |
+| Shadow counts differ from production assignments | Expected: shadow is a post-assignment counterfactual and `affects_routing` is always false; set mode back to `off` and restart if diagnostics are not wanted |
 | Pitch returns 401 | Send the current `pitch_key` on the pitch route |
 | Browser logs in but immediately loses the cookie | HTTPS and `viewer_cookie_secure` declarations disagree, or the proxy is not actually serving HTTPS |
 | Compose is reachable only locally | This is the safe default; set `MYCELIUM_PUBLISH_ADDRESS` to the private overlay address, not a public wildcard |

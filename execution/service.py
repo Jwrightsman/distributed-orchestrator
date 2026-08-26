@@ -42,6 +42,7 @@ from execution.validators import ValidatorRegistry
 logger = logging.getLogger("mycelium.execution")
 
 _REQUIRED_PERSISTENCE_ATTEMPTS = 3
+_CONTRACT_FLOOR_EVIDENCE_METHOD = "candidate-validation-v1"
 _TERMINAL_LIFECYCLES = frozenset(
     {"completed", "failed", "cancelled", "interrupted"}
 )
@@ -154,6 +155,83 @@ class ExecutionService:
                 event_type,
                 type(exc).__name__,
             )
+
+    @staticmethod
+    def _record_contract_floor_evidence(result: ExecutionResultV1) -> bool:
+        """Project candidate-local assurance and acknowledge the terminal snapshot."""
+
+        try:
+            projections: list[tuple[object, bool]] = []
+            for candidate in result.candidates:
+                if candidate.placement != "distributed" or not candidate.attempt_id:
+                    continue
+                floor = [
+                    evidence
+                    for evidence in candidate.validation
+                    if evidence.required
+                    and evidence.requirement_source == "contract_floor"
+                ]
+                if not floor or any(
+                    evidence.status in {"skipped", "error"} for evidence in floor
+                ):
+                    continue
+                if not all(
+                    evidence.status in {"passed", "failed"} for evidence in floor
+                ):
+                    continue
+                attempt = server_state.attempt_store.get(candidate.attempt_id)
+                if attempt is None:
+                    raise RuntimeError(
+                        "distributed candidate references a missing durable attempt"
+                    )
+                projections.append(
+                    (
+                        attempt,
+                        all(evidence.status == "passed" for evidence in floor),
+                    )
+                )
+            outcome = server_state.capability_evidence_store.best_effort(
+                server_state.capability_evidence_store.record_contract_floor_projection,
+                execution_id=result.execution_id,
+                projections=projections,
+                method_version=_CONTRACT_FLOOR_EVIDENCE_METHOD,
+            )
+            if not outcome.succeeded:
+                logger.warning(
+                    "contract-floor evidence projection deferred execution_id=%s "
+                    "error_code=%s",
+                    result.execution_id,
+                    outcome.error_code,
+                )
+                return False
+            return True
+        except Exception as exc:
+            logger.warning(
+                "contract-floor evidence projection failed execution_id=%s "
+                "error_type=%s",
+                result.execution_id,
+                type(exc).__name__,
+            )
+            return False
+
+    def reconcile_contract_floor_evidence(self, *, limit: int = 1000) -> int:
+        """Retry only terminal execution projections lacking an acknowledgement."""
+
+        try:
+            candidates = self.store.list_contract_floor_reconciliation_candidates(
+                limit=limit
+            )
+        except Exception as exc:
+            logger.warning(
+                "contract-floor evidence reconciliation scan failed error_type=%s",
+                type(exc).__name__,
+            )
+            return 0
+        repaired = 0
+        for result in candidates:
+            if self._record_contract_floor_evidence(result):
+                repaired += 1
+        return repaired
 
     def _new_result(
         self,
@@ -764,6 +842,7 @@ class ExecutionService:
                 Dispatcher.cancel_execution(
                     execution_id,
                     reason="execution deadline exceeded",
+                    terminal_cause="execution_deadline",
                 )
             except Exception as exc:
                 logger.error(
@@ -984,6 +1063,7 @@ class ExecutionService:
             if registered_current_task:
                 self._background.pop(execution_id, None)
             raise
+        self._record_contract_floor_evidence(result)
         control.result = result
         control.terminal_committed = True
         error_codes = {error.code for error in result.errors}
@@ -1750,6 +1830,7 @@ class ExecutionService:
 
     def reconcile_after_restart(self, restart_marker: str | None = None) -> list[str]:
         changed = self.store.reconcile_nonterminal(restart_marker)
+        self.reconcile_contract_floor_evidence()
         for execution_id in changed:
             result = self.store.get(execution_id)
             request = self.store.get_request(execution_id)

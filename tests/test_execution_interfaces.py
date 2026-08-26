@@ -371,9 +371,10 @@ async def test_distributed_dag_sampled_verification_remains_wired(monkeypatch):
         status="completed",
         output="```python\nprint('same shape')\n```",
         placement="distributed",
-        node_id="primary",
-        enrollment_id="enrollment-primary",
-        attempt_count=1,
+            node_id="primary",
+            enrollment_id="enrollment-primary",
+            attempt_id="a" * 32,
+            attempt_count=1,
     )
 
     async def remote(self, duplicate, request, execution_id, strategy, decision):

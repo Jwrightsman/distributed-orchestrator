@@ -115,7 +115,7 @@ I know it is ~57% and not the 61% I first got, because I ran the identical set t
 
 - **Not a cloud product.** `qwen3.5:4b` via Ollama on an 8 GB laptop with no GPU. No API keys, nothing leaves the machines you own.
 - **Multi-machine.** Volunteer hardware joins with one command and picks up builder tasks. Task reclaim, circuit breaker and auto-reconnect are built in, because volunteer laptops close their lids.
-- **Contributions are tracked** in an append-only credit ledger. No tokens, no blockchain, deliberately.
+- **Accepted compute contributions are tracked** durably in SQLite, with a JSON compatibility projection. They are not correctness, trust, reputation, routing weight, money, or a token.
 - **Persistent project memory**, auto-summarised as it grows.
 
 [SwarmHarness](https://arxiv.org/abs/2605.28764) (May 2026) describes this design space academically — decentralised, incentive-aligned agent networks without a blockchain — and notes that nobody ships the combination. That is a protocol paper; this is a working implementation.
@@ -278,9 +278,9 @@ minute without thinking. Edit the tone freely; keep the honesty.
 
 > Right now: a circuit breaker that benches a node after repeated failures, and a reviewer that has to assemble the outputs into something coherent. That catches nodes that *fail*. It does not catch a node returning plausible-looking rubbish, and I would rather say so than pretend otherwise.
 >
-> There is a verification module in the repo that does catch it: occasionally the same subtask goes to two nodes and the results are compared on shape — same artifact kind, both parse, similar size — because two honest small models never produce identical text. Disagreement lowers both nodes' scores, since from the outside you cannot tell which one was wrong, and over many samples the consistently-odd node separates itself. Reputation then decides who gets offered work *first*, never who is excluded — exclusion stays the circuit breaker's job.
+> There is an optional sampled-comparison path that records whether two outputs agree on bounded shape. That is useful diagnostic data, but agreement is not correctness: two nodes can agree on rubbish, and disagreement does not tell you which one was wrong. It does not create a trust or reputation score.
 >
-> It is wired in and **off by default** (`verify_rate: 0`), because every duplicate is a whole extra inference. Turning it on is a config change, not a rewrite. Today the honest answer is "trusted network, plus a mechanism that is built and measured but not switched on."
+> The coordinator also records tightly scoped operational facts such as accepted settlement, deadline completion, contract-floor outcome, lease expiry, and stale-node disconnect. Its shadow policy is **off by default**; when enabled, it asks what it would have preferred only after the real assignment. Production routing is unchanged: no first-refusal weight, reputation ranking, or evidence-based exclusion. Today the honest answer remains "trusted network, bounded structural checks, and diagnostics—not malicious-output detection."
 
 ### "Isn't splitting one small artifact across agents the problem?"
 
@@ -312,7 +312,7 @@ minute without thinking. Edit the tone freely; keep the honesty.
 
 > No, and there never will be. No token, no blockchain, no fundraise. That is a deliberate design constraint, not a "not yet".
 >
-> The ledger is an append-only JSON file that counts contributions — compute, pitches, reviews. If this ever becomes a real guild, the interesting problem is governance among people who actually show up, not a coin.
+> Accepted compute contributions are stored authoritatively in SQLite; `ledger.json` is a compatibility projection. A contribution says an attempt supplied accepted compute, not that its output won, was correct, earned trust, or should receive work first. If this ever becomes a real guild, the interesting problem is governance among people who actually show up, not a coin.
 
 ### "What actually happens to my machine if I join?"
 

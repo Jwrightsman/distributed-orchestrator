@@ -133,16 +133,62 @@ reasons and the descriptor hash evaluated. Hard constraints exclude ineligible
 nodes but never rank eligible ones, and unknown claim values do not satisfy
 exact or minimum constraints.
 
-That matcher boundary does not remove the pre-existing process-local sampled
-verification pool. In local mode, when explicitly enabled, its routing weight
-may defer first refusal among nodes that already passed hard eligibility. It is
-off by default and forced off in trusted-alpha mode. Theme 2B neither consumes
-descriptor evidence nor adds a new ranking mechanism.
+Hard eligibility is the complete production scheduling policy. The optional
+sampled-comparison path records bounded output-shape agreement, but agreement is
+not correctness or trust and never delays, ranks, or reorders production work.
+The circuit breaker remains the only failure-based exclusion mechanism.
 
 Attempt issuance binds the session's descriptor version/hash and the canonical
 requirement version/digest before handout. Receipts preserve that binding, so a
 later session's descriptor cannot change historical assignment meaning. See
 [ADR 0011](adr/0011-node-capabilities-versioned-claims.md).
+
+## Scoped capability evidence and shadow policy
+
+The coordinator records bounded operational observations for accepted worker
+attempts. A scope is the exact enrollment, descriptor version/hash, executor
+kind/version/protocol, selected model provider/name/digest/variant, task class,
+and evidence role (`production` or `sampled_comparison`). Missing or inconsistent
+bindings are excluded rather than inferred. A descriptor, selected model, task
+class, or role change therefore starts a cold scope instead of inheriting an old
+history.
+
+Recorded observations are accepted settlement outcome, completion before the
+issued lease deadline, coordinator wall time, output byte count and effective
+throughput, candidate-local contract-floor outcome when that check ran to a
+terminal result, worker-attributable lease expiry or stale-node disconnect, and
+paired sampled shape agreement. Fault attribution uses the server-owned terminal
+cause. Caller cancellation, execution deadline, coordinator restart, session
+replacement, enrollment reclaim, receipt-binding failure, payload/stream limits,
+supersession, and unknown causes are not charged to a worker scope.
+Sampled attempts durably bind the exact production attempt they compare.
+
+`capability_evidence_mode` accepts only `off` or `shadow` and defaults to `off`.
+Both modes preserve the same production handout. `shadow` evaluates a bounded
+counterfactual only after the real attempt is durable and assigned. It freezes
+already hard-eligible descriptor/model scopes at assignment time and uses only
+that immutable set plus observations recorded no later than the assignment.
+Below `capability_evidence_min_samples` (default 5), a scope is
+explicitly insufficient rather than bad. Binary aggregates expose counts, rates,
+and Wilson intervals; recent latency and throughput use bounded medians. Sampled
+agreement is diagnostic output-shape agreement, not semantic correctness, and
+is not a shadow preference dimension.
+
+Observations and shadow decisions are append-only in SQLite. Domain-separated
+deterministic IDs make exact replay idempotent and conflicting reuse an error.
+Evidence recording is contained by a savepoint or best-effort boundary: its
+failure cannot reverse accepted settlement, receipt publication, or contribution
+credit. Missing-only attempt reconciliation and append-only contract-floor
+projection receipts provide bounded startup repair without completed rows
+starving later gaps.
+
+Viewer-protected `GET /v1/operator/capability-evidence` returns aggregates and
+shadow decision counts, never raw observations. Evidence rows contain no prompt,
+output body, worker error text, free-form reason, credential, nonce, session
+secret, or arbitrary telemetry. Contribution points remain a separate record of
+accepted compute; they are not capability evidence, assurance, correctness,
+reputation, or routing weight. See
+[ADR 0012](adr/0012-observed-capability-evidence-shadow-only.md).
 
 ## DAG execution
 
@@ -355,6 +401,7 @@ and cookie behavior are in [ACCESS_CONTROL.md](ACCESS_CONTROL.md).
 | Accepted receipts | Yes, SQLite | broker can reload a matching receipt |
 | Node enrollments and credential digests | Yes, SQLite | identity/revocation survive; worker obtains a new session |
 | Enrolled capability snapshots | Yes, SQLite | immutable claim JSON and descriptor hashes survive; a fresh session selects its claim |
+| Scoped capability observations and shadow decisions | Yes, SQLite | append-only operational aggregates survive; startup performs bounded best-effort reconciliation |
 | Contribution records | Yes, SQLite | unique attempt contribution and enrollment attribution remain exactly once |
 | Share records and token hashes | Yes, SQLite | expiry/revocation remain effective |
 | Artifact root and manifest metadata | Yes, SQLite plus disk | files remain until retention/pruning |

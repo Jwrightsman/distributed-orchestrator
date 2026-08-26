@@ -232,6 +232,11 @@ async def test_reclaimed_attempt_reports_real_retry_and_reassignment_counts():
     queued = await _wait_for_queue()
     with state._task_queue_lock:
         state.task_queue.remove(queued)
+        queued["selected_model"] = {
+            "provider": "ollama",
+            "name": "qwen3.5:4b",
+            "digest": None,
+        }
         first_issued = time.time()
         state.attempt_store.issue(
             queued,

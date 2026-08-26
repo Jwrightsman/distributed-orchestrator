@@ -1,26 +1,12 @@
-"""
-Verification and node reputation.
+"""Process-local sampled output agreement.
 
-The circuit breaker catches a node that *fails*. It cannot catch a node that
-returns plausible-looking garbage — the honest limitation the README already
-states. This closes that gap the cheap way: occasionally give the same subtask
-to two nodes and compare what comes back.
+Every duplicate costs a whole extra inference, so ``verify_rate`` (default 0)
+samples only a fraction of tasks. Two stochastic model outputs are compared by
+coarse shape rather than exact text. The resulting agreement/disagreement is a
+diagnostic observation only: it is not correctness, trust, or a routing signal.
 
-Design constraints that shaped this:
-
-- **Cost.** Every duplicate is a whole extra inference. Verification is
-  sampled, not universal — `verify_rate` (default 0) picks a fraction of tasks.
-- **Small models disagree constantly.** Two honest nodes will not produce
-  identical text for the same prompt. Comparing strings would flag everything.
-  So agreement is measured on what actually matters: does the deliverable have
-  the same *shape* — same artifact kind, both parse, similar size.
-- **A score has to survive being wrong.** One disagreement is not evidence of a
-  bad node; it may be the other node that was wrong, or both may be fine. The
-  score is a running ratio with a floor on sample size before it influences
-  anything.
-
-Reputation feeds routing weight: a node with a poor verified record gets offered
-work last, not never. Exclusion is the circuit breaker's job.
+The operational circuit breaker is separate and continues to handle explicit
+worker failures. This module neither excludes nor orders workers.
 """
 
 from __future__ import annotations
@@ -29,11 +15,7 @@ import random
 import re
 from dataclasses import dataclass, field
 
-# Below this many verified samples a node's score is not trusted for routing.
-MIN_SAMPLES_FOR_ROUTING = 3
-
-# Reputation floor — a node never drops to zero weight from disagreement alone.
-MIN_WEIGHT = 0.25
+SAMPLED_AGREEMENT_METHOD_VERSION = "shape-v1"
 
 
 def verification_identity_key(
@@ -41,7 +23,7 @@ def verification_identity_key(
     enrollment_id: str | None = None,
     session_id: str | None = None,
 ) -> str | None:
-    """Return a namespaced trust key without falling back to a node label."""
+    """Return a namespaced comparison key without using a mutable node label."""
 
     if enrollment_id:
         return f"enrollment:{enrollment_id}"
@@ -51,8 +33,8 @@ def verification_identity_key(
 
 
 @dataclass
-class NodeReputation:
-    """Running verification record for one node."""
+class SampledAgreementRecord:
+    """Bounded process-local agreement observations for one identity."""
 
     identity_key: str
     node_id: str | None = None
@@ -66,18 +48,11 @@ class NodeReputation:
         return self.agreed + self.disagreed
 
     @property
-    def score(self) -> float:
-        """Agreement ratio, 1.0 when unmeasured — new nodes are not suspects."""
+    def agreement_rate(self) -> float | None:
+        """Observed agreement ratio, or ``None`` when there are no samples."""
         if self.total == 0:
-            return 1.0
+            return None
         return self.agreed / self.total
-
-    @property
-    def routing_weight(self) -> float:
-        """How strongly to prefer this node. 1.0 until it has a real record."""
-        if self.total < MIN_SAMPLES_FOR_ROUTING:
-            return 1.0
-        return max(MIN_WEIGHT, self.score)
 
     def record(self, agreed: bool, detail: str = "") -> None:
         if agreed:
@@ -91,10 +66,14 @@ class NodeReputation:
         return {
             "node_id": self.node_id,
             "enrollment_id": self.enrollment_id,
-            "verified_samples": self.total,
-            "agreement_score": round(self.score, 3),
-            "routing_weight": round(self.routing_weight, 3),
-            "trusted_for_routing": self.total >= MIN_SAMPLES_FOR_ROUTING,
+            "sampled_comparisons": self.total,
+            "agreements": self.agreed,
+            "disagreements": self.disagreed,
+            "agreement_rate": (
+                round(self.agreement_rate, 3)
+                if self.agreement_rate is not None
+                else None
+            ),
         }
 
 
@@ -104,11 +83,10 @@ _CODE_FENCE = re.compile(r"```(\w*)")
 def _shape(text: str) -> dict:
     """The comparable shape of a deliverable.
 
-    Deliberately coarse. Two honest small models writing the same function will
-    not agree token for token, and demanding that would make every comparison a
-    disagreement. What a *dishonest or broken* node gets wrong is bigger: it
-    returns nothing, returns prose where code was asked for, or returns a
-    fraction of the length.
+    Deliberately coarse. Two stochastic models writing the same function will
+    not agree token for token. Shape comparison records large observable
+    differences such as an empty output, code/prose mismatch, or very different
+    lengths without claiming which output is better.
     """
     langs = [m.group(1).lower() for m in _CODE_FENCE.finditer(text) if m.group(1)]
     stripped = text.strip()
@@ -117,18 +95,18 @@ def _shape(text: str) -> dict:
         "has_code": bool(langs) or stripped.startswith(("<!doctype", "<html", "#!", "import ", "def ")),
         "languages": sorted(set(langs)),
         # Genuinely nothing, not merely short. A 40-char answer can be a
-        # correct one-liner; treating it as empty made a Python-vs-JavaScript
-        # mismatch score as agreement because both sides were "empty".
+        # valid one-liner; treating it as empty made a Python-vs-JavaScript
+        # mismatch appear as agreement because both sides were "empty".
         "empty": len(stripped) < 15,
     }
 
 
 def compare_outputs(a: str, b: str) -> tuple[bool, str]:
-    """Do two answers to the same subtask agree in substance?
+    """Do two answers to the same subtask have a comparable shape?
 
     Returns (agreed, reason). Length comparison is ratio-based with a generous
-    band — the goal is catching a node that returns a stub or a refusal while
-    another returns real work, not enforcing stylistic similarity.
+    band. This deliberately does not establish semantic equivalence or
+    correctness.
     """
     sa, sb = _shape(a), _shape(b)
 
@@ -150,12 +128,38 @@ def compare_outputs(a: str, b: str) -> tuple[bool, str]:
 
 
 class VerificationPool:
-    """Tracks reputation and decides which tasks get a second opinion."""
+    """Tracks sampled agreement and decides which tasks get a second opinion."""
 
     def __init__(self, verify_rate: float = 0.0, rng: random.Random | None = None):
         self.verify_rate = verify_rate
-        self.reputations: dict[str, NodeReputation] = {}
+        self.agreement_records: dict[str, SampledAgreementRecord] = {}
         self._rng = rng or random.Random()
+
+    def agreement_record(
+        self,
+        identity_key: str,
+        *,
+        node_id: str | None = None,
+        enrollment_id: str | None = None,
+    ) -> SampledAgreementRecord:
+        """Return one record keyed by enrollment or explicit legacy session."""
+
+        if not identity_key:
+            raise ValueError("sampled-agreement identity key is required")
+        record = self.agreement_records.get(identity_key)
+        if record is None:
+            record = SampledAgreementRecord(
+                identity_key=identity_key,
+                node_id=node_id,
+                enrollment_id=enrollment_id,
+            )
+            self.agreement_records[identity_key] = record
+        else:
+            if record.node_id is None and node_id is not None:
+                record.node_id = node_id
+            if record.enrollment_id is None and enrollment_id is not None:
+                record.enrollment_id = enrollment_id
+        return record
 
     def reputation(
         self,
@@ -163,25 +167,14 @@ class VerificationPool:
         *,
         node_id: str | None = None,
         enrollment_id: str | None = None,
-    ) -> NodeReputation:
-        """Return one record keyed by enrollment or explicit legacy session."""
+    ) -> SampledAgreementRecord:
+        """Deprecated compatibility alias; this record never affects routing."""
 
-        if not identity_key:
-            raise ValueError("verification identity key is required")
-        record = self.reputations.get(identity_key)
-        if record is None:
-            record = NodeReputation(
-                identity_key=identity_key,
-                node_id=node_id,
-                enrollment_id=enrollment_id,
-            )
-            self.reputations[identity_key] = record
-        else:
-            if record.node_id is None and node_id is not None:
-                record.node_id = node_id
-            if record.enrollment_id is None and enrollment_id is not None:
-                record.enrollment_id = enrollment_id
-        return record
+        return self.agreement_record(
+            identity_key,
+            node_id=node_id,
+            enrollment_id=enrollment_id,
+        )
 
     def should_verify(self, available_nodes: int) -> bool:
         """Duplicate this task? Needs a spare node and the dice.
@@ -205,21 +198,20 @@ class VerificationPool:
         enrollment_id_a: str | None = None,
         enrollment_id_b: str | None = None,
     ) -> dict:
-        """Compare two answers and credit both nodes with the outcome.
+        """Compare two output shapes and record the same outcome for both.
 
-        Neither node is assumed correct. Agreement raises both records;
-        disagreement lowers both, because from here we cannot tell which one was
-        wrong. Over many samples the consistently-odd node separates itself.
+        Neither output is assumed correct. A disagreement cannot identify which
+        output, if either, is better.
         """
         agreed, reason = compare_outputs(output_a, output_b)
         recorded = bool(identity_a and identity_b)
         if recorded:
-            self.reputation(
+            self.agreement_record(
                 str(identity_a),
                 node_id=node_a,
                 enrollment_id=enrollment_id_a,
             ).record(agreed, reason)
-            self.reputation(
+            self.agreement_record(
                 str(identity_b),
                 node_id=node_b,
                 enrollment_id=enrollment_id_b,
@@ -233,29 +225,10 @@ class VerificationPool:
             "recorded": recorded,
         }
 
-    def rank(self, identity_keys: list[str]) -> list[str]:
-        """Identity keys ordered best-first. Stable for equal weights."""
-        return sorted(
-            identity_keys,
-            key=lambda key: (-self.reputation(key).routing_weight, key),
-        )
-
-    def rank_nodes(self, nodes: list[tuple[str, str]]) -> list[str]:
-        """Return display labels ranked through their non-label identity keys."""
-
-        return [
-            node_id
-            for node_id, _identity_key in sorted(
-                nodes,
-                key=lambda item: (
-                    -self.reputation(item[1], node_id=item[0]).routing_weight,
-                    item[0],
-                ),
-            )
-        ]
-
     def as_dict(self) -> dict:
         return {
             "verify_rate": self.verify_rate,
-            "nodes": [r.as_dict() for r in self.reputations.values()],
+            "sampled_agreements": [
+                record.as_dict() for record in self.agreement_records.values()
+            ],
         }

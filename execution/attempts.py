@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import math
 import sqlite3
 import threading
 import time
@@ -18,11 +19,15 @@ import uuid
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast, get_args
 
+from capability_evidence import CapabilityEvidenceStore
 from ledger import ensure_contribution_schema, insert_contribution_in_transaction
 from node_capabilities import (
+    NodeCapabilityDescriptorV1,
+    canonical_descriptor_json,
     canonical_requirement_binding,
+    capability_descriptor_digest,
     ensure_node_capability_snapshot_schema,
 )
 from node_enrollments import ensure_node_enrollment_schema
@@ -39,6 +44,31 @@ AttemptState = Literal[
     "superseded",
     "interrupted",
 ]
+EvidenceRole = Literal["production", "sampled_comparison"]
+LeaseDeadlineKind = Literal["worker_lease", "execution_deadline"]
+TerminalCause = Literal[
+    "settled_output",
+    "settled_worker_error",
+    "settled_empty_output",
+    "lease_expired",
+    "output_payload_limit",
+    "error_payload_limit",
+    "stream_output_limit",
+    "stream_batch_limit",
+    "stream_rate_limit",
+    "execution_cancelled",
+    "execution_deadline",
+    "receipt_binding_failure",
+    "enrollment_reclaimed",
+    "node_stale",
+    "session_replaced",
+    "coordinator_restart",
+    "superseded",
+]
+
+_EVIDENCE_ROLES = frozenset(get_args(EvidenceRole))
+_LEASE_DEADLINE_KINDS = frozenset(get_args(LeaseDeadlineKind))
+_TERMINAL_CAUSES = frozenset(get_args(TerminalCause))
 
 _TERMINAL_STATES = {
     "settled",
@@ -106,6 +136,11 @@ class AttemptRecord:
     assigned_session_id: str | None
     assigned_descriptor_version: str | None
     assigned_descriptor_hash: str | None
+    assigned_model_provider: str | None
+    assigned_model_name: str | None
+    assigned_model_digest: str | None
+    evidence_role: EvidenceRole | None
+    comparison_primary_attempt_id: str | None
     requirement_version: str | None
     requirement_digest: str | None
     contract_version: str | None
@@ -113,6 +148,7 @@ class AttemptRecord:
     state: str
     issued_at: float
     lease_expires_at: float
+    lease_deadline_kind: LeaseDeadlineKind | None
     max_output_bytes: int
     streamed_bytes: int
     stream_batch_count: int
@@ -126,10 +162,28 @@ class AttemptRecord:
     result_hash: str | None = None
     response_json: str | None = None
     reason: str | None = None
+    terminal_cause: TerminalCause | None = None
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> AttemptRecord:
-        return cls(**{field: row[field] for field in cls.__dataclass_fields__})
+        values = {field: row[field] for field in cls.__dataclass_fields__}
+        deadline_kind = values.get("lease_deadline_kind")
+        if deadline_kind is not None and deadline_kind not in _LEASE_DEADLINE_KINDS:
+            raise RuntimeError("stored attempt lease deadline kind is invalid")
+        comparison_primary = values.get("comparison_primary_attempt_id")
+        if comparison_primary is not None and (
+            not isinstance(comparison_primary, str)
+            or not comparison_primary
+            or comparison_primary != comparison_primary.strip()
+            or len(comparison_primary) > 64
+        ):
+            raise RuntimeError("stored sampled-comparison primary binding is invalid")
+        evidence_role = values.get("evidence_role")
+        if evidence_role == "production" and comparison_primary is not None:
+            raise RuntimeError("stored production attempt has a comparison binding")
+        if evidence_role == "sampled_comparison" and comparison_primary is None:
+            raise RuntimeError("stored sampled comparison is missing its primary")
+        return cls(**values)
 
 
 @dataclass(frozen=True)
@@ -143,6 +197,10 @@ class AcceptedResultReceipt:
     assigned_enrollment_id: str | None
     assigned_descriptor_version: str | None
     assigned_descriptor_hash: str | None
+    assigned_model_provider: str | None
+    assigned_model_name: str | None
+    assigned_model_digest: str | None
+    evidence_role: EvidenceRole | None
     requirement_version: str | None
     requirement_digest: str | None
     contract_version: str | None
@@ -151,6 +209,7 @@ class AcceptedResultReceipt:
     output: str | None
     error: str | None
     elapsed_seconds: float
+    terminal_cause: TerminalCause | None
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> AcceptedResultReceipt:
@@ -164,6 +223,10 @@ class AcceptedResultReceipt:
             "enrollment_id": self.assigned_enrollment_id,
             "capability_descriptor_version": self.assigned_descriptor_version,
             "capability_descriptor_hash": self.assigned_descriptor_hash,
+            "selected_model_provider": self.assigned_model_provider,
+            "selected_model_name": self.assigned_model_name,
+            "selected_model_digest": self.assigned_model_digest,
+            "evidence_role": self.evidence_role,
             "resource_requirement_version": self.requirement_version,
             "resource_requirement_digest": self.requirement_digest,
             "output": self.output,
@@ -177,6 +240,7 @@ class AcceptedResultReceipt:
             "execution_unit_id": self.execution_unit_id,
             "execution_unit_kind": self.execution_unit_kind,
             "result_hash": self.result_hash,
+            "terminal_cause": self.terminal_cause,
         }
 
 
@@ -230,6 +294,22 @@ def _validate_versioned_digest(
     ):
         raise ValueError(f"{label} digest must be lowercase SHA-256")
     return normalized_version, normalized_digest
+
+
+def _validate_evidence_role(value: Any) -> EvidenceRole:
+    if not isinstance(value, str) or value not in _EVIDENCE_ROLES:
+        raise ValueError(
+            "evidence_role must be 'production' or 'sampled_comparison'"
+        )
+    return cast(EvidenceRole, value)
+
+
+def _validate_terminal_cause(value: str | None) -> TerminalCause | None:
+    if value is not None and (
+        not isinstance(value, str) or value not in _TERMINAL_CAUSES
+    ):
+        raise ValueError("terminal_cause is not a supported server cause")
+    return cast(TerminalCause | None, value)
 
 
 def canonical_result_hash(
@@ -288,6 +368,16 @@ class AttemptStore:
                 assigned_session_id    TEXT,
                 assigned_descriptor_version TEXT,
                 assigned_descriptor_hash TEXT,
+                assigned_model_provider TEXT,
+                assigned_model_name    TEXT,
+                assigned_model_digest  TEXT,
+                evidence_role          TEXT CHECK(evidence_role IS NULL OR evidence_role IN (
+                    'production', 'sampled_comparison'
+                )),
+                comparison_primary_attempt_id TEXT CHECK(
+                    comparison_primary_attempt_id IS NULL
+                    OR length(comparison_primary_attempt_id) BETWEEN 1 AND 64
+                ),
                 requirement_version     TEXT,
                 requirement_digest      TEXT,
                 contract_version       TEXT,
@@ -298,6 +388,9 @@ class AttemptStore:
                 )),
                 issued_at              REAL NOT NULL,
                 lease_expires_at       REAL NOT NULL,
+                lease_deadline_kind    TEXT CHECK(lease_deadline_kind IS NULL OR lease_deadline_kind IN (
+                    'worker_lease', 'execution_deadline'
+                )),
                 max_output_bytes       INTEGER NOT NULL DEFAULT 1048576,
                 streamed_bytes         INTEGER NOT NULL DEFAULT 0,
                 stream_batch_count     INTEGER NOT NULL DEFAULT 0,
@@ -310,7 +403,8 @@ class AttemptStore:
                 settled_at             REAL,
                 result_hash            TEXT,
                 response_json          TEXT,
-                reason                 TEXT
+                reason                 TEXT,
+                terminal_cause         TEXT
             )
             """
         )
@@ -323,8 +417,18 @@ class AttemptStore:
             "assigned_session_id": "TEXT",
             "assigned_descriptor_version": "TEXT",
             "assigned_descriptor_hash": "TEXT",
+            "assigned_model_provider": "TEXT",
+            "assigned_model_name": "TEXT",
+            "assigned_model_digest": "TEXT",
+            "evidence_role": "TEXT",
+            "comparison_primary_attempt_id": (
+                "TEXT CHECK(comparison_primary_attempt_id IS NULL OR "
+                "length(comparison_primary_attempt_id) BETWEEN 1 AND 64)"
+            ),
             "requirement_version": "TEXT",
             "requirement_digest": "TEXT",
+            "terminal_cause": "TEXT",
+            "lease_deadline_kind": "TEXT",
             "max_output_bytes": "INTEGER NOT NULL DEFAULT 1048576",
             "streamed_bytes": "INTEGER NOT NULL DEFAULT 0",
             "stream_batch_count": "INTEGER NOT NULL DEFAULT 0",
@@ -362,6 +466,12 @@ class AttemptStore:
                 assigned_enrollment_id TEXT,
                 assigned_descriptor_version TEXT,
                 assigned_descriptor_hash TEXT,
+                assigned_model_provider TEXT,
+                assigned_model_name    TEXT,
+                assigned_model_digest  TEXT,
+                evidence_role          TEXT CHECK(evidence_role IS NULL OR evidence_role IN (
+                    'production', 'sampled_comparison'
+                )),
                 requirement_version    TEXT,
                 requirement_digest     TEXT,
                 contract_version       TEXT,
@@ -369,7 +479,8 @@ class AttemptStore:
                 accepted_at            REAL NOT NULL,
                 output                 TEXT,
                 error                  TEXT,
-                elapsed_seconds        REAL NOT NULL
+                elapsed_seconds        REAL NOT NULL,
+                terminal_cause         TEXT
             )
             """
         )
@@ -383,8 +494,13 @@ class AttemptStore:
             "assigned_enrollment_id",
             "assigned_descriptor_version",
             "assigned_descriptor_hash",
+            "assigned_model_provider",
+            "assigned_model_name",
+            "assigned_model_digest",
+            "evidence_role",
             "requirement_version",
             "requirement_digest",
+            "terminal_cause",
         ):
             if name not in receipt_columns:
                 con.execute(
@@ -474,27 +590,71 @@ class AttemptStore:
         )
 
     @staticmethod
-    def _capability_snapshot_matches(
+    def _assigned_model_from_snapshot(
         con: sqlite3.Connection,
         *,
         enrollment_id: str,
         descriptor_version: str,
         descriptor_hash: str,
-    ) -> bool:
+        selected_model: Any,
+    ) -> tuple[str, str, str | None]:
+        if not isinstance(selected_model, dict):
+            raise ValueError("enrolled attempt requires a selected_model binding")
+        if set(selected_model) != {"provider", "name", "digest"}:
+            raise ValueError(
+                "selected_model must contain exactly provider, name, and digest"
+            )
+        provider = selected_model.get("provider")
+        name = selected_model.get("name")
+        digest = selected_model.get("digest")
+        if not isinstance(provider, str) or not isinstance(name, str):
+            raise ValueError("selected_model provider and name must be strings")
+        if digest is not None and not isinstance(digest, str):
+            raise ValueError("selected_model digest must be a string or null")
+
         row = con.execute(
             """
-            SELECT descriptor_version
+            SELECT descriptor_version, descriptor_json
             FROM node_capability_snapshots
             WHERE enrollment_id = ? AND descriptor_hash = ?
             """,
             (enrollment_id, descriptor_hash),
         ).fetchone()
-        return bool(
-            row is not None
-            and hmac.compare_digest(
-                str(row["descriptor_version"]), descriptor_version
+        if row is None or not hmac.compare_digest(
+            str(row["descriptor_version"]), descriptor_version
+        ):
+            raise AttemptConflict(
+                "assigned capability descriptor snapshot is missing or inconsistent"
             )
-        )
+        try:
+            descriptor_json = str(row["descriptor_json"])
+            descriptor = NodeCapabilityDescriptorV1.model_validate_json(descriptor_json)
+            if canonical_descriptor_json(descriptor) != descriptor_json:
+                raise ValueError("descriptor JSON is not canonical")
+            if descriptor.descriptor_version != descriptor_version:
+                raise ValueError("descriptor version is inconsistent")
+            if not hmac.compare_digest(
+                capability_descriptor_digest(descriptor), descriptor_hash
+            ):
+                raise ValueError("descriptor hash is inconsistent")
+        except Exception as exc:
+            raise AttemptConflict(
+                "assigned capability descriptor snapshot is invalid"
+            ) from exc
+
+        matches = [
+            model
+            for model in descriptor.models
+            if model.provider == provider
+            and model.name == name
+            and model.digest == digest
+        ]
+        if len(matches) != 1:
+            raise AttemptConflict(
+                "selected model is not uniquely advertised by the assigned snapshot"
+            )
+        model = matches[0]
+        return model.provider, model.name, model.digest
 
     def issue(
         self,
@@ -517,6 +677,22 @@ class AttemptStore:
             raise ValueError("attempt id and nonce are required")
         if lease_expires_at <= issued_at:
             raise ValueError("attempt lease must expire after issuance")
+        lease_deadline_kind: LeaseDeadlineKind = "worker_lease"
+        execution_deadline = task.get("execution_deadline_at")
+        if execution_deadline is not None:
+            try:
+                execution_deadline = float(execution_deadline)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("execution_deadline_at must be a finite timestamp") from exc
+            if not math.isfinite(execution_deadline):
+                raise ValueError("execution_deadline_at must be a finite timestamp")
+            # Rolling-upgrade fixtures and adopted handouts may carry a nominal
+            # worker lease beyond the execution deadline. Preserve their prior
+            # authority behavior while attributing any eventual timeout to the
+            # coordinator-imposed deadline, never to worker slowness.
+            if lease_expires_at >= execution_deadline - 1e-6:
+                lease_deadline_kind = "execution_deadline"
+        task["lease_deadline_kind"] = lease_deadline_kind
         if assigned_enrollment_id is None:
             if assigned_credential_version is not None:
                 raise ValueError(
@@ -540,6 +716,36 @@ class AttemptStore:
             raise ValueError(
                 "enrolled attempt requires a capability descriptor snapshot binding"
             )
+        assigned_model_provider: str | None = None
+        assigned_model_name: str | None = None
+        assigned_model_digest: str | None = None
+        evidence_role: EvidenceRole | None = None
+        comparison_primary_attempt_id: str | None = None
+        if assigned_enrollment_id is not None:
+            if "selected_model" not in task:
+                raise ValueError("enrolled attempt requires a selected_model binding")
+            evidence_role = _validate_evidence_role(
+                task.get("evidence_role", "production")
+            )
+            task["evidence_role"] = evidence_role
+            supplied_primary = task.get("comparison_primary_attempt_id")
+            if evidence_role == "production":
+                if supplied_primary is not None:
+                    raise ValueError(
+                        "production attempts cannot bind a comparison primary"
+                    )
+            else:
+                if (
+                    not isinstance(supplied_primary, str)
+                    or not supplied_primary
+                    or supplied_primary != supplied_primary.strip()
+                    or len(supplied_primary) > 64
+                ):
+                    raise ValueError(
+                        "sampled comparison requires a primary attempt binding"
+                    )
+                comparison_primary_attempt_id = supplied_primary
+                task["comparison_primary_attempt_id"] = supplied_primary
         expected_requirement_version, expected_requirement_digest = (
             canonical_requirement_binding(
                 task.get("resource_requirements"), task.get("requires", [])
@@ -586,26 +792,6 @@ class AttemptStore:
             ]
             if missing:
                 raise ValueError(f"v1 task is missing server binding fields: {', '.join(missing)}")
-        values = (
-            attempt_id,
-            str(task["task_id"]),
-            task.get("execution_id"),
-            task.get("execution_unit_id"),
-            task.get("execution_unit_kind"),
-            assigned_node_id,
-            assigned_enrollment_id,
-            assigned_credential_version,
-            assigned_session_id,
-            assigned_descriptor_version,
-            assigned_descriptor_hash,
-            requirement_version,
-            requirement_digest,
-            task.get("contract_version"),
-            nonce_digest(nonce),
-            issued_at,
-            lease_expires_at,
-            max_output_bytes,
-        )
         try:
             with self._lock, connection(
                 self.path, row_factory=sqlite3.Row
@@ -621,18 +807,34 @@ class AttemptStore:
                     raise AttemptConflict(
                         "assigned enrollment is revoked, missing, or no longer current"
                     )
-                if (
-                    assigned_enrollment_id is not None
-                    and not self._capability_snapshot_matches(
+                if assigned_enrollment_id is not None:
+                    (
+                        assigned_model_provider,
+                        assigned_model_name,
+                        assigned_model_digest,
+                    ) = self._assigned_model_from_snapshot(
                         con,
                         enrollment_id=assigned_enrollment_id,
                         descriptor_version=str(assigned_descriptor_version),
                         descriptor_hash=assigned_descriptor_hash,
+                        selected_model=task["selected_model"],
                     )
-                ):
-                    raise AttemptConflict(
-                        "assigned capability descriptor snapshot is missing or inconsistent"
-                    )
+                if comparison_primary_attempt_id is not None:
+                    primary = con.execute(
+                        "SELECT execution_id, execution_unit_kind, evidence_role "
+                        "FROM attempts WHERE attempt_id = ?",
+                        (comparison_primary_attempt_id,),
+                    ).fetchone()
+                    if (
+                        primary is None
+                        or str(primary["execution_id"]) != str(task.get("execution_id"))
+                        or str(primary["execution_unit_kind"])
+                        != str(task.get("execution_unit_kind"))
+                        or str(primary["evidence_role"]) != "production"
+                    ):
+                        raise AttemptConflict(
+                            "sampled comparison primary binding is inconsistent"
+                        )
                 con.execute(
                     """
                     INSERT INTO attempts (
@@ -640,13 +842,42 @@ class AttemptStore:
                         execution_unit_kind, assigned_node_id,
                         assigned_enrollment_id, assigned_credential_version,
                         assigned_session_id, assigned_descriptor_version,
-                        assigned_descriptor_hash, requirement_version,
-                        requirement_digest, contract_version, nonce_digest,
-                        state, issued_at, lease_expires_at, max_output_bytes
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                              'active', ?, ?, ?)
+                        assigned_descriptor_hash, assigned_model_provider,
+                        assigned_model_name, assigned_model_digest, evidence_role,
+                        comparison_primary_attempt_id,
+                        requirement_version, requirement_digest,
+                        contract_version, nonce_digest,
+                        state, issued_at, lease_expires_at, lease_deadline_kind,
+                        max_output_bytes
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                              ?, ?, ?, ?, 'active', ?, ?, ?, ?)
                     """,
-                    values,
+                    (
+                        attempt_id,
+                        str(task["task_id"]),
+                        task.get("execution_id"),
+                        task.get("execution_unit_id"),
+                        task.get("execution_unit_kind"),
+                        assigned_node_id,
+                        assigned_enrollment_id,
+                        assigned_credential_version,
+                        assigned_session_id,
+                        assigned_descriptor_version,
+                        assigned_descriptor_hash,
+                        assigned_model_provider,
+                        assigned_model_name,
+                        assigned_model_digest,
+                        evidence_role,
+                        comparison_primary_attempt_id,
+                        requirement_version,
+                        requirement_digest,
+                        task.get("contract_version"),
+                        nonce_digest(nonce),
+                        issued_at,
+                        lease_expires_at,
+                        lease_deadline_kind,
+                        max_output_bytes,
+                    ),
                 )
                 con.commit()
         except sqlite3.IntegrityError as exc:
@@ -892,9 +1123,18 @@ class AttemptStore:
                     if receipt_row is None or not record.response_json:
                         raise RuntimeError("settled attempt is missing its durable receipt")
                     response = json.loads(record.response_json)
+                    receipt = AcceptedResultReceipt.from_row(receipt_row)
+                    CapabilityEvidenceStore.best_effort_in_transaction(
+                        con,
+                        CapabilityEvidenceStore.record_settlement_in_transaction,
+                        con,
+                        record,
+                        accepted_at=receipt.accepted_at,
+                        output_bytes=len((receipt.output or "").encode("utf-8")),
+                    )
                     con.commit()
                     return SettlementOutcome(
-                        receipt=AcceptedResultReceipt.from_row(receipt_row),
+                        receipt=receipt,
                         response=response,
                         replayed=True,
                     )
@@ -910,15 +1150,33 @@ class AttemptStore:
                         state=record.state,
                     )
                 if accepted_at > record.lease_expires_at:
+                    expiry_cause: TerminalCause = (
+                        "execution_deadline"
+                        if record.lease_deadline_kind == "execution_deadline"
+                        else "lease_expired"
+                    )
                     con.execute(
                         """
                         UPDATE attempts
                         SET state = 'expired', settled_at = ?,
-                            reason = 'lease expired', stream_closed = 1
+                            reason = 'lease expired', stream_closed = 1,
+                            terminal_cause = ?
                         WHERE attempt_id = ? AND state = 'active'
                         """,
-                        (accepted_at, record.attempt_id),
+                        (accepted_at, expiry_cause, record.attempt_id),
                     )
+                    terminal_row = con.execute(
+                        "SELECT * FROM attempts WHERE attempt_id = ?",
+                        (record.attempt_id,),
+                    ).fetchone()
+                    if terminal_row is not None:
+                        CapabilityEvidenceStore.best_effort_in_transaction(
+                            con,
+                            CapabilityEvidenceStore.record_terminal_in_transaction,
+                            con,
+                            AttemptRecord.from_row(terminal_row),
+                            terminal_at=accepted_at,
+                        )
                     con.commit()
                     raise AttemptRejected("lease expired", state="expired")
 
@@ -937,14 +1195,24 @@ class AttemptStore:
                         f"{field} payload exceeded server byte limit "
                         f"({observed}>{limit})"
                     )
+                    terminal_cause = (
+                        "output_payload_limit"
+                        if field == "output"
+                        else "error_payload_limit"
+                    )
                     con.execute(
                         """
                         UPDATE attempts
                         SET state = 'cancelled', settled_at = ?, reason = ?,
-                            stream_closed = 1
+                            stream_closed = 1, terminal_cause = ?
                         WHERE attempt_id = ? AND state = 'active'
                         """,
-                        (accepted_at, reason, record.attempt_id),
+                        (
+                            accepted_at,
+                            reason,
+                            terminal_cause,
+                            record.attempt_id,
+                        ),
                     )
                     con.commit()
                     raise WorkerPayloadLimitExceeded(
@@ -952,16 +1220,30 @@ class AttemptStore:
                     )
 
                 points = 5 if output and not error else 0
+                terminal_cause = (
+                    "settled_worker_error"
+                    if error
+                    else "settled_output"
+                    if output
+                    else "settled_empty_output"
+                )
                 response = {"status": "accepted", "credits_earned": points}
                 response_json = json.dumps(response, separators=(",", ":"), sort_keys=True)
                 updated = con.execute(
                     """
                     UPDATE attempts
                     SET state = 'settled', settled_at = ?, result_hash = ?,
-                        response_json = ?, reason = NULL, stream_closed = 1
+                        response_json = ?, reason = NULL, stream_closed = 1,
+                        terminal_cause = ?
                     WHERE attempt_id = ? AND state = 'active'
                     """,
-                    (accepted_at, result_hash, response_json, record.attempt_id),
+                    (
+                        accepted_at,
+                        result_hash,
+                        response_json,
+                        terminal_cause,
+                        record.attempt_id,
+                    ),
                 )
                 if updated.rowcount != 1:
                     raise AttemptRejected("attempt was settled concurrently")
@@ -971,10 +1253,13 @@ class AttemptStore:
                         attempt_id, task_id, execution_id, execution_unit_id,
                         execution_unit_kind, assigned_node_id,
                         assigned_enrollment_id, assigned_descriptor_version,
-                        assigned_descriptor_hash, requirement_version,
-                        requirement_digest, contract_version,
-                        result_hash, accepted_at, output, error, elapsed_seconds
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        assigned_descriptor_hash, assigned_model_provider,
+                        assigned_model_name, assigned_model_digest, evidence_role,
+                        requirement_version, requirement_digest, contract_version,
+                        result_hash, accepted_at, output, error, elapsed_seconds,
+                        terminal_cause
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                              ?, ?, ?, ?, ?)
                     """,
                     (
                         record.attempt_id,
@@ -986,6 +1271,10 @@ class AttemptStore:
                         record.assigned_enrollment_id,
                         record.assigned_descriptor_version,
                         record.assigned_descriptor_hash,
+                        record.assigned_model_provider,
+                        record.assigned_model_name,
+                        record.assigned_model_digest,
+                        record.evidence_role,
                         record.requirement_version,
                         record.requirement_digest,
                         record.contract_version,
@@ -994,6 +1283,7 @@ class AttemptStore:
                         output,
                         error,
                         elapsed_seconds,
+                        terminal_cause,
                     ),
                 )
                 insert_contribution_in_transaction(
@@ -1014,6 +1304,19 @@ class AttemptStore:
                     session_id=record.assigned_session_id,
                     created_at=accepted_at,
                 )
+                settled_row = con.execute(
+                    "SELECT * FROM attempts WHERE attempt_id = ?",
+                    (record.attempt_id,),
+                ).fetchone()
+                if settled_row is not None:
+                    CapabilityEvidenceStore.best_effort_in_transaction(
+                        con,
+                        CapabilityEvidenceStore.record_settlement_in_transaction,
+                        con,
+                        AttemptRecord.from_row(settled_row),
+                        accepted_at=accepted_at,
+                        output_bytes=output_bytes,
+                    )
                 con.commit()
                 receipt_row = con.execute(
                     "SELECT * FROM accepted_result_receipts WHERE attempt_id = ?",
@@ -1112,15 +1415,33 @@ class AttemptStore:
                     )
                     raise AttemptRejected(reason, state=record.state)
                 if streamed_at > record.lease_expires_at:
+                    expiry_cause: TerminalCause = (
+                        "execution_deadline"
+                        if record.lease_deadline_kind == "execution_deadline"
+                        else "lease_expired"
+                    )
                     con.execute(
                         """
                         UPDATE attempts
                         SET state = 'expired', settled_at = ?,
-                            reason = 'lease expired', stream_closed = 1
+                            reason = 'lease expired', stream_closed = 1,
+                            terminal_cause = ?
                         WHERE attempt_id = ? AND state = 'active'
                         """,
-                        (streamed_at, record.attempt_id),
+                        (streamed_at, expiry_cause, record.attempt_id),
                     )
+                    terminal_row = con.execute(
+                        "SELECT * FROM attempts WHERE attempt_id = ?",
+                        (record.attempt_id,),
+                    ).fetchone()
+                    if terminal_row is not None:
+                        CapabilityEvidenceStore.best_effort_in_transaction(
+                            con,
+                            CapabilityEvidenceStore.record_terminal_in_transaction,
+                            con,
+                            AttemptRecord.from_row(terminal_row),
+                            terminal_at=streamed_at,
+                        )
                     con.commit()
                     raise AttemptRejected("lease expired", state="expired")
                 if record.stream_closed:
@@ -1158,15 +1479,26 @@ class AttemptStore:
                     )
 
                 if error_code is not None:
+                    terminal_cause = {
+                        "output_limit_exceeded": "stream_output_limit",
+                        "stream_batch_limit_exceeded": "stream_batch_limit",
+                        "stream_rate_limit_exceeded": "stream_rate_limit",
+                    }[error_code]
                     emit_limit_event = not bool(record.stream_limit_event_emitted)
                     changed = con.execute(
                         """
                         UPDATE attempts
                         SET state = 'cancelled', settled_at = ?, reason = ?,
-                            stream_closed = 1, stream_limit_event_emitted = 1
+                            stream_closed = 1, stream_limit_event_emitted = 1,
+                            terminal_cause = ?
                         WHERE attempt_id = ? AND state = 'active'
                         """,
-                        (streamed_at, detail, record.attempt_id),
+                        (
+                            streamed_at,
+                            detail,
+                            terminal_cause,
+                            record.attempt_id,
+                        ),
                     ).rowcount
                     if changed != 1:
                         raise AttemptRejected("attempt changed while streaming")
@@ -1226,6 +1558,103 @@ class AttemptStore:
                 "SELECT * FROM accepted_result_receipts WHERE task_id = ?", (task_id,)
             ).fetchone()
         return AcceptedResultReceipt.from_row(row) if row else None
+
+    def list_evidence_reconciliation_candidates(
+        self, *, limit: int = 1000
+    ) -> list[AttemptRecord]:
+        """Return bounded terminal attempts missing an expected projection.
+
+        This is only a durable recovery input.  The evidence store remains
+        responsible for snapshot validation and replay-safe observation writes.
+        Historical and legacy attempts are excluded rather than attributed by
+        inference, and completed projections cannot consume the bounded batch.
+        """
+
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:
+            raise ValueError("limit must be an integer between 1 and 1000")
+        self.migrate()
+        CapabilityEvidenceStore(self.path).migrate()
+        with self._lock, connection(self.path, row_factory=sqlite3.Row) as con:
+            rows = con.execute(
+                """
+                SELECT attempts.*
+                FROM attempts
+                LEFT JOIN accepted_result_receipts AS receipts
+                  ON receipts.attempt_id = attempts.attempt_id
+                WHERE attempts.settled_at IS NOT NULL
+                  AND attempts.execution_id IS NOT NULL
+                  AND attempts.execution_unit_id IS NOT NULL
+                  AND attempts.execution_unit_kind IS NOT NULL
+                  AND attempts.assigned_enrollment_id IS NOT NULL
+                  AND attempts.assigned_descriptor_version IS NOT NULL
+                  AND attempts.assigned_descriptor_hash IS NOT NULL
+                  AND attempts.assigned_model_provider IS NOT NULL
+                  AND attempts.assigned_model_name IS NOT NULL
+                  AND attempts.evidence_role IN ('production', 'sampled_comparison')
+                  AND (
+                    (
+                      attempts.state = 'settled'
+                      AND attempts.terminal_cause IN (
+                        'settled_output', 'settled_worker_error',
+                        'settled_empty_output'
+                      )
+                      AND receipts.attempt_id IS NOT NULL
+                      AND (
+                        NOT EXISTS (
+                          SELECT 1 FROM node_capability_observations AS observation
+                          WHERE observation.attempt_id = attempts.attempt_id
+                            AND observation.observation_type = 'settlement_outcome'
+                        )
+                        OR NOT EXISTS (
+                          SELECT 1 FROM node_capability_observations AS observation
+                          WHERE observation.attempt_id = attempts.attempt_id
+                            AND observation.observation_type = 'deadline_completion'
+                        )
+                        OR NOT EXISTS (
+                          SELECT 1 FROM node_capability_observations AS observation
+                          WHERE observation.attempt_id = attempts.attempt_id
+                            AND observation.observation_type = 'coordinator_wall_seconds'
+                        )
+                        OR NOT EXISTS (
+                          SELECT 1 FROM node_capability_observations AS observation
+                          WHERE observation.attempt_id = attempts.attempt_id
+                            AND observation.observation_type = 'output_bytes'
+                        )
+                        OR (
+                          length(CAST(COALESCE(receipts.output, '') AS BLOB)) > 0
+                          AND attempts.settled_at > attempts.issued_at
+                          AND NOT EXISTS (
+                            SELECT 1 FROM node_capability_observations AS observation
+                            WHERE observation.attempt_id = attempts.attempt_id
+                              AND observation.observation_type =
+                                  'effective_output_bytes_per_second'
+                          )
+                        )
+                      )
+                    )
+                    OR (
+                      attempts.state IN ('expired', 'reclaimed')
+                      AND attempts.terminal_cause IN ('lease_expired', 'node_stale')
+                      AND (
+                        NOT EXISTS (
+                          SELECT 1 FROM node_capability_observations AS observation
+                          WHERE observation.attempt_id = attempts.attempt_id
+                            AND observation.observation_type = 'terminal_outcome'
+                        )
+                        OR NOT EXISTS (
+                          SELECT 1 FROM node_capability_observations AS observation
+                          WHERE observation.attempt_id = attempts.attempt_id
+                            AND observation.observation_type = 'deadline_completion'
+                        )
+                      )
+                    )
+                  )
+                ORDER BY attempts.settled_at ASC, attempts.attempt_id ASC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [AttemptRecord.from_row(row) for row in rows]
 
     def count_attempts(self, task_id: str) -> int:
         self.migrate()
@@ -1300,7 +1729,7 @@ class AttemptStore:
                 """
                 UPDATE attempts
                 SET state = 'reclaimed', settled_at = ?, reason = ?,
-                    stream_closed = 1
+                    stream_closed = 1, terminal_cause = 'enrollment_reclaimed'
                 WHERE assigned_enrollment_id = ? AND state = 'active'
                 """,
                 (reclaimed_at, reason, enrollment_id),
@@ -1335,6 +1764,7 @@ class AttemptStore:
         *,
         state: AttemptState,
         reason: str,
+        terminal_cause: TerminalCause | None = None,
         task_id: str | None = None,
         attempt_id: str | None = None,
         now: float | None = None,
@@ -1343,22 +1773,50 @@ class AttemptStore:
             raise ValueError("transition target must be a terminal attempt state")
         if not task_id and not attempt_id:
             raise ValueError("task_id or attempt_id is required")
+        validated_cause = _validate_terminal_cause(terminal_cause)
         column, value = ("attempt_id", attempt_id) if attempt_id else ("task_id", task_id)
+        transitioned_at = now if now is not None else time.time()
         with self._lock, connection(self.path, row_factory=sqlite3.Row) as con:
             self._ensure_schema(con)
             con.execute("BEGIN IMMEDIATE")
             changed = con.execute(
                 f"UPDATE attempts SET state = ?, settled_at = ?, reason = ?, "
-                f"stream_closed = 1 "
+                f"stream_closed = 1, terminal_cause = ? "
                 f"WHERE {column} = ? AND state = 'active'",
-                (state, now if now is not None else time.time(), reason, value),
+                (
+                    state,
+                    transitioned_at,
+                    reason,
+                    validated_cause,
+                    value,
+                ),
             ).rowcount
+            if changed:
+                terminal_row = con.execute(
+                    f"SELECT * FROM attempts WHERE {column} = ?",
+                    (value,),
+                ).fetchone()
+                if terminal_row is not None:
+                    CapabilityEvidenceStore.best_effort_in_transaction(
+                        con,
+                        CapabilityEvidenceStore.record_terminal_in_transaction,
+                        con,
+                        AttemptRecord.from_row(terminal_row),
+                        terminal_at=transitioned_at,
+                    )
             con.commit()
         return changed == 1
 
-    def cancel_execution(self, execution_id: str, reason: str) -> list[str]:
+    def cancel_execution(
+        self,
+        execution_id: str,
+        reason: str,
+        *,
+        terminal_cause: TerminalCause | None = None,
+    ) -> list[str]:
         """Cancel every active attempt and return its task identifiers."""
         now = time.time()
+        validated_cause = _validate_terminal_cause(terminal_cause)
         with self._lock, connection(self.path, row_factory=sqlite3.Row) as con:
             self._ensure_schema(con)
             con.execute("BEGIN IMMEDIATE")
@@ -1369,10 +1827,10 @@ class AttemptStore:
             con.execute(
                 """
                 UPDATE attempts SET state = 'cancelled', settled_at = ?, reason = ?,
-                    stream_closed = 1
+                    stream_closed = 1, terminal_cause = ?
                 WHERE execution_id = ? AND state = 'active'
                 """,
-                (now, reason, execution_id),
+                (now, reason, validated_cause, execution_id),
             )
             con.commit()
         return [str(row["task_id"]) for row in rows]
@@ -1383,15 +1841,38 @@ class AttemptStore:
         with self._lock, connection(self.path, row_factory=sqlite3.Row) as con:
             self._ensure_schema(con)
             con.execute("BEGIN IMMEDIATE")
+            expiring_rows = con.execute(
+                "SELECT attempt_id FROM attempts "
+                "WHERE state = 'active' AND lease_expires_at < ?",
+                (cutoff,),
+            ).fetchall()
             changed = con.execute(
                 """
                 UPDATE attempts
                 SET state = 'expired', settled_at = ?, reason = 'lease expired',
-                    stream_closed = 1
+                    stream_closed = 1,
+                    terminal_cause = CASE
+                        WHEN lease_deadline_kind = 'execution_deadline'
+                            THEN 'execution_deadline'
+                        ELSE 'lease_expired'
+                    END
                 WHERE state = 'active' AND lease_expires_at < ?
                 """,
                 (cutoff, cutoff),
             ).rowcount
+            for expiring_row in expiring_rows:
+                terminal_row = con.execute(
+                    "SELECT * FROM attempts WHERE attempt_id = ?",
+                    (str(expiring_row["attempt_id"]),),
+                ).fetchone()
+                if terminal_row is not None:
+                    CapabilityEvidenceStore.best_effort_in_transaction(
+                        con,
+                        CapabilityEvidenceStore.record_terminal_in_transaction,
+                        con,
+                        AttemptRecord.from_row(terminal_row),
+                        terminal_at=cutoff,
+                    )
             con.commit()
         return int(changed)
 
@@ -1403,7 +1884,7 @@ class AttemptStore:
             changed = con.execute(
                 """
                 UPDATE attempts SET state = 'interrupted', settled_at = ?, reason = ?,
-                    stream_closed = 1
+                    stream_closed = 1, terminal_cause = 'coordinator_restart'
                 WHERE state = 'active'
                 """,
                 (time.time(), reason),

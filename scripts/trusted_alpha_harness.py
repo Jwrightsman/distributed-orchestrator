@@ -60,6 +60,9 @@ REQUIRED_COVERAGE = frozenset(
         "artifact_sealing_download_and_mutation",
         "share_creation_and_revocation",
         "database_concurrency",
+        "capability_evidence_replay_and_attribution",
+        "capability_evidence_operator_privacy",
+        "capability_shadow_routing_invariance",
         "clean_shutdown",
     }
 )
@@ -193,6 +196,33 @@ SCENARIOS = (
         description="simultaneous cross-store writes remain complete and atomic",
         nodeids=(
             "tests/test_sqlite_policy.py::test_concurrent_cross_store_writes_are_complete_and_atomic",
+        ),
+    ),
+    Scenario(
+        coverage=("capability_evidence_replay_and_attribution",),
+        description=(
+            "scoped observations survive replay and restart while excluding "
+            "caller and coordinator failures"
+        ),
+        nodeids=(
+            "tests/test_capability_evidence_integration.py::test_authoritative_settlement_writes_evidence_replay_is_idempotent_and_rejection_does_not",
+            "tests/test_capability_evidence_integration.py::test_typed_fault_attribution_excludes_caller_coordinator_and_bounded_execution_deadline",
+            "tests/test_capability_evidence_integration.py::test_reopen_preserves_observations_and_startup_reconciliation_repairs_missing_row",
+        ),
+    ),
+    Scenario(
+        coverage=(
+            "capability_evidence_operator_privacy",
+            "capability_shadow_routing_invariance",
+        ),
+        description=(
+            "protected aggregate evidence stays content-free and hypothetical "
+            "preferences cannot alter hard eligibility or handout"
+        ),
+        nodeids=(
+            "tests/test_capability_evidence_integration.py::test_operator_evidence_requires_viewer_and_exposes_only_safe_aggregates",
+            "tests/test_capability_evidence_integration.py::test_off_and_shadow_modes_keep_actual_handout_invariant_with_contrasting_evidence",
+            "tests/test_capability_evidence_integration.py::test_shadow_candidate_set_reapplies_hard_matcher_and_excludes_ineligible_node",
         ),
     ),
     Scenario(

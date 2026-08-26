@@ -17,6 +17,9 @@ CONFIG_FILE = Path(os.environ.get("MYCELIUM_CONFIG_FILE", "config.json"))
 TRUSTED_ALPHA_MARKER = ".mycelium-trusted-alpha"
 VALID_DEPLOYMENT_MODES = frozenset({"local", "trusted_alpha"})
 VALID_NODE_ENROLLMENT_MODES = frozenset({"compat", "required"})
+VALID_CAPABILITY_EVIDENCE_MODES = frozenset({"off", "shadow"})
+MIN_CAPABILITY_EVIDENCE_SAMPLES = 1
+MAX_CAPABILITY_EVIDENCE_SAMPLES = 1_000
 MIN_STATIC_CREDENTIAL_LENGTH = 32
 GENERATED_SECRET_BYTES = 32
 
@@ -186,19 +189,25 @@ DEFAULTS = {
     # Leave empty {} to route tasks to any available node (default).
     "role_model_map": {},
 
-    # ── Verification & reputation (optional) ─────────────────────────
+    # Capability evidence is observational only. "shadow" may compute a
+    # hypothetical preference, but neither value changes production eligibility,
+    # task order, or assignment.
+    "capability_evidence_mode": "off",
+    # A scoped aggregate remains insufficient until it has this many samples.
+    "capability_evidence_min_samples": 5,
+
+    # Sampled output agreement (optional)
     # Fraction of builder tasks that get sent to a SECOND node as well, so the
-    # two answers can be compared. This is the only mechanism that can notice a
-    # node returning plausible-looking garbage — the circuit breaker only sees
-    # nodes that fail outright.
+    # shapes of the two answers can be compared. Agreement is not correctness,
+    # trust, or a production-routing signal. The circuit breaker remains a
+    # separate mechanism based on operational failure.
     #
-    # Each verified task costs a whole extra inference, so this is sampled, not
+    # Each sampled task costs a whole extra inference, so this is sampled, not
     # universal. 0.1 means roughly one task in ten is double-run.
     #
-    # 0 (default) disables it completely: no duplicate work, no reputation
-    # records, and routing order is unchanged. Verification also switches itself
-    # off whenever fewer than two nodes are connected — there is nobody to
-    # compare against, and it must never block work on a single-node network.
+    # 0 (default) disables duplicate work and process-local comparison records.
+    # Sampling also switches itself off whenever fewer than two nodes are
+    # connected. Sampling never changes task assignment at any rate.
     "verify_rate": 0.0,
 }
 
@@ -301,6 +310,47 @@ def load(
             )
         _LOG.warning("Unknown node_enrollment_mode; using local compatibility mode")
         overrides["node_enrollment_mode"] = "compat"
+
+    configured_evidence_mode = overrides.get(
+        "capability_evidence_mode", DEFAULTS["capability_evidence_mode"]
+    )
+    valid_evidence_mode = (
+        isinstance(configured_evidence_mode, str)
+        and configured_evidence_mode in VALID_CAPABILITY_EVIDENCE_MODES
+    )
+    if not valid_evidence_mode:
+        if effective_strict:
+            raise ConfigError(
+                "capability_evidence_mode must be one of: "
+                + ", ".join(sorted(VALID_CAPABILITY_EVIDENCE_MODES))
+            )
+        _LOG.warning("Unknown capability_evidence_mode; using off")
+        overrides["capability_evidence_mode"] = DEFAULTS["capability_evidence_mode"]
+
+    configured_min_samples = overrides.get(
+        "capability_evidence_min_samples",
+        DEFAULTS["capability_evidence_min_samples"],
+    )
+    valid_min_samples = (
+        type(configured_min_samples) is int
+        and MIN_CAPABILITY_EVIDENCE_SAMPLES
+        <= configured_min_samples
+        <= MAX_CAPABILITY_EVIDENCE_SAMPLES
+    )
+    if not valid_min_samples:
+        if effective_strict:
+            raise ConfigError(
+                "capability_evidence_min_samples must be an integer between "
+                f"{MIN_CAPABILITY_EVIDENCE_SAMPLES} and "
+                f"{MAX_CAPABILITY_EVIDENCE_SAMPLES}"
+            )
+        _LOG.warning(
+            "Invalid capability_evidence_min_samples; using the default of %d",
+            DEFAULTS["capability_evidence_min_samples"],
+        )
+        overrides["capability_evidence_min_samples"] = DEFAULTS[
+            "capability_evidence_min_samples"
+        ]
 
     config = DEFAULTS.copy()
     config.update(overrides)

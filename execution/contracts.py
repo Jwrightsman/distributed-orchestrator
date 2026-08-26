@@ -365,6 +365,14 @@ class ExecutionUnitSummaryV1(ProtocolModel):
         default=None,
         pattern=r"^[0-9a-f]{64}$",
     )
+    attempt_id: str | None = Field(default=None, max_length=64)
+    selected_model_provider: str | None = Field(default=None, max_length=32)
+    selected_model_name: str | None = Field(default=None, max_length=128)
+    selected_model_digest: str | None = Field(
+        default=None,
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
+    evidence_role: Literal["production", "sampled_comparison"] | None = None
     attempt_count: int = Field(default=0, ge=0, le=20)
     duration_ms: int = Field(default=0, ge=0)
     fallback_reason: str | None = Field(default=None, max_length=500)
@@ -385,6 +393,14 @@ class CandidateSummaryV1(ProtocolModel):
         default=None,
         pattern=r"^[0-9a-f]{64}$",
     )
+    attempt_id: str | None = Field(default=None, max_length=64)
+    selected_model_provider: str | None = Field(default=None, max_length=32)
+    selected_model_name: str | None = Field(default=None, max_length=128)
+    selected_model_digest: str | None = Field(
+        default=None,
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
+    evidence_role: Literal["production", "sampled_comparison"] | None = None
     generation_duration_ms: int = Field(default=0, ge=0)
     validation_duration_ms: int = Field(default=0, ge=0)
     validation: list[ValidationEvidenceV1] = Field(default_factory=list, max_length=16)
