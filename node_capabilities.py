@@ -44,6 +44,7 @@ MatchReasonCodeV1 = Literal[
     "gpu_vendor_mismatch",
     "insufficient_gpu_memory",
     "insufficient_context",
+    "insufficient_output_capacity",
     "missing_feature",
     "isolation_mismatch",
     "legacy_capability_missing",
@@ -61,6 +62,7 @@ _REASON_ORDER: tuple[MatchReasonCodeV1, ...] = (
     "gpu_vendor_mismatch",
     "insufficient_gpu_memory",
     "insufficient_context",
+    "insufficient_output_capacity",
     "missing_feature",
     "isolation_mismatch",
     "legacy_capability_missing",
@@ -567,8 +569,20 @@ def match_node_requirements(
     legacy_node_capabilities: Sequence[str],
     *,
     preferred_model_name: str | None = None,
+    required_output_capacity_bytes: int | None = None,
 ) -> CapabilityMatchResultV1:
     """Pure deterministic hard-constraint matcher used by every routing path."""
+
+    if required_output_capacity_bytes is not None:
+        if isinstance(required_output_capacity_bytes, bool) or not isinstance(
+            required_output_capacity_bytes, int
+        ):
+            raise ValueError("required_output_capacity_bytes must be an integer")
+        if not 1 <= required_output_capacity_bytes <= MAX_NODE_OUTPUT_BYTES:
+            raise ValueError(
+                "required_output_capacity_bytes must be between "
+                f"1 and {MAX_NODE_OUTPUT_BYTES}"
+            )
 
     requirements = (
         resource_requirements
@@ -671,6 +685,17 @@ def match_node_requirements(
             and descriptor.isolation.kind not in requirements.allowed_isolation_kinds
         ):
             reasons.add("isolation_mismatch")
+
+    # The execution output budget is authoritative server context, not part of
+    # the caller's typed resource-requirement block. Compare it whenever a node
+    # made a typed capacity claim. Descriptorless legacy sessions have no such
+    # claim to compare and retain their explicit compatibility behavior.
+    if (
+        descriptor is not None
+        and required_output_capacity_bytes is not None
+        and descriptor.limits.max_output_bytes < required_output_capacity_bytes
+    ):
+        reasons.add("insufficient_output_capacity")
 
     if not set(legacy_required_capabilities).issubset(
         set(legacy_node_capabilities)

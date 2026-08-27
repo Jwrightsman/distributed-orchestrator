@@ -71,22 +71,32 @@ def connect(
     *,
     row_factory: Any | None = None,
     wal: bool = True,
+    read_only: bool = False,
 ) -> RetryConnection:
     """Open one consistently configured SQLite connection."""
-    database = str(Path(path))
+    plain_database = str(Path(path))
+    database = (
+        f"{Path(path).resolve().as_uri()}?mode=ro"
+        if read_only
+        else plain_database
+    )
     con = sqlite3.connect(
         database,
         timeout=SQLITE_TIMEOUT_SECONDS,
         factory=RetryConnection,
+        uri=read_only,
     )
     try:
         con.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
         con.execute("PRAGMA foreign_keys = ON")
-        if wal and database != ":memory:":
+        if read_only:
+            con.execute("PRAGMA query_only = ON")
+        elif wal and plain_database != ":memory:":
             # WAL is persistent for the database. Reissuing the pragma is safe
             # and keeps independently constructed store objects coherent.
             con.execute("PRAGMA journal_mode = WAL")
-        con.execute(f"PRAGMA synchronous = {SQLITE_SYNCHRONOUS}")
+        if not read_only:
+            con.execute(f"PRAGMA synchronous = {SQLITE_SYNCHRONOUS}")
         if row_factory is not None:
             con.row_factory = row_factory
         return con
@@ -101,8 +111,14 @@ def connection(
     *,
     row_factory: Any | None = None,
     wal: bool = True,
+    read_only: bool = False,
 ) -> Iterator[RetryConnection]:
-    con = connect(path, row_factory=row_factory, wal=wal)
+    con = connect(
+        path,
+        row_factory=row_factory,
+        wal=wal,
+        read_only=read_only,
+    )
     try:
         yield con
     except Exception:

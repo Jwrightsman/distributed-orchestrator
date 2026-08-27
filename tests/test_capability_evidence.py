@@ -13,15 +13,23 @@ from capability_evidence import (
     BinaryAggregate,
     CapabilityEvidenceStore,
     CapabilityShadowDecisionStore,
+    CapabilityShadowOperationalStore,
     DEADLINE_COMPLETION_SUBJECT,
     EligibleShadowCandidate,
     EvidenceConflict,
     EvidenceScope,
     ScopeAggregate,
     ShadowDecisionConflict,
+    ShadowOperationalEventConflict,
+    ShadowOperationalProcessCounters,
     evaluate_shadow_preference,
+    future_active_experiment_eligibility,
 )
-from node_capabilities import NodeCapabilityDescriptorV1, NodeCapabilitySnapshotStore
+from node_capabilities import (
+    LEGACY_DESCRIPTOR_HASH,
+    NodeCapabilityDescriptorV1,
+    NodeCapabilitySnapshotStore,
+)
 from node_enrollments import NodeEnrollmentStore, new_enrollment_credential
 
 
@@ -129,6 +137,24 @@ def _resolved_scope(store: CapabilityEvidenceStore, attempt) -> EvidenceScope:
     resolution = store.resolve_scope(attempt)
     assert resolution.context is not None
     return resolution.context.scope
+
+
+def _future_experiment_scope(**changes) -> EvidenceScope:
+    scope = EvidenceScope(
+        enrollment_id="enrollment-identity",
+        descriptor_version="1",
+        descriptor_hash="c" * 64,
+        executor_kind="ollama",
+        executor_version="0.11.4",
+        worker_protocol_version="1",
+        model_provider="ollama",
+        model_name="qwen3.5:4b",
+        model_digest=MODEL_DIGEST,
+        model_variant="Q4_K_M",
+        task_class="candidate",
+        evidence_role="production",
+    )
+    return replace(scope, **changes)
 
 
 def test_scope_requires_every_authoritative_binding_and_validated_snapshot(tmp_path):
@@ -297,6 +323,41 @@ def test_only_timely_settled_output_passes_deadline_completion(tmp_path):
     assert aggregate.deadline_completion.sample_count == 4
     assert aggregate.deadline_completion.positive_count == 1
     assert aggregate.deadline_completion.negative_count == 3
+
+
+def test_read_only_aggregate_uses_initialized_schema_without_migration(
+    tmp_path,
+    monkeypatch,
+):
+    database = tmp_path / "read-only-aggregate.db"
+    enrollment, snapshot = _register(database, "worker-a")
+    store = CapabilityEvidenceStore(database)
+    attempt = _attempt(
+        enrollment,
+        snapshot,
+        suffix="read-only-aggregate",
+        terminal_cause="settled_output",
+        settled_at=110,
+    )
+    store.record_settlement(
+        attempt,
+        accepted_at=110,
+        output_bytes=10,
+        recorded_at=120,
+    )
+    scope = _resolved_scope(store, attempt)
+    expected = store.aggregate(scope, minimum_samples=1, recorded_before=120)
+
+    def forbidden_migration():
+        raise AssertionError("read-only aggregation must not migrate")
+
+    monkeypatch.setattr(store, "migrate", forbidden_migration)
+
+    assert store.aggregate_read_only(
+        scope,
+        minimum_samples=1,
+        recorded_before=120,
+    ) == expected
 
 
 def test_legacy_deadline_row_is_backfilled_by_v2_without_conflict_or_double_count(
@@ -1165,6 +1226,320 @@ def test_shadow_operator_counts_group_by_actual_candidate_and_exact_scope(tmp_pa
         store.aggregate_counts(limit=201)
     with pytest.raises(ValueError, match="SHA-256"):
         store.aggregate_counts(actual_scope_key="not-a-scope")
+
+
+def test_shadow_operational_store_is_replay_safe_append_only_and_restart_safe(
+    tmp_path,
+):
+    database = tmp_path / "shadow-operational.db"
+    store = CapabilityShadowOperationalStore(database)
+
+    first = store.record(
+        attempt_id="attempt-operational",
+        phase="admission",
+        outcome="scheduled",
+        reason_code="evaluation_scheduled",
+        occurred_at=10,
+    )
+    replay = store.record(
+        attempt_id="attempt-operational",
+        phase="admission",
+        outcome="scheduled",
+        reason_code="evaluation_scheduled",
+        occurred_at=999,
+    )
+
+    assert replay == first
+    assert replay.occurred_at == 10
+    with pytest.raises(ShadowOperationalEventConflict):
+        store.record(
+            attempt_id="attempt-operational",
+            phase="admission",
+            outcome="queue_saturated",
+            reason_code="background_queue_limit_reached",
+            occurred_at=11,
+        )
+
+    private_exception = "PRIVATE WORKER ERROR MUST NOT PERSIST"
+    with pytest.raises(ValueError, match="reason_code"):
+        store.record(
+            attempt_id="attempt-private",
+            phase="evaluation",
+            outcome="evaluator_failed",
+            reason_code=private_exception,
+            occurred_at=12,
+        )
+
+    restarted = CapabilityShadowOperationalStore(database)
+    assert restarted.get(first.event_id) == first
+    assert restarted.get_for_attempt_phase("attempt-operational", "admission") == first
+    report = restarted.report()
+    assert report.admission_counts["scheduled"] == 1
+    assert report.assignment_observation_total == 1
+    assert report.offered_total == report.drop_failure_denominator == 1
+    assert report.drop_failure_numerator == report.failed_total == 0
+    assert report.drop_failure_rate == 0.0
+    assert report.pending_total == 1
+
+    expected_columns = {
+        "event_id",
+        "attempt_id",
+        "phase",
+        "outcome",
+        "reason_code",
+        "occurred_at",
+    }
+    assert set(asdict(first)) == expected_columns
+    with sqlite3.connect(database) as con:
+        columns = {
+            row[1]
+            for row in con.execute(
+                "PRAGMA table_info(capability_shadow_operational_events)"
+            )
+        }
+        row_count = con.execute(
+            "SELECT COUNT(*) FROM capability_shadow_operational_events"
+        ).fetchone()[0]
+        assert columns == expected_columns
+        assert row_count == 1
+        with pytest.raises(sqlite3.DatabaseError, match="append-only"):
+            con.execute(
+                "UPDATE capability_shadow_operational_events "
+                "SET occurred_at = 20"
+            )
+        with pytest.raises(sqlite3.DatabaseError, match="append-only"):
+            con.execute("DELETE FROM capability_shadow_operational_events")
+    assert private_exception.encode("utf-8") not in database.read_bytes()
+
+
+def test_shadow_operational_report_uses_admission_cohort_and_reproducible_math(
+    tmp_path,
+):
+    store = CapabilityShadowOperationalStore(tmp_path / "shadow-report.db")
+
+    def record(attempt_id, phase, outcome, reason_code, occurred_at):
+        store.record(
+            attempt_id=attempt_id,
+            phase=phase,
+            outcome=outcome,
+            reason_code=reason_code,
+            occurred_at=occurred_at,
+        )
+
+    record(
+        "attempt-before",
+        "admission",
+        "queue_saturated",
+        "background_queue_limit_reached",
+        9,
+    )
+    record("attempt-disabled", "admission", "disabled", "mode_disabled", 10)
+    record(
+        "attempt-not-applicable",
+        "admission",
+        "not_applicable",
+        "nonproduction_attempt",
+        11,
+    )
+    record(
+        "attempt-queue",
+        "admission",
+        "queue_saturated",
+        "background_queue_limit_reached",
+        12,
+    )
+    record(
+        "attempt-scope",
+        "admission",
+        "scope_capture_failed",
+        "scope_capture_failed",
+        13,
+    )
+    for attempt_id, admitted_at in (
+        ("attempt-completed", 14),
+        ("attempt-evaluator", 15),
+        ("attempt-write", 16),
+        ("attempt-cancelled", 17),
+        ("attempt-pending", 20),
+    ):
+        record(
+            attempt_id,
+            "admission",
+            "scheduled",
+            "evaluation_scheduled",
+            admitted_at,
+        )
+    record(
+        "attempt-completed",
+        "evaluation",
+        "completed",
+        "decision_persisted",
+        100,
+    )
+    record(
+        "attempt-evaluator",
+        "evaluation",
+        "evaluator_failed",
+        "evaluator_failed",
+        101,
+    )
+    record(
+        "attempt-write",
+        "evaluation",
+        "decision_write_failed",
+        "decision_write_failed",
+        102,
+    )
+    record(
+        "attempt-cancelled",
+        "evaluation",
+        "cancelled_on_shutdown",
+        "coordinator_shutdown",
+        103,
+    )
+    record(
+        "attempt-after",
+        "admission",
+        "scheduled",
+        "evaluation_scheduled",
+        21,
+    )
+    record(
+        "attempt-after",
+        "evaluation",
+        "completed",
+        "decision_persisted",
+        200,
+    )
+
+    report = store.report(window_started_at=10, window_ended_at=20)
+
+    assert report.admission_counts == {
+        "disabled": 1,
+        "not_applicable": 1,
+        "queue_saturated": 1,
+        "scope_capture_failed": 1,
+        "scheduled": 5,
+    }
+    assert report.evaluation_counts == {
+        "completed": 1,
+        "evaluator_failed": 1,
+        "decision_write_failed": 1,
+        "cancelled_on_shutdown": 1,
+    }
+    assert report.orphan_evaluation_total == 0
+    assert report.assignment_observation_total == 9
+    assert report.offered_total == report.drop_failure_denominator == 7
+    assert report.scheduled_total == 5
+    assert report.completed_total == 1
+    assert report.skipped_total == 2
+    assert report.failed_total == report.drop_failure_numerator == 5
+    assert report.pending_total == 1
+    assert report.drop_failure_rate == pytest.approx(5 / 7)
+    assert report.latest_event_at == 103
+    assert report.window_started_at == 10
+    assert report.window_ended_at == 20
+
+
+def test_shadow_operational_report_includes_evaluation_when_admission_write_is_missing(
+    tmp_path,
+):
+    store = CapabilityShadowOperationalStore(tmp_path / "shadow-orphan-report.db")
+    store.record(
+        attempt_id="attempt-orphan-evaluation",
+        phase="evaluation",
+        outcome="evaluator_failed",
+        reason_code="evaluator_failed",
+        occurred_at=15,
+    )
+
+    report = store.report(window_started_at=10, window_ended_at=20)
+
+    assert report.admission_counts == {
+        "disabled": 0,
+        "not_applicable": 0,
+        "queue_saturated": 0,
+        "scope_capture_failed": 0,
+        "scheduled": 0,
+    }
+    assert report.evaluation_counts == {
+        "completed": 0,
+        "evaluator_failed": 1,
+        "decision_write_failed": 0,
+        "cancelled_on_shutdown": 0,
+    }
+    assert report.orphan_evaluation_total == 1
+    assert report.assignment_observation_total == 1
+    assert report.scheduled_total == 1
+    assert report.offered_total == report.drop_failure_denominator == 1
+    assert report.failed_total == report.drop_failure_numerator == 1
+    assert report.pending_total == 0
+    assert report.drop_failure_rate == 1.0
+    assert report.latest_event_at == 15
+
+
+def test_shadow_operational_process_counters_increment_and_reset():
+    counters = ShadowOperationalProcessCounters(reset_at=10)
+
+    assert counters.increment("durable_health_record_write_failure") == 1
+    assert counters.increment("durable_health_record_write_failure") == 2
+    assert counters.increment("unexpected_containment_failure") == 1
+    assert counters.increment("background_task_callback_failure") == 1
+    assert asdict(counters.snapshot()) == {
+        "reset_at": 10.0,
+        "durable_health_record_write_failure": 2,
+        "unexpected_containment_failure": 1,
+        "background_task_callback_failure": 1,
+    }
+    with pytest.raises(ValueError, match="unsupported"):
+        counters.increment("not-a-counter")
+
+    counters.reset(reset_at=20)
+    assert asdict(counters.snapshot()) == {
+        "reset_at": 20.0,
+        "durable_health_record_write_failure": 0,
+        "unexpected_containment_failure": 0,
+        "background_task_callback_failure": 0,
+    }
+
+
+def test_future_active_experiment_identity_accepts_digest_and_blocks_missing_digest():
+    exact = future_active_experiment_eligibility(_future_experiment_scope())
+    missing = future_active_experiment_eligibility(
+        _future_experiment_scope(model_digest=None)
+    )
+
+    assert exact.eligible_for_future_active_experiment is True
+    assert exact.blocking_reasons == ()
+    assert exact.as_dict() == {
+        "eligible_for_future_active_experiment": True,
+        "blocking_reasons": [],
+        "meaning": (
+            "identity_prerequisites_only_not_correctness_reputation_trust_"
+            "or_active_routing"
+        ),
+    }
+    assert missing.eligible_for_future_active_experiment is False
+    assert missing.blocking_reasons == ("immutable_model_identity_missing",)
+
+
+def test_future_active_experiment_identity_blocks_legacy_and_unreconstructable_flags():
+    legacy = future_active_experiment_eligibility(
+        _future_experiment_scope(descriptor_hash=LEGACY_DESCRIPTOR_HASH)
+    )
+    unreconstructable = future_active_experiment_eligibility(
+        _future_experiment_scope(),
+        descriptor_identity_reconstructable=False,
+        model_identity_reconstructable=False,
+    )
+
+    assert legacy.eligible_for_future_active_experiment is False
+    assert legacy.blocking_reasons == ("legacy_descriptor_identity",)
+    assert unreconstructable.eligible_for_future_active_experiment is False
+    assert unreconstructable.blocking_reasons == (
+        "descriptor_identity_unreconstructable",
+        "model_identity_unreconstructable",
+    )
 
 
 def test_schema_migration_is_idempotent_and_preserves_all_evidence_state(tmp_path):

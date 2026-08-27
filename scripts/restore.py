@@ -32,16 +32,18 @@ if str(_APP_ROOT) not in sys.path:
 
 from scripts.backup import (  # noqa: E402
     BACKUP_FORMAT,
-    BACKUP_FORMAT_VERSION,
     BUILD_METADATA_PATH,
     CONFIG_NAME,
     DATABASE_NAME,
+    DATABASE_NAMES,
     LEDGER_NAME,
     MANIFEST_NAME,
+    SHADOW_OPERATIONAL_DATABASE_NAME,
     SQLITE_SIDECARS,
     STATE_DIRECTORIES,
     STATE_FILES,
     STATE_PREFIX,
+    SUPPORTED_BACKUP_FORMAT_VERSIONS,
 )
 
 
@@ -211,7 +213,7 @@ def _load_manifest(bundle: zipfile.ZipFile, info: zipfile.ZipInfo) -> dict:
         raise RestoreError("backup manifest must be a JSON object")
     if manifest.get("format") != BACKUP_FORMAT:
         raise RestoreError("archive is not a Mycelium state backup")
-    if manifest.get("format_version") != BACKUP_FORMAT_VERSION:
+    if manifest.get("format_version") not in SUPPORTED_BACKUP_FORMAT_VERSIONS:
         raise RestoreError("backup format version is not supported")
     return manifest
 
@@ -318,6 +320,11 @@ def _validate_structure(
 
     expected_state = {
         "database": f"{STATE_PREFIX}/{DATABASE_NAME}",
+        "shadow_operational_health_database": (
+            f"{STATE_PREFIX}/{SHADOW_OPERATIONAL_DATABASE_NAME}"
+            if f"{STATE_PREFIX}/{SHADOW_OPERATIONAL_DATABASE_NAME}" in entries
+            else None
+        ),
         "configuration": (
             f"{STATE_PREFIX}/{CONFIG_NAME}"
             if f"{STATE_PREFIX}/{CONFIG_NAME}" in entries
@@ -333,7 +340,12 @@ def _validate_structure(
         "execution_artifacts": f"{STATE_PREFIX}/execution_artifacts",
         "build_metadata": BUILD_METADATA_PATH,
     }
-    if manifest.get("state") != expected_state:
+    legacy_expected_state = dict(expected_state)
+    legacy_expected_state.pop("shadow_operational_health_database")
+    accepted_state_layouts = [expected_state]
+    if f"{STATE_PREFIX}/{SHADOW_OPERATIONAL_DATABASE_NAME}" not in entries:
+        accepted_state_layouts.append(legacy_expected_state)
+    if manifest.get("state") not in accepted_state_layouts:
         raise RestoreError("backup manifest state layout is invalid")
 
 
@@ -407,13 +419,13 @@ def _read_json_object(path: Path, label: str, expected_type: type) -> Any:
     return value
 
 
-def _validate_staged_state(staging: Path) -> None:
+def _validate_staged_state(staging: Path, *, expected_format_version: int) -> None:
     build = staging.joinpath(*PurePosixPath(BUILD_METADATA_PATH).parts)
     build_data = _read_json_object(build, "build metadata", dict)
     if (
         build_data.get("product") != "Mycelium"
         or build_data.get("backup_format") != BACKUP_FORMAT
-        or build_data.get("backup_format_version") != BACKUP_FORMAT_VERSION
+        or build_data.get("backup_format_version") != expected_format_version
     ):
         raise RestoreError("restored build metadata does not describe this backup format")
 
@@ -424,16 +436,23 @@ def _validate_staged_state(staging: Path) -> None:
     if ledger.exists():
         _read_json_object(ledger, "compatibility ledger", list)
 
-    database = staging / STATE_PREFIX / DATABASE_NAME
-    database_uri = f"{database.resolve().as_uri()}?mode=ro"
-    try:
-        with closing(sqlite3.connect(database_uri, uri=True, timeout=30.0)) as connection:
-            connection.execute("PRAGMA query_only = ON")
-            result = connection.execute("PRAGMA integrity_check").fetchall()
-    except sqlite3.Error as exc:
-        raise RestoreError("restored SQLite snapshot cannot be opened") from exc
-    if result != [("ok",)]:
-        raise RestoreError("restored SQLite snapshot failed its integrity check")
+    for database_name in DATABASE_NAMES:
+        database = staging / STATE_PREFIX / database_name
+        if not database.exists():
+            continue
+        database_uri = f"{database.resolve().as_uri()}?mode=ro"
+        try:
+            with closing(
+                sqlite3.connect(database_uri, uri=True, timeout=30.0)
+            ) as database_connection:
+                database_connection.execute("PRAGMA query_only = ON")
+                result = database_connection.execute(
+                    "PRAGMA integrity_check"
+                ).fetchall()
+        except sqlite3.Error as exc:
+            raise RestoreError("restored SQLite snapshot cannot be opened") from exc
+        if result != [("ok",)]:
+            raise RestoreError("restored SQLite snapshot failed its integrity check")
     for name in STATE_FILES:
         sensitive_file = staging / STATE_PREFIX / name
         if sensitive_file.exists():
@@ -547,7 +566,10 @@ def restore_backup(
         except (OSError, RuntimeError, zipfile.BadZipFile) as exc:
             raise RestoreError("backup archive is not a valid ZIP file") from exc
 
-        _validate_staged_state(staging)
+        _validate_staged_state(
+            staging,
+            expected_format_version=int(manifest["format_version"]),
+        )
         _restore_verified_staging(staging, state_root, force=force)
 
     return state_root

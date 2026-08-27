@@ -1,9 +1,9 @@
 """Create a consistent, checksummed Mycelium state backup.
 
-The coordinator may keep ``events.db`` in WAL mode while this command runs.
-Opening or copying the database and its sidecars as ordinary files can produce
-a snapshot from different points in time, so this module always uses SQLite's
-online backup API for the database.  Other state is copied into a private
+The coordinator may keep its SQLite databases in WAL mode while this command
+runs. Opening or copying a database and its sidecars as ordinary files can
+produce a snapshot from different points in time, so this module always uses
+SQLite's online backup API for each database. Other state is copied into a private
 staging directory before the ZIP is assembled.
 
 Process-local scheduler queues, active node sessions, and in-flight work are
@@ -31,19 +31,22 @@ from typing import BinaryIO
 
 
 BACKUP_FORMAT = "mycelium-state-backup"
-BACKUP_FORMAT_VERSION = 1
+BACKUP_FORMAT_VERSION = 2
+SUPPORTED_BACKUP_FORMAT_VERSIONS = (1, BACKUP_FORMAT_VERSION)
 MANIFEST_NAME = "backup-manifest.json"
 BUILD_METADATA_PATH = "metadata/build.json"
 STATE_PREFIX = "state"
 DATABASE_NAME = "events.db"
+SHADOW_OPERATIONAL_DATABASE_NAME = "capability-shadow-health.db"
 CONFIG_NAME = "config.json"
 LEDGER_NAME = "ledger.json"
 STATE_DIRECTORIES = ("projects", "output", "execution_artifacts")
-STATE_FILES = (DATABASE_NAME, CONFIG_NAME, LEDGER_NAME)
-SQLITE_SIDECARS = (
-    f"{DATABASE_NAME}-wal",
-    f"{DATABASE_NAME}-shm",
-    f"{DATABASE_NAME}-journal",
+DATABASE_NAMES = (DATABASE_NAME, SHADOW_OPERATIONAL_DATABASE_NAME)
+STATE_FILES = (*DATABASE_NAMES, CONFIG_NAME, LEDGER_NAME)
+SQLITE_SIDECARS = tuple(
+    f"{database_name}{suffix}"
+    for database_name in DATABASE_NAMES
+    for suffix in ("-wal", "-shm", "-journal")
 )
 
 _APP_ROOT = Path(__file__).resolve().parent.parent
@@ -424,6 +427,7 @@ def create_backup(destination: str | Path, *, state_dir: str | Path = ".") -> Pa
         raise BackupError(f"state directory does not exist: {state_root}")
 
     database = state_root / DATABASE_NAME
+    shadow_operational_database = state_root / SHADOW_OPERATIONAL_DATABASE_NAME
     created_at = _utc_now()
     target = _archive_target(destination, created_at)
     _reject_destination_inside_state(target, state_root)
@@ -441,6 +445,27 @@ def create_backup(destination: str | Path, *, state_dir: str | Path = ".") -> Pa
             database_destination = staging / STATE_PREFIX / DATABASE_NAME
             database_metadata = _snapshot_sqlite(database, database_destination)
             entries.append({"path": f"{STATE_PREFIX}/{DATABASE_NAME}", **database_metadata})
+
+            shadow_operational_database_included = (
+                shadow_operational_database.exists()
+                or shadow_operational_database.is_symlink()
+            )
+            if shadow_operational_database_included:
+                shadow_destination = (
+                    staging / STATE_PREFIX / SHADOW_OPERATIONAL_DATABASE_NAME
+                )
+                shadow_metadata = _snapshot_sqlite(
+                    shadow_operational_database,
+                    shadow_destination,
+                )
+                entries.append(
+                    {
+                        "path": (
+                            f"{STATE_PREFIX}/{SHADOW_OPERATIONAL_DATABASE_NAME}"
+                        ),
+                        **shadow_metadata,
+                    }
+                )
 
             for file_name in (CONFIG_NAME, LEDGER_NAME):
                 source = state_root / file_name
@@ -488,6 +513,11 @@ def create_backup(destination: str | Path, *, state_dir: str | Path = ".") -> Pa
                 "checksums": checksums,
                 "state": {
                     "database": f"{STATE_PREFIX}/{DATABASE_NAME}",
+                    "shadow_operational_health_database": (
+                        f"{STATE_PREFIX}/{SHADOW_OPERATIONAL_DATABASE_NAME}"
+                        if shadow_operational_database_included
+                        else None
+                    ),
                     "configuration": (
                         f"{STATE_PREFIX}/{CONFIG_NAME}"
                         if (state_root / CONFIG_NAME).exists()
@@ -542,7 +572,16 @@ def main(argv: list[str] | None = None) -> int:
 
     config_included = "yes" if (Path(args.state_dir) / CONFIG_NAME).exists() else "no"
     print(f"Backup created: {archive}")
+    shadow_included = (
+        "yes"
+        if (Path(args.state_dir) / SHADOW_OPERATIONAL_DATABASE_NAME).exists()
+        else "no"
+    )
     print("SQLite snapshot: consistent online backup of events.db")
+    print(
+        "Shadow operational-health SQLite snapshot included: "
+        f"{shadow_included}"
+    )
     print(f"Configuration included: {config_included} (values not displayed)")
     print("Not recoverable: process-local queues, in-flight work, or node sessions.")
     return 0

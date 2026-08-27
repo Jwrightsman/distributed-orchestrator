@@ -15,13 +15,25 @@ import pytest
 from scripts import backup, restore
 
 
-def _create_state(root: Path) -> Path:
+def _create_state(root: Path, *, include_shadow_health: bool = True) -> Path:
     state = root / "state"
     state.mkdir(parents=True)
     with sqlite3.connect(state / "events.db") as connection:
         connection.execute("PRAGMA journal_mode = WAL")
         connection.execute("CREATE TABLE records (id INTEGER PRIMARY KEY, value TEXT NOT NULL)")
         connection.execute("INSERT INTO records(value) VALUES ('durable')")
+    if include_shadow_health:
+        with sqlite3.connect(
+            state / backup.SHADOW_OPERATIONAL_DATABASE_NAME
+        ) as connection:
+            connection.execute("PRAGMA journal_mode = WAL")
+            connection.execute(
+                "CREATE TABLE shadow_health "
+                "(id INTEGER PRIMARY KEY, outcome TEXT NOT NULL)"
+            )
+            connection.execute(
+                "INSERT INTO shadow_health(outcome) VALUES ('completed')"
+            )
 
     (state / "config.json").write_text(
         json.dumps(
@@ -79,6 +91,7 @@ def test_backup_captures_recovery_state_with_manifest_and_does_not_print_secrets
     expected = {
         "metadata/build.json",
         "state/events.db",
+        "state/capability-shadow-health.db",
         "state/config.json",
         "state/ledger.json",
         "state/projects",
@@ -157,6 +170,52 @@ def test_backup_uses_a_consistent_live_sqlite_snapshot(tmp_path):
     assert left_count > 0
 
 
+def test_backup_and_restore_work_before_shadow_health_database_exists(tmp_path):
+    state = _create_state(tmp_path / "source", include_shadow_health=False)
+
+    archive = backup.create_backup(tmp_path / "without-health.zip", state_dir=state)
+    manifest = _manifest(archive)
+    assert manifest["state"]["shadow_operational_health_database"] is None
+    assert all(
+        entry["path"] != f"state/{backup.SHADOW_OPERATIONAL_DATABASE_NAME}"
+        for entry in manifest["entries"]
+    )
+
+    target = tmp_path / "restored-without-health"
+    restore.restore_backup(archive, state_dir=target)
+    assert (target / "events.db").is_file()
+    assert not (target / backup.SHADOW_OPERATIONAL_DATABASE_NAME).exists()
+
+
+def test_restore_accepts_legacy_v1_archive_without_shadow_health_database(
+    tmp_path,
+    monkeypatch,
+):
+    state = _create_state(
+        tmp_path / "legacy-source",
+        include_shadow_health=False,
+    )
+    monkeypatch.setattr(backup, "BACKUP_FORMAT_VERSION", 1)
+    versioned = backup.create_backup(tmp_path / "versioned.zip", state_dir=state)
+    legacy = tmp_path / "legacy-v1.zip"
+    legacy_manifest = _manifest(versioned)
+    legacy_manifest["state"].pop("shadow_operational_health_database")
+    _rewrite_member(
+        versioned,
+        legacy,
+        backup.MANIFEST_NAME,
+        json.dumps(legacy_manifest, sort_keys=True).encode("utf-8"),
+    )
+
+    target = tmp_path / "legacy-target"
+    restore.restore_backup(legacy, state_dir=target)
+    with sqlite3.connect(target / "events.db") as connection:
+        assert connection.execute("SELECT value FROM records").fetchone() == (
+            "durable",
+        )
+    assert not (target / backup.SHADOW_OPERATIONAL_DATABASE_NAME).exists()
+
+
 def test_restore_refuses_existing_state_then_replaces_it_with_explicit_force(tmp_path):
     source = _create_state(tmp_path / "source")
     archive = backup.create_backup(tmp_path / "snapshot.zip", state_dir=source)
@@ -166,6 +225,8 @@ def test_restore_refuses_existing_state_then_replaces_it_with_explicit_force(tmp
     old_config.write_text('{"old":true}', encoding="utf-8")
     stale_wal = target / "events.db-wal"
     stale_wal.write_bytes(b"stale sqlite sidecar")
+    stale_shadow_wal = target / "capability-shadow-health.db-wal"
+    stale_shadow_wal.write_bytes(b"stale shadow sqlite sidecar")
     (target / "unrelated.txt").write_text("keep me", encoding="utf-8")
 
     with pytest.raises(restore.RestoreError, match="--force"):
@@ -181,8 +242,15 @@ def test_restore_refuses_existing_state_then_replaces_it_with_explicit_force(tmp
     assert (target / "execution_artifacts" / "execution-a" / "result.txt").is_file()
     assert (target / "unrelated.txt").read_text(encoding="utf-8") == "keep me"
     assert not stale_wal.exists()
+    assert not stale_shadow_wal.exists()
     with sqlite3.connect(target / "events.db") as connection:
         assert connection.execute("SELECT value FROM records").fetchone() == ("durable",)
+    with sqlite3.connect(
+        target / backup.SHADOW_OPERATIONAL_DATABASE_NAME
+    ) as connection:
+        assert connection.execute(
+            "SELECT outcome FROM shadow_health"
+        ).fetchone() == ("completed",)
 
 
 def test_checksum_failure_is_rejected_before_existing_state_is_touched(tmp_path):

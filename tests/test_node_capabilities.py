@@ -26,7 +26,9 @@ from node_enrollments import NodeEnrollmentStore, new_enrollment_credential
 MODEL_DIGEST = "sha256:" + "a" * 64
 
 
-def _descriptor(**overrides) -> NodeCapabilityDescriptorV1:
+def _descriptor(
+    *, max_output_bytes: int = 1_048_576, **overrides
+) -> NodeCapabilityDescriptorV1:
     payload = {
         "descriptor_version": "1",
         "executor": {
@@ -58,7 +60,7 @@ def _descriptor(**overrides) -> NodeCapabilityDescriptorV1:
         "features": ["code", "streaming"],
         "limits": {
             "max_concurrent_execution_units": 1,
-            "max_output_bytes": 1_048_576,
+            "max_output_bytes": max_output_bytes,
             "max_context_tokens": 16_384,
         },
         "isolation": {"kind": "none"},
@@ -296,6 +298,58 @@ def test_supported_executor_and_worker_protocol_match():
     )
 
     match = match_node_requirements(requirements, [], _descriptor(), [])
+
+    assert match.eligible is True
+    assert match.reason_codes == ()
+
+
+def test_node_output_capacity_above_task_requirement_is_eligible():
+    match = match_node_requirements(
+        None,
+        [],
+        _descriptor(max_output_bytes=4096),
+        [],
+        required_output_capacity_bytes=2048,
+    )
+
+    assert match.eligible is True
+    assert match.reason_codes == ()
+
+
+def test_node_output_capacity_equal_to_task_requirement_is_eligible():
+    match = match_node_requirements(
+        None,
+        [],
+        _descriptor(max_output_bytes=2048),
+        [],
+        required_output_capacity_bytes=2048,
+    )
+
+    assert match.eligible is True
+    assert match.reason_codes == ()
+
+
+def test_node_output_capacity_below_task_requirement_has_stable_reason():
+    match = match_node_requirements(
+        None,
+        [],
+        _descriptor(max_output_bytes=2047),
+        [],
+        required_output_capacity_bytes=2048,
+    )
+
+    assert match.eligible is False
+    assert match.reason_codes == ("insufficient_output_capacity",)
+
+
+def test_descriptorless_compatibility_does_not_fabricate_output_capacity():
+    match = match_node_requirements(
+        None,
+        ["code"],
+        None,
+        ["code"],
+        required_output_capacity_bytes=10_485_760,
+    )
 
     assert match.eligible is True
     assert match.reason_codes == ()

@@ -31,6 +31,7 @@ def test_report_is_deterministic_and_covers_required_scenarios():
     second = evaluation.evaluate_fixture(copy.deepcopy(fixture))
 
     assert evaluation.render_report(first) == evaluation.render_report(second)
+    assert first["report_version"] == "2"
     assert {case["scenario"] for case in first["cases"]} >= evaluation.REQUIRED_SCENARIOS
     assert first["summary"] == {
         "case_count": 10,
@@ -46,6 +47,12 @@ def test_report_is_deterministic_and_covers_required_scenarios():
             "deadline_success_count": 2,
         },
         "excluded_non_node_fault_count": 3,
+        "future_active_experiment_identity": {
+            "eligible_scope_count": 20,
+            "blocked_scope_count": 0,
+            "blocking_reason_counts": {},
+            "meaning": "necessary_identity_prerequisite_not_promotion",
+        },
         "hard_ineligible_candidates_excluded": 1,
         "ignored_prior_scope_samples": 120,
         "invariant_failures": 0,
@@ -78,6 +85,65 @@ def test_report_is_deterministic_and_covers_required_scenarios():
             "deadline_success_rate": 0.9,
         },
     }
+
+
+def test_future_active_identity_exact_digest_has_no_blocker():
+    report = evaluation.evaluate_fixture(_fixture())
+    case = _by_scenario(report)["sufficient_evidence"]
+
+    assert case["future_active_experiment_eligibility"]["by_candidate"][
+        "sufficient-a"
+    ] == {
+        "eligible_for_future_active_experiment": True,
+        "blocking_reasons": [],
+        "meaning": (
+            "identity_prerequisites_only_not_correctness_reputation_trust_"
+            "or_active_routing"
+        ),
+    }
+
+
+def test_missing_digest_does_not_change_assignment_or_shadow_preference():
+    exact_report = evaluation.evaluate_fixture(_fixture())
+    exact_case = _by_scenario(exact_report)["sufficient_evidence"]
+    digestless_fixture = _fixture()
+    digestless_fixture["cases"][0]["candidates"][0]["scope"][
+        "model_digest_seed"
+    ] = None
+
+    digestless_report = evaluation.evaluate_fixture(digestless_fixture)
+    digestless_case = _by_scenario(digestless_report)["sufficient_evidence"]
+    diagnostic = digestless_case["future_active_experiment_eligibility"][
+        "by_candidate"
+    ]["sufficient-a"]
+
+    assert diagnostic["eligible_for_future_active_experiment"] is False
+    assert diagnostic["blocking_reasons"] == ["immutable_model_identity_missing"]
+    assert digestless_report["summary"]["future_active_experiment_identity"] == {
+        "eligible_scope_count": 19,
+        "blocked_scope_count": 1,
+        "blocking_reason_counts": {"immutable_model_identity_missing": 1},
+        "meaning": "necessary_identity_prerequisite_not_promotion",
+    }
+    assert digestless_case["claim_only_candidate_id"] == exact_case[
+        "claim_only_candidate_id"
+    ]
+    assert digestless_case["eligible_candidate_ids"] == exact_case[
+        "eligible_candidate_ids"
+    ]
+    assert digestless_case["hard_ineligible_candidate_ids"] == exact_case[
+        "hard_ineligible_candidate_ids"
+    ]
+    assert digestless_case["shadow"]["outcome"] == exact_case["shadow"]["outcome"]
+    assert digestless_case["shadow"]["preferred_candidate_id"] == exact_case[
+        "shadow"
+    ]["preferred_candidate_id"]
+    assert digestless_case["shadow"]["rationale_code"] == exact_case["shadow"][
+        "rationale_code"
+    ]
+    assert digestless_case["shadow"][
+        "with_claim_fallback_candidate_id"
+    ] == exact_case["shadow"]["with_claim_fallback_candidate_id"]
 
 
 def test_cold_start_and_scope_changes_never_inherit_prior_evidence():

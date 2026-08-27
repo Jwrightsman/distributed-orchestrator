@@ -675,6 +675,37 @@ def test_compat_is_explicit_and_cannot_masquerade_as_enrollment(enrolled_server)
     assert state.enrollment_store.get(durable.json()["enrollment_id"]).status == "active"
 
 
+def test_descriptorless_compat_poll_keeps_legacy_output_capacity_behavior(
+    enrolled_server,
+):
+    client, settings, _path = enrolled_server
+    settings["node_enrollment_mode"] = "compat"
+    registration = client.post(
+        "/nodes/register",
+        json=_registration("legacy-output-worker"),
+        headers={"X-Node-Secret": ADMISSION_SECRET},
+    )
+    assert registration.status_code == 200
+    assert registration.json()["capability_descriptor"] is None
+    _queue_task("legacy-output-task")
+    state.task_queue[-1]["max_output_bytes"] = 10_485_760
+
+    handout = client.get(
+        "/tasks/next",
+        params={"node_id": "legacy-output-worker"},
+        headers={
+            **_session_headers(registration),
+            "X-Node-Secret": ADMISSION_SECRET,
+        },
+    )
+
+    assert handout.status_code == 200
+    attempt = state.attempt_store.get(handout.json()["attempt_id"])
+    assert attempt is not None
+    assert attempt.max_output_bytes == 10_485_760
+    assert attempt.assigned_descriptor_hash is None
+
+
 def test_operator_listing_is_protected_and_contains_no_credential_material(
     enrolled_server, caplog
 ):

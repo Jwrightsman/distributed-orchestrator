@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Generic, Literal, TypeVar
 
 from node_capabilities import (
+    LEGACY_DESCRIPTOR_HASH,
     NodeCapabilitySnapshotRecord,
     ensure_node_capability_snapshot_schema,
     normalize_model_digest,
@@ -52,6 +53,91 @@ ObservationType = Literal[
     "sampled_agreement",
 ]
 ShadowOutcome = Literal["same", "different", "no_preference"]
+ShadowOperationalPhase = Literal["admission", "evaluation"]
+ShadowAdmissionOutcome = Literal[
+    "disabled",
+    "not_applicable",
+    "queue_saturated",
+    "scope_capture_failed",
+    "scheduled",
+]
+ShadowEvaluationOutcome = Literal[
+    "completed",
+    "evaluator_failed",
+    "decision_write_failed",
+    "cancelled_on_shutdown",
+]
+ShadowOperationalOutcome = ShadowAdmissionOutcome | ShadowEvaluationOutcome
+ShadowOperationalCounterName = Literal[
+    "durable_health_record_write_failure",
+    "unexpected_containment_failure",
+    "background_task_callback_failure",
+]
+FutureActiveExperimentBlockingReason = Literal[
+    "legacy_descriptor_identity",
+    "descriptor_identity_unreconstructable",
+    "immutable_model_identity_missing",
+    "model_identity_unreconstructable",
+]
+
+FUTURE_ACTIVE_EXPERIMENT_BLOCKING_REASON_ORDER: tuple[
+    FutureActiveExperimentBlockingReason, ...
+] = (
+    "legacy_descriptor_identity",
+    "descriptor_identity_unreconstructable",
+    "immutable_model_identity_missing",
+    "model_identity_unreconstructable",
+)
+
+SHADOW_ADMISSION_OUTCOMES: tuple[ShadowAdmissionOutcome, ...] = (
+    "disabled",
+    "not_applicable",
+    "queue_saturated",
+    "scope_capture_failed",
+    "scheduled",
+)
+SHADOW_EVALUATION_OUTCOMES: tuple[ShadowEvaluationOutcome, ...] = (
+    "completed",
+    "evaluator_failed",
+    "decision_write_failed",
+    "cancelled_on_shutdown",
+)
+SHADOW_OPERATION_COUNTER_NAMES: tuple[ShadowOperationalCounterName, ...] = (
+    "durable_health_record_write_failure",
+    "unexpected_containment_failure",
+    "background_task_callback_failure",
+)
+
+_SHADOW_OPERATION_REASON_CODES: dict[
+    tuple[ShadowOperationalPhase, ShadowOperationalOutcome], frozenset[str]
+] = {
+    ("admission", "disabled"): frozenset({"mode_disabled"}),
+    ("admission", "not_applicable"): frozenset(
+        {
+            "legacy_descriptor_identity",
+            "nonproduction_attempt",
+            "unsupported_task_class",
+        }
+    ),
+    ("admission", "queue_saturated"): frozenset(
+        {"background_queue_limit_reached"}
+    ),
+    ("admission", "scope_capture_failed"): frozenset(
+        {
+            "scope_capture_failed",
+            "coordinator_shutdown_during_scope_capture",
+        }
+    ),
+    ("admission", "scheduled"): frozenset({"evaluation_scheduled"}),
+    ("evaluation", "completed"): frozenset({"decision_persisted"}),
+    ("evaluation", "evaluator_failed"): frozenset({"evaluator_failed"}),
+    ("evaluation", "decision_write_failed"): frozenset(
+        {"decision_write_failed"}
+    ),
+    ("evaluation", "cancelled_on_shutdown"): frozenset(
+        {"coordinator_shutdown"}
+    ),
+}
 
 _OBSERVATION_TYPES: frozenset[str] = frozenset(
     {
@@ -118,6 +204,10 @@ class ShadowDecisionConflict(RuntimeError):
     """A deterministic shadow-decision ID was reused for different content."""
 
 
+class ShadowOperationalEventConflict(RuntimeError):
+    """One attempt/phase operational identity was reused for another outcome."""
+
+
 @dataclass(frozen=True)
 class EvidenceScope:
     """The exact aggregation boundary; no field may be inferred across scopes."""
@@ -156,6 +246,86 @@ class EvidenceScope:
             separators=(",", ":"),
         )
         return _domain_digest("mycelium.capability-evidence-scope.v1", payload)
+
+
+@dataclass(frozen=True)
+class FutureActiveExperimentEligibility:
+    """Identity prerequisites only; never a promotion or routing decision."""
+
+    eligible_for_future_active_experiment: bool
+    blocking_reasons: tuple[FutureActiveExperimentBlockingReason, ...]
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "eligible_for_future_active_experiment": (
+                self.eligible_for_future_active_experiment
+            ),
+            "blocking_reasons": list(self.blocking_reasons),
+            "meaning": (
+                "identity_prerequisites_only_not_correctness_reputation_trust_"
+                "or_active_routing"
+            ),
+        }
+
+
+def future_active_experiment_eligibility(
+    scope: EvidenceScope,
+    *,
+    descriptor_identity_reconstructable: bool = True,
+    model_identity_reconstructable: bool = True,
+) -> FutureActiveExperimentEligibility:
+    """Diagnose immutable identity needed by a separately approved experiment.
+
+    This presentation-only diagnostic is intentionally absent from hard
+    matching, shadow candidate selection, evidence aggregation, and shadow
+    preference. A positive result is necessary but not sufficient for any
+    future active experiment.
+    """
+
+    blockers: set[FutureActiveExperimentBlockingReason] = set()
+    legacy_descriptor = scope.descriptor_hash == LEGACY_DESCRIPTOR_HASH
+    if legacy_descriptor:
+        blockers.add("legacy_descriptor_identity")
+    elif (
+        not descriptor_identity_reconstructable
+        or scope.descriptor_version != "1"
+        or len(scope.descriptor_hash) != 64
+        or any(
+            character not in "0123456789abcdef"
+            for character in scope.descriptor_hash
+        )
+    ):
+        blockers.add("descriptor_identity_unreconstructable")
+
+    if scope.model_digest is None:
+        blockers.add("immutable_model_identity_missing")
+    else:
+        try:
+            canonical_digest = normalize_model_digest(scope.model_digest)
+            _bounded_text(
+                scope.model_provider,
+                field_name="model_provider",
+                maximum=64,
+            )
+            _bounded_text(scope.model_name, field_name="model_name", maximum=128)
+        except ValueError:
+            blockers.add("model_identity_unreconstructable")
+        else:
+            if (
+                not model_identity_reconstructable
+                or canonical_digest != scope.model_digest
+            ):
+                blockers.add("model_identity_unreconstructable")
+
+    ordered = tuple(
+        reason
+        for reason in FUTURE_ACTIVE_EXPERIMENT_BLOCKING_REASON_ORDER
+        if reason in blockers
+    )
+    return FutureActiveExperimentEligibility(
+        eligible_for_future_active_experiment=not ordered,
+        blocking_reasons=ordered,
+    )
 
 
 @dataclass(frozen=True)
@@ -367,6 +537,77 @@ class ShadowDecisionAggregate:
     last_decision_at: float
 
 
+@dataclass(frozen=True)
+class ShadowOperationalRecord:
+    """Content-free operational health for one shadow-pipeline phase."""
+
+    event_id: str
+    attempt_id: str
+    phase: ShadowOperationalPhase
+    outcome: ShadowOperationalOutcome
+    reason_code: str
+    occurred_at: float
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> ShadowOperationalRecord:
+        event_id = str(row["event_id"])
+        attempt_id = _bounded_text(row["attempt_id"], field_name="attempt_id")
+        phase = str(row["phase"])
+        outcome = str(row["outcome"])
+        reason_code = str(row["reason_code"])
+        _validate_shadow_operational_classification(
+            phase=phase,
+            outcome=outcome,
+            reason_code=reason_code,
+        )
+        expected_event_id = _shadow_operational_event_id(
+            attempt_id=attempt_id,
+            phase=phase,  # type: ignore[arg-type]
+        )
+        if event_id != expected_event_id:
+            raise RuntimeError("stored shadow operational event ID is not canonical")
+        return cls(
+            event_id=event_id,
+            attempt_id=attempt_id,
+            phase=phase,  # type: ignore[arg-type]
+            outcome=outcome,  # type: ignore[arg-type]
+            reason_code=reason_code,
+            occurred_at=_timestamp(row["occurred_at"], field_name="occurred_at"),
+        )
+
+
+@dataclass(frozen=True)
+class ShadowOperationalReport:
+    """Fixed-shape health counts for an assignment-time admission cohort."""
+
+    admission_counts: dict[ShadowAdmissionOutcome, int]
+    evaluation_counts: dict[ShadowEvaluationOutcome, int]
+    orphan_evaluation_total: int
+    assignment_observation_total: int
+    offered_total: int
+    scheduled_total: int
+    completed_total: int
+    skipped_total: int
+    failed_total: int
+    pending_total: int
+    drop_failure_numerator: int
+    drop_failure_denominator: int
+    drop_failure_rate: float | None
+    latest_event_at: float | None
+    window_started_at: float | None
+    window_ended_at: float | None
+
+
+@dataclass(frozen=True)
+class ShadowOperationalProcessSnapshot:
+    """Process-lifetime fallback counters that a failed durable store cannot own."""
+
+    reset_at: float
+    durable_health_record_write_failure: int
+    unexpected_containment_failure: int
+    background_task_callback_failure: int
+
+
 def _domain_digest(domain: str, payload: str) -> str:
     return hashlib.sha256(
         domain.encode("ascii") + b"\0" + payload.encode("utf-8")
@@ -406,6 +647,83 @@ def _timestamp(value: object, *, field_name: str) -> float:
     if not math.isfinite(parsed) or parsed < 0:
         raise ValueError(f"{field_name} must be a finite non-negative timestamp")
     return parsed
+
+
+def _validate_shadow_operational_classification(
+    *, phase: str, outcome: str, reason_code: object
+) -> str:
+    if phase not in {"admission", "evaluation"}:
+        raise ValueError("shadow operational phase must be admission or evaluation")
+    allowed_reasons = _SHADOW_OPERATION_REASON_CODES.get(
+        (phase, outcome)  # type: ignore[arg-type]
+    )
+    if allowed_reasons is None:
+        raise ValueError("shadow operational outcome is invalid for its phase")
+    parsed_reason = _bounded_text(
+        reason_code,
+        field_name="reason_code",
+        maximum=64,
+    )
+    if parsed_reason not in allowed_reasons:
+        raise ValueError("shadow operational reason code is invalid for its outcome")
+    return parsed_reason
+
+
+def _shadow_operational_event_id(
+    *, attempt_id: str, phase: ShadowOperationalPhase
+) -> str:
+    payload = json.dumps(
+        {"attempt_id": attempt_id, "phase": phase},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return _domain_digest("mycelium.capability-shadow-operation.v1", payload)
+
+
+class ShadowOperationalProcessCounters:
+    """Thread-safe non-durable counters for failures the health store cannot log."""
+
+    def __init__(self, *, reset_at: float | None = None):
+        self._lock = threading.RLock()
+        self._reset_at = _timestamp(
+            time.time() if reset_at is None else reset_at,
+            field_name="reset_at",
+        )
+        self._counts: dict[ShadowOperationalCounterName, int] = {
+            name: 0 for name in SHADOW_OPERATION_COUNTER_NAMES
+        }
+
+    def increment(self, name: ShadowOperationalCounterName) -> int:
+        if name not in SHADOW_OPERATION_COUNTER_NAMES:
+            raise ValueError("unsupported shadow operational process counter")
+        with self._lock:
+            self._counts[name] += 1
+            return self._counts[name]
+
+    def reset(self, *, reset_at: float | None = None) -> None:
+        parsed = _timestamp(
+            time.time() if reset_at is None else reset_at,
+            field_name="reset_at",
+        )
+        with self._lock:
+            self._reset_at = parsed
+            for name in SHADOW_OPERATION_COUNTER_NAMES:
+                self._counts[name] = 0
+
+    def snapshot(self) -> ShadowOperationalProcessSnapshot:
+        with self._lock:
+            return ShadowOperationalProcessSnapshot(
+                reset_at=self._reset_at,
+                durable_health_record_write_failure=self._counts[
+                    "durable_health_record_write_failure"
+                ],
+                unexpected_containment_failure=self._counts[
+                    "unexpected_containment_failure"
+                ],
+                background_task_callback_failure=self._counts[
+                    "background_task_callback_failure"
+                ],
+            )
 
 
 def _attempt_value(attempt: object, name: str) -> object:
@@ -684,6 +1002,93 @@ def ensure_capability_shadow_decision_schema(con: sqlite3.Connection) -> None:
         BEFORE DELETE ON capability_shadow_decisions
         BEGIN
             SELECT RAISE(ABORT, 'capability shadow decisions are append-only');
+        END
+        """
+    )
+
+
+def ensure_capability_shadow_operational_schema(con: sqlite3.Connection) -> None:
+    """Install the bounded append-only shadow-pipeline health schema."""
+
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS capability_shadow_operational_events (
+            event_id     TEXT PRIMARY KEY CHECK(
+                length(event_id) = 64
+                AND event_id NOT GLOB '*[^0-9a-f]*'
+            ),
+            attempt_id   TEXT NOT NULL CHECK(length(attempt_id) BETWEEN 1 AND 256),
+            phase        TEXT NOT NULL CHECK(phase IN ('admission', 'evaluation')),
+            outcome      TEXT NOT NULL CHECK(
+                (phase = 'admission' AND outcome IN (
+                    'disabled', 'not_applicable', 'queue_saturated',
+                    'scope_capture_failed', 'scheduled'
+                ))
+                OR
+                (phase = 'evaluation' AND outcome IN (
+                    'completed', 'evaluator_failed', 'decision_write_failed',
+                    'cancelled_on_shutdown'
+                ))
+            ),
+            reason_code  TEXT NOT NULL CHECK(
+                reason_code IN (
+                    'mode_disabled', 'legacy_descriptor_identity',
+                    'nonproduction_attempt', 'unsupported_task_class',
+                    'background_queue_limit_reached', 'scope_capture_failed',
+                    'coordinator_shutdown_during_scope_capture',
+                    'evaluation_scheduled', 'decision_persisted',
+                    'evaluator_failed', 'decision_write_failed',
+                    'coordinator_shutdown'
+                )
+            ),
+            occurred_at  REAL NOT NULL CHECK(occurred_at >= 0),
+            CHECK(
+                (outcome = 'disabled' AND reason_code = 'mode_disabled')
+                OR (outcome = 'not_applicable' AND reason_code IN (
+                    'legacy_descriptor_identity', 'nonproduction_attempt',
+                    'unsupported_task_class'
+                ))
+                OR (outcome = 'queue_saturated'
+                    AND reason_code = 'background_queue_limit_reached')
+                OR (outcome = 'scope_capture_failed'
+                    AND reason_code IN (
+                        'scope_capture_failed',
+                        'coordinator_shutdown_during_scope_capture'
+                    ))
+                OR (outcome = 'scheduled'
+                    AND reason_code = 'evaluation_scheduled')
+                OR (outcome = 'completed'
+                    AND reason_code = 'decision_persisted')
+                OR (outcome = 'evaluator_failed'
+                    AND reason_code = 'evaluator_failed')
+                OR (outcome = 'decision_write_failed'
+                    AND reason_code = 'decision_write_failed')
+                OR (outcome = 'cancelled_on_shutdown'
+                    AND reason_code = 'coordinator_shutdown')
+            ),
+            UNIQUE(attempt_id, phase)
+        )
+        """
+    )
+    con.execute(
+        "CREATE INDEX IF NOT EXISTS idx_capability_shadow_operations_phase_time "
+        "ON capability_shadow_operational_events(phase, occurred_at, attempt_id)"
+    )
+    con.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_capability_shadow_operations_no_update
+        BEFORE UPDATE ON capability_shadow_operational_events
+        BEGIN
+            SELECT RAISE(ABORT, 'capability shadow operational events are append-only');
+        END
+        """
+    )
+    con.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_capability_shadow_operations_no_delete
+        BEFORE DELETE ON capability_shadow_operational_events
+        BEGIN
+            SELECT RAISE(ABORT, 'capability shadow operational events are append-only');
         END
         """
     )
@@ -1568,6 +1973,38 @@ class CapabilityEvidenceStore:
                 cutoff=cutoff,
             )
 
+    def aggregate_read_only(
+        self,
+        scope: EvidenceScope,
+        *,
+        minimum_samples: int = 5,
+        recent_limit: int = 100,
+        recorded_before: float | None = None,
+    ) -> ScopeAggregate:
+        """Aggregate from an initialized database without schema/write access."""
+
+        if isinstance(minimum_samples, bool) or not 1 <= minimum_samples <= 10_000:
+            raise ValueError("minimum_samples must be between 1 and 10000")
+        if isinstance(recent_limit, bool) or not 1 <= recent_limit <= MAX_RECENT_SAMPLES:
+            raise ValueError(f"recent_limit must be between 1 and {MAX_RECENT_SAMPLES}")
+        cutoff = (
+            None
+            if recorded_before is None
+            else _timestamp(recorded_before, field_name="recorded_before")
+        )
+        with self._lock, connection(
+            self.path,
+            row_factory=sqlite3.Row,
+            read_only=True,
+        ) as con:
+            return self._aggregate_in_connection(
+                con,
+                scope,
+                minimum_samples=minimum_samples,
+                recent_limit=recent_limit,
+                cutoff=cutoff,
+            )
+
     def list_scope_aggregates(
         self,
         *,
@@ -1676,6 +2113,97 @@ class CapabilityShadowDecisionStore:
         ) as con:
             ensure_capability_shadow_decision_schema(con)
             con.commit()
+
+    def import_legacy_decisions(
+        self,
+        source_path: str | Path,
+        *,
+        batch_size: int = 500,
+    ) -> int:
+        """Idempotently copy pre-isolation decisions from another database."""
+
+        if isinstance(batch_size, bool) or not 1 <= batch_size <= 500:
+            raise ValueError("batch_size must be between 1 and 500")
+        source = Path(source_path)
+        if not source.is_file() or source.resolve() == self.path.resolve():
+            return 0
+
+        columns = (
+            "decision_id",
+            "schema_version",
+            "actual_attempt_id",
+            "policy_version",
+            "decision_at",
+            "actual_candidate_id",
+            "actual_scope_key",
+            "preferred_candidate_id",
+            "outcome",
+            "rationale_code",
+            "candidate_count",
+            "candidate_set_digest",
+            "recorded_at",
+        )
+        column_list = ", ".join(columns)
+        placeholders = ", ".join("?" for _column in columns)
+        self.migrate()
+        imported = 0
+        with migration_lock(source), connection(
+            source,
+            row_factory=sqlite3.Row,
+        ) as source_con:
+            table = source_con.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type = 'table' AND name = 'capability_shadow_decisions'"
+            ).fetchone()
+            if table is None:
+                return 0
+            available_columns = {
+                str(row[1])
+                for row in source_con.execute(
+                    "PRAGMA table_info(capability_shadow_decisions)"
+                ).fetchall()
+            }
+            if not set(columns) <= available_columns:
+                raise ValueError("legacy shadow decision schema is incomplete")
+            cursor = source_con.execute(
+                f"SELECT {column_list} FROM capability_shadow_decisions "
+                "WHERE actual_scope_key IS NOT NULL ORDER BY decision_id"
+            )
+            while rows := cursor.fetchmany(batch_size):
+                values = [tuple(row[column] for column in columns) for row in rows]
+                with self._lock, migration_lock(self.path), connection(
+                    self.path,
+                    row_factory=sqlite3.Row,
+                ) as destination:
+                    ensure_capability_shadow_decision_schema(destination)
+                    destination.execute("BEGIN IMMEDIATE")
+                    before = destination.total_changes
+                    destination.executemany(
+                        "INSERT OR IGNORE INTO capability_shadow_decisions "
+                        f"({column_list}) VALUES ({placeholders})",
+                        values,
+                    )
+                    imported += destination.total_changes - before
+                    decision_ids = [str(row["decision_id"]) for row in rows]
+                    id_placeholders = ", ".join("?" for _item in decision_ids)
+                    stored_rows = destination.execute(
+                        f"SELECT {column_list} FROM capability_shadow_decisions "
+                        f"WHERE decision_id IN ({id_placeholders})",
+                        decision_ids,
+                    ).fetchall()
+                    stored = {
+                        str(row["decision_id"]): tuple(
+                            row[column] for column in columns
+                        )
+                        for row in stored_rows
+                    }
+                    for row, expected in zip(rows, values, strict=True):
+                        if stored.get(str(row["decision_id"])) != expected:
+                            raise ShadowDecisionConflict(
+                                "legacy shadow decision conflicts with isolated store"
+                            )
+                    destination.commit()
+        return imported
 
     def record(
         self, evaluation: ShadowEvaluation, *, recorded_at: float | None = None
@@ -1910,6 +2438,313 @@ class CapabilityShadowDecisionStore:
                 last_decision_at=float(row["last_decision_at"]),
             )
             for row in rows
+        )
+
+
+class CapabilityShadowOperationalStore:
+    """Append-only operational health, separate from evidence and node outcomes."""
+
+    def __init__(self, path: str | Path = "capability-shadow-health.db"):
+        self.path = Path(path)
+        self._lock = threading.RLock()
+
+    def migrate(self) -> None:
+        with self._lock, migration_lock(self.path), connection(
+            self.path, row_factory=sqlite3.Row
+        ) as con:
+            ensure_capability_shadow_operational_schema(con)
+            con.commit()
+
+    def record(
+        self,
+        *,
+        attempt_id: str,
+        phase: ShadowOperationalPhase,
+        outcome: ShadowOperationalOutcome,
+        reason_code: str,
+        occurred_at: float | None = None,
+    ) -> ShadowOperationalRecord:
+        """Record one terminal phase outcome, or replay the identical classification.
+
+        The event identity is the attempt/phase pair. A same-classification replay
+        returns the first row (including its original timestamp); changing either
+        outcome or reason under that identity raises a conflict.
+        """
+
+        parsed_attempt_id = _bounded_text(
+            attempt_id,
+            field_name="attempt_id",
+        )
+        if phase not in {"admission", "evaluation"}:
+            raise ValueError("shadow operational phase must be admission or evaluation")
+        parsed_reason = _validate_shadow_operational_classification(
+            phase=phase,
+            outcome=outcome,
+            reason_code=reason_code,
+        )
+        event_time = _timestamp(
+            time.time() if occurred_at is None else occurred_at,
+            field_name="occurred_at",
+        )
+        event_id = _shadow_operational_event_id(
+            attempt_id=parsed_attempt_id,
+            phase=phase,
+        )
+        values = (
+            event_id,
+            parsed_attempt_id,
+            phase,
+            outcome,
+            parsed_reason,
+            event_time,
+        )
+        with self._lock, migration_lock(self.path), connection(
+            self.path, row_factory=sqlite3.Row
+        ) as con:
+            ensure_capability_shadow_operational_schema(con)
+            con.execute("BEGIN IMMEDIATE")
+            con.execute(
+                """
+                INSERT OR IGNORE INTO capability_shadow_operational_events (
+                    event_id, attempt_id, phase, outcome, reason_code, occurred_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                values,
+            )
+            row = con.execute(
+                "SELECT * FROM capability_shadow_operational_events "
+                "WHERE attempt_id = ? AND phase = ?",
+                (parsed_attempt_id, phase),
+            ).fetchone()
+            if row is None:  # pragma: no cover - SQLite insert contract
+                raise RuntimeError(
+                    "shadow operational event disappeared after insertion"
+                )
+            record = ShadowOperationalRecord.from_row(row)
+            immutable_identity = (
+                record.event_id,
+                record.attempt_id,
+                record.phase,
+                record.outcome,
+                record.reason_code,
+            )
+            if immutable_identity != values[:5]:
+                raise ShadowOperationalEventConflict(
+                    "shadow operational event conflicts with immutable stored content"
+                )
+            con.commit()
+            return record
+
+    def get(self, event_id: str) -> ShadowOperationalRecord | None:
+        parsed_event_id = _bounded_text(
+            event_id,
+            field_name="event_id",
+            maximum=64,
+        )
+        if len(parsed_event_id) != 64 or any(
+            character not in "0123456789abcdef" for character in parsed_event_id
+        ):
+            raise ValueError("event_id must be a lowercase SHA-256 digest")
+        self.migrate()
+        with self._lock, connection(self.path, row_factory=sqlite3.Row) as con:
+            row = con.execute(
+                "SELECT * FROM capability_shadow_operational_events "
+                "WHERE event_id = ?",
+                (parsed_event_id,),
+            ).fetchone()
+        return ShadowOperationalRecord.from_row(row) if row is not None else None
+
+    def get_for_attempt_phase(
+        self,
+        attempt_id: str,
+        phase: ShadowOperationalPhase,
+    ) -> ShadowOperationalRecord | None:
+        parsed_attempt_id = _bounded_text(
+            attempt_id,
+            field_name="attempt_id",
+        )
+        if phase not in {"admission", "evaluation"}:
+            raise ValueError("shadow operational phase must be admission or evaluation")
+        self.migrate()
+        with self._lock, connection(self.path, row_factory=sqlite3.Row) as con:
+            row = con.execute(
+                "SELECT * FROM capability_shadow_operational_events "
+                "WHERE attempt_id = ? AND phase = ?",
+                (parsed_attempt_id, phase),
+            ).fetchone()
+        return ShadowOperationalRecord.from_row(row) if row is not None else None
+
+    def report(
+        self,
+        *,
+        window_started_at: float | None = None,
+        window_ended_at: float | None = None,
+    ) -> ShadowOperationalReport:
+        """Aggregate a cohort selected by its admission timestamp.
+
+        Evaluation events for selected attempts remain in the cohort even if
+        they complete after ``window_ended_at``. This keeps the failure numerator
+        and offered denominator about the same assignments. A durable evaluation
+        whose admission write is missing is selected by its own timestamp and
+        counted as one inferred scheduled/offered assignment, so a persisted
+        terminal outcome cannot disappear from the report.
+        """
+
+        started = (
+            None
+            if window_started_at is None
+            else _timestamp(window_started_at, field_name="window_started_at")
+        )
+        ended = (
+            None
+            if window_ended_at is None
+            else _timestamp(window_ended_at, field_name="window_ended_at")
+        )
+        if started is not None and ended is not None and started > ended:
+            raise ValueError("window_started_at must not exceed window_ended_at")
+
+        cohort_clauses = ["phase = 'admission'"]
+        parameters: list[object] = []
+        if started is not None:
+            cohort_clauses.append("occurred_at >= ?")
+            parameters.append(started)
+        if ended is not None:
+            cohort_clauses.append("occurred_at <= ?")
+            parameters.append(ended)
+
+        self.migrate()
+        with self._lock, connection(self.path, row_factory=sqlite3.Row) as con:
+            rows = con.execute(
+                """
+                WITH cohort AS (
+                    SELECT attempt_id
+                    FROM capability_shadow_operational_events
+                    WHERE """
+                + " AND ".join(cohort_clauses)
+                + """
+                )
+                SELECT events.phase, events.outcome, COUNT(*) AS event_count,
+                       MAX(events.occurred_at) AS latest_event_at
+                FROM capability_shadow_operational_events AS events
+                JOIN cohort ON cohort.attempt_id = events.attempt_id
+                GROUP BY events.phase, events.outcome
+                ORDER BY events.phase, events.outcome
+                """,
+                parameters,
+            ).fetchall()
+            orphan_clauses = [
+                "evaluation.phase = 'evaluation'",
+                "admission.attempt_id IS NULL",
+            ]
+            orphan_parameters: list[object] = []
+            if started is not None:
+                orphan_clauses.append("evaluation.occurred_at >= ?")
+                orphan_parameters.append(started)
+            if ended is not None:
+                orphan_clauses.append("evaluation.occurred_at <= ?")
+                orphan_parameters.append(ended)
+            orphan_rows = con.execute(
+                """
+                SELECT evaluation.outcome, COUNT(*) AS event_count,
+                       MAX(evaluation.occurred_at) AS latest_event_at
+                FROM capability_shadow_operational_events AS evaluation
+                LEFT JOIN capability_shadow_operational_events AS admission
+                  ON admission.attempt_id = evaluation.attempt_id
+                 AND admission.phase = 'admission'
+                WHERE """
+                + " AND ".join(orphan_clauses)
+                + """
+                GROUP BY evaluation.outcome
+                ORDER BY evaluation.outcome
+                """,
+                orphan_parameters,
+            ).fetchall()
+
+        admission_counts: dict[ShadowAdmissionOutcome, int] = {
+            outcome: 0 for outcome in SHADOW_ADMISSION_OUTCOMES
+        }
+        evaluation_counts: dict[ShadowEvaluationOutcome, int] = {
+            outcome: 0 for outcome in SHADOW_EVALUATION_OUTCOMES
+        }
+        latest_event_at: float | None = None
+        for row in rows:
+            phase = str(row["phase"])
+            outcome = str(row["outcome"])
+            count = int(row["event_count"])
+            if phase == "admission":
+                admission_counts[outcome] = count  # type: ignore[index]
+            elif phase == "evaluation":
+                evaluation_counts[outcome] = count  # type: ignore[index]
+            else:  # pragma: no cover - guarded by the schema
+                raise RuntimeError("stored shadow operational phase is invalid")
+            row_latest = _timestamp(
+                row["latest_event_at"],
+                field_name="latest_event_at",
+            )
+            latest_event_at = (
+                row_latest
+                if latest_event_at is None
+                else max(latest_event_at, row_latest)
+            )
+
+        orphan_evaluation_total = 0
+        for row in orphan_rows:
+            outcome = str(row["outcome"])
+            count = int(row["event_count"])
+            evaluation_counts[outcome] += count  # type: ignore[index]
+            orphan_evaluation_total += count
+            row_latest = _timestamp(
+                row["latest_event_at"],
+                field_name="latest_event_at",
+            )
+            latest_event_at = (
+                row_latest
+                if latest_event_at is None
+                else max(latest_event_at, row_latest)
+            )
+
+        assignment_observation_total = (
+            sum(admission_counts.values()) + orphan_evaluation_total
+        )
+        scheduled_total = (
+            admission_counts["scheduled"] + orphan_evaluation_total
+        )
+        completed_total = evaluation_counts["completed"]
+        skipped_total = (
+            admission_counts["disabled"] + admission_counts["not_applicable"]
+        )
+        offered_total = (
+            scheduled_total
+            + admission_counts["queue_saturated"]
+            + admission_counts["scope_capture_failed"]
+        )
+        evaluation_terminal_total = sum(evaluation_counts.values())
+        failed_total = (
+            admission_counts["queue_saturated"]
+            + admission_counts["scope_capture_failed"]
+            + evaluation_counts["evaluator_failed"]
+            + evaluation_counts["decision_write_failed"]
+            + evaluation_counts["cancelled_on_shutdown"]
+        )
+        return ShadowOperationalReport(
+            admission_counts=admission_counts,
+            evaluation_counts=evaluation_counts,
+            orphan_evaluation_total=orphan_evaluation_total,
+            assignment_observation_total=assignment_observation_total,
+            offered_total=offered_total,
+            scheduled_total=scheduled_total,
+            completed_total=completed_total,
+            skipped_total=skipped_total,
+            failed_total=failed_total,
+            pending_total=max(0, scheduled_total - evaluation_terminal_total),
+            drop_failure_numerator=failed_total,
+            drop_failure_denominator=offered_total,
+            drop_failure_rate=(
+                failed_total / offered_total if offered_total else None
+            ),
+            latest_event_at=latest_event_at,
+            window_started_at=started,
+            window_ended_at=ended,
         )
 
 
