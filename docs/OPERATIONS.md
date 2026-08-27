@@ -37,7 +37,9 @@ coordinator on a local filesystem serving a small private trusted alpha.
 | Attempt authority, nonce digests, settlement receipts, quarantine | SQLite | Retained; active attempts become `interrupted`; exact settled replay remains durable |
 | Node enrollment IDs, credential digests, status, rotation/revocation | SQLite | Retained; sessions are reacquired after restart |
 | Enrolled capability descriptor snapshots | SQLite | Immutable canonical claim JSON retained by enrollment/hash; attempts keep version/hash references |
-| Scoped capability observations, projection receipts, and shadow decisions | SQLite | Append-only operational records retained; bounded missing-only startup reconciliation repairs missed projections without changing settlement |
+| Scoped capability observations and projection receipts | SQLite (`events.db`) | Append-only records retained; bounded missing-only startup reconciliation repairs missed projections without changing settlement |
+| Shadow decisions and successful operational-health events | Separate SQLite (`capability-shadow-health.db`) | Append-only decisions and admission/evaluation rows survive; deterministic identities prevent replay double count; writer locks are isolated from authoritative `events.db` |
+| Shadow health-store, containment, and callback fallback counters | Memory | Reset at process start; protected reporting exposes their new `reset_at` timestamp |
 | Shares and revocation metadata | SQLite | Retained; plaintext share token is never stored |
 | Contribution records | SQLite | Authoritative; JSON ledger is only a compatibility projection |
 | Artifact roots, entries, hashes, roles, seal state | SQLite plus files | Retained if both database and artifact trees are restored together |
@@ -48,10 +50,10 @@ coordinator on a local filesystem serving a small private trusted alpha.
 | Plaintext attempt nonce | Coordinator and assigned-worker process memory | Never stored durably; SQLite and backups contain only its digest |
 | Plaintext node session token | Worker process memory only | Not recoverable from coordinator state; the coordinator stores only its digest |
 
-Do not copy only `events.db` and assume a complete recovery. Artifacts,
-projects, config, output, and the compatibility ledger are part of the backup
-set. Conversely, copying a live WAL database file directly is not a consistent
-SQLite snapshot.
+Do not copy only `events.db` and assume a complete recovery.
+`capability-shadow-health.db`, artifacts, projects, config, output, and the
+compatibility ledger are part of the backup set. Conversely, copying either
+live WAL database file directly is not a consistent SQLite snapshot.
 
 ## Single-coordinator ownership
 
@@ -89,6 +91,20 @@ All production `events.db` stores use the shared connection policy:
 - bounded retry only for SQLite busy/locked failures; and
 - a process-wide migration lock per resolved database path.
 
+Best-effort shadow decisions and operational-health rows use the sibling
+`capability-shadow-health.db`. Its separate SQLite writer-lock domain prevents
+optional experiment writes from contending with authoritative assignment,
+attempt, and settlement transactions in `events.db`. On upgrade, pre-isolation
+shadow decisions are copied from the legacy `events.db` table idempotently;
+that source table is retained as append-only history but receives no new live
+decisions.
+
+Background shadow aggregation opens `events.db` through SQLite `mode=ro` plus
+`query_only`, skips schema migration and WAL configuration, and performs only
+bounded selects against startup-initialized evidence tables. This preserves the
+single-coordinator write boundary even if a daemon read finishes after the
+graceful drain.
+
 Critical settlement paths use explicit immediate transactions so the attempt
 transition, immutable receipt, replay response, and unique compute contribution
 commit together. The one-coordinator invariant prevents cross-process scheduler
@@ -105,8 +121,8 @@ execution fails closed.
 
 For diagnosis, run `PRAGMA quick_check` through preflight or a read-only SQLite
 tool only after considering the sensitivity of the database. Use the online
-backup tool while the service is active rather than filesystem-copying
-`events.db`, `-wal`, or `-shm` separately.
+backup tool while the service is active rather than filesystem-copying either
+database or its `-wal`/`-shm` sidecars separately.
 
 ## Lifecycle, cancellation, and restart
 
@@ -278,6 +294,20 @@ Ollama model is claimed; version, digest, and quantization are included only
 when Ollama supplies them for that exact model. Stock isolation is explicitly
 `none`, concurrency is one, and its output claim stays at the protocol ceiling.
 
+The output value is a claimed hard placement limit. For a typed session, every
+qualification and handout path compares it with the canonical execution's
+server-derived output budget. Equality is eligible; a smaller claim is excluded
+with `insufficient_output_capacity`. The budget is not added to the typed
+resource-requirement object or its hash. A descriptorless local-compatibility
+session has no typed capacity to compare, and the coordinator does not invent
+one for it.
+
+The concurrency field is only an informational claimed upper bound. The
+coordinator does not maintain or enforce per-node slot counts and does not
+create multiple slots when a worker advertises a value above one. The stock
+worker polls and executes sequentially, so its normal behavior conservatively
+remains within the descriptor.
+
 Operators may set `model` and `worker_capability_overrides` in `config.json`.
 Direct `node.py` starts also accept `--model MODEL` and
 `--capability-overrides PATH`; the bounded JSON file is layered over the config
@@ -293,6 +323,11 @@ session cannot change its descriptor: `409 node_capability_descriptor_conflict`
 means stop new assignment, let current work finish, stop the worker, and start a
 new process/session with the intended descriptor. Do not keep retrying the old
 session with changed claims.
+
+The server-issued attempt remains the output authority after assignment. A
+larger claim cannot raise the task limit, and reconnect, streaming, or final
+result submission cannot renegotiate it. The attempt-specific cap continues to
+govern cumulative stream bytes and settlement.
 
 Bootstrap and returning registration for a durable enrollment require the
 descriptor. A descriptorless old worker can run only in the explicitly
@@ -333,12 +368,28 @@ logs a warning and uses the default. `verify_rate` is independent and defaults
 to zero.
 
 `shadow` runs only a bounded post-assignment counterfactual over candidates that
-already passed the same hard requirements. Their exact descriptor/model scopes
-are frozen at assignment time before asynchronous aggregation, which uses
-evidence recorded no later than assignment. It cannot mutate the queue,
-eligibility, actual assignment, settlement, contributions, or breaker state. An
-evidence write or evaluation failure is contained and never overturns accepted
-work.
+already passed the same hard requirements. Admission freezes bounded non-secret
+claim inputs at assignment time. Canonical rematching and exact
+descriptor/model scope construction run from that immutable snapshot in bounded
+background work, outside the production queue lock; handout does not wait for
+scope capture or evidence aggregation. Aggregation uses evidence recorded no
+later than assignment. It cannot mutate the queue, eligibility, actual
+assignment, settlement, contributions, or breaker state. An evidence write or
+evaluation failure is contained and never overturns accepted work.
+
+The optional pipeline records its own operational health in two phases.
+Admission outcomes are `disabled`, `not_applicable`, `queue_saturated`,
+`scope_capture_failed`, and `scheduled`. A scheduled evaluation terminates as
+`completed`, `evaluator_failed`, `decision_write_failed`, or
+`cancelled_on_shutdown`. Durable rows contain only deterministic event ID,
+attempt ID, phase, outcome, bounded reason code, and occurrence time; replay does
+not double count them.
+
+Failures that cannot safely record themselves in the health database increment process-local
+`durable_health_record_write_failure`, `unexpected_containment_failure`, or
+`background_task_callback_failure` counters. The protected report includes the
+process `reset_at` time. These counters reset on coordinator start and the
+failure path never recursively tries to write another health record.
 
 Use viewer authentication to inspect aggregates:
 
@@ -347,6 +398,11 @@ curl -fsS -b viewer.cookies \
   "$BASE_URL/v1/operator/capability-evidence?limit=100&evidence_role=production"
 ```
 
+The response field `shadow_decision_aggregates_available` distinguishes a real
+zero from an unavailable isolated decision store. On read failure the protected
+endpoint remains available, per-scope shadow counts are null, and a
+process-local containment failure is counted without exposing exception text.
+
 Optional filters are `enrollment_id`, `descriptor_hash`, `task_class`
 (`dag_subtask` or `candidate`), and `evidence_role` (`production` or
 `sampled_comparison`). The response always states `affects_routing=false`.
@@ -354,6 +410,50 @@ Binary dimensions include sample counts and Wilson intervals; latency and
 throughput are bounded recent medians. Below the configured minimum, read
 `insufficient_evidence` as cold start, never as failure. Descriptor, selected
 model, task class, and evidence-role changes create separate cold scopes.
+
+Bounded `window_started_at` and `window_ended_at` Unix-timestamp query filters
+select an inclusive admission-time cohort and include the corresponding
+attempts' evaluation outcomes even when they finish after the window end. The report exposes durable counts by
+phase/outcome plus offered, scheduled, completed, skipped, failed, and pending
+totals. Reproduce its drop/failure rate as:
+
+```text
+orphan_evaluation_total = evaluation rows with no persisted admission row
+assignment_observation_total = all admission outcomes + orphan_evaluation_total
+scheduled = scheduled admissions + orphan_evaluation_total
+offered = scheduled + queue_saturated + scope_capture_failed
+skipped = disabled + not_applicable
+failed = queue_saturated + scope_capture_failed + evaluator_failed
+         + decision_write_failed + cancelled_on_shutdown
+drop/failure numerator = failed
+drop/failure denominator = offered
+drop/failure rate = failed / offered
+```
+
+The rate is null when `offered` is zero. An orphan evaluation is a durable
+terminal evaluation whose admission write is absent; the report exposes
+`orphan_evaluation_total` and infers one scheduled/offered observation for each
+orphan so a partial telemetry-write failure cannot hide the outcome or shrink
+the denominator. `pending` is scheduled, including those inferred admissions,
+minus completed and all evaluation terminal outcomes, bounded at zero. Read this
+as experiment pipeline health, not as a node failure or reputation rate.
+Cancellation on coordinator shutdown is an operational outcome and is never
+blamed on a worker. Shutdown stops new shadow admissions and uses a finite
+graceful drain. Scope capture that exceeds the drain is reported as
+`scope_capture_failed` with reason
+`coordinator_shutdown_during_scope_capture`. An already-running decision write
+may finish after the coordinator stops awaiting it and records its truthful
+`completed` or `decision_write_failed` result; the drain overrun is also visible
+in the process-local containment counter.
+
+Each scope includes an identity-only future-active diagnostic with the bounded
+reasons `legacy_descriptor_identity`, `descriptor_identity_unreconstructable`,
+`immutable_model_identity_missing`, and `model_identity_unreconstructable`.
+Non-promotable scopes remain hard-eligible when their task constraints allow
+it. The diagnostic does not alter a hypothetical shadow preference or itself
+suppress evidence; in particular, a digestless typed scope continues collecting
+when the existing resolver can otherwise reconstruct it. Passing the identity
+check is necessary but not sufficient for a future active experiment.
 
 Only server-owned `lease_expired` and `node_stale` terminal causes are charged
 as worker failures. Caller cancellation, execution deadline, payload/stream
@@ -376,9 +476,15 @@ contains only the superseded `lifecycle` definition; current aggregates ignore
 the old subject rather than rewriting append-only history.
 
 The endpoint returns aggregates and grouped shadow outcomes, not raw records.
-The store omits prompt/output bodies, worker error text, free-form reasons,
-credentials, nonces, session secrets, and arbitrary telemetry. It is still
-private operational inventory and is included in `events.db` backups.
+It also returns derived identity blockers and aggregate operational-health
+counts, never the underlying health rows. The stores and response omit
+prompt/output bodies, worker error text, free-form reasons, credentials, tokens,
+nonces, session secrets, artifact contents, and arbitrary exception messages.
+All accounting is best effort: its failure cannot alter node selection, handout,
+attempt count, settlement, contribution, or execution outcome. The report is
+still private operational inventory and its durable portion is included in
+the backup as `capability-shadow-health.db`, separately from authoritative
+`events.db`.
 
 Session counters and durable lifetime contribution counters are distinct:
 
@@ -558,24 +664,37 @@ behavioral test actually ran and its scope is shown.
 
 ## Backup and recovery
 
-`scripts/backup.py` uses SQLite's online backup API, then packages the database,
-config, projects, output/artifacts, compatibility ledger, and build metadata in
-a versioned ZIP with checksums. The archive is sensitive and receives private
-POSIX permissions where supported.
+`scripts/backup.py` writes backup format v2. It uses SQLite's online backup API
+for both `events.db` and `capability-shadow-health.db`, then packages those
+independent snapshots, config, projects, output/artifacts, compatibility ledger,
+and build metadata in a versioned ZIP with checksums. The archive is sensitive
+and receives private POSIX permissions where supported.
 
 `scripts/restore.py` validates the complete archive before mutation, rejects
 unsafe entries and collisions, stages on the target filesystem, installs with
 rollback-capable renames, and refuses existing managed state without
-`--force`. It removes stale SQLite sidecars and prints the post-restore
+`--force`. It restores both databases together, removes their stale SQLite
+sidecars, and prints the post-restore
 preflight command. Stop the coordinator before restore.
 
-The SQLite snapshot includes node enrollment IDs, credential digests,
+Restore accepts current format-v2 archives and legacy format-v1 archives. A v2
+backup normally carries `capability-shadow-health.db`; the health database may
+be absent only when backing up or restoring pre-feature state. Legacy v1 has no
+health-database manifest field, so restoring it preserves the authoritative
+state while starting new shadow-health history on the upgraded coordinator.
+
+The `events.db` snapshot includes node enrollment IDs, credential digests,
 revocation/rotation state, immutable capability-claim snapshots, and nullable
 attempt/receipt descriptor and requirement bindings, scoped capability
-observations and shadow decisions, plus contribution attribution. It contains no
-plaintext enrollment credential. Worker identity files live on the workers and
-are deliberately outside the coordinator backup; each worker operator must
-protect and back them up separately.
+observations, legacy pre-isolation shadow decisions, and contribution
+attribution. The separate `capability-shadow-health.db` snapshot contains live
+append-only shadow decisions and successful operational-health records. A
+legacy format-v1 restore copies its old decisions forward idempotently on the
+next startup. Process-local shadow fallback counters and their prior reset
+timestamp are not restored. Neither snapshot contains a plaintext enrollment
+credential. Worker identity files live on the workers and are deliberately
+outside the coordinator backup; each worker operator must protect and back them
+up separately.
 
 A restore is point-in-time, not an offboarding log. Only revocations and
 rotations already present in that snapshot survive. Restoring an older snapshot
@@ -604,8 +723,8 @@ fields directly:
 | Concern | Fields/source | Display rule |
 | --- | --- | --- |
 | Enrollment/session | Private `GET /v1/operator/node-enrollments` and `GET /nodes`: `enrollment_id`, `node_id`, `status`, timestamps, live session/drain state, and session/lifetime totals | Use enrollment ID as trust/accounting key and node ID as label; never request or render credential material or `session_token` |
-| Capability claim | Private operator enrollment view: descriptor/version/hash, legacy tag provenance, `hard_requirement_eligibility.reason_codes`; `/nodes` has hash/version only | Say “claimed” and “eligible,” never measured, verified, trusted, or attested; keep full hardware/model inventory off public views |
-| Capability evidence | Private `GET /v1/operator/capability-evidence`: scoped counts/rates/intervals, recent medians, `insufficient_evidence`, grouped shadow outcomes, `affects_routing` | Say “observed operational history”; agreement means shape only; never display correctness, trust, reputation, routing weight, or a global score |
+| Capability claim | Private operator enrollment view: descriptor/version/hash, legacy tag provenance, `hard_requirement_eligibility.reason_codes`; `/nodes` has hash/version only | Say “claimed” and “eligible,” never measured, verified, trusted, or attested; `insufficient_output_capacity` compares the claimed node maximum with the server task budget; keep full hardware/model inventory off public views |
+| Capability evidence | Private `GET /v1/operator/capability-evidence`: scoped counts/rates/intervals, recent medians, `insufficient_evidence`, grouped shadow outcomes, identity blockers, operational-health counts and process reset/counters, `affects_routing` | Say “observed operational history” and “experiment health”; agreement means shape only; future-active eligibility is an identity prerequisite only; never display correctness, trust, reputation, routing weight, or a global score |
 | Deployment protection | Public `/health.private_routes_protected` and `warnings`; private `/v1/operator/health`: `deployment_mode`, `instance_id`, `single_coordinator_lock`, `preflight_warnings` | “Protected” requires the boolean true; do not treat HTTP 200 alone as safe |
 | Artifact role | Manifest entry `role` | Label deliverable separately from provenance/log/candidate/internal |
 | Manifest integrity | Execution `artifact_integrity_mode`, `sealed_manifest_hash`; manifest `integrity_mode`, `manifest_hash`, `sealed_at` | Say “sealed local hash baseline,” not signed/verified; explain legacy/active/invalid states |
@@ -638,3 +757,9 @@ Sampled comparison remains optional and default-off. Its agreement signal is
 diagnostic output-shape agreement only. Production polling never defers first
 refusal or changes queue order from verification or capability evidence, in any
 deployment or evidence mode.
+
+There is likewise no worker concurrency or capacity-weighted scheduling. A
+future active evidence experiment requires immutable model and descriptor
+identity, every documented live threshold, a separate accepted ADR, and a
+separately reviewed implementation PR. None is introduced by the current
+diagnostic.

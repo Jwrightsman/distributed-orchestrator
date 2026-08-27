@@ -159,9 +159,28 @@ bounded GPU data, and exact Ollama metadata are best-effort; unavailable values
 remain unknown. Detection and overrides are claims, not measurement,
 attestation, trust, or correctness.
 
+The descriptor's `limits.max_output_bytes` is also a claimed hard placement
+limit. A typed node is eligible only when that claim is at least the canonical
+task's server-issued `max_output_bytes`; equality is eligible and a lower claim
+is reported as `insufficient_output_capacity`. The task value is matching
+context derived by the coordinator, not a duplicate resource requirement or a
+change to the canonical request hash. After handout, the exact task value stored
+on the durable attempt remains authoritative for streaming and settlement. A
+larger descriptor claim cannot raise it.
+
+`limits.max_concurrent_execution_units` is only an informational upper-bound
+claim today. The coordinator does not maintain or enforce per-node slot counts,
+and the stock worker polls and executes sequentially, conservatively staying
+within that bound. The coordinator does not issue per-node parallel slots or
+capacity-weight assignments.
+
 Trusted-alpha enrolled registration requires this descriptor. Do not use local
 descriptorless compatibility as an enrollment workaround; upgrade the worker
-if the coordinator returns `node_capability_descriptor_required`.
+if the coordinator returns `node_capability_descriptor_required`. Where local
+descriptorless compatibility is explicitly enabled, the matcher does not
+fabricate a typed output-capacity claim; the existing legacy matching behavior
+continues, while any assigned durable attempt still enforces its server-issued
+output limit.
 
 Protect and back up the worker identity file separately. POSIX mode must be
 `0600`; a malformed, wrong-coordinator, wrong-label, or dangerously permissive
@@ -243,11 +262,13 @@ process:
 ```
 
 The only modes are `off` and `shadow`; there is no active routing mode. The
-minimum must be an integer from 1 through 1000. Shadow work starts only after
-the real assignment, freezes assignment-time candidate scopes, never waits for
-evidence, and cannot rank, reorder, or replace it. `verify_rate` is a separate
-default-off sampled-comparison control; trusted-alpha keeps that duplicate path
-disabled.
+minimum must be an integer from 1 through 1000. After the real assignment is
+durable, admission freezes bounded non-secret assignment-time claim inputs.
+Canonical rematching and candidate-scope construction run from that snapshot in
+bounded background work outside the production queue lock, so handout never
+waits for scope capture or evidence. Shadow work cannot rank, reorder, or replace
+the assignment. `verify_rate` is a separate default-off sampled-comparison
+control; trusted-alpha keeps that duplicate path disabled.
 
 Read the protected aggregates with the same viewer cookie:
 
@@ -263,6 +284,64 @@ selected-model, task-class, and evidence-role changes deliberately start a new
 scope. Contract-floor rates describe structural assurance; sampled agreement
 describes output shape, not correctness or trust. A durable comparison binds an
 exact primary attempt rather than any unit sharing the execution.
+
+The same protected surface reports shadow-pipeline operational health. Admission
+outcomes are `disabled`, `not_applicable`, `queue_saturated`,
+`scope_capture_failed`, and `scheduled`; evaluation outcomes are `completed`,
+`evaluator_failed`, `decision_write_failed`, and `cancelled_on_shutdown`.
+Inspect durable counts by phase and outcome together with offered, scheduled,
+completed, skipped, failed, and pending totals. The report must expose both
+`drop_failure_numerator` and `drop_failure_denominator`, not only a percentage:
+
+```text
+orphan_evaluation_total = evaluation rows with no persisted admission row
+assignment_observation_total = all admission outcomes + orphan_evaluation_total
+scheduled = scheduled admissions + orphan_evaluation_total
+offered = scheduled + queue_saturated + scope_capture_failed
+drop/failure numerator = queue_saturated + scope_capture_failed
+                         + evaluator_failed + decision_write_failed
+                         + cancelled_on_shutdown
+drop/failure denominator = offered
+```
+
+The rate is unavailable when `offered` is zero. The report's
+`orphan_evaluation_total` identifies terminal evaluation rows whose admission
+write is absent; each is counted as one inferred scheduled/offered observation
+so the outcome remains in a reproducible numerator and denominator. Bounded
+`window_started_at` and `window_ended_at` Unix-timestamp query filters select an
+inclusive admission-time cohort and include terminal evaluation records for
+those attempts even when they finish after the window end; orphan rows are
+selected by their evaluation time. `pending` makes scheduled admissions without
+a terminal evaluation visible. Shutdown cancellation is experiment health, not
+a node failure. Graceful shutdown has a finite drain: capture that exceeds it is
+`scope_capture_failed` with
+`coordinator_shutdown_during_scope_capture`, while an already-running decision
+write records its true eventual completed/write-failed result rather than a
+false cancellation. A drain overrun increments the process-local containment
+counter.
+
+Successful observations are small append-only durable rows containing only an
+event ID, attempt ID, phase, bounded outcome and reason code, and timestamp.
+Process-lifetime fallback counters separately expose
+`durable_health_record_write_failure`, `unexpected_containment_failure`, and
+`background_task_callback_failure` beside their process `reset_at`. A failure
+of this health recording is not recursively recorded and must never affect an
+eligible set, selected node, handout, settlement, execution, or attempt count.
+
+Each exact scope also reports `eligible_for_future_active_experiment` and bounded
+`blocking_reasons`: `legacy_descriptor_identity`,
+`descriptor_identity_unreconstructable`, `immutable_model_identity_missing`,
+and `model_identity_unreconstructable`. These are future-experiment
+prerequisites only: they do not change hard eligibility, actual assignment,
+shadow preference, or collection of otherwise valid shadow evidence. A
+digestless typed scope continues collecting when the existing resolver can
+otherwise reconstruct it. Do not describe the diagnostic as correctness,
+reputation, or trust.
+
+No active experiment is authorized by this report. It would require immutable
+model and descriptor identity, every live volume/safety/predictive/fairness
+threshold in the experiment specification, a separate accepted ADR, and a
+separately reviewed implementation PR. There is still no active evidence mode.
 
 Only `lease_expired` and `node_stale` are worker-attributable terminal failures.
 Caller cancellation, execution deadline, payload/stream limits, receipt binding,
@@ -342,21 +421,28 @@ python scripts/backup.py \
   --destination /secure/backups/mycelium-$(date +%F-%H%M).zip
 ```
 
-The versioned ZIP includes a consistent `events.db` snapshot, config, projects,
-output, execution artifacts, compatibility ledger when present, build metadata,
+The format-v2 ZIP includes consistent independent snapshots of `events.db` and
+its sibling `capability-shadow-health.db`, plus config, projects, output,
+execution artifacts, the compatibility ledger when present, build metadata,
 and a SHA-256 index. Enrollment IDs, digests, revocation, attribution, rotation
-version, scoped capability observations, and shadow decisions are in SQLite. The
-tool does not print configuration values.
+version, and scoped capability observations are in `events.db`; live shadow
+decisions and successful operational-health records are in
+`capability-shadow-health.db`. Pre-isolation decisions retained by an older
+`events.db` or legacy-v1 restore are copied forward idempotently at startup. The
+separate writer-lock domains ensure optional experiment writes cannot contend
+with authoritative attempt, assignment, or settlement writes. The tool does
+not print configuration values.
 Store the ZIP as sensitive data: it contains private prompts/results, artifacts,
 static credentials, and authentication digests. Copy it off-host and test
 restore periodically.
 
 Not backed up because it is process-local: pending queue entries, dispatcher
-waits, in-flight coroutine state, connected-node sessions, and plaintext node
-session tokens. Worker identity files and plaintext enrollment credentials are
-also not coordinator state; back them up separately on each worker. The
-database records interrupted work, but backup cannot turn that work into
-resumable scheduling state.
+waits, in-flight coroutine state, connected-node sessions, plaintext node
+session tokens, and the three shadow operational fallback counters and their
+`reset_at`. Worker identity files and plaintext enrollment credentials are also
+not coordinator state; back them up separately on each worker. The database
+records interrupted work, but backup cannot turn that work into resumable
+scheduling state.
 
 ## 10. Restore
 
@@ -372,15 +458,20 @@ python scripts/preflight.py --config data/config.json --state-dir data \
 docker compose up -d
 ```
 
-Restore verifies archive layout, regular-file types, path confinement,
-case/Unicode collisions, JSON, SQLite, and every checksum before mutation. It
+Restore accepts current format v2 and legacy format v1. Version 1 predates the
+health-database manifest field and restores without
+`capability-shadow-health.db`; the upgraded coordinator starts new health
+history. In v2, a missing health database is valid only for a backup of
+pre-feature state. Restore verifies archive layout, regular-file types, path
+confinement, case/Unicode collisions, JSON, every SQLite database present, and
+every checksum before mutation. It
 rejects traversal, symlinks, special files, duplicates, and unexpected entries;
 installation uses staged same-filesystem renames with rollback. Existing
 managed state is refused unless `--force` (also `--overwrite`) is explicit.
 Use that flag only after making a separate backup and confirming the
 coordinator is stopped.
 
-Stale SQLite `-wal`, `-shm`, and journal sidecars are removed during a
+Stale SQLite `-wal`, `-shm`, and journal sidecars for both databases are removed during a
 successful replacement. Restored process-local queues/sessions do not exist;
 durable enrollment IDs/revocations remain, workers authenticate for new
 sessions, and interrupted work must be retried as a new execution.
@@ -495,11 +586,13 @@ Treat normalized capability descriptors as private hardware/model inventory.
 Do not add the protected enrollment response or override JSON to a shareable
 bundle unless the recipient is authorized and the inventory is necessary.
 
-Treat the protected capability-evidence response the same way. It omits prompts,
-output bodies, worker errors, free-form reasons, credentials, nonces, and session
-secrets, but its scoped model, timing, and outcome aggregates are still private
-operational inventory. Do not include the raw database or evidence response in a
-shareable bundle.
+Treat the protected capability-evidence and shadow-health response the same way.
+The new operational rows, counters, metrics, and response omit prompts, output
+bodies, worker error text, arbitrary exception messages, credentials, attempt
+nonces, session secrets, and artifact contents. Their scoped model, timing, and
+outcome aggregates are still private operational inventory. Do not include the
+raw database or protected response in a shareable bundle. The health report is
+best-effort experiment telemetry, not execution authority or node reputation.
 
 Do not add idempotency keys, attempt nonces, or node session tokens to the
 bundle. Persistence failure logs should identify only the execution, commit

@@ -325,6 +325,7 @@ Dockerfile          # + docker-compose.yml: one-command orchestrator + Ollama
 output/             # Saved results, one directory per run
 projects/           # Persistent project memory (one dir per project)
 events.db           # SQLite event log (survives server restarts)
+capability-shadow-health.db # Best-effort shadow decisions and experiment health
 ```
 
 ## Deploying beyond your machine
@@ -381,6 +382,7 @@ This is a **Phase 0 private trusted-alpha system**. Here's exactly what's durabl
 | Attempt settlement and accepted receipts | Yes | SQLite — exact replay survives restart; active attempts interrupt on restart |
 | Node enrollment identity/revocation | Yes | SQLite stores immutable IDs and credential digests, never plaintext credentials |
 | Scoped capability observations | Yes | Append-only SQLite rows; deterministic IDs make settlement replay and restart repair idempotent |
+| Shadow decisions and experiment health | Yes, when recorded | Separate append-only `capability-shadow-health.db`; process fallback counters reset on restart |
 | Contribution records | Yes | SQLite plus a regenerated JSON compatibility projection; enrolled compute is keyed by enrollment ID |
 | Share records and token hashes | Yes | SQLite — expiry and revocation survive restart |
 | Artifact manifests | Yes | Terminal baselines, roles, hashes, and seal state in SQLite; files remain under registered roots |

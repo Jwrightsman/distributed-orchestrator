@@ -1,25 +1,31 @@
-# Handoff — Mycelium Durable Node Enrollment
+# Handoff — Mycelium Theme 2.1 Capability and Evidence Closeout
 
-_Updated August 25, 2026._
+_Updated August 26, 2026._
 
 ## Read these first
 
-1. `SPRINT_DURABLE_NODE_ENROLLMENT.md` — current Theme 2A scope, evidence, and residuals
-2. `MASTER_PLAN.md` — current direction and freeze boundary
-3. `docs/PROTOCOL.md` — normative execution/client/worker contract
-4. `docs/ACCESS_CONTROL.md` and `docs/ARTIFACTS.md` — authority and delivery APIs
-5. `docs/THREAT_MODEL.md` — defended and undefended boundaries
-6. `docs/DEPLOY.md`, `docs/TRUSTED_ALPHA_RUNBOOK.md`, and
-   `docs/OPERATIONS.md` — deployment and recovery procedure
-7. `docs/adr/0010-durable-enrollment-identity.md` — Theme 2A identity decision
+1. `docs/adr/0011-node-capabilities-versioned-claims.md` — typed claim and hard
+   matching boundary
+2. `docs/adr/0012-observed-capability-evidence-shadow-only.md` — scoped evidence,
+   shadow-only policy, and operational-health boundary
+3. `docs/experiments/capability-evidence-shadow.md` — live thresholds and the
+   future-active no-go gates
+4. `docs/ARCHITECTURE.md` and `docs/PROTOCOL.md` — current system and normative
+   execution/client/worker contracts
+5. `docs/TRUSTED_ALPHA_RUNBOOK.md` and `docs/OPERATIONS.md` — protected reporting,
+   deployment, backup, and recovery procedure
+6. `docs/adr/0010-durable-enrollment-identity.md` — retained enrollment identity
+   foundation
+7. `MASTER_PLAN.md` — current direction and freeze boundary
 8. `docs/audits/2026-08-23-comparative-architecture-audit.md` — historical,
-   non-normative architecture research
+   non-normative architecture research; do not rewrite it as current policy
 9. `CLAUDE.md` and `AGENTS.md` — repository and consent rules
 
-`SPRINT_DURABLE_EXECUTION_TRUTH.md`, `SPRINT_TRUSTED_ALPHA_RC1.md`,
-`SPRINT_STRATEGY_PROTOCOL.md`, `SPRINT_TRUSTED_ALPHA_INTEGRITY.md`, and
-`SPRINT_PHASE2.md` are historical records. Do not copy their old test counts,
-status lists, or interface assumptions into a current claim.
+`SPRINT_DURABLE_NODE_ENROLLMENT.md`, `SPRINT_DURABLE_EXECUTION_TRUTH.md`,
+`SPRINT_TRUSTED_ALPHA_RC1.md`, `SPRINT_STRATEGY_PROTOCOL.md`,
+`SPRINT_TRUSTED_ALPHA_INTEGRITY.md`, and `SPRINT_PHASE2.md` are historical
+records. Do not copy their old test counts, status lists, or interface
+assumptions into a current claim.
 
 ## Human and scope context
 
@@ -28,27 +34,88 @@ he must act on, and warn before anything network-facing. Never install, join, or
 run Mycelium on a machine without that machine owner's explicit informed
 consent.
 
-Theme 2A is a bounded durable-enrollment change on the trusted-alpha backend. It
-does not authorize typed resource descriptors (Theme 2B), permissionless
-admission, public-key infrastructure, attestation, Sybil resistance, workflow
-resumption, coordinator HA, new strategies, accounts, marketplace/token
-features, federation, model sharding, generated-code sandbox, or unrelated UI
-redesign. Frontend work may consume the contract below without changing its
-meanings.
+Theme 2.1 is a bounded capability/evidence closeout on the trusted-alpha
+backend. It enforces a typed node's claimed output capacity through the shared
+hard matcher, makes shadow-pipeline operational failures measurable without
+making them authoritative, and exposes immutable identity as a prerequisite for
+any future active experiment. It does not authorize active evidence routing,
+reputation, marketplace/payment logic, capacity-weighted scheduling, worker
+concurrency, a third evidence mode, attestation, public-key identity, workflow
+resumption, or coordinator HA. Frontend work may consume the protected
+diagnostics below without changing their meanings.
 
 ## Branch and review
 
-- Branch: `codex/theme-2a-durable-node-enrollment`
-- Base: `origin/master` at `9979f681369fa69cfb35133f17e07ce3aac54abf`
+- Branch: `codex/theme-2-1-capability-evidence-closeout`
+- Base: latest default branch after PR #61, starting at
+  `d6d12da176741962611a13f2130097bc880959c5`
 - Merge: review explicitly; do not auto-merge
-- Current sprint record: `SPRINT_DURABLE_NODE_ENROLLMENT.md`
+- Current handoff/experiment records: `HANDOFF.md` and
+  `docs/experiments/capability-evidence-shadow.md`
 
 The final integrator must record the current commit range and current full-suite,
 Ruff, import, preflight, and deployment checks. Historical counts in sprint
 records are evidence for those exact revisions, not a substitute for the final
 branch run.
 
-## Theme 2A architecture
+## Theme 2.1 architecture
+
+- `limits.max_output_bytes` is a claimed hard placement limit for typed nodes.
+  The coordinator passes the canonical execution's authoritative
+  `max_output_bytes` into the one shared matcher. Equality is eligible; a lower
+  claim is ineligible with `insufficient_output_capacity`.
+- The execution output budget is not duplicated in
+  `NodeResourceRequirementsV1`, does not change canonical request hashing, and
+  is checked consistently during scheduler qualification, eligible-set
+  construction, long polling, the under-lock handout recheck, protected
+  diagnostics, and shadow candidate capture.
+- Explicit descriptorless compatibility retains legacy matching because no
+  typed output claim is fabricated. Once work is assigned, the durable
+  attempt's exact server-issued output limit remains authoritative for stream
+  and settlement enforcement; a descriptor or result cannot raise it.
+- `max_concurrent_execution_units` is an informational upper-bound claim. The
+  coordinator does not maintain or enforce per-node slot counts. The stock
+  worker remains sequential and conservatively stays within the claim; values
+  above one do not create server concurrency slots, parallel polls, or
+  capacity-weighted scheduling.
+- Shadow admission freezes a bounded set of non-secret, assignment-time node
+  claim inputs. Canonical rematching and evidence-scope construction run from
+  that frozen snapshot in bounded background work, after the real attempt is
+  durable, so they neither delay handout nor hold the production queue lock.
+- Shadow operational health uses bounded admission outcomes (`disabled`,
+  `not_applicable`, `queue_saturated`, `scope_capture_failed`, `scheduled`) and
+  evaluation outcomes (`completed`, `evaluator_failed`,
+  `decision_write_failed`, `cancelled_on_shutdown`). Successful minimal events
+  are durable and deduplicated in sibling `capability-shadow-health.db`, whose
+  writer locks are isolated from authoritative `events.db`; health-store write,
+  containment, and callback failures are process-lifetime counters with a reset
+  timestamp.
+- Operational accounting is best effort and non-authoritative. Its records and
+  protected report omit prompts, output bodies, worker error text, arbitrary
+  exceptions, credentials, session tokens, attempt nonces, and artifact
+  contents. Failure cannot change eligibility, selection, handout, settlement,
+  execution state, or attempt count.
+- Graceful shutdown closes new shadow admission and uses a finite drain.
+  Timed-out capture is classified with the bounded reason
+  `coordinator_shutdown_during_scope_capture`; an in-flight decision write
+  retains its truthful eventual completed/write-failed classification instead
+  of being mislabeled as cancellation.
+- Protected evidence aggregates and deterministic evaluation reports expose
+  `eligible_for_future_active_experiment` with bounded `blocking_reasons`.
+  The reasons are `legacy_descriptor_identity`,
+  `descriptor_identity_unreconstructable`, `immutable_model_identity_missing`,
+  and `model_identity_unreconstructable`. The diagnostic does not change current
+  hard eligibility, assignment, shadow preference, or valid shadow collection;
+  digestless typed scopes continue collecting when otherwise reconstructable.
+- A future active experiment requires immutable model and descriptor identity,
+  every live volume/safety/predictive/fairness threshold, a separate accepted
+  ADR, and a separately reviewed implementation PR. Active routing and worker
+  concurrency remain unimplemented.
+
+Decisions: [ADR 0011](docs/adr/0011-node-capabilities-versioned-claims.md) and
+[ADR 0012](docs/adr/0012-observed-capability-evidence-shadow-only.md).
+
+## Durable enrollment foundation retained
 
 - `enrollment_id` is immutable durable contributor attribution; `node_id` is a
   display label; `session_id` is one process incarnation; `attempt_id` is one
@@ -143,13 +210,19 @@ Decision: [ADR 0008](docs/adr/0008-idempotent-canonical-execution-submission.md)
   `/v1/operator/health` publishes instance ID, deployment mode, lock state, and
   preflight warnings.
 - Docker remains one Uvicorn worker and includes the preflight scripts. Backup
-  and restore cover durable state with online SQLite snapshotting, a versioned
-  checksum manifest, validate-before-mutate restore, and rollback.
+  format v2 covers both `events.db` and `capability-shadow-health.db` with
+  independent online SQLite snapshots, a versioned checksum manifest,
+  validate-before-mutate restore, and rollback. Restore remains compatible with
+  legacy format-v1 archives that predate the health database.
 
 ### SQLite, attempt authority, and contribution
 
 - Production `events.db` access uses the common WAL, foreign-key, 10-second busy
   timeout, `synchronous=NORMAL`, bounded retry, and migration-lock policy.
+- Best-effort shadow decisions and operational-health writes use sibling
+  `capability-shadow-health.db`; its separate writer-lock domain prevents them
+  from contending with authoritative attempt, assignment, or settlement writes.
+  Pre-isolation decisions in `events.db` copy forward idempotently at startup.
 - The coordinator persists an active attempt before handing out worker work.
   Authority binds task, execution, unit, kind, node, node session, contract,
   nonce digest, lease, state, and output cap.
@@ -250,6 +323,8 @@ Decision: [ADR 0008](docs/adr/0008-idempotent-canonical-execution-submission.md)
 | contribution records and compatibility projection | running coroutines and model-call process state |
 | share metadata/token hashes | live WebSocket connections and event fanout |
 | artifact registrations, sealed rows/hashes, retained files | breaker/waiting-node state |
+| typed descriptor snapshots and scoped capability observations | current-session descriptor claim and background evaluator tasks |
+| shadow decisions and successful operational-health events in `capability-shadow-health.db` | health-store write, containment, and callback counters plus their process reset timestamp |
 | SQLite and file state captured by an explicit backup | archive scheduling, off-site copies, TLS/proxy configuration |
 
 Restart reconciliation makes process-local loss truthful; it does not resume
@@ -281,6 +356,9 @@ filenames, or generic “verified” badges:
 | Post-hoc verification | `posthoc_verification_status`, timestamps, agreement, and reason. RC1 trusted-alpha is disabled; show that plainly without changing original assurance. |
 | Canonical submission replay | `Idempotency-Replayed` appears only on keyed canonical POST responses. `false` means created; `true` means an existing execution was returned. Never label it exactly-once execution or workflow resumption. |
 | Share metadata | Create returns plaintext token once. List shows share ID, create/expiry/revocation/last-access times and artifact/node/candidate flags without token. Support revoke-one/revoke-all and explain that copied content cannot be recalled. |
+| Claimed output capacity | Private node enrollment diagnostics report hard eligibility and stable reason codes. Present `limits.max_output_bytes` as a node claim, not attestation. Make clear that the durable attempt's task limit remains authoritative and that descriptorless compatibility has no fabricated typed capacity. |
+| Shadow operational health | Protected evidence reporting exposes durable phase/outcome counts, `orphan_evaluation_total`, offered/scheduled/completed/skipped/failed/pending totals, the drop/failure numerator and denominator, latest event time, optional bounded windows, and process-local fallback counters with reset time. An orphan terminal row is visibly counted as one inferred scheduled/offered observation so partial health-store failure cannot silently shrink the denominator. Label it experiment health, not node reputation. |
+| Future active-experiment identity | Per-scope `eligible_for_future_active_experiment` and `blocking_reasons`. Missing immutable model identity is a promotion blocker only; it does not change current routing or itself suppress otherwise valid shadow collection. Do not present it as trust or correctness. |
 
 The client must handle `401` private HTTP, `4401` event WebSocket, `409`
 artifact-integrity/session conflicts or `idempotency_conflict`, `413`
@@ -329,8 +407,9 @@ Also prohibited: trustless/permissionless readiness, public-key or physical
 worker identity, attestation, confidential compute, enforced no-network execution, sandboxed
 generated code, Sybil resistance, durable queue resume, multi-coordinator
 operation, multi-user authorization, monetary credits, host-independent artifact
-attestation, exactly-once external side effects, open-mode peer identity, or
-proof that arbitrary generated output is correct.
+attestation, exactly-once external side effects, open-mode peer identity, active
+evidence-based routing, node reputation, parallel worker handouts, or proof that
+arbitrary generated output is correct.
 
 ## Release/operator checklist
 
@@ -362,6 +441,43 @@ proof that arbitrary generated output is correct.
    demo endpoint's abuse and compute risk.
 11. Review generated artifacts before execution. Validation and sealing are not
     a sandbox or content-safety verdict.
+12. Exercise greater-than, equal, and lower typed output-capacity matching across
+    scheduler qualification, polling, the under-lock recheck, protected
+    diagnostics, and shadow candidate capture. Verify the durable attempt still
+    stores and enforces the exact server task limit.
+13. Exercise every shadow admission/evaluation outcome, deterministic replay,
+    restart persistence, health-store failure fallback, and shutdown
+    cancellation. Reproduce the documented drop/failure rate from its reported
+    numerator and denominator, including an orphan evaluation whose admission
+    row was not persisted, and inspect the response for forbidden data.
+14. Verify exact digest, missing digest, legacy descriptor, and unreconstructable
+    identity diagnostics without changing actual assignment or shadow
+    preference. Confirm there is no active evidence mode and no worker
+    concurrency.
+
+## Theme 2.1 branch verification
+
+The working tree based on
+`d6d12da176741962611a13f2130097bc880959c5` completed these gates on August 26,
+2026:
+
+- `python -m pytest -q`: 1,153 passed, 3 skipped;
+- focused capability, evidence, integration, evaluation, attempt-authority, and
+  execution-interface suites: 166 passed in their six requested commands
+  (27, 40, 31, 11, 42, and 15 respectively);
+- `python -m ruff check .`: passed;
+- `python -c "import server"`: passed;
+- `python scripts/trusted_alpha_harness.py`: passed in bounded profile,
+  including 63 focused tests across 43 selectors;
+- `python scripts/restart_recovery.py`: 17/17 checks passed;
+- `python scripts/capability_evidence_eval.py`: passed with report version 2,
+  20 identity-eligible fixture scopes, zero blocked fixture scopes, and zero
+  invariant failures;
+- `docker compose config`: passed; and
+- `git diff --check`: passed, with only Git's platform line-ending notices.
+
+Use the final branch `HEAD` as the ending revision; do not substitute these
+results for a later changed tree without rerunning the affected gates.
 
 The intended release state is a **small private trusted alpha**: auditable work
 across computers whose operators are known and trusted, with explicit evidence

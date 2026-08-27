@@ -77,6 +77,12 @@ evidence-role change, or new enrollment therefore starts a new evidence scope.
 In particular, evidence for an earlier descriptor, model, or task class cannot
 bootstrap a changed scope.
 
+The selected model digest remains nullable because the runtime may not provide
+one. A digestless typed scope is still exact relative to the immutable
+descriptor claim and remains eligible for observation and shadow evaluation.
+It is not, however, eligible to be promoted into any future active experiment:
+provider and model name alone are not immutable model identity.
+
 ### Recorded observations
 
 `node_capability_observations` is append-only and bounded. It records only the
@@ -191,12 +197,14 @@ Configuration accepts only `off` and `shadow`.
 no hidden fallback that applies a shadow result to production placement.
 
 The real task handout and durable attempt are fixed before shadow work is
-scheduled. The coordinator then freezes the exact hard-matched descriptor and
-selected-model scopes for the bounded candidate set. Background work consumes
-that immutable assignment-time snapshot rather than rereading live node,
+scheduled. The coordinator freezes a bounded set of non-secret assignment-time
+claim inputs rather than retaining credentials or rereading later live node,
 session, draining, or blacklist state under the earlier decision timestamp.
-The bounded snapshot reads claims only and never waits for evidence. Shadow
-aggregation runs asynchronously in a bounded background set. Queue
+Canonical hard rematching and exact descriptor/selected-model scope construction
+then run from that immutable snapshot in bounded background work, outside the
+production queue lock. Handout does not wait for matching, scope capture, or
+evidence aggregation. The evaluator uses only observations at or before the
+assignment cutoff. Queue
 saturation, missing scope, database failure, evaluator failure, or no running
 event loop causes the diagnostic to be skipped without failing or changing the
 handout.
@@ -226,26 +234,173 @@ One candidate, insufficient evidence, or an ambiguous alternative produces
 `no_preference`. The actual assignment remains unchanged for `same`,
 `different`, and `no_preference`. Durable shadow decisions record only the
 actual scope, candidate-set digest, policy version, hypothetical outcome, and
-bounded reason code.
+bounded reason code. They live in the optional sibling
+`capability-shadow-health.db`, not authoritative `events.db`, so a bounded
+shutdown may abandon a running best-effort writer without retaining write access
+to attempt or settlement authority. Pre-isolation decision rows are copied
+forward idempotently on startup and remain append-only in their legacy source.
 
 `verify_rate` remains a separate, default-zero control for the costly duplicate
 inference used to produce sampled agreement. Enabling shadow mode does not
 enable duplicate work, and enabling sampling does not change routing.
 
+### Shadow operational health accounting
+
+The coordinator records bounded operational health for the optional shadow
+pipeline separately from node observations and hypothetical decisions. An
+admission record has exactly one of these outcomes:
+
+```text
+disabled
+not_applicable
+queue_saturated
+scope_capture_failed
+scheduled
+```
+
+An admitted background evaluation has at most one terminal outcome:
+
+```text
+completed
+evaluator_failed
+decision_write_failed
+cancelled_on_shutdown
+```
+
+Outcome-to-reason classification is fixed and content-free:
+
+| Phase/outcome | Allowed reason code |
+| --- | --- |
+| admission / `disabled` | `mode_disabled` |
+| admission / `not_applicable` | `legacy_descriptor_identity`, `nonproduction_attempt`, or `unsupported_task_class` |
+| admission / `queue_saturated` | `background_queue_limit_reached` |
+| admission / `scope_capture_failed` | `scope_capture_failed` or `coordinator_shutdown_during_scope_capture` |
+| admission / `scheduled` | `evaluation_scheduled` |
+| evaluation / `completed` | `decision_persisted` |
+| evaluation / `evaluator_failed` | `evaluator_failed` |
+| evaluation / `decision_write_failed` | `decision_write_failed` |
+| evaluation / `cancelled_on_shutdown` | `coordinator_shutdown` |
+
+The durable append-only `capability_shadow_operational_events` record lives
+alongside those decisions in sibling `capability-shadow-health.db`, not
+authoritative `events.db`, and
+contains only `event_id`, `attempt_id`, `phase`, `outcome`, bounded `reason_code`, and
+`occurred_at`. Event IDs are deterministic per attempt and phase, and the schema
+also has a unique `(attempt_id, phase)` constraint, so an exact replay is
+idempotent and conflicting reuse is rejected. Update/delete triggers preserve
+append-only history. Existing state directories create the empty table through
+the health store's own idempotent schema path; no historical task or evidence
+backfill is inferred. The separate database gives best-effort telemetry an
+independent SQLite writer-lock domain, so it cannot contend with authoritative
+attempt, assignment, or settlement writes.
+
+Operational records, new log/metric fields, and protected responses never
+contain a prompt, output body, worker error text, credential, session token,
+attempt nonce, artifact content, or arbitrary exception message. They describe
+experiment-pipeline health, not worker behavior, reputation, trust, or
+correctness.
+
+Successful health-record writes are durable. A failure of that store cannot
+reliably record itself, so process-lifetime counters separately retain
+`durable_health_record_write_failure`, `unexpected_containment_failure`, and
+`background_task_callback_failure`, together with their process `reset_at`
+timestamp. Those counters reset on process start and are not reconstructed from
+SQLite. The failure-recording path never recursively records its own failure.
+Backup format v2 includes both `events.db` and
+`capability-shadow-health.db`. Restore accepts legacy format v1 without the
+health database; health state is optional only for pre-feature state.
+Process-local fallback counters remain outside both databases.
+
+All operational accounting is best effort. Neither a record nor failure to
+write one may alter candidate eligibility, selected node, queue or handout,
+attempt creation, settlement, contribution, or execution outcome. Admission and
+evaluation remain bounded background work; production does not wait for this
+telemetry.
+
+Graceful shutdown requests stop new shadow admissions, immediately cancel
+ordinary evaluator work, and allow scope capture or an already-running decision
+write a finite drain interval. A capture that exceeds the interval is classified
+as `scope_capture_failed` with
+`coordinator_shutdown_during_scope_capture`. A decision write that exceeds the
+interval is no longer awaited by the coordinator; its bounded worker-thread
+operation records `completed` or `decision_write_failed` when it returns, so a
+committed decision is never mislabeled as cancellation. A drain overrun also
+increments the process-local containment counter. None of these outcomes blame
+the node.
+
+Background evidence aggregation uses an already-initialized SQLite connection
+opened with `mode=ro` and `query_only`; it performs no schema migration or WAL
+configuration. A timed-out daemon may therefore finish a bounded read after the
+coordinator lock is released, but it cannot mutate or acquire writer authority
+over `events.db`. All optional shadow writes target only the isolated health
+database.
+
+For a selected admission cohort, the protected report derives:
+
+```text
+orphan_evaluation_total = evaluation rows with no persisted admission row
+assignment_observation_total = all admission outcomes + orphan_evaluation_total
+scheduled = scheduled admissions + orphan_evaluation_total
+offered = scheduled + queue_saturated + scope_capture_failed
+skipped = disabled + not_applicable
+failed = queue_saturated + scope_capture_failed + evaluator_failed
+         + decision_write_failed + cancelled_on_shutdown
+pending = max(0, scheduled - completed - evaluator_failed
+                 - decision_write_failed - cancelled_on_shutdown)
+drop/failure numerator = failed
+drop/failure denominator = offered
+drop/failure rate = numerator / denominator
+```
+
+The rate is null when the denominator is zero. A durable evaluation may exist
+without its admission row when the earlier best-effort write failed. The report
+exposes such rows as `orphan_evaluation_total` and counts each as an inferred
+scheduled/offered observation, ensuring a persisted terminal failure cannot
+disappear or silently shrink the denominator. Optional time windows select an
+inclusive admission-time cohort and include terminal evaluation rows for those
+same attempts even when evaluation finishes after the window end; orphan rows
+are selected by their evaluation timestamp. Counts and the
+numerator/denominator therefore reproduce the reported rate.
+
+### Future active-experiment identity prerequisite
+
+Each exact evidence scope receives a derived, bounded diagnostic containing
+`eligible_for_future_active_experiment` and ordered `blocking_reasons`. At
+minimum, `immutable_model_identity_missing` blocks a nullable model digest. The
+complete bounded reasons are `legacy_descriptor_identity`,
+`descriptor_identity_unreconstructable`, `immutable_model_identity_missing`,
+and `model_identity_unreconstructable`. This diagnostic is computed from
+identity already present in the scope and immutable snapshot. It is not stored
+as lifecycle or routing authority.
+
+The diagnostic does not change current hard eligibility, actual assignment,
+shadow candidate membership, or hypothetical preference. Shadow observations
+continue for digestless typed scopes and any other scope that the existing
+evidence resolver can safely reconstruct. Existing exclusion of legacy or
+incomplete evidence scopes is separate from this diagnostic. A true identity
+diagnostic is only one necessary prerequisite, not a promotion decision,
+quality label, attestation, trust flag, or reputation score.
+
 ### Operator and privacy boundary
 
 The viewer-protected `GET /v1/operator/capability-evidence` returns bounded,
-filtered exact-scope aggregates and grouped shadow-decision counts. Production
-role is the default, the result limit is capped at 200, and responses state
-`affects_routing: false`. Public status, event, and metrics surfaces do not
-receive per-scope evidence.
+filtered exact-scope aggregates, grouped shadow-decision counts, future-active
+identity diagnostics, and shadow operational-health totals. Production role is
+the default, the result limit is capped at 200, and responses state
+`affects_routing: false`. Operational reporting includes durable counts by phase
+and outcome, offered/scheduled/completed/skipped/failed/pending totals, explicit
+drop/failure numerator and denominator, latest event time, optional bounded time
+windows, and process-local fallback counters with their reset timestamp. Public
+status, event, and metrics surfaces do not receive per-scope evidence or shadow
+health details.
 
 Observation rows contain no prompt, output body, worker error, free-form reason,
 credential, nonce, session secret, or arbitrary telemetry. Metadata keys are
 allowlisted by observation type and size-bounded. The protected aggregate
-reader does not expose raw observations or metadata. Enrollment, node label,
-descriptor digest, and model identity remain operator data rather than public
-reputation claims.
+reader does not expose raw observations, operational records, or metadata.
+Enrollment, node label, descriptor digest, and model identity remain operator
+data rather than public reputation claims. The response explicitly labels the
+new counts as operational experiment health, not node reputation.
 
 ### Contribution accounting remains separate
 
@@ -258,6 +413,9 @@ contribution, and contribution totals do not influence the shadow evaluator.
 
 - Operators can inspect durable operational observations without treating node
   claims as measurements.
+- Operators can distinguish shadow admission drops, evaluator failures, durable
+  decision-write failures, and shutdown cancellation without blaming a node or
+  affecting production.
 - Replay and coordinator restart do not duplicate observations.
 - A changed descriptor, model, or task class cannot inherit favorable history.
 - Cold-start nodes are not penalized by a guessed score; the evaluator declines
@@ -289,10 +447,18 @@ Activating evidence would
 create feedback loops: preferred scopes would receive more work and therefore
 more evidence, while new scopes would receive less opportunity to recover.
 
-Any active mode requires a separate ADR, explicit operator configuration,
-measured live results, a migration and rollback plan, and renewed threat and
-fairness review. It cannot be introduced by changing the meaning of `shadow` or
-by reviving first-refusal deferral.
+Any active experiment requires all four of the following before implementation:
+
+1. immutable model and descriptor identity with no identity blocker;
+2. every live volume, safety, predictive, and fairness threshold in the shadow
+   experiment;
+3. a separate accepted ADR; and
+4. a separately reviewed implementation PR.
+
+It also requires explicit operator configuration, a migration and rollback
+plan, and renewed threat and fairness review. It cannot be introduced by
+changing the meaning of `shadow` or by reviving first-refusal deferral. This ADR
+does not introduce active evidence-based routing.
 
 ## Rejected alternatives
 

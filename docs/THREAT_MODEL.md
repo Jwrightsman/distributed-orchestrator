@@ -27,7 +27,7 @@ boundary.
 | Node enrollments | SQLite identity/status/credential digest plus worker-owned plaintext identity file | credential theft, label takeover, failed revocation, or false attribution |
 | Node sessions | process memory plus session identifiers/digests attached to node and attempt state | stale incarnation use, bearer-token disclosure, or restart invalidation |
 | Capability claims and snapshots | live registry plus canonical enrollment-scoped SQLite snapshots; descriptor/requirement digests on attempts | false hardware/model/isolation claims, private inventory disclosure, or assigning work under the wrong snapshot |
-| Scoped capability observations and shadow decisions | append-only SQLite rows derived from coordinator-owned attempt state | false attribution, replay conflict, evidence poisoning, private inventory disclosure, or accidental use in production routing |
+| Scoped capability observations and shadow decisions | append-only SQLite rows derived from coordinator-owned attempt state; decisions use the isolated shadow database | false attribution, replay conflict, evidence poisoning, private inventory disclosure, or accidental use in production routing |
 | Viewer, pitch, and admission secrets | local config/environment and HTTP headers | private reads, unwanted compute use, or initial worker admission |
 | Canonical submission identity | digest-only SQLite mapping to an execution | duplicate execution after retry, key conflict, or a mapping whose execution is missing |
 | Artifact integrity baseline | sealed manifest rows/hash in SQLite plus files on disk | ordinary file drift, database/file loss, or host-level joint tampering |
