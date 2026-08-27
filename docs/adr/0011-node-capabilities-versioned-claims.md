@@ -51,6 +51,23 @@ entries. It excludes hostnames, serial numbers, MAC addresses, physical
 addresses, and other unnecessary stable identifiers. Hostname remains separate
 operator metadata.
 
+`limits.max_output_bytes` is a node-advertised upper-bound claim. When the
+server has an authoritative execution output budget, the same hard matcher
+requires a typed descriptor's claimed maximum to be at least that budget;
+equality is sufficient and a lower claim produces
+`insufficient_output_capacity`. The server-derived budget is matching context,
+not a new `NodeResourceRequirementsV1` field, and it does not change canonical
+request or requirement hashing. The claim is neither measurement nor an
+attested guarantee.
+
+`limits.max_concurrent_execution_units` is also an informational claimed upper
+bound. The coordinator does not maintain per-node slot accounting or enforce
+this value, and concurrent custom polls are not a supported way to obtain such
+slots. The stock worker polls and executes sequentially, which conservatively
+stays within every valid advertised bound. The field does not create scheduler
+slots, parallel poll positions, or capacity-weighted placement; values greater
+than one are not consumed as concurrency in this protocol version.
+
 Durable enrolled registration requires this descriptor. Descriptorless workers
 remain available only through the explicitly unenrolled local compatibility
 path; they cannot create a new durable enrolled attempt with a null snapshot
@@ -95,18 +112,27 @@ an exact model digest, minimum CPU and memory, GPU presence/vendor/memory,
 minimum context, required typed features, and allowed isolation kinds.
 
 One pure deterministic matcher evaluates typed requirements, legacy required
-tags, the node descriptor, and legacy node tags. Scheduler qualification,
-worker task handout, and protected operator diagnostics call that matcher. It
-returns eligibility, stable reason codes, the matched descriptor hash, and the
-selected advertised model. Model filtering and selection share one code path:
-the configured model wins only when it satisfies the request, otherwise the
-canonical first match is bound into the handout by provider, name, and nullable
-digest. Provider/name pairs are unique within a descriptor. The stock worker
-validates the binding against its immutable descriptor before invoking Ollama;
-legacy unbound handouts continue to use its configured model.
+tags, the node descriptor, legacy node tags, and bounded server-derived matching
+context such as the execution's required output capacity. Scheduler
+qualification, eligible-set construction, worker long polling, the under-lock
+handout recheck, protected operator diagnostics, and shadow candidate capture
+call that matcher. It returns eligibility, stable reason codes, the matched
+descriptor hash, and the selected advertised model. Model filtering and
+selection share one code path: the configured model wins only when it satisfies
+the request, otherwise the canonical first match is bound into the handout by
+provider, name, and nullable digest. Provider/name pairs are unique within a
+descriptor. The stock worker validates the binding against its immutable
+descriptor before invoking Ollama; legacy unbound handouts continue to use its
+configured model.
 Typed and legacy constraints are both hard when both are supplied. Unknown
 claimed data cannot satisfy a corresponding minimum or exact requirement. The
 matcher excludes only; it does not rank eligible nodes.
+
+The explicitly unenrolled descriptorless compatibility path has no typed
+output-capacity claim. The matcher does not fabricate one or retroactively turn
+the compatibility session into a typed descriptor; its documented legacy
+matching behavior remains. Any task it receives is still bounded by the exact
+server-issued attempt limit.
 
 The pre-existing process-local sampled-verification pool is outside this
 matcher. In local mode, an operator who explicitly enables `verify_rate` may
@@ -123,6 +149,11 @@ version and digest. The descriptor JSON is referenced through the immutable
 snapshot rather than copied into each attempt. Accepted receipts retain these
 bindings. Nullable columns keep historical and compatibility attempts readable.
 A claim made in a later session cannot rewrite an earlier attempt.
+
+The attempt also retains the server-issued output limit copied from the
+canonical execution. A descriptor can exclude a node whose claimed capacity is
+too small, but it cannot raise, replace, or negotiate that attempt limit. Output
+streaming and settlement continue to enforce the durable attempt value.
 
 ### Canonical submission-hash evolution
 
@@ -149,10 +180,22 @@ operator. `GET /nodes` omits full descriptor JSON, and public `/health` and
 `/status.json` do not expose it. Digests are claim identifiers, not proof of
 the underlying hardware or model bytes.
 
+Protected evidence aggregates may additionally state whether an exact scope
+has the immutable identity needed even to be considered by a future active
+experiment. The bounded blockers are `legacy_descriptor_identity`,
+`descriptor_identity_unreconstructable`, `immutable_model_identity_missing`,
+and `model_identity_unreconstructable`. This derived diagnostic does not change
+hard eligibility or assignment and does not itself suppress otherwise valid
+shadow collection. Passing it does not establish trust, reputation,
+correctness, or attestation.
+
 ## Consequences
 
 - Hard resource eligibility is explicit, bounded, versioned, and consistent
   between scheduling and handout.
+- A typed node claiming less output capacity than a task requires is excluded
+  everywhere the canonical matcher is used, while the issued attempt remains
+  the output-budget authority.
 - Legacy workers remain usable only as explicitly unenrolled local compatibility
   sessions. Legacy tag requirements remain usable alongside typed descriptors.
 - Enrolled attempt history can identify the exact claim and requirements used
@@ -171,6 +214,8 @@ and arbitrary Boolean policy languages are deferred. They require separate
 evidence, trust, privacy, and migration decisions. This does not remove or
 endorse the older optional local sampled-verification first-refusal behavior
 described above. In particular, a descriptor hash is not an attestation digest.
+No worker concurrency, parallel polling slots, or capacity-weighted scheduling
+is authorized by the concurrency-limit claim.
 
 ## Rejected alternatives
 

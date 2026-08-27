@@ -47,7 +47,13 @@ from execution.artifacts import get_artifact_store
 from execution.service import get_execution_service
 from execution.sharing import get_share_store
 from scripts.preflight import run_preflight
-from server_state import _cleanup_stale_nodes, _db_load_jobs, _init_db
+from server_state import (
+    _cleanup_stale_nodes,
+    _db_load_jobs,
+    _init_db,
+    begin_capability_shadow_runtime,
+    shutdown_capability_shadow_evaluations,
+)
 
 # Re-exported for back-compat: tests and scripts reach server state through
 # this module (server.nodes, server.jobs, ...). Same objects as server_state's.
@@ -143,6 +149,7 @@ async def _lifespan(app: FastAPI):
             deployment_mode,
         )
 
+        begin_capability_shadow_runtime()
         _init_db()
         _db_load_jobs()
         get_artifact_store().migrate()
@@ -157,6 +164,7 @@ async def _lifespan(app: FastAPI):
         try:
             yield
         finally:
+            await shutdown_capability_shadow_evaluations()
             cleanup_task.cancel()
             with suppress(asyncio.CancelledError):
                 await cleanup_task

@@ -72,14 +72,15 @@ invariants return exit code 2.
 
 ## Commands run
 
-The following commands were run from the repository root on 2026-08-26:
+The following baseline commands were recorded from the repository root on
+2026-08-26:
 
 ```text
 python scripts/capability_evidence_eval.py
 python -m pytest tests/test_capability_evidence.py tests/test_capability_evidence_eval.py -q
 ```
 
-The focused test command completed with:
+At the baseline revision, the focused test command completed with:
 
 ```text
 38 passed in 14.34s
@@ -90,7 +91,9 @@ The fixture SHA-256 was
 
 ## Exact current synthetic output
 
-The CLI emitted a deterministic version-1 JSON report with these exact summary
+The Theme 2.1 branch reran `python scripts/capability_evidence_eval.py` after the
+identity-diagnostic addition; it returned zero and emitted a deterministic
+version-2 JSON report. Its policy metrics retained these exact summary
 values:
 
 | Metric | Claim-only actual | Shadow preference, evaluable cases | Shadow with claim fallback |
@@ -113,6 +116,18 @@ Other exact summary values were:
 - hard-ineligible candidates excluded: 1;
 - prior-scope samples ignored after resets: 120; and
 - invariant failures: 0.
+
+The version-2 identity summary reported 20 eligible scopes, zero blocked scopes,
+and an empty blocking-reason count for this exact-digest fixture.
+
+The deterministic report also exposes, for each reconstructed scope,
+`eligible_for_future_active_experiment` and bounded `blocking_reasons`. An exact
+immutable model digest has no identity blocker. A missing digest must report
+`immutable_model_identity_missing`; the complete bounded reasons are
+`legacy_descriptor_identity`, `descriptor_identity_unreconstructable`,
+`immutable_model_identity_missing`, and `model_identity_unreconstructable`.
+This diagnostic does not change hard eligibility, the fixture's actual
+assignment, or its shadow preference.
 
 The per-scenario outcomes were:
 
@@ -139,10 +154,28 @@ gain.
 The live phase keeps `capability_evidence_mode="shadow"` and never introduces an
 active mode. Actual assignment is durable before the background evaluator is
 scheduled. The evidence cutoff is the assignment timestamp; observations
-recorded later cannot influence that decision. The exact hard-matched
-descriptor/model scopes are frozen at assignment time, so a later re-registration,
-session change, drain, or blacklist change cannot be recorded as though it
-existed at the earlier decision time.
+recorded later cannot influence that decision. Admission freezes bounded,
+non-secret assignment-time claim inputs. Canonical rematching and exact
+descriptor/model scope construction run from that immutable snapshot as bounded
+background work outside the production queue lock, so scope capture cannot delay
+handout. A later re-registration, session change, drain, or blacklist change
+cannot be recorded as though it existed at the earlier decision time.
+
+Graceful shutdown closes new admission and uses a finite background drain. A
+scope capture that exceeds the drain is an admission `scope_capture_failed`
+event with reason `coordinator_shutdown_during_scope_capture`. An already-running
+decision write may outlive the await interval and records its real `completed`
+or `decision_write_failed` terminal result when the bounded write returns; the
+process-local containment counter exposes the overrun. These are coordinator
+health outcomes, never node blame.
+
+The shared hard matcher includes the server-derived output budget. A typed node
+whose claimed `limits.max_output_bytes` is lower than the task's
+`max_output_bytes` is excluded before candidate-scope capture, with
+`insufficient_output_capacity`; equality is eligible. Descriptorless explicit
+compatibility sessions retain their legacy behavior because the coordinator
+does not invent a typed output-capacity claim. The durable attempt's exact
+server-issued output limit remains authoritative after assignment.
 
 For every actual assignment, retain:
 
@@ -167,9 +200,20 @@ Agreement is never substituted for a held-out deadline or contract-floor label.
 
 Report counts beside every rate. At minimum, the live report includes:
 
-- number of assignments offered to shadow evaluation;
-- shadow scheduling skips, queue saturation, evaluator failures, and durable
-  decision-write failures;
+- admission counts for `disabled`, `not_applicable`, `queue_saturated`,
+  `scope_capture_failed`, and `scheduled`;
+- `assignment_observation_total`, the sum of all admission outcomes plus
+  `orphan_evaluation_total`;
+- evaluation counts for `completed`, `evaluator_failed`,
+  `decision_write_failed`, and `cancelled_on_shutdown`;
+- `orphan_evaluation_total`, counting terminal evaluation rows whose admission
+  record did not persist;
+- offered, scheduled, completed, skipped, failed, and pending totals;
+- the drop/failure numerator, denominator, and derived rate, with bounded
+  admission-cohort time-window filtering and latest event time;
+- process-lifetime counts of durable health-record write failures, unexpected
+  containment failures, and background-task callback failures beside the
+  process reset timestamp;
 - counts of `same`, `different`, and each `no_preference` rationale;
 - evidence coverage by exact scope and metric;
 - hypothetical divergence coverage: decisions with one unambiguous different
@@ -197,6 +241,26 @@ These thresholds do not activate routing. Meeting all of them permits drafting
 a separate active-routing ADR and controlled experiment; missing any threshold
 is a no-go.
 
+### Immutable identity prerequisite
+
+Every candidate scope considered for a future active experiment must have an
+immutable model digest and an exact reconstructable typed descriptor/model
+identity. Any of the four bounded identity blockers above is a no-go. The
+diagnostic does not change current production hard eligibility or alter a shadow
+preference. It also does not itself suppress collection: a digestless typed
+scope continues collecting when the existing evidence resolver can otherwise
+reconstruct it; existing exclusion of legacy or incomplete evidence scopes is a
+separate boundary.
+
+An active-routing experiment requires all four of the following:
+
+1. immutable model and descriptor identity for every participating scope;
+2. all live volume, safety, predictive, and fairness thresholds below;
+3. a separate accepted ADR; and
+4. a separately reviewed implementation PR.
+
+This document and the `off`/`shadow` modes do not implement active routing.
+
 ### Evidence and decision volume
 
 - Every exact candidate scope and every metric used in a hypothetical
@@ -220,8 +284,31 @@ live promotion analysis must re-evaluate with a floor of 20.
 - Zero production assignments differ because shadow mode is enabled.
 - Zero shadow failures fail or cancel a production handout or settlement.
 - Shadow-on versus shadow-off p95 handout latency differs by no more than 5 ms
-  in a controlled coordinator test, and shadow task/write failure plus queue
-  drop rate remains below 1%.
+  in a controlled coordinator test, and the reported shadow drop/failure rate
+  remains below 1%.
+
+The operational-health rate used by this gate is reproducible from reported
+counts:
+
+```text
+orphan_evaluation_total = evaluation rows with no persisted admission row
+assignment_observation_total = all admission outcomes + orphan_evaluation_total
+scheduled = scheduled admissions + orphan_evaluation_total
+offered = scheduled + queue_saturated + scope_capture_failed
+numerator = queue_saturated + scope_capture_failed + evaluator_failed
+            + decision_write_failed + cancelled_on_shutdown
+denominator = offered
+drop/failure rate = numerator / denominator
+```
+
+The rate is unavailable when the denominator is zero. `disabled` and
+`not_applicable` are reported as skipped but excluded from offered. Every orphan
+evaluation is treated as one inferred scheduled/offered observation, making its
+terminal outcome and denominator contribution explicit. Pending is `scheduled`,
+including inferred admissions, minus all terminal evaluation outcomes, floored
+at zero. A bounded time window selects an inclusive admission-time cohort and
+follows those admitted attempts to their evaluation outcomes even when they
+finish after the window end; orphan rows are selected by evaluation time.
 
 Any single violation is an immediate no-go regardless of predictive metrics.
 
@@ -280,6 +367,16 @@ claim of broader social fairness.
   independent can understate uncertainty.
 - The existing operational circuit breaker and hard matcher affect which
   attempts become observable, even though evidence does not feed either.
+- Operational-health records are best-effort experiment telemetry. Successful
+  observations and shadow decisions are durable in the sibling
+  `capability-shadow-health.db`, whose writer locks are isolated from
+  authoritative `events.db`. Legacy decisions copy forward idempotently.
+  Backup/restore must include both databases in format v2; restore remains
+  compatible with legacy format v1 without health state. A missing health
+  database is otherwise valid only for pre-feature state. Health-store write,
+  containment, and callback failures are process-lifetime counters that reset
+  on restart; a missing durable row therefore cannot be interpreted as proof
+  that no failure occurred.
 - Distribution shift can reverse an apparently strong historical preference,
   as the fixture's final case demonstrates.
 
@@ -299,6 +396,11 @@ stops duplicate comparison work. Neither change affects hard eligibility,
 attempt authority, accepted receipts, contribution accounting, or the existing
 operational circuit breaker.
 
+Digestless typed or otherwise non-promotable exact scopes may still retain and
+collect shadow evidence while shadow mode is enabled when the existing resolver
+can safely reconstruct them. Their future-active diagnostic is not a routing
+control, reputation score, correctness verdict, or trust score.
+
 If the experiment is abandoned:
 
 1. leave mode `off`;
@@ -311,5 +413,7 @@ If the experiment is abandoned:
    coordinator.
 
 No attempt, receipt, descriptor snapshot, or contribution migration is needed
-to remove the evaluator. A future active experiment must add a new mode under a
-new ADR; it must not repurpose `shadow` or the deprecated first-refusal hook.
+to remove the evaluator. A future active experiment must satisfy the immutable
+identity and live-threshold gates, add a new mode under a separately accepted
+ADR, and arrive in a separately reviewed implementation PR. It must not
+repurpose `shadow` or the deprecated first-refusal hook.

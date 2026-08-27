@@ -53,6 +53,25 @@ def test_connection_policy_enables_wal_foreign_keys_and_bounded_retry(tmp_path, 
     assert len(sleeps) == 2
 
 
+def test_read_only_connection_cannot_write_or_change_schema(tmp_path):
+    database = tmp_path / "read-only.db"
+    with connection(database) as con:
+        con.execute("CREATE TABLE records (value TEXT NOT NULL)")
+        con.execute("INSERT INTO records (value) VALUES ('present')")
+        con.commit()
+
+    with connection(database, read_only=True) as con:
+        assert con.execute("PRAGMA query_only").fetchone() == (1,)
+        assert con.execute("SELECT value FROM records").fetchone() == ("present",)
+        with pytest.raises(sqlite3.OperationalError):
+            con.execute("INSERT INTO records (value) VALUES ('forbidden')")
+        with pytest.raises(sqlite3.OperationalError):
+            con.execute("CREATE TABLE forbidden (value TEXT)")
+
+    with connection(database) as con:
+        assert con.execute("SELECT value FROM records").fetchall() == [("present",)]
+
+
 def test_concurrent_store_initialization_is_idempotent(tmp_path):
     database = tmp_path / "events.db"
     storage = tmp_path / "storage"

@@ -126,12 +126,29 @@ new session. Values populated by stock-worker detection or operator overrides
 remain self-reported claims, not observed evidence or attestation. The digest
 identifies the claim; it does not prove the claimed hardware or model bytes.
 
+The descriptor's `limits.max_output_bytes` is a hard claimed placement limit.
+The canonical execution supplies the authoritative output budget as bounded
+server matching context: a typed node is eligible only when its claimed maximum
+is greater than or equal to the task budget. A lower claim yields
+`insufficient_output_capacity`. The execution budget is not duplicated in the
+typed resource-requirement model or its hashes. Descriptorless local
+compatibility sessions retain their explicit legacy behavior because the server
+does not invent a typed capacity claim for them.
+
+`limits.max_concurrent_execution_units` is an informational claimed upper
+bound. The coordinator does not maintain or enforce per-node slot counts and
+does not turn values above one into parallel server slots. The stock worker
+polls and executes sequentially, conservatively staying within the claim;
+worker concurrency and capacity-weighted scheduling are not part of this
+architecture.
+
 Canonical requests may carry bounded typed resource requirements in addition
-to legacy required-capability strings. A single pure matcher is used for both
-initial node qualification and final task handout. It returns stable exclusion
-reasons and the descriptor hash evaluated. Hard constraints exclude ineligible
-nodes but never rank eligible ones, and unknown claim values do not satisfy
-exact or minimum constraints.
+to legacy required-capability strings. A single pure matcher is used for
+initial node qualification, eligible-set construction, worker polling, the
+under-lock final handout recheck, protected diagnostics, and shadow candidate
+capture. It returns stable exclusion reasons and the descriptor hash evaluated.
+Hard constraints exclude ineligible nodes but never rank eligible ones, and
+unknown claim values do not satisfy exact or minimum constraints.
 
 Hard eligibility is the complete production scheduling policy. The optional
 sampled-comparison path records bounded output-shape agreement, but agreement is
@@ -142,6 +159,11 @@ Attempt issuance binds the session's descriptor version/hash and the canonical
 requirement version/digest before handout. Receipts preserve that binding, so a
 later session's descriptor cannot change historical assignment meaning. See
 [ADR 0011](adr/0011-node-capabilities-versioned-claims.md).
+
+The same durable attempt stores the exact server-issued output limit. A larger
+descriptor claim cannot raise it, and worker streaming or result submission
+cannot renegotiate it. Stream and settlement enforcement continue to use the
+attempt value.
 
 ## Scoped capability evidence and shadow policy
 
@@ -166,17 +188,23 @@ Sampled attempts durably bind the exact production attempt they compare.
 
 `capability_evidence_mode` accepts only `off` or `shadow` and defaults to `off`.
 Both modes preserve the same production handout. `shadow` evaluates a bounded
-counterfactual only after the real attempt is durable and assigned. It freezes
-already hard-eligible descriptor/model scopes at assignment time and uses only
-that immutable set plus observations recorded no later than the assignment.
+counterfactual only after the real attempt is durable and assigned. Admission
+freezes bounded, non-secret node claim inputs at assignment time; canonical
+rematching and descriptor/model scope construction consume that immutable
+snapshot in background work outside the production queue lock. Handout does not
+wait for scope matching, capture, or evidence aggregation. The evaluator uses
+only the resulting scopes plus observations recorded no later than assignment.
 Below `capability_evidence_min_samples` (default 5), a scope is
 explicitly insufficient rather than bad. Binary aggregates expose counts, rates,
 and Wilson intervals; recent latency and throughput use bounded medians. Sampled
 agreement is diagnostic output-shape agreement, not semantic correctness, and
 is not a shadow preference dimension.
 
-Observations and shadow decisions are append-only in SQLite. Domain-separated
-deterministic IDs make exact replay idempotent and conflicting reuse an error.
+Observations and shadow decisions are append-only in SQLite. Observations remain
+in authoritative `events.db`; optional decisions use sibling
+`capability-shadow-health.db`, and legacy decision rows copy forward
+idempotently. Domain-separated deterministic IDs make exact replay idempotent
+and conflicting reuse an error.
 Evidence recording is contained by a savepoint or best-effort boundary: its
 failure cannot reverse accepted settlement, receipt publication, or contribution
 credit. Missing-only attempt reconciliation and append-only contract-floor
@@ -185,12 +213,50 @@ starving later gaps. Deadline-success semantics use a versioned subject key, so
 an upgrade backfills corrected evidence without mutating or double-counting
 superseded append-only rows.
 
+Shadow-pipeline operational health is a separate bounded record alongside the
+isolated decisions in
+`capability_shadow_operational_events`, stored in the sibling
+`capability-shadow-health.db` rather than authoritative `events.db`. Admission
+is classified as `disabled`,
+`not_applicable`, `queue_saturated`, `scope_capture_failed`, or `scheduled`;
+scheduled evaluation terminates as
+`completed`, `evaluator_failed`, `decision_write_failed`, or
+`cancelled_on_shutdown`. Durable records contain only deterministic event and
+attempt IDs, phase, outcome, bounded reason code, and occurrence time.
+The separate database keeps best-effort health writes out of authoritative
+attempt, assignment, and settlement writer locks. Store-write, containment,
+and callback failures that cannot safely self-record
+are process-lifetime counters with a reset timestamp. Operational accounting is
+best effort and cannot change or delay production placement or settlement.
+If an evaluation row persists after its admission row failed to persist, the
+protected aggregate exposes it in `orphan_evaluation_total` and treats it as one
+inferred scheduled/offered observation. This keeps the terminal outcome visible
+and makes the reported failure numerator and offered denominator reproducible.
+Graceful shutdown closes admission and drains capture/decision work for a finite
+interval. Timed-out capture is an operational scope-capture failure; an
+in-flight decision write retains its truthful eventual commit/failure outcome.
+Background evidence aggregation uses a schema-initialized, query-only SQLite
+connection, so abandoned optional work cannot mutate authoritative `events.db`.
+
+Each scope also carries a derived future-active identity diagnostic. Its bounded
+blockers are `legacy_descriptor_identity`,
+`descriptor_identity_unreconstructable`, `immutable_model_identity_missing`,
+and `model_identity_unreconstructable`. The diagnostic does not change hard
+eligibility or itself suppress shadow collection; digestless typed scopes still
+collect when the existing evidence resolver can otherwise reconstruct them.
+Passing the identity prerequisite is not trust, correctness, reputation,
+attestation, or authorization to route actively.
+
 Viewer-protected `GET /v1/operator/capability-evidence` returns aggregates and
-shadow decision counts, never raw observations. Evidence rows contain no prompt,
-output body, worker error text, free-form reason, credential, nonce, session
-secret, or arbitrary telemetry. Contribution points remain a separate record of
-accepted compute; they are not capability evidence, assurance, correctness,
-reputation, or routing weight. See
+shadow decision counts, future-active identity blockers, and shadow operational
+health, never raw observations or operational events. The report exposes counts
+and the explicit drop/failure numerator and denominator, not only a percentage,
+and distinguishes durable history from process-local fallback counters. Evidence
+and health rows contain no prompt, output body, worker error text, free-form
+reason, credential, nonce, session secret, artifact content, or arbitrary
+telemetry. Contribution points remain a separate record of accepted compute;
+they are not capability evidence, assurance, correctness, reputation, or routing
+weight. Active evidence routing remains unimplemented. See
 [ADR 0012](adr/0012-observed-capability-evidence-shadow-only.md).
 
 ## DAG execution
@@ -404,17 +470,21 @@ and cookie behavior are in [ACCESS_CONTROL.md](ACCESS_CONTROL.md).
 | Accepted receipts | Yes, SQLite | broker can reload a matching receipt |
 | Node enrollments and credential digests | Yes, SQLite | identity/revocation survive; worker obtains a new session |
 | Enrolled capability snapshots | Yes, SQLite | immutable claim JSON and descriptor hashes survive; a fresh session selects its claim |
-| Scoped capability observations and shadow decisions | Yes, SQLite | append-only operational aggregates survive; startup performs bounded best-effort reconciliation |
+| Scoped capability observations | Yes, SQLite (`events.db`) | append-only operational aggregates survive; startup performs bounded best-effort reconciliation |
+| Shadow decisions and operational health records | Yes, separate SQLite | `capability-shadow-health.db` contains append-only decisions and `capability_shadow_operational_events`; legacy decisions copy forward, isolated writer locks protect `events.db`, and exact replay remains idempotent |
 | Contribution records | Yes, SQLite | unique attempt contribution and enrollment attribution remain exactly once |
 | Share records and token hashes | Yes, SQLite | expiry/revocation remain effective |
 | Artifact root and manifest metadata | Yes, SQLite plus disk | files remain until retention/pruning |
 | Worker queue and in-flight coroutine | **No** | lost; never represented as still running |
 | Connected nodes, sessions, and breaker state | **No** | enrolled workers authenticate again; operational state resets |
+| Shadow operational fallback counters | **No** | reset on process start and report their new `reset_at` timestamp |
 
 Reconciliation makes non-resumable loss truthful; it is not durable scheduling
-or failover. Submission mappings are retained indefinitely during trusted alpha
-and are part of backup/restore. The coordinator remains a single point of
-availability.
+or failover. Submission mappings are retained indefinitely during trusted alpha.
+Backup format v2 includes both `events.db` and
+`capability-shadow-health.db`. Restore also accepts legacy format-v1 archives
+without the health database; absence is optional only for state that predates
+this feature. The coordinator remains a single point of availability.
 
 ## Public pitch admission
 

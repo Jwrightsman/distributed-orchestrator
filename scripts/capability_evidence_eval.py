@@ -30,9 +30,10 @@ from capability_evidence import (  # noqa: E402
     EvidenceScope,
     ScopeAggregate,
     evaluate_shadow_preference,
+    future_active_experiment_eligibility,
 )
 
-REPORT_VERSION = "1"
+REPORT_VERSION = "2"
 FIXTURE_VERSION = "1"
 MAX_CASES = 100
 MAX_CANDIDATES = 16
@@ -139,7 +140,12 @@ def _scope(raw: object, *, field: str) -> EvidenceScope:
     if task_class not in ALLOWED_TASK_CLASSES:
         raise FixtureError(f"{field}.task_class must be dag_subtask or candidate")
     descriptor_seed = _text(data["descriptor_seed"], field=f"{field}.descriptor_seed")
-    model_digest_seed = _text(data["model_digest_seed"], field=f"{field}.model_digest_seed")
+    raw_model_digest_seed = data["model_digest_seed"]
+    model_digest_seed = (
+        None
+        if raw_model_digest_seed is None
+        else _text(raw_model_digest_seed, field=f"{field}.model_digest_seed")
+    )
     return EvidenceScope(
         enrollment_id=_text(data["enrollment_id"], field=f"{field}.enrollment_id"),
         descriptor_version="1",
@@ -149,7 +155,11 @@ def _scope(raw: object, *, field: str) -> EvidenceScope:
         worker_protocol_version="1",
         model_provider="ollama",
         model_name=_text(data["model_name"], field=f"{field}.model_name"),
-        model_digest=_digest("synthetic-model-v1", model_digest_seed),
+        model_digest=(
+            f"sha256:{_digest('synthetic-model-v1', model_digest_seed)}"
+            if model_digest_seed is not None
+            else None
+        ),
         model_variant=None,
         task_class=task_class,  # type: ignore[arg-type]
         evidence_role="production",
@@ -350,6 +360,9 @@ def _candidate(
         "candidate_id": candidate_id,
         "hard_eligible": hard_eligible,
         "aggregate": aggregate,
+        "future_active_experiment_eligibility": (
+            future_active_experiment_eligibility(scope).as_dict()
+        ),
         "labels": _labels(data["labels"], field=f"{field}.labels"),
         "excluded_causes": tuple(excluded_causes),
         "ignored_prior_scope_samples": ignored_prior_scope_samples,
@@ -476,6 +489,12 @@ def _case_report(
     ignored_prior_scope_samples = sum(
         candidate["ignored_prior_scope_samples"] for candidate in candidates
     )
+    future_active_diagnostics = {
+        candidate["candidate_id"]: candidate[
+            "future_active_experiment_eligibility"
+        ]
+        for candidate in eligible_records
+    }
     return {
         "case_id": case_id,
         "scenario": scenario,
@@ -484,6 +503,10 @@ def _case_report(
         "hard_ineligible_candidate_ids": hard_ineligible_ids,
         "excluded_non_node_fault_count": excluded_count,
         "ignored_prior_scope_samples": ignored_prior_scope_samples,
+        "future_active_experiment_eligibility": {
+            "by_candidate": future_active_diagnostics,
+            "meaning": "identity_prerequisite_only_not_reputation_or_trust",
+        },
         "shadow": {
             "candidate_set_digest": evaluation.candidate_set_digest,
             "decision_id": evaluation.decision_id,
@@ -571,6 +594,19 @@ def evaluate_fixture(raw: object) -> dict[str, Any]:
     outcome_counts = {name: 0 for name in ("same", "different", "no_preference")}
     for case in cases:
         outcome_counts[case["shadow"]["outcome"]] += 1
+    future_active_diagnostics = [
+        diagnostic
+        for case in cases
+        for diagnostic in case["future_active_experiment_eligibility"][
+            "by_candidate"
+        ].values()
+    ]
+    future_active_reason_counts: dict[str, int] = {}
+    for diagnostic in future_active_diagnostics:
+        for reason in diagnostic["blocking_reasons"]:
+            future_active_reason_counts[reason] = (
+                future_active_reason_counts.get(reason, 0) + 1
+            )
     return {
         "report_version": REPORT_VERSION,
         "fixture_version": FIXTURE_VERSION,
@@ -604,6 +640,20 @@ def evaluate_fixture(raw: object) -> dict[str, Any]:
                 "shadow_preference": shadow_preference,
             },
             "shadow_outcomes": outcome_counts,
+            "future_active_experiment_identity": {
+                "eligible_scope_count": sum(
+                    int(item["eligible_for_future_active_experiment"])
+                    for item in future_active_diagnostics
+                ),
+                "blocked_scope_count": sum(
+                    int(not item["eligible_for_future_active_experiment"])
+                    for item in future_active_diagnostics
+                ),
+                "blocking_reason_counts": dict(
+                    sorted(future_active_reason_counts.items())
+                ),
+                "meaning": "necessary_identity_prerequisite_not_promotion",
+            },
             "hard_ineligible_candidates_excluded": sum(
                 len(case["hard_ineligible_candidate_ids"]) for case in cases
             ),

@@ -3,7 +3,8 @@
 # Runs the FastAPI orchestrator. Ollama runs in its own container
 # (see docker-compose.yml) or on the host.
 #
-# Runtime data (config.json, ledger.json, events.db, output/, projects/)
+# Runtime data (config.json, ledger.json, events.db,
+# capability-shadow-health.db, output/, projects/)
 # lives in /data — mount a volume there to persist it.
 
 FROM python:3.14-slim

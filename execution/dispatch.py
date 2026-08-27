@@ -89,6 +89,7 @@ def qualifying_nodes(request: ExecutionRequestV1) -> list[str]:
             node.get("capability_descriptor"),
             node.get("capabilities", []),
             preferred_model_name=node.get("model"),
+            required_output_capacity_bytes=request.max_output_bytes,
         )
         recorded_hash = node.get("capability_descriptor_hash")
         if (

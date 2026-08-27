@@ -8,9 +8,13 @@ server.py assembles the app.
 """
 
 import asyncio
+from concurrent.futures import Future
+from copy import deepcopy
+from dataclasses import dataclass
 import json
 import logging
 import math
+import queue
 import re
 import secrets
 import sqlite3
@@ -18,7 +22,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 from fastapi import HTTPException, Request, WebSocket
 from pydantic import BaseModel, Field, field_validator
@@ -26,8 +30,15 @@ from pydantic import BaseModel, Field, field_validator
 from capability_evidence import (
     CapabilityEvidenceStore,
     CapabilityShadowDecisionStore,
+    CapabilityShadowOperationalStore,
     EligibleShadowCandidate,
     EvidenceScope,
+    ShadowAdmissionOutcome,
+    ShadowEvaluation,
+    ShadowEvaluationOutcome,
+    ShadowOperationalOutcome,
+    ShadowOperationalPhase,
+    ShadowOperationalProcessCounters,
     evaluate_shadow_preference,
 )
 from config import get as get_config
@@ -193,7 +204,150 @@ verification_pool = VerificationPool(verify_rate=0.0)
 # Capability evidence is append-only and observational. Shadow jobs operate on
 # already-issued attempts and have no reference to the queue mutation APIs.
 _CAPABILITY_SHADOW_TASK_LIMIT = 64
+# SQLite work is bounded independently. This shorter graceful drain keeps the
+# coordinator inside Docker's 30-second stop budget while allowing ordinary
+# decision writes to finish and report their real terminal outcome.
+_CAPABILITY_SHADOW_SHUTDOWN_DRAIN_SECONDS = 12.0
+_CAPABILITY_SHADOW_SHUTDOWN_CANCEL_SECONDS = 1.0
+
+
+class _BoundedDaemonExecutor:
+    """Run optional shadow work without joining blocked threads at process exit.
+
+    The standard asyncio executor uses non-daemon workers that its runner joins
+    during process shutdown. Shadow telemetry is explicitly best effort, so a
+    blocked optional write must not extend coordinator ownership past the
+    graceful drain. This tiny private executor bounds workers and queued calls;
+    queued futures are cancellable, while already-running daemon calls may be
+    abandoned safely when the process exits.
+    """
+
+    _STOP = object()
+
+    def __init__(self, *, name: str, max_workers: int, max_pending: int):
+        self._name = name
+        self._max_workers = max_workers
+        self._queue: queue.Queue[object] = queue.Queue(maxsize=max_pending)
+        self._lock = threading.RLock()
+        self._threads: list[threading.Thread] = []
+        self._accepting = True
+
+    def _start_workers_locked(self) -> None:
+        if self._threads:
+            return
+        for index in range(self._max_workers):
+            worker = threading.Thread(
+                target=self._worker,
+                name=f"{self._name}-{index + 1}",
+                daemon=True,
+            )
+            self._threads.append(worker)
+            worker.start()
+
+    def submit(
+        self,
+        function: Callable[..., Any],
+        /,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Future[Any]:
+        future: Future[Any] = Future()
+        with self._lock:
+            if not self._accepting:
+                raise RuntimeError("capability shadow executor is closed")
+            self._start_workers_locked()
+            try:
+                self._queue.put_nowait((future, function, args, kwargs))
+            except queue.Full as exc:
+                raise RuntimeError("capability shadow executor queue is full") from exc
+        return future
+
+    def close(self) -> None:
+        """Cancel queued calls and ask idle/running daemon workers to exit."""
+
+        with self._lock:
+            if not self._accepting:
+                return
+            self._accepting = False
+            while True:
+                try:
+                    item = self._queue.get_nowait()
+                except queue.Empty:
+                    break
+                try:
+                    if item is not self._STOP:
+                        future, _function, _args, _kwargs = item
+                        future.cancel()
+                finally:
+                    self._queue.task_done()
+            for _worker in self._threads:
+                self._queue.put_nowait(self._STOP)
+
+    def _worker(self) -> None:
+        while True:
+            item = self._queue.get()
+            try:
+                if item is self._STOP:
+                    return
+                future, function, args, kwargs = item
+                if not future.set_running_or_notify_cancel():
+                    continue
+                try:
+                    result = function(*args, **kwargs)
+                except BaseException as exc:  # mirrors concurrent.futures
+                    future.set_exception(exc)
+                else:
+                    future.set_result(result)
+            finally:
+                self._queue.task_done()
+
+
+def _new_capability_shadow_work_executor() -> _BoundedDaemonExecutor:
+    return _BoundedDaemonExecutor(
+        name="mycelium-shadow-work",
+        max_workers=8,
+        max_pending=_CAPABILITY_SHADOW_TASK_LIMIT,
+    )
+
+
+def _new_capability_shadow_health_executor() -> _BoundedDaemonExecutor:
+    return _BoundedDaemonExecutor(
+        name="mycelium-shadow-health",
+        max_workers=2,
+        max_pending=_CAPABILITY_SHADOW_HEALTH_TASK_LIMIT,
+    )
+
+
 _capability_shadow_tasks: set[asyncio.Task] = set()
+_CAPABILITY_SHADOW_HEALTH_TASK_LIMIT = 256
+_CAPABILITY_SHADOW_TERMINAL_TRACKING_LIMIT = 4096
+_capability_shadow_health_tasks: set[asyncio.Task] = set()
+_capability_shadow_task_attempt_ids: dict[asyncio.Task, str] = {}
+_capability_shadow_task_decision_times: dict[asyncio.Task, float] = {}
+_capability_shadow_terminal_claims: dict[str, ShadowEvaluationOutcome] = {}
+_capability_shadow_decision_writes: set[str] = set()
+_capability_shadow_decision_futures: dict[str, Future[Any]] = {}
+_capability_shadow_admissions: set[str] = set()
+_capability_shadow_lifecycle_lock = threading.RLock()
+_capability_shadow_shutdown_requested = False
+_capability_shadow_work_executor = _new_capability_shadow_work_executor()
+_capability_shadow_health_executor = _new_capability_shadow_health_executor()
+
+
+@dataclass(frozen=True)
+class _CapabilityShadowCandidateClaim:
+    """Non-secret assignment-time inputs for background canonical matching."""
+
+    node_id: str
+    draining: bool
+    blacklist_until: float
+    enrollment_id: str | None
+    descriptor_payload: dict[str, Any] | None
+    descriptor_hash: str | None
+    descriptor_version: str | None
+    session_id: str | None
+    legacy_capabilities: tuple[str, ...]
+    preferred_model_name: str | None
 
 # Compatibility registry for active GET /tasks/next polls. Sampled agreement
 # does not read it and it has no effect on assignment order.
@@ -243,6 +397,7 @@ _RESULT_TTL = 3600           # keep raw task results for 1 hour
 
 # ── SQLite event persistence ──────────────────────────────────────────
 _DB_PATH = Path("events.db")
+_CAPABILITY_SHADOW_OPERATIONAL_DB_PATH = Path("capability-shadow-health.db")
 _db_lock = threading.Lock()
 
 # Durable attempt state and receipts share the existing SQLite database. The
@@ -252,7 +407,19 @@ attempt_store = AttemptStore(_DB_PATH)
 enrollment_store = NodeEnrollmentStore(_DB_PATH)
 capability_snapshot_store = NodeCapabilitySnapshotStore(_DB_PATH)
 capability_evidence_store = CapabilityEvidenceStore(_DB_PATH)
-capability_shadow_decision_store = CapabilityShadowDecisionStore(_DB_PATH)
+# Optional shadow decisions and operational health are deliberately isolated
+# from authoritative attempt persistence. Their best-effort writers can never
+# hold events.db's SQLite writer lock or make issuance/settlement wait behind
+# experiment telemetry.
+capability_shadow_decision_store = CapabilityShadowDecisionStore(
+    _CAPABILITY_SHADOW_OPERATIONAL_DB_PATH
+)
+capability_shadow_operational_store = CapabilityShadowOperationalStore(
+    _CAPABILITY_SHADOW_OPERATIONAL_DB_PATH
+)
+capability_shadow_process_counters = ShadowOperationalProcessCounters(
+    reset_at=STARTED_AT
+)
 accepted_result_broker = AcceptedResultBroker(attempt_store)
 _COORDINATOR_RESTART_MARKER = f"restart-{secrets.token_hex(12)}"
 
@@ -295,17 +462,255 @@ def _reconcile_capability_evidence() -> None:
             )
 
 
-def _shadow_task_done(task: asyncio.Task) -> None:
-    _capability_shadow_tasks.discard(task)
+def _record_capability_shadow_operation(
+    *,
+    attempt_id: str,
+    phase: ShadowOperationalPhase,
+    outcome: ShadowOperationalOutcome,
+    reason_code: str,
+    occurred_at: float,
+) -> None:
+    """Best-effort durable health write with one non-recursive fallback."""
+
+    try:
+        capability_shadow_operational_store.record(
+            attempt_id=attempt_id,
+            phase=phase,
+            outcome=outcome,
+            reason_code=reason_code,
+            occurred_at=occurred_at,
+        )
+    except Exception:
+        capability_shadow_process_counters.increment(
+            "durable_health_record_write_failure"
+        )
+
+
+def _migrate_capability_shadow_operational_store() -> None:
+    """Best-effort health-store initialization outside startup authority."""
+
+    try:
+        capability_shadow_operational_store.migrate()
+    except Exception as exc:
+        capability_shadow_process_counters.increment(
+            "durable_health_record_write_failure"
+        )
+        logger.warning(
+            "capability shadow operational store unavailable error_type=%s",
+            type(exc).__name__,
+        )
+
+
+def _migrate_capability_shadow_decision_store() -> None:
+    """Best-effort initialization and idempotent pre-isolation copy-forward."""
+
+    try:
+        capability_shadow_decision_store.migrate()
+        capability_shadow_decision_store.import_legacy_decisions(_DB_PATH)
+    except Exception as exc:
+        capability_shadow_process_counters.increment(
+            "durable_health_record_write_failure"
+        )
+        logger.warning(
+            "capability shadow decision store unavailable error_type=%s",
+            type(exc).__name__,
+        )
+
+
+def _shadow_health_task_done(task: asyncio.Task) -> None:
+    _capability_shadow_health_tasks.discard(task)
     try:
         task.result()
     except asyncio.CancelledError:
         pass
     except Exception as exc:  # pragma: no cover - final containment boundary
+        capability_shadow_process_counters.increment(
+            "background_task_callback_failure"
+        )
         logger.warning(
-            "capability shadow evaluation failed error_type=%s",
+            "capability shadow health callback failed error_type=%s",
             type(exc).__name__,
         )
+
+
+async def _await_capability_shadow_future(future: Future[Any]) -> Any:
+    """Bridge one private daemon-pool future into the coordinator loop."""
+
+    return await asyncio.wrap_future(future)
+
+
+def _schedule_capability_shadow_operation(
+    *,
+    attempt_id: str,
+    phase: ShadowOperationalPhase,
+    outcome: ShadowOperationalOutcome,
+    reason_code: str,
+    occurred_at: float,
+) -> None:
+    """Queue telemetry separately so it cannot hold up a production handout."""
+
+    try:
+        if len(_capability_shadow_health_tasks) >= _CAPABILITY_SHADOW_HEALTH_TASK_LIMIT:
+            capability_shadow_process_counters.increment(
+                "unexpected_containment_failure"
+            )
+            return
+        loop = asyncio.get_running_loop()
+        future = _capability_shadow_health_executor.submit(
+            _record_capability_shadow_operation,
+            attempt_id=attempt_id,
+            phase=phase,
+            outcome=outcome,
+            reason_code=reason_code,
+            occurred_at=occurred_at,
+        )
+        task = loop.create_task(
+            _await_capability_shadow_future(future)
+        )
+        _capability_shadow_health_tasks.add(task)
+        task.add_done_callback(_shadow_health_task_done)
+    except Exception:
+        capability_shadow_process_counters.increment(
+            "unexpected_containment_failure"
+        )
+
+
+def _reserve_capability_shadow_terminal(
+    attempt_id: str,
+    outcome: ShadowEvaluationOutcome,
+) -> bool:
+    """Give shutdown or the evaluator sole ownership of a terminal outcome."""
+
+    with _capability_shadow_lifecycle_lock:
+        if attempt_id in _capability_shadow_terminal_claims:
+            return False
+        _capability_shadow_terminal_claims[attempt_id] = outcome
+        while (
+            len(_capability_shadow_terminal_claims)
+            > _CAPABILITY_SHADOW_TERMINAL_TRACKING_LIMIT
+        ):
+            oldest_attempt_id = next(iter(_capability_shadow_terminal_claims))
+            _capability_shadow_terminal_claims.pop(oldest_attempt_id, None)
+        return True
+
+
+def _record_capability_shadow_terminal(
+    *,
+    attempt_id: str,
+    outcome: ShadowEvaluationOutcome,
+    reason_code: str,
+) -> None:
+    if not _reserve_capability_shadow_terminal(attempt_id, outcome):
+        return
+    _schedule_capability_shadow_operation(
+        attempt_id=attempt_id,
+        phase="evaluation",
+        outcome=outcome,
+        reason_code=reason_code,
+        occurred_at=time.time(),
+    )
+
+
+def _record_capability_shadow_terminal_direct(
+    *,
+    attempt_id: str,
+    outcome: ShadowEvaluationOutcome,
+    reason_code: str,
+) -> None:
+    """Persist a terminal owned by a worker thread before that thread exits."""
+
+    if not _reserve_capability_shadow_terminal(attempt_id, outcome):
+        return
+    _record_capability_shadow_operation(
+        attempt_id=attempt_id,
+        phase="evaluation",
+        outcome=outcome,
+        reason_code=reason_code,
+        occurred_at=time.time(),
+    )
+
+
+def _shadow_task_done(task: asyncio.Task) -> None:
+    _capability_shadow_tasks.discard(task)
+    _capability_shadow_task_decision_times.pop(task, None)
+    attempt_id = _capability_shadow_task_attempt_ids.pop(task, None)
+    try:
+        task.result()
+    except asyncio.CancelledError:
+        pass
+    except Exception as exc:  # pragma: no cover - final containment boundary
+        capability_shadow_process_counters.increment(
+            "background_task_callback_failure"
+        )
+        if attempt_id is not None:
+            _record_capability_shadow_terminal(
+                attempt_id=attempt_id,
+                outcome="evaluator_failed",
+                reason_code="evaluator_failed",
+            )
+        logger.warning(
+            "capability shadow evaluation callback failed error_type=%s",
+            type(exc).__name__,
+        )
+
+
+def _snapshot_capability_shadow_candidate_claims(
+    *,
+    actual_node_id: str,
+    eligible_node_ids: tuple[str, ...],
+) -> tuple[_CapabilityShadowCandidateClaim, ...]:
+    """Copy bounded, non-secret claim inputs before the handout returns."""
+
+    other_node_ids = sorted(
+        {
+            node_id
+            for node_id in eligible_node_ids
+            if isinstance(node_id, str) and node_id and node_id != actual_node_id
+        }
+    )[:63]
+    snapshots: list[_CapabilityShadowCandidateClaim] = []
+    for node_id in (actual_node_id, *other_node_ids):
+        node = nodes.get(node_id)
+        if node is None:
+            continue
+        descriptor_payload = node.get("capability_descriptor")
+        snapshots.append(
+            _CapabilityShadowCandidateClaim(
+                node_id=node_id,
+                draining=bool(node.get("draining")),
+                blacklist_until=float(node_blacklist.get(node_id, 0)),
+                enrollment_id=(
+                    str(node["enrollment_id"])
+                    if node.get("enrollment_id")
+                    else None
+                ),
+                descriptor_payload=(
+                    deepcopy(descriptor_payload)
+                    if isinstance(descriptor_payload, dict)
+                    else None
+                ),
+                descriptor_hash=(
+                    str(node["capability_descriptor_hash"])
+                    if node.get("capability_descriptor_hash")
+                    else None
+                ),
+                descriptor_version=(
+                    str(node["capability_descriptor_version"])
+                    if node.get("capability_descriptor_version")
+                    else None
+                ),
+                session_id=(
+                    str(node["session_id"])
+                    if node.get("session_id")
+                    else None
+                ),
+                legacy_capabilities=tuple(node.get("capabilities", [])),
+                preferred_model_name=(
+                    str(node["model"]) if node.get("model") else None
+                ),
+            )
+        )
+    return tuple(snapshots)
 
 
 def _capture_capability_shadow_scopes(
@@ -316,8 +721,18 @@ def _capture_capability_shadow_scopes(
     required_capabilities: tuple[str, ...],
     eligible_node_ids: tuple[str, ...],
     captured_at: float,
+    candidate_claims: tuple[_CapabilityShadowCandidateClaim, ...] | None = None,
 ) -> tuple[EvidenceScope, ...]:
     """Freeze already-matched claim/model scopes before background work starts."""
+
+    claims = (
+        candidate_claims
+        if candidate_claims is not None
+        else _snapshot_capability_shadow_candidate_claims(
+            actual_node_id=str(actual_attempt.assigned_node_id),
+            eligible_node_ids=eligible_node_ids,
+        )
+    )
 
     if getattr(actual_attempt, "evidence_role", None) != "production":
         raise ValueError("shadow evaluation requires a production attempt")
@@ -344,6 +759,35 @@ def _capture_capability_shadow_scopes(
     if len(actual_models) != 1:
         raise ValueError("actual shadow model does not match the issued attempt")
     actual_model = actual_models[0]
+    actual_node_id = str(actual_attempt.assigned_node_id)
+    actual_claim = next(
+        (claim for claim in claims if claim.node_id == actual_node_id),
+        None,
+    )
+    if (
+        actual_claim is None
+        or actual_claim.draining
+        or actual_claim.blacklist_until > captured_at
+        or actual_claim.enrollment_id
+        != getattr(actual_attempt, "assigned_enrollment_id", None)
+        or actual_claim.session_id
+        != getattr(actual_attempt, "assigned_session_id", None)
+        or actual_claim.descriptor_version != actual_descriptor.descriptor_version
+        or actual_claim.descriptor_hash != descriptor_hash
+    ):
+        raise ValueError("actual shadow node is no longer registered")
+    actual_match = match_node_requirements(
+        resource_requirements,
+        required_capabilities,
+        actual_descriptor,
+        actual_claim.legacy_capabilities,
+        preferred_model_name=getattr(actual_attempt, "assigned_model_name", None),
+        required_output_capacity_bytes=getattr(
+            actual_attempt, "max_output_bytes", None
+        ),
+    )
+    if not actual_match.eligible or actual_match.selected_model != actual_model:
+        raise ValueError("actual shadow node no longer satisfies task requirements")
     actual_scope = EvidenceScope(
         enrollment_id=str(actual_attempt.assigned_enrollment_id),
         descriptor_version=actual_descriptor.descriptor_version,
@@ -362,30 +806,26 @@ def _capture_capability_shadow_scopes(
     )
 
     scopes: dict[str, EvidenceScope] = {actual_scope.scope_key: actual_scope}
-    actual_node_id = str(actual_attempt.assigned_node_id)
-    for node_id in eligible_node_ids:
+    for claim in claims:
         if len(scopes) >= 64:
             break
+        node_id = claim.node_id
         if node_id == actual_node_id:
             continue
-        node = nodes.get(node_id)
-        if not node or node.get("draining"):
+        if claim.draining:
             continue
-        if node_blacklist.get(node_id, 0) > captured_at:
+        if claim.blacklist_until > captured_at:
             continue
-        enrollment_id = node.get("enrollment_id")
-        descriptor_payload = node.get("capability_descriptor")
-        descriptor_hash = node.get("capability_descriptor_hash")
-        descriptor_version = node.get("capability_descriptor_version")
-        session = node_sessions.current(node_id)
+        enrollment_id = claim.enrollment_id
+        descriptor_payload = claim.descriptor_payload
+        descriptor_hash = claim.descriptor_hash
+        descriptor_version = claim.descriptor_version
         if (
             not enrollment_id
             or descriptor_payload is None
             or not descriptor_hash
             or not descriptor_version
-            or session is None
-            or session.enrollment_id != enrollment_id
-            or session.capability_descriptor_hash != descriptor_hash
+            or not claim.session_id
         ):
             continue
         try:
@@ -399,8 +839,11 @@ def _capture_capability_shadow_scopes(
                 resource_requirements,
                 required_capabilities,
                 descriptor,
-                node.get("capabilities", []),
-                preferred_model_name=node.get("model"),
+                claim.legacy_capabilities,
+                preferred_model_name=claim.preferred_model_name,
+                required_output_capacity_bytes=getattr(
+                    actual_attempt, "max_output_bytes", None
+                ),
             )
             model = match.selected_model
             if not match.eligible or model is None:
@@ -426,6 +869,36 @@ def _capture_capability_shadow_scopes(
     return tuple(sorted(scopes.values(), key=lambda item: item.scope_key))
 
 
+def _build_capability_shadow_evaluation(
+    *,
+    actual_attempt_id: str,
+    actual_scope_key: str,
+    candidate_scopes: tuple[EvidenceScope, ...],
+    minimum_samples: int,
+    decision_at: float,
+) -> ShadowEvaluation:
+    """Evaluate immutable assignment-time candidates without writing a decision."""
+
+    candidates = [
+        EligibleShadowCandidate(
+            candidate_id=scope.scope_key,
+            aggregate=capability_evidence_store.aggregate_read_only(
+                scope,
+                minimum_samples=minimum_samples,
+                recorded_before=decision_at,
+            ),
+        )
+        for scope in candidate_scopes
+    ]
+    return evaluate_shadow_preference(
+        actual_attempt_id=actual_attempt_id,
+        actual_candidate_id=actual_scope_key,
+        candidates=candidates,
+        minimum_samples=minimum_samples,
+        decision_at=decision_at,
+    )
+
+
 def _evaluate_capability_shadow(
     *,
     actual_attempt_id: str,
@@ -434,33 +907,212 @@ def _evaluate_capability_shadow(
     minimum_samples: int,
     decision_at: float,
 ) -> None:
-    """Evaluate immutable assignment-time candidates without live-node access."""
+    """Compatibility helper for a contained synchronous shadow evaluation."""
 
-    candidates = [
-        EligibleShadowCandidate(
-            candidate_id=scope.scope_key,
-            aggregate=capability_evidence_store.aggregate(
-                scope,
-                minimum_samples=minimum_samples,
-                recorded_before=decision_at,
-            ),
-        )
-        for scope in candidate_scopes
-    ]
-    evaluation = evaluate_shadow_preference(
+    evaluation = _build_capability_shadow_evaluation(
         actual_attempt_id=actual_attempt_id,
-        actual_candidate_id=actual_scope_key,
-        candidates=candidates,
+        actual_scope_key=actual_scope_key,
+        candidate_scopes=candidate_scopes,
         minimum_samples=minimum_samples,
         decision_at=decision_at,
     )
     capability_shadow_decision_store.record(evaluation)
 
 
+def _persist_capability_shadow_decision(
+    *,
+    actual_attempt_id: str,
+    evaluation: ShadowEvaluation,
+) -> None:
+    """Persist a decision and its truthful terminal health in one worker thread.
+
+    An asyncio task can stop waiting after the bounded shutdown drain, but
+    Python cannot cancel a SQLite call already running in a thread. Keeping the
+    terminal classification in that same thread prevents a committed decision
+    from being mislabeled as a shutdown cancellation.
+    """
+
+    try:
+        capability_shadow_decision_store.record(evaluation)
+    except Exception:
+        _record_capability_shadow_terminal_direct(
+            attempt_id=actual_attempt_id,
+            outcome="decision_write_failed",
+            reason_code="decision_write_failed",
+        )
+    else:
+        _record_capability_shadow_terminal_direct(
+            attempt_id=actual_attempt_id,
+            outcome="completed",
+            reason_code="decision_persisted",
+        )
+    finally:
+        with _capability_shadow_lifecycle_lock:
+            _capability_shadow_decision_writes.discard(actual_attempt_id)
+
+
+def _shadow_decision_future_done(
+    future: Future[Any],
+    *,
+    attempt_id: str,
+) -> None:
+    with _capability_shadow_lifecycle_lock:
+        if _capability_shadow_decision_futures.get(attempt_id) is future:
+            _capability_shadow_decision_futures.pop(attempt_id, None)
+
+
+async def _run_capability_shadow_evaluation(
+    *,
+    actual_attempt_id: str,
+    actual_scope_key: str,
+    candidate_scopes: tuple[EvidenceScope, ...],
+    minimum_samples: int,
+    decision_at: float,
+) -> None:
+    """Contain evaluator and decision-write failures outside production work."""
+
+    try:
+        evaluation_future = _capability_shadow_work_executor.submit(
+            _build_capability_shadow_evaluation,
+            actual_attempt_id=actual_attempt_id,
+            actual_scope_key=actual_scope_key,
+            candidate_scopes=candidate_scopes,
+            minimum_samples=minimum_samples,
+            decision_at=decision_at,
+        )
+        evaluation = await _await_capability_shadow_future(evaluation_future)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _record_capability_shadow_terminal(
+            attempt_id=actual_attempt_id,
+            outcome="evaluator_failed",
+            reason_code="evaluator_failed",
+        )
+        return
+
+    with _capability_shadow_lifecycle_lock:
+        if actual_attempt_id in _capability_shadow_terminal_claims:
+            return
+        _capability_shadow_decision_writes.add(actual_attempt_id)
+    try:
+        decision_future = _capability_shadow_work_executor.submit(
+            _persist_capability_shadow_decision,
+            actual_attempt_id=actual_attempt_id,
+            evaluation=evaluation,
+        )
+        with _capability_shadow_lifecycle_lock:
+            _capability_shadow_decision_futures[actual_attempt_id] = (
+                decision_future
+            )
+        decision_future.add_done_callback(
+            lambda future: _shadow_decision_future_done(
+                future,
+                attempt_id=actual_attempt_id,
+            )
+        )
+        # Shield a running write so the daemon records whether it really
+        # committed even if the outer pipeline stops waiting after the drain.
+        await asyncio.shield(
+            _await_capability_shadow_future(decision_future)
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # pragma: no cover - synchronous helper contains failures
+        with _capability_shadow_lifecycle_lock:
+            _capability_shadow_decision_writes.discard(actual_attempt_id)
+        _record_capability_shadow_terminal_direct(
+            attempt_id=actual_attempt_id,
+            outcome="decision_write_failed",
+            reason_code="decision_write_failed",
+        )
+
+
+async def _run_capability_shadow_pipeline(
+    *,
+    actual_attempt: Any,
+    actual_descriptor: NodeCapabilityDescriptorV1,
+    resource_requirements: dict[str, Any] | None,
+    required_capabilities: tuple[str, ...],
+    eligible_node_ids: tuple[str, ...],
+    candidate_claims: tuple[_CapabilityShadowCandidateClaim, ...],
+    minimum_samples: int,
+    decision_at: float,
+) -> None:
+    """Capture scopes and evaluate entirely outside the production handout."""
+
+    attempt_id = str(actual_attempt.attempt_id)
+    try:
+        capture_future = _capability_shadow_work_executor.submit(
+            _capture_capability_shadow_scopes,
+            actual_attempt=actual_attempt,
+            actual_descriptor=actual_descriptor,
+            resource_requirements=resource_requirements,
+            required_capabilities=required_capabilities,
+            eligible_node_ids=eligible_node_ids,
+            captured_at=decision_at,
+            candidate_claims=candidate_claims,
+        )
+        candidate_scopes = await _await_capability_shadow_future(capture_future)
+        actual_scope = next(
+            scope
+            for scope in candidate_scopes
+            if scope.enrollment_id == actual_attempt.assigned_enrollment_id
+            and scope.descriptor_hash == actual_attempt.assigned_descriptor_hash
+            and scope.model_provider == actual_attempt.assigned_model_provider
+            and scope.model_name == actual_attempt.assigned_model_name
+            and scope.model_digest == actual_attempt.assigned_model_digest
+        )
+    except asyncio.CancelledError:
+        with _capability_shadow_lifecycle_lock:
+            shutdown_requested = _capability_shadow_shutdown_requested
+        if not shutdown_requested:
+            capability_shadow_process_counters.increment(
+                "unexpected_containment_failure"
+            )
+        raise
+    except Exception:
+        _schedule_capability_shadow_operation(
+            attempt_id=attempt_id,
+            phase="admission",
+            outcome="scope_capture_failed",
+            reason_code="scope_capture_failed",
+            occurred_at=decision_at,
+        )
+        return
+    finally:
+        with _capability_shadow_lifecycle_lock:
+            _capability_shadow_admissions.discard(attempt_id)
+
+    _schedule_capability_shadow_operation(
+        attempt_id=attempt_id,
+        phase="admission",
+        outcome="scheduled",
+        reason_code="evaluation_scheduled",
+        occurred_at=decision_at,
+    )
+    with _capability_shadow_lifecycle_lock:
+        shutdown_requested = _capability_shadow_shutdown_requested
+    if shutdown_requested:
+        _record_capability_shadow_terminal(
+            attempt_id=attempt_id,
+            outcome="cancelled_on_shutdown",
+            reason_code="coordinator_shutdown",
+        )
+        return
+    await _run_capability_shadow_evaluation(
+        actual_attempt_id=attempt_id,
+        actual_scope_key=actual_scope.scope_key,
+        candidate_scopes=candidate_scopes,
+        minimum_samples=minimum_samples,
+        decision_at=decision_at,
+    )
+
+
 def schedule_capability_shadow_evaluation(
     actual_attempt: Any,
     *,
-    actual_descriptor: NodeCapabilityDescriptorV1,
+    actual_descriptor: NodeCapabilityDescriptorV1 | None,
     resource_requirements: dict[str, Any] | None,
     required_capabilities: list[str] | tuple[str, ...],
     eligible_node_ids: list[str] | tuple[str, ...],
@@ -468,15 +1120,69 @@ def schedule_capability_shadow_evaluation(
 ) -> bool:
     """Schedule a bounded post-assignment diagnostic; never await evidence."""
 
+    attempt_id = getattr(actual_attempt, "attempt_id", None)
+    if not isinstance(attempt_id, str) or not attempt_id:
+        capability_shadow_process_counters.increment(
+            "unexpected_containment_failure"
+        )
+        return False
+    try:
+        occurred_at = float(decision_at)
+        if not math.isfinite(occurred_at) or occurred_at < 0:
+            raise ValueError("invalid decision timestamp")
+    except (TypeError, ValueError):
+        capability_shadow_process_counters.increment(
+            "unexpected_containment_failure"
+        )
+        return False
+
+    def _admission(
+        outcome: ShadowAdmissionOutcome,
+        reason_code: str,
+    ) -> None:
+        _schedule_capability_shadow_operation(
+            attempt_id=attempt_id,
+            phase="admission",
+            outcome=outcome,
+            reason_code=reason_code,
+            occurred_at=occurred_at,
+        )
+
     try:
         cfg = get_config()
-        if str(cfg.get("capability_evidence_mode", "off")) != "shadow":
-            return False
+        mode = str(cfg.get("capability_evidence_mode", "off"))
         minimum_samples = int(cfg.get("capability_evidence_min_samples", 5))
-        if getattr(actual_attempt, "evidence_role", None) != "production":
-            return False
-        if len(_capability_shadow_tasks) >= _CAPABILITY_SHADOW_TASK_LIMIT:
-            return False
+    except Exception:
+        capability_shadow_process_counters.increment(
+            "unexpected_containment_failure"
+        )
+        return False
+    if mode != "shadow":
+        _admission("disabled", "mode_disabled")
+        return False
+    if getattr(actual_attempt, "evidence_role", None) != "production":
+        _admission("not_applicable", "nonproduction_attempt")
+        return False
+    if getattr(actual_attempt, "execution_unit_kind", None) not in {
+        "dag_subtask",
+        "candidate",
+    }:
+        _admission("not_applicable", "unsupported_task_class")
+        return False
+    if (
+        actual_descriptor is None
+        or getattr(actual_attempt, "assigned_descriptor_hash", None) is None
+    ):
+        _admission("not_applicable", "legacy_descriptor_identity")
+        return False
+    if len(_capability_shadow_tasks) >= _CAPABILITY_SHADOW_TASK_LIMIT:
+        _admission(
+            "queue_saturated",
+            "background_queue_limit_reached",
+        )
+        return False
+
+    try:
         loop = asyncio.get_running_loop()
         candidates = tuple(
             sorted(
@@ -487,38 +1193,253 @@ def schedule_capability_shadow_evaluation(
                 }
             )[:64]
         )
-        candidate_scopes = _capture_capability_shadow_scopes(
-            actual_attempt=actual_attempt,
-            actual_descriptor=actual_descriptor,
-            resource_requirements=resource_requirements,
-            required_capabilities=tuple(required_capabilities),
+        candidate_claims = _snapshot_capability_shadow_candidate_claims(
+            actual_node_id=str(actual_attempt.assigned_node_id),
             eligible_node_ids=candidates,
-            captured_at=float(decision_at),
         )
-        actual_scope = next(
-            scope
-            for scope in candidate_scopes
-            if scope.enrollment_id == actual_attempt.assigned_enrollment_id
-            and scope.descriptor_hash == actual_attempt.assigned_descriptor_hash
-            and scope.model_provider == actual_attempt.assigned_model_provider
-            and scope.model_name == actual_attempt.assigned_model_name
-            and scope.model_digest == actual_attempt.assigned_model_digest
-        )
-        task = loop.create_task(
-            asyncio.to_thread(
-                _evaluate_capability_shadow,
-                actual_attempt_id=str(actual_attempt.attempt_id),
-                actual_scope_key=actual_scope.scope_key,
-                candidate_scopes=candidate_scopes,
-                minimum_samples=minimum_samples,
-                decision_at=float(decision_at),
+    except Exception:
+        _admission("scope_capture_failed", "scope_capture_failed")
+        return False
+
+    try:
+        with _capability_shadow_lifecycle_lock:
+            if _capability_shadow_shutdown_requested:
+                task = None
+            else:
+                _capability_shadow_admissions.add(attempt_id)
+                task = loop.create_task(
+                    _run_capability_shadow_pipeline(
+                        actual_attempt=actual_attempt,
+                        actual_descriptor=actual_descriptor,
+                        resource_requirements=resource_requirements,
+                        required_capabilities=tuple(required_capabilities),
+                        eligible_node_ids=candidates,
+                        candidate_claims=candidate_claims,
+                        minimum_samples=minimum_samples,
+                        decision_at=occurred_at,
+                    )
+                )
+                _capability_shadow_tasks.add(task)
+                _capability_shadow_task_attempt_ids[task] = attempt_id
+                _capability_shadow_task_decision_times[task] = occurred_at
+        if task is None:
+            _admission(
+                "scope_capture_failed",
+                "coordinator_shutdown_during_scope_capture",
             )
-        )
-        _capability_shadow_tasks.add(task)
+            return False
         task.add_done_callback(_shadow_task_done)
         return True
     except Exception:
+        with _capability_shadow_lifecycle_lock:
+            _capability_shadow_admissions.discard(attempt_id)
+        capability_shadow_process_counters.increment(
+            "unexpected_containment_failure"
+        )
+        _admission("scope_capture_failed", "scope_capture_failed")
         return False
+
+
+async def shutdown_capability_shadow_evaluations() -> None:
+    """Classify unfinished work and drain it for a finite graceful interval."""
+
+    global _capability_shadow_shutdown_requested
+    with _capability_shadow_lifecycle_lock:
+        _capability_shadow_shutdown_requested = True
+        evaluations = tuple(_capability_shadow_tasks)
+    cancellation_records: list[str] = []
+    for task in evaluations:
+        if task.done():
+            continue
+        attempt_id = _capability_shadow_task_attempt_ids.get(task)
+        cancel_task = False
+        with _capability_shadow_lifecycle_lock:
+            admission_in_progress = attempt_id in _capability_shadow_admissions
+            decision_write_in_progress = (
+                attempt_id in _capability_shadow_decision_writes
+            )
+            terminal_owned = (
+                attempt_id in _capability_shadow_terminal_claims
+            )
+            decision_future = _capability_shadow_decision_futures.get(
+                attempt_id
+            )
+            cancellation_reserved = False
+            if terminal_owned:
+                cancel_task = True
+            elif admission_in_progress:
+                pass
+            elif decision_write_in_progress:
+                if decision_future is not None and decision_future.cancel():
+                    _capability_shadow_decision_writes.discard(attempt_id)
+                    cancellation_reserved = bool(
+                        attempt_id is not None
+                        and _reserve_capability_shadow_terminal(
+                            attempt_id,
+                            "cancelled_on_shutdown",
+                        )
+                    )
+                    cancel_task = True
+            else:
+                cancellation_reserved = bool(
+                    attempt_id is not None
+                    and _reserve_capability_shadow_terminal(
+                        attempt_id,
+                        "cancelled_on_shutdown",
+                    )
+                )
+                cancel_task = True
+        if cancellation_reserved and attempt_id is not None:
+            cancellation_records.append(attempt_id)
+        if cancel_task:
+            task.cancel()
+    for attempt_id in cancellation_records:
+        _schedule_capability_shadow_operation(
+            attempt_id=attempt_id,
+            phase="evaluation",
+            outcome="cancelled_on_shutdown",
+            reason_code="coordinator_shutdown",
+            occurred_at=time.time(),
+        )
+
+    pending: set[asyncio.Task] = set()
+    if evaluations:
+        _done, pending = await asyncio.wait(
+            evaluations,
+            timeout=_CAPABILITY_SHADOW_SHUTDOWN_DRAIN_SECONDS,
+        )
+
+    timed_out_captures: list[tuple[str, float]] = []
+    timed_out_cancellations: list[str] = []
+    for task in pending:
+        if task.done():
+            continue
+        attempt_id = _capability_shadow_task_attempt_ids.get(task)
+        with _capability_shadow_lifecycle_lock:
+            admission_in_progress = attempt_id in _capability_shadow_admissions
+            decision_write_in_progress = (
+                attempt_id in _capability_shadow_decision_writes
+            )
+            terminal_owned = (
+                attempt_id in _capability_shadow_terminal_claims
+            )
+            decision_future = _capability_shadow_decision_futures.get(
+                attempt_id
+            )
+            if terminal_owned:
+                pass
+            elif admission_in_progress and attempt_id is not None:
+                _capability_shadow_admissions.discard(attempt_id)
+                admission_time = _capability_shadow_task_decision_times.get(task)
+                if admission_time is None:
+                    capability_shadow_process_counters.increment(
+                        "unexpected_containment_failure"
+                    )
+                    admission_time = time.time()
+                timed_out_captures.append((attempt_id, admission_time))
+            elif decision_write_in_progress:
+                if decision_future is not None and decision_future.cancel():
+                    _capability_shadow_decision_writes.discard(attempt_id)
+                    if attempt_id is not None and (
+                        _reserve_capability_shadow_terminal(
+                            attempt_id,
+                            "cancelled_on_shutdown",
+                        )
+                    ):
+                        timed_out_cancellations.append(attempt_id)
+                elif decision_future is not None and decision_future.running():
+                    # The daemon records completed/write-failed truth when its
+                    # bounded SQLite operation returns. Until then the report
+                    # correctly shows this scheduled assignment as pending.
+                    capability_shadow_process_counters.increment(
+                        "unexpected_containment_failure"
+                    )
+                elif decision_future is not None and decision_future.done():
+                    # The synchronous writer claims a terminal before setting
+                    # its Future result; reaching this branch is containment
+                    # failure rather than a normal drain-boundary completion.
+                    capability_shadow_process_counters.increment(
+                        "unexpected_containment_failure"
+                    )
+                else:
+                    _capability_shadow_decision_writes.discard(attempt_id)
+                    capability_shadow_process_counters.increment(
+                        "unexpected_containment_failure"
+                    )
+            elif attempt_id is not None and _reserve_capability_shadow_terminal(
+                attempt_id,
+                "cancelled_on_shutdown",
+            ):
+                timed_out_cancellations.append(attempt_id)
+            else:
+                capability_shadow_process_counters.increment(
+                    "unexpected_containment_failure"
+                )
+        task.cancel()
+
+    for attempt_id, admission_time in timed_out_captures:
+        _schedule_capability_shadow_operation(
+            attempt_id=attempt_id,
+            phase="admission",
+            outcome="scope_capture_failed",
+            reason_code="coordinator_shutdown_during_scope_capture",
+            occurred_at=admission_time,
+        )
+    for attempt_id in timed_out_cancellations:
+        _schedule_capability_shadow_operation(
+            attempt_id=attempt_id,
+            phase="evaluation",
+            outcome="cancelled_on_shutdown",
+            reason_code="coordinator_shutdown",
+            occurred_at=time.time(),
+        )
+
+    # Cancels queued optional calls and never joins already-running daemon work.
+    # This is the process-exit boundary that asyncio's default executor cannot
+    # provide for best-effort telemetry.
+    _capability_shadow_work_executor.close()
+
+    if pending:
+        _done, still_pending = await asyncio.wait(
+            pending,
+            timeout=_CAPABILITY_SHADOW_SHUTDOWN_CANCEL_SECONDS,
+        )
+        for _task in still_pending:
+            capability_shadow_process_counters.increment(
+                "unexpected_containment_failure"
+            )
+
+    health_tasks = tuple(_capability_shadow_health_tasks)
+    if health_tasks:
+        _done, pending = await asyncio.wait(health_tasks, timeout=1.0)
+        for task in pending:
+            task.cancel()
+        if pending:
+            _done, still_pending = await asyncio.wait(
+                pending,
+                timeout=_CAPABILITY_SHADOW_SHUTDOWN_CANCEL_SECONDS,
+            )
+            for _task in still_pending:
+                capability_shadow_process_counters.increment(
+                    "background_task_callback_failure"
+                )
+    _capability_shadow_health_executor.close()
+
+
+def begin_capability_shadow_runtime() -> None:
+    """Allow background admission at the start of one coordinator lifespan."""
+
+    global _capability_shadow_health_executor
+    global _capability_shadow_shutdown_requested
+    global _capability_shadow_work_executor
+    with _capability_shadow_lifecycle_lock:
+        _capability_shadow_work_executor.close()
+        _capability_shadow_health_executor.close()
+        _capability_shadow_work_executor = _new_capability_shadow_work_executor()
+        _capability_shadow_health_executor = (
+            _new_capability_shadow_health_executor()
+        )
+        _capability_shadow_shutdown_requested = False
 
 
 def node_enrollment_required() -> bool:
@@ -1023,7 +1944,8 @@ def _init_db() -> None:
     capability_snapshot_store.migrate()
     attempt_store.migrate()
     capability_evidence_store.migrate()
-    capability_shadow_decision_store.migrate()
+    _migrate_capability_shadow_decision_store()
+    _migrate_capability_shadow_operational_store()
     # Redact legacy free-form contribution metadata and regenerate the JSON
     # projection before any read route can expose it.
     from ledger import sync_compatibility_ledger

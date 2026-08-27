@@ -86,6 +86,10 @@ bounded fields are `allowed_executor_kinds`,
 preserve previous behavior. `required_capabilities` remains the legacy string
 compatibility contract; when both forms are present both must match.
 
+The execution's independent `max_output_bytes` is authoritative server matching
+context, not a `NodeResourceRequirementsV1` field. It therefore does not change
+the resource-requirement or canonical request hash projections described below.
+
 ### Strategy options
 
 `DagOptionsV1` contains `maximum_subtasks` from one through five and booleans
@@ -483,6 +487,19 @@ resource-requirement versions fail validation with machine-readable
 `unsupported_capability_descriptor_version` or
 `unsupported_resource_requirement_version` error types.
 
+`limits.max_output_bytes` is a claimed hard placement limit. Every task-bound
+matcher caller supplies the execution's server-derived output budget; a typed
+node must claim a value greater than or equal to it. Exact equality is eligible,
+while a lower claim yields `insufficient_output_capacity`. This is exclusion
+based on a node claim, not capacity measurement or attestation.
+
+`limits.max_concurrent_execution_units` is an informational claimed upper
+bound. The coordinator does not maintain or enforce per-node slot counts, and
+it does not treat values above one as parallel slots. The stock worker polls
+and executes sequentially, so its normal behavior conservatively stays within
+the claim. This field does not enable worker concurrency, parallel polling, or
+capacity-weighted scheduling.
+
 Canonical compact sorted-key JSON defines the descriptor SHA-256 hash. For an
 enrolled node, each distinct JSON snapshot is stored idempotently by enrollment
 and hash and validated on read. The session binds the descriptor version/hash;
@@ -500,6 +517,11 @@ nullable advertised digest. The stock worker validates that binding against
 its immutable process descriptor and passes the selected name to Ollama.
 Handouts from older coordinators have no binding and retain the configured-model
 behavior.
+
+The same matcher is authoritative for initial qualification, eligible-node-set
+construction, worker long polling, the under-lock handout recheck, protected
+operator diagnostics, and shadow candidate capture. No route may add a separate
+output-capacity interpretation that can disagree with those decisions.
 
 These values are node claims, whether populated by best-effort detection or an
 operator override. Persistence and hashing do not measure, attest, or verify
@@ -524,6 +546,11 @@ explicitly confirm the requested action, enrollment ID, and credential version;
 it never silently downgrades its private identity to a legacy shared-secret
 session.
 
+A descriptorless compatibility session advertises no typed output-capacity
+claim. The matcher does not fabricate one, so its explicit legacy compatibility
+behavior remains. If assigned, it is still constrained by the exact output
+limit in the server-issued attempt.
+
 Registration strings and capabilities are bounded, and the server normalizes
 node IDs to at most 64 ASCII characters. `max_output_bytes` is an execution
 contract limit from 1 KiB through 10 MiB and is copied into each issued
@@ -534,6 +561,10 @@ emit at most 250,000 batches, and the rate is capped at 120 batches per second.
 Crossing the byte/batch or rate boundary closes the stream and returns a
 machine-readable `413` or `429` without allowing settlement to bypass the
 result cap.
+
+The attempt cap remains authoritative even when a descriptor advertises a
+larger value. Neither registration, polling, streaming, nor result submission
+lets a worker raise it.
 
 ## Server-authoritative worker attempts
 
@@ -674,11 +705,13 @@ shadow preference policy.
 `capability_evidence_mode` is strictly `off` or `shadow` and defaults to `off`.
 `capability_evidence_min_samples` defaults to 5 and must be an integer from 1 to
 1000. `shadow` schedules a bounded counterfactual after the production handout
-is durable. It freezes the exact hard-matched descriptor/model scopes at
-assignment time, then the background evaluator reads only that immutable set
-and observations recorded by the assignment cutoff. It never waits on evidence
-or changes eligibility, queue order, assignment, settlement, contribution
-credit, or the circuit breaker. There is no active evidence-routing mode.
+is durable. Admission freezes bounded non-secret node claim inputs at assignment
+time. Canonical rematching and exact descriptor/model scope construction run
+from that immutable snapshot as bounded background work outside the production
+queue lock. Handout never waits on scope capture or evidence, and the evaluator
+uses only observations recorded by the assignment cutoff. Shadow work never
+changes eligibility, queue order, assignment, settlement, contribution credit,
+or the circuit breaker. There is no active evidence-routing mode.
 `verify_rate` is an independent, default-off sampled-comparison control.
 
 Observation, pair, and shadow-decision IDs are deterministic and
@@ -695,6 +728,80 @@ The protected aggregate endpoint exposes no raw observations or metadata. The
 evidence store contains no prompt, output body, worker-error text, free-form
 reason, credential, nonce, session secret, or arbitrary telemetry. It is part of
 `events.db` and therefore part of coordinator backup and restore.
+The response exposes `shadow_decision_aggregates_available`; if the isolated
+shadow database cannot be read, the endpoint remains available, per-scope
+shadow counts are null rather than fabricated as zero, and the process-local
+containment counter increments.
+
+Shadow decisions and operational health use the sibling
+`capability-shadow-health.db`. Decisions remain append-only and deterministic;
+pre-isolation rows in `events.db` are copied forward idempotently at startup.
+Operational health uses the distinct append-only
+`capability_shadow_operational_events` table, with only `event_id`, `attempt_id`,
+`phase`, `outcome`, bounded `reason_code`, and `occurred_at`. A deterministic
+event primary key plus unique attempt/phase identity makes replay idempotent;
+the health schema creates no invented historical event backfill. This separate
+database keeps all best-effort shadow writes out of the authoritative
+`events.db` writer-lock domain.
+Admission outcomes are `disabled`, `not_applicable`,
+`queue_saturated`, `scope_capture_failed`, and `scheduled`. Evaluation outcomes
+are `completed`, `evaluator_failed`, `decision_write_failed`, and
+`cancelled_on_shutdown`.
+
+During graceful shutdown, new admission is closed and background work has a
+finite drain. Admission whose scope capture exceeds that drain uses
+`scope_capture_failed` with
+`coordinator_shutdown_during_scope_capture`. An in-flight durable decision write
+retains ownership of its eventual `completed` or `decision_write_failed`
+terminal result rather than being mislabeled as cancellation.
+Background evidence aggregation uses an already-migrated SQLite `mode=ro` and
+`query_only` connection; it cannot modify authoritative `events.db` if a daemon
+read survives the drain.
+
+The durable report exposes counts by phase and outcome plus:
+
+```text
+orphan_evaluation_total = evaluation rows with no persisted admission row
+assignment_observation_total = all admission outcomes + orphan_evaluation_total
+scheduled = scheduled admissions + orphan_evaluation_total
+offered = scheduled + queue_saturated + scope_capture_failed
+skipped = disabled + not_applicable
+failed = queue_saturated + scope_capture_failed + evaluator_failed
+         + decision_write_failed + cancelled_on_shutdown
+drop_failure_numerator = failed
+drop_failure_denominator = offered
+drop_failure_rate = failed / offered
+```
+
+The rate is null for a zero denominator. The report exposes
+`orphan_evaluation_total`; each orphan terminal evaluation is treated as one
+inferred scheduled/offered observation so it remains visible in the matching
+numerator and denominator. `pending_total` is scheduled, including inferred
+admissions, minus all evaluation terminal outcomes, bounded at zero. A time
+window selects an inclusive admission-time cohort and includes the corresponding
+attempts' evaluation events even when they finish after the window end; orphan
+rows are selected by their own evaluation time. Store-write,
+unexpected-containment, and background-callback failures are process-local
+counters named `durable_health_record_write_failure`,
+`unexpected_containment_failure`, and `background_task_callback_failure`, with
+a process `reset_at` timestamp. They are not durable and never recursively try
+to record their own storage failure.
+
+Operational accounting is best effort and cannot alter or delay production
+eligibility, node selection, handout, attempt creation, settlement,
+contribution, or execution lifecycle. Its records and reports omit prompts,
+outputs, worker error text, credentials, tokens, nonces, artifact contents, and
+arbitrary exception messages. They measure experiment-pipeline health, not node
+reputation.
+
+Every aggregate scope also reports a derived
+`eligible_for_future_active_experiment` boolean and bounded
+`blocking_reasons`: `legacy_descriptor_identity`,
+`descriptor_identity_unreconstructable`, `immutable_model_identity_missing`,
+and `model_identity_unreconstructable`. This is an identity prerequisite only.
+It neither changes hard eligibility, assignment, or shadow preference nor
+itself suppresses observations; a digestless typed scope continues collecting
+when the existing evidence resolver can otherwise reconstruct it.
 
 ## Canonical REST API
 
@@ -714,7 +821,7 @@ reason, credential, nonce, session secret, or arbitrary telemetry. It is part of
 | `DELETE /v1/executions/{id}/shares` | Revoke all shares for an execution |
 | `GET /v1/shares/{token}` | Read one redacted public share |
 | `GET /v1/operator/health` | Read private deployment mode, instance, lock, and preflight state |
-| `GET /v1/operator/capability-evidence` | Read protected scoped aggregates and shadow-only decision counts; never raw observations |
+| `GET /v1/operator/capability-evidence` | Read protected scoped aggregates, shadow-only decisions, identity blockers, and operational-health counts; never raw observations or events |
 
 Read, artifact, cancellation, and share-management routes require viewer access
 when `viewer_key` is configured. Canonical submission uses the separate
@@ -834,15 +941,24 @@ payloads. `GET /nodes` exposes descriptor version/hash but omits the full
 descriptor. Viewer-protected `GET /v1/operator/node-enrollments` additionally
 returns the normalized claim, claim/tag provenance, snapshot count, and stable
 hard-requirement match diagnostics. Its optional bounded
-`resource_requirements` and repeated `required_capability` query parameters are
-diagnostic only. Public `/health` and `/status.json` expose none of this detail.
+`resource_requirements`, repeated `required_capability`, and
+`required_output_capacity_bytes` query parameters are diagnostic only. Public
+`/health` and `/status.json` expose none of this detail.
 
 Viewer-protected `GET /v1/operator/capability-evidence` accepts `limit` from 1
 through 200 (default 100), plus optional `enrollment_id`, `descriptor_hash`,
-`task_class`, and `evidence_role` filters. The evidence role defaults to
-`production`. It returns the configured mode and minimum, scoped aggregates,
-grouped shadow outcomes, category meanings, and `affects_routing=false`. It
-never exposes raw observation records, prompts, outputs, errors, or credentials.
+`task_class`, and `evidence_role` filters. Bounded operational time-window
+parameters `window_started_at` and `window_ended_at` accept finite,
+non-negative Unix timestamps and select an inclusive admission cohort plus its
+matching evaluation rows. The evidence role defaults to `production`. The response returns the configured mode
+and minimum, scoped aggregates, future-active identity diagnostics, grouped
+shadow outcomes, durable admission/evaluation counts, offered/scheduled/
+completed/skipped/failed/pending totals, `orphan_evaluation_total`, explicit
+drop/failure numerator and denominator, process-local fallback counters and
+`reset_at`, category meanings, and `affects_routing=false`. It labels these
+values operational experiment
+health, not node reputation, and never exposes raw observation/event records,
+prompts, outputs, errors, credentials, nonces, or artifact contents.
 `GET /nodes`
 contains no capability-evidence score, reputation, trust flag, or routing weight.
 
@@ -859,12 +975,18 @@ mode, held lock, and preflight warnings.
 
 Exactly one coordinator may own a state directory. An operating-system lock is
 acquired before migrations and background work; a second process fails closed.
-All production `events.db` access, including append-only capability observations
-and shadow decisions, uses the shared SQLite policy: WAL mode,
+All production `events.db` access, including append-only capability observations,
+uses the shared SQLite policy: WAL mode,
 foreign keys on, a 10-second busy timeout, `synchronous=NORMAL`, bounded busy
 retry, per-path migration serialization, and explicit immediate transactions at
 integrity boundaries. This improves one-process concurrency; it is not a
-multi-coordinator protocol. Backup/restore captures durable state, but queues,
+multi-coordinator protocol. Best-effort shadow decisions and operational-health
+writes use the sibling `capability-shadow-health.db`, so their writer locks
+cannot contend with authoritative attempt, assignment, or settlement writes in
+`events.db`.
+Backup format v2 captures both SQLite databases as durable state. Restore also
+accepts legacy format v1 without `capability-shadow-health.db`; that database is
+optional only for state predating shadow operational-health persistence. Queues,
 in-flight coroutines, node sessions, and breaker state remain process-local.
 
 `execution_submissions` is an additive, indefinitely retained trusted-alpha
@@ -924,4 +1046,8 @@ trust, correctness, physical-machine identity, or hardware/model attestation.
 The hard matcher excludes but does not rank. Scoped operational evidence and
 sampled shape agreement do not verify the descriptor or result. Production
 routing is unchanged in every evidence mode: there is no first-refusal weight,
-trusted score, reputation rank, or active evidence policy.
+trusted score, reputation rank, or active evidence policy. A future active
+experiment requires immutable model/descriptor identity, every live experiment
+threshold, a separate accepted ADR, and a separately reviewed implementation
+PR. Protocol v1 implements none of that active routing and does not implement
+worker concurrency.

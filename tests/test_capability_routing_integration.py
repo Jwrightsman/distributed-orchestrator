@@ -37,6 +37,7 @@ def _descriptor(
     *,
     model: str = "qwen3.5:4b",
     memory_bytes: int = 16 * 1024**3,
+    max_output_bytes: int = 1_048_576,
 ) -> NodeCapabilityDescriptorV1:
     return NodeCapabilityDescriptorV1(
         executor=ExecutorDescriptorV1(
@@ -60,7 +61,7 @@ def _descriptor(
         features=["code"],
         limits=NodeLimitDescriptorV1(
             max_concurrent_execution_units=1,
-            max_output_bytes=1_048_576,
+            max_output_bytes=max_output_bytes,
             max_context_tokens=32_768,
         ),
         isolation=IsolationDescriptorV1(kind="none"),
@@ -103,7 +104,12 @@ def _returning(
     )
 
 
-def _queue_v1(task_id: str, *, requirements=None) -> None:
+def _queue_v1(
+    task_id: str,
+    *,
+    requirements=None,
+    max_output_bytes: int = 1024,
+) -> None:
     state.task_queue.append(
         {
             "task_id": task_id,
@@ -114,7 +120,7 @@ def _queue_v1(task_id: str, *, requirements=None) -> None:
             "execution_id": "e" * 32,
             "execution_unit_id": f"candidate-{task_id}",
             "execution_unit_kind": "candidate",
-            "max_output_bytes": 1024,
+            "max_output_bytes": max_output_bytes,
             "requires": ["legacy-code"],
             "resource_requirements": (
                 requirements.model_dump(mode="json")
@@ -300,6 +306,136 @@ def test_scheduler_and_polling_both_use_the_shared_matcher(
     assert response.status_code == 204
     assert [task["task_id"] for task in state.task_queue] == ["typed-mismatch"]
     assert len(calls) >= 2
+
+
+def test_output_capacity_is_shared_by_scheduler_poll_and_operator_diagnostics(
+    capability_server,
+):
+    client, _path = capability_server
+    descriptor = _descriptor(max_output_bytes=2048)
+    registration = _bootstrap(client, descriptor)
+    assert registration.status_code == 200
+    headers = {"X-Node-Session": registration.json()["session_token"]}
+    request = ExecutionRequestV1(
+        task="build it",
+        placement="distributed",
+        confidentiality="trusted_guild",
+        remote_dispatch_consent=True,
+        max_output_bytes=4096,
+    )
+
+    assert qualifying_nodes(request) == []
+
+    _queue_v1("too-large", max_output_bytes=4096)
+    response = client.get(
+        "/tasks/next",
+        params={"node_id": "worker"},
+        headers=headers,
+    )
+    assert response.status_code == 204
+    assert [task["task_id"] for task in state.task_queue] == ["too-large"]
+    assert state.attempt_store.active_for_task("too-large") is None
+
+    operator = client.get(
+        "/v1/operator/node-enrollments",
+        params={"required_output_capacity_bytes": 4096},
+        headers={"Authorization": f"Bearer {VIEWER_KEY}"},
+    )
+    assert operator.status_code == 200
+    diagnostic = operator.json()["enrollments"][0][
+        "hard_requirement_eligibility"
+    ]
+    assert diagnostic == {
+        "eligible": False,
+        "reason_codes": ["insufficient_output_capacity"],
+        "matched_descriptor_hash": registration.json()[
+            "capability_descriptor_hash"
+        ],
+        "selected_model": None,
+    }
+
+
+def test_under_lock_handout_recheck_rejects_stale_output_capacity_precheck(
+    capability_server, monkeypatch
+):
+    client, _path = capability_server
+    descriptor = _descriptor(max_output_bytes=2048)
+    registration = _bootstrap(client, descriptor)
+    assert registration.status_code == 200
+    _queue_v1("capacity-race", max_output_bytes=1024)
+    monkeypatch.setattr(state, "_LONG_POLL_TIMEOUT", 0)
+    original_matcher = node_capabilities.match_node_requirements
+    calls = 0
+
+    def mutate_after_precheck(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        result = original_matcher(*args, **kwargs)
+        if calls == 1:
+            state.task_queue[0]["max_output_bytes"] = 4096
+        return result
+
+    monkeypatch.setattr(
+        node_capabilities,
+        "match_node_requirements",
+        mutate_after_precheck,
+    )
+
+    response = client.get(
+        "/tasks/next",
+        params={"node_id": "worker"},
+        headers={"X-Node-Session": registration.json()["session_token"]},
+    )
+
+    assert response.status_code == 204
+    assert calls >= 2
+    assert state.task_queue[0]["max_output_bytes"] == 4096
+    assert state.attempt_store.active_for_task("capacity-race") is None
+
+
+def test_larger_worker_claim_cannot_raise_server_attempt_output_limit(
+    capability_server,
+):
+    client, _path = capability_server
+    descriptor = _descriptor(max_output_bytes=10_485_760)
+    registration = _bootstrap(client, descriptor)
+    assert registration.status_code == 200
+    _queue_v1("authoritative-budget", max_output_bytes=4097)
+
+    handout = client.get(
+        "/tasks/next",
+        params={"node_id": "worker"},
+        headers={"X-Node-Session": registration.json()["session_token"]},
+    )
+
+    assert handout.status_code == 200
+    assert handout.json()["max_output_bytes"] == 4097
+    attempt = state.attempt_store.get(handout.json()["attempt_id"])
+    assert attempt is not None
+    assert attempt.max_output_bytes == 4097
+
+    attempted_raise = client.post(
+        "/tasks/authoritative-budget/result",
+        json={
+            "node_id": "worker",
+            "output": "x" * 4098,
+            "error": None,
+            "elapsed_seconds": 1,
+            "contract_version": handout.json()["contract_version"],
+            "attempt_id": handout.json()["attempt_id"],
+            "nonce": handout.json()["nonce"],
+            "execution_id": handout.json()["execution_id"],
+            "execution_unit_id": handout.json()["execution_unit_id"],
+            "execution_unit_kind": handout.json()["execution_unit_kind"],
+            "max_output_bytes": 10_485_760,
+        },
+        headers={"X-Node-Session": registration.json()["session_token"]},
+    )
+    assert attempted_raise.status_code == 413
+    assert attempted_raise.json()["max_bytes"] == 4097
+    assert state.attempt_store.get(handout.json()["attempt_id"]).max_output_bytes == (
+        4097
+    )
 
 
 def test_handout_binds_the_exact_matching_model_from_a_multi_model_descriptor(

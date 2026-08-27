@@ -6,6 +6,7 @@ breaker (consecutive-failure blacklist) also lives on this surface.
 """
 
 import asyncio
+import math
 import secrets
 import time
 import uuid
@@ -16,7 +17,15 @@ from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from access_control import require_viewer
-from execution.attempts import AttemptRejected, WorkerPayloadLimitExceeded
+from capability_evidence import (
+    FUTURE_ACTIVE_EXPERIMENT_BLOCKING_REASON_ORDER,
+    future_active_experiment_eligibility,
+)
+from execution.attempts import (
+    DEFAULT_MAX_OUTPUT_BYTES,
+    AttemptRejected,
+    WorkerPayloadLimitExceeded,
+)
 from ledger import sync_compatibility_ledger
 import node_capabilities
 from node_enrollments import (
@@ -549,6 +558,34 @@ async def list_node_enrollments(request: Request):
             ) from exc
     else:
         diagnostic_requirements = None
+    raw_output_capacity = request.query_params.get(
+        "required_output_capacity_bytes"
+    )
+    if raw_output_capacity is None:
+        diagnostic_output_capacity = None
+    else:
+        try:
+            diagnostic_output_capacity = int(raw_output_capacity)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "invalid_required_output_capacity",
+                    "message": (
+                        "required_output_capacity_bytes must be an integer"
+                    ),
+                },
+            ) from exc
+        if not 1 <= diagnostic_output_capacity <= node_capabilities.MAX_NODE_OUTPUT_BYTES:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "invalid_required_output_capacity",
+                    "message": (
+                        "required_output_capacity_bytes is outside the protocol limit"
+                    ),
+                },
+            )
     diagnostic_legacy = [
         value.strip()
         for value in request.query_params.getlist("required_capability")
@@ -596,6 +633,7 @@ async def list_node_enrollments(request: Request):
             snapshot.descriptor if snapshot is not None else None,
             legacy_capabilities,
             preferred_model_name=(node or {}).get("model"),
+            required_output_capacity_bytes=diagnostic_output_capacity,
         )
         lifetime = _lifetime_summary(enrollment.node_id, enrollment.enrollment_id)
         out.append(
@@ -656,6 +694,21 @@ async def list_capability_evidence(request: Request):
         descriptor_hash = request.query_params.get("descriptor_hash")
         task_class = request.query_params.get("task_class")
         evidence_role = request.query_params.get("evidence_role", "production")
+        raw_window_started_at = request.query_params.get("window_started_at")
+        raw_window_ended_at = request.query_params.get("window_ended_at")
+        window_started_at = (
+            float(raw_window_started_at)
+            if raw_window_started_at is not None
+            else None
+        )
+        window_ended_at = (
+            float(raw_window_ended_at)
+            if raw_window_ended_at is not None
+            else None
+        )
+        for value in (window_started_at, window_ended_at):
+            if value is not None and (not math.isfinite(value) or value < 0):
+                raise ValueError("operational-health window timestamps are invalid")
         cfg = state.get_config()
         minimum_samples = int(cfg.get("capability_evidence_min_samples", 5))
         summaries = state.capability_evidence_store.list_scope_aggregates(
@@ -666,19 +719,48 @@ async def list_capability_evidence(request: Request):
             limit=limit,
             minimum_samples=minimum_samples,
         )
-        shadow = (
-            state.capability_shadow_decision_store.aggregate_counts_for_scope_keys(
-                [summary.scope.scope_key for summary in summaries]
-            )
-        )
     except (TypeError, ValueError) as exc:
         raise HTTPException(
             status_code=422,
             detail={
                 "code": "invalid_capability_evidence_query",
-                "message": str(exc),
+                "message": "the capability-evidence query is invalid",
             },
         ) from exc
+
+    shadow = ()
+    shadow_decisions_available = True
+    try:
+        shadow = await asyncio.to_thread(
+            state.capability_shadow_decision_store.aggregate_counts_for_scope_keys,
+            [summary.scope.scope_key for summary in summaries],
+        )
+    except Exception as exc:
+        shadow_decisions_available = False
+        state.capability_shadow_process_counters.increment(
+            "unexpected_containment_failure"
+        )
+        state.logger.warning(
+            "capability shadow decision report unavailable error_type=%s",
+            type(exc).__name__,
+        )
+
+    operational = None
+    try:
+        operational = await asyncio.to_thread(
+            state.capability_shadow_operational_store.report,
+            window_started_at=window_started_at,
+            window_ended_at=window_ended_at,
+        )
+    except Exception as exc:
+        state.capability_shadow_process_counters.increment(
+            "unexpected_containment_failure"
+        )
+        state.logger.warning(
+            "capability shadow operational report unavailable error_type=%s",
+            type(exc).__name__,
+        )
+    process_local = state.capability_shadow_process_counters.snapshot()
 
     shadow_by_scope = {item.actual_scope_key: item for item in shadow}
 
@@ -695,10 +777,59 @@ async def list_capability_evidence(request: Request):
         }
 
     scopes = []
+    future_active_reason_counts = {
+        reason: 0 for reason in FUTURE_ACTIVE_EXPERIMENT_BLOCKING_REASON_ORDER
+    }
+    future_active_eligible_count = 0
     for summary in summaries:
         scope = summary.scope
         aggregate = summary.aggregate
         shadow_counts = shadow_by_scope.get(scope.scope_key)
+        try:
+            snapshot = state.capability_snapshot_store.get(
+                scope.enrollment_id,
+                scope.descriptor_hash,
+            )
+            descriptor_identity_reconstructable = bool(
+                snapshot is not None
+                and snapshot.descriptor_version == scope.descriptor_version
+                and snapshot.descriptor.executor.kind == scope.executor_kind
+                and snapshot.descriptor.executor.version == scope.executor_version
+                and snapshot.descriptor.executor.worker_protocol_version
+                == scope.worker_protocol_version
+                and node_capabilities.capability_descriptor_digest(
+                    snapshot.descriptor
+                )
+                == scope.descriptor_hash
+            )
+            model_identity_reconstructable = bool(
+                snapshot is not None
+                and len(
+                    [
+                        model
+                        for model in snapshot.descriptor.models
+                        if model.provider == scope.model_provider
+                        and model.name == scope.model_name
+                        and model.digest == scope.model_digest
+                        and model.variant == scope.model_variant
+                    ]
+                )
+                == 1
+            )
+        except Exception:
+            descriptor_identity_reconstructable = False
+            model_identity_reconstructable = False
+        identity_diagnostic = future_active_experiment_eligibility(
+            scope,
+            descriptor_identity_reconstructable=(
+                descriptor_identity_reconstructable
+            ),
+            model_identity_reconstructable=model_identity_reconstructable,
+        )
+        if identity_diagnostic.eligible_for_future_active_experiment:
+            future_active_eligible_count += 1
+        for reason in identity_diagnostic.blocking_reasons:
+            future_active_reason_counts[reason] += 1
         scopes.append(
             {
                 "scope_key": scope.scope_key,
@@ -756,18 +887,34 @@ async def list_capability_evidence(request: Request):
                 "insufficient_evidence": aggregate.insufficient_evidence,
                 "last_observed_at": summary.last_observed_at,
                 "shadow_policy": {
-                    "decision_count": shadow_counts.decision_count if shadow_counts else 0,
-                    "same_count": shadow_counts.same_count if shadow_counts else 0,
+                    "available": shadow_decisions_available,
+                    "decision_count": (
+                        shadow_counts.decision_count
+                        if shadow_counts
+                        else (0 if shadow_decisions_available else None)
+                    ),
+                    "same_count": (
+                        shadow_counts.same_count
+                        if shadow_counts
+                        else (0 if shadow_decisions_available else None)
+                    ),
                     "different_count": (
-                        shadow_counts.different_count if shadow_counts else 0
+                        shadow_counts.different_count
+                        if shadow_counts
+                        else (0 if shadow_decisions_available else None)
                     ),
                     "no_preference_count": (
-                        shadow_counts.no_preference_count if shadow_counts else 0
+                        shadow_counts.no_preference_count
+                        if shadow_counts
+                        else (0 if shadow_decisions_available else None)
                     ),
                     "last_decision_at": (
                         shadow_counts.last_decision_at if shadow_counts else None
                     ),
                 },
+                "future_active_experiment_eligibility": (
+                    identity_diagnostic.as_dict()
+                ),
                 "affects_routing": False,
             }
         )
@@ -775,12 +922,99 @@ async def list_capability_evidence(request: Request):
         "mode": str(cfg.get("capability_evidence_mode", "off")),
         "minimum_samples": minimum_samples,
         "affects_routing": False,
+        "shadow_decision_aggregates_available": shadow_decisions_available,
         "categories": {
             "claim": "node_advertised_descriptor",
             "observation": "coordinator_recorded_operational_outcome",
             "agreement": "bounded_output_comparison_not_correctness",
             "assurance": "task_specific_contract_validation",
             "reputation": "not_implemented",
+        },
+        "shadow_operational_health": {
+            "meaning": "operational_experiment_health_not_node_reputation",
+            "authoritative": False,
+            "affects_routing": False,
+            "durable": {
+                "available": True,
+                "counts_by_phase": {
+                    "admission": operational.admission_counts,
+                    "evaluation": operational.evaluation_counts,
+                },
+                "orphan_evaluation_total": operational.orphan_evaluation_total,
+                "assignment_observation_total": (
+                    operational.assignment_observation_total
+                ),
+                "offered_total": operational.offered_total,
+                "scheduled_total": operational.scheduled_total,
+                "completed_total": operational.completed_total,
+                "skipped_total": operational.skipped_total,
+                "failed_total": operational.failed_total,
+                "pending_total": operational.pending_total,
+                "drop_failure_numerator": (
+                    operational.drop_failure_numerator
+                ),
+                "drop_failure_denominator": (
+                    operational.drop_failure_denominator
+                ),
+                "drop_failure_rate": operational.drop_failure_rate,
+                "window": {
+                    "started_at": operational.window_started_at,
+                    "ended_at": operational.window_ended_at,
+                    "cohort_basis": "inclusive_admission_occurred_at",
+                },
+                "latest_event_at": operational.latest_event_at,
+            }
+            if operational is not None
+            else {
+                "available": False,
+                "counts_by_phase": None,
+                "orphan_evaluation_total": None,
+                "assignment_observation_total": None,
+                "offered_total": None,
+                "scheduled_total": None,
+                "completed_total": None,
+                "skipped_total": None,
+                "failed_total": None,
+                "pending_total": None,
+                "drop_failure_numerator": None,
+                "drop_failure_denominator": None,
+                "drop_failure_rate": None,
+                "window": {
+                    "started_at": window_started_at,
+                    "ended_at": window_ended_at,
+                    "cohort_basis": "inclusive_admission_occurred_at",
+                },
+                "latest_event_at": None,
+            },
+            "process_local": {
+                "reset_at": process_local.reset_at,
+                "durable_health_record_write_failure": (
+                    process_local.durable_health_record_write_failure
+                ),
+                "unexpected_containment_failure": (
+                    process_local.unexpected_containment_failure
+                ),
+                "background_task_callback_failure": (
+                    process_local.background_task_callback_failure
+                ),
+                "durable": False,
+            },
+        },
+        "future_active_experiment_eligibility": {
+            "eligible_scope_count": future_active_eligible_count,
+            "blocked_scope_count": len(scopes) - future_active_eligible_count,
+            "blocking_reason_counts": future_active_reason_counts,
+            "necessary_prerequisites": [
+                "immutable_model_identity",
+                "all_live_experiment_thresholds",
+                "separate_accepted_adr",
+                "separately_reviewed_implementation_pr",
+            ],
+            "active_routing_implemented": False,
+            "meaning": (
+                "identity_prerequisites_only_not_correctness_reputation_trust_"
+                "or_active_routing"
+            ),
         },
         "scopes": scopes,
         "count": len(scopes),
@@ -926,6 +1160,9 @@ async def next_task(node_id: str, request: Request):
                 node_descriptor,
                 current_node_caps,
                 preferred_model_name=nodes.get(node_id, {}).get("model"),
+                required_output_capacity_bytes=t.get(
+                    "max_output_bytes", DEFAULT_MAX_OUTPUT_BYTES
+                ),
             )
             if capability_match.eligible:
                 return i, capability_match

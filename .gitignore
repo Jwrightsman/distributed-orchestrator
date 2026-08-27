@@ -6,6 +6,8 @@ ledger.json
 config.json
 projects/
 events.db
+capability-shadow-health.db
+capability-shadow-health.db-*
 scripts/wan_results/
 scripts/showcase_results/
 scripts/demo_results/
