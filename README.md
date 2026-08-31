@@ -16,7 +16,7 @@ active model, no auth required. **Agents:** read [AGENTS.md](AGENTS.md) first;
 it states plainly that installing this on a machine requires that machine
 owner's consent.
 
-> **Status (August 2026):** The current target is a **small private trusted alpha**. Execution protocol v1 has DAG and ensemble strategies, durable per-node bearer enrollment with independent revocation, process-local sessions, server-authoritative worker attempts, commit-before-publication lifecycle truth, requester-scoped canonical retry idempotency, authenticated artifact delivery, and explicit redacted shares. The scheduler is still process-local, enrollment is not physical-machine identity or Sybil resistance, and generated code is not sandboxed. See [the protocol](docs/PROTOCOL.md), [access model](docs/ACCESS_CONTROL.md), and [threat model](docs/THREAT_MODEL.md).
+> **Status (August 2026):** The current target is a **small private trusted alpha**. Execution protocol v1 has DAG and ensemble strategies, durable per-node bearer enrollment with independent revocation, process-local sessions, server-authoritative worker attempts, commit-before-publication lifecycle truth, requester-scoped canonical retry idempotency, authenticated artifact delivery, and explicit redacted shares. The Theme 3A branch adds a bounded subprocess boundary for parser-heavy built-in validators; its final gates and merge are pending. The scheduler is still process-local, enrollment is not physical-machine identity or Sybil resistance, and generated code is not sandboxed or executed by production validation. See [the protocol](docs/PROTOCOL.md), [access model](docs/ACCESS_CONTROL.md), and [threat model](docs/THREAT_MODEL.md).
 
 ## Positioning
 
@@ -72,6 +72,14 @@ normal lifecycle event, callback, compatibility mirror, response, or terminal
 artifact/share publication. Optional requester-scoped `Idempotency-Key` lets an
 HTTP caller retry the same canonical submission without scheduling a second
 execution. Neither control makes the process-local scheduler resumable.
+
+Parser-heavy built-in validators run through a strict versioned subprocess
+protocol by default. `code_parse`, structured JSON parsing, and JSON Schema
+validation are isolated; simple bounded checks remain inline. Operators can
+force every built-in through the runner. This contains parser failures and
+bounds time, I/O, staging, and available POSIX resources; it does not import or
+execute generated code and is not a hostile-code, filesystem, or network
+sandbox. See [ADR 0013](docs/adr/0013-parser-heavy-validators-bounded-process-boundary.md).
 
 ## Quick start
 
@@ -389,6 +397,7 @@ This is a **Phase 0 private trusted-alpha system**. Here's exactly what's durabl
 | Project memory | Yes | `projects/<id>/memory.md` on disk |
 | Connected nodes and node sessions | No | Durable enrollments survive; workers authenticate for fresh sessions |
 | Task queue and running coroutines | No | Restart marks affected canonical executions/jobs/attempts `interrupted`; it does not resume them |
+| Validator-runner operational counters | No | Content-free process counters reset when the coordinator restarts; durable validation evidence remains part of terminal execution metadata |
 
 **Execution guarantees:** Required execution snapshots commit before live, event, callback, project-memory/legacy mirrors, response, and terminal artifact/share publication. Current execution-linked history/run/gallery/download/demo surfaces require that durable terminal state and its sealed artifact binding; staged files are not completion authority. A keyed canonical retry converges on one durable execution ID; a changed request conflicts. Distributed compute may still be attempted more than once after expiry or reclaim, but only the current active server-issued attempt can settle. Settlement, its accepted receipt, replay response, and compute contribution are atomic and durable. Changed, unknown, queued-but-unleased, expired, reclaimed, cancelled, interrupted, or mismatched results are rejected and kept only in a bounded diagnostic quarantine. The queue itself remains process-local, and these controls are not an exactly-once external-side-effect guarantee.
 
@@ -445,7 +454,7 @@ Stated plainly, because you'll find them anyway:
 
   Shrinking the ask fixes it. The same harness, model and prompts produce a labelled bar chart in **10 of 10 attempts** (`python cli.py --demo-showcase chart`), with all seven labels and values correct every time — Fisher exact p = 0.0004 against the game, though ten-for-ten still only puts the true rate at ≥74% with 95% confidence. An analog clock and a particle field both scored 3/4 at a smaller sample. The lesson is about coupling, not about the model being bad: [`docs/showcase-ceiling.md`](docs/showcase-ceiling.md) has the full write-up and `scripts/showcase_results/` has the raw logs.
 - **CPU-only is slow.** A full pitch is minutes, not seconds — the planner, each builder, and the reviewer are each a separate model call, and the reviewer has to re-emit the whole deliverable. A GPU changes this dramatically.
-- **Generated code is not sandboxed.** The pipeline writes runnable files to `output/`. It checks that Python parses and HTML is structurally sound, but *you* are responsible for reading anything before you run it.
+- **Generated code is not sandboxed.** The pipeline writes runnable files to `output/`. Production validation parses supported code without importing or executing it. In the default `auto` mode, parser-heavy checks use a bounded child-process boundary; the weaker local-only `inline` mode records `inline_compatibility` instead, and trusted-alpha preflight rejects that mode. A same-user child process is not mandatory access control, guaranteed network denial, or a safe place to run hostile generated code. *You* are responsible for reading anything before you run it.
 - **The full threat model is written down**, including the deliberate public allowlist, viewer-protected surfaces, share capabilities, malicious-worker limits, and what still blocks a permissionless network: [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md). Reporting a vulnerability: [SECURITY.md](SECURITY.md).
 - **It's a trusted network, not a trustless one.** Per-node bearer enrollment supports stable attribution and individual revocation; a short-lived server session identifies one incarnation. Neither proves a physical machine, honest operator, model bytes, or Sybil resistance. An authenticated node can still return plausible-looking garbage. Experimental sampled redundant execution remains available only in local mode; trusted-alpha mode disables it until post-hoc evidence has durable semantics. Shape agreement is not proof of correctness.
 - **Capability descriptors are claims, not evidence.** Typed CPU, memory, GPU, model, context, feature, executor, and isolation fields make hard routing deterministic, but an admitted worker can lie about them. A descriptor digest identifies the exact claim used for an attempt; it is not hardware or model attestation. The matcher only excludes ineligible nodes. Optional `verify_rate` sampling is off by default and never changes assignment order; its bounded agreement observations remain separate from correctness and availability. Experimental capability evidence is likewise `off` or shadow-only, never active routing.
@@ -468,6 +477,7 @@ a reference, not a promise of dates.
 - [x] Required execution commit before live/event/callback/response and terminal artifact/share publication
 - [x] Requester-scoped, digest-only idempotency for canonical HTTP submission
 - [x] Separate lifecycle, validation outcome, assurance, and check summaries
+- [ ] Bounded, versioned subprocess containment for parser-heavy built-in validators, with staged file copies and fail-closed evidence — implemented on the Theme 3A branch; check this only after final gates and merge
 - [x] Viewer-protected private routes and explicit redacted share capabilities
 - [x] Path-safe sealed artifact manifests, deliverable/audit bundles, files, ZIPs, hashes, quotas, and retention
 - [x] **Persistent DAG project memory** — `projects/<id>/memory.md` is loaded by the DAG pipeline; ensemble/direct reject `project_id` until selected-result-only updates exist

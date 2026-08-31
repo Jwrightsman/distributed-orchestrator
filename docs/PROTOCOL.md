@@ -287,9 +287,14 @@ publication require a committed terminal snapshot.
 `timeout_seconds` is a total deadline beginning when the canonical execution is
 queued. Planning, local generation, worker waits, validation, review, revision,
 and artifact registration consume the same remaining budget. Worker leases are
-capped by that deadline. Timeout cancels queued and active units, rejects later
-worker results, persists a terminal failure with `execution_timeout`, and marks
-the result retryable.
+capped by that deadline. A canonical validator child, including repair-time
+parsing and registry validation, receives no more than the lesser of its
+configured timeout and this remaining budget. Timeout
+cancels queued and active units, requests termination/reaping of an active
+validator process, rejects later worker results, persists a terminal failure
+with `execution_timeout`, and marks the result retryable. Failure to confirm
+process-tree cleanup is separately counted and must be treated as a containment
+incident.
 
 `POST /v1/executions/{execution_id}/cancel` is idempotent. It records the
 cancellation request and timestamps, signals local work, removes queued worker
@@ -368,6 +373,103 @@ are rejected.
 and valid JSON are structural evidence. JSON Schema provides deterministic
 contract-conformance evidence. None proves that arbitrary code behaves as the
 requester intended. Unsupported code formats are reported as not checked.
+
+### Validator execution boundary
+
+The registry is a closed allowlist of versioned built-ins. Its parent-owned
+execution classification is:
+
+| Class | Validators in `auto` |
+| --- | --- |
+| `subprocess_isolated` | `code_parse`, `structured_json`, `json_schema` |
+| `inline_trusted` | `nonempty`, `artifact_extraction`, `artifact_contract`, `file_manifest` |
+
+`validator_execution_mode="auto"` is the default and follows this table.
+`subprocess` forces every current built-in through the compatible runner.
+`inline` is an explicit weaker local-development mode; trusted-alpha preflight
+rejects it. In that mode evidence labels normally inline checks
+`inline_trusted` and overridden isolated parsers `inline_compatibility`. An
+isolated validator never silently falls back inline after a runner failure.
+
+Parent and child exchange strict `ValidatorRunnerRequestV1` and
+`ValidatorRunnerResponseV1` JSON over bounded stdin/stdout. The request can
+contain only protocol and built-in identity/version, minimal bounded output or
+the validator-specific bounded contract projection, staged relative filenames,
+and parent-clamped limits. It
+cannot name a module, executable, shell command, arbitrary callable, database,
+credential, session, nonce, or unrelated execution. Unknown fields, invalid or
+mismatched identity/version, malformed JSON, excessive depth/items/strings, an
+recognized bare or delimiter-prefixed absolute POSIX/Windows/UNC host-path
+pattern, any `file://` pattern in response keys or values, and over-limit
+request/response bytes fail closed. The protocol has no
+host-path field, and child path-like detail is never authoritative.
+
+The response contains only identity/version, boolean outcome, bounded optional
+score/detail, and bounded failure reason. Child detail and ordinary validation
+reasons are bounded but non-authoritative. The authoritative parent adds
+required/optional and contract-floor source, assurance, behavioral-correctness,
+duration, execution mode, runner protocol version, platform containment level,
+and termination reason when applicable. No child response can raise assurance
+or claim behavioral correctness.
+
+File-consuming subprocess checks receive regular-file copies from only the
+authoritative selected candidate subtree. Canonical strategy paths bind both
+repair-time parsing and registry validation to the current validated entry
+snapshot and shared executor. Standalone compatibility callers without an
+ArtifactStore still enforce root/path/type/size limits without that optional
+snapshot. The parent rejects traversal,
+symlinks, special files, duplicate portable paths, out-of-root inputs, and
+authoritative size/hash changes; enforces file-count, per-file, aggregate, and
+relative-path limits; and copies bytes without hard links into a fresh
+stage with private POSIX modes where supported. Process-tree termination and
+reaping are attempted before stage removal on success, failure, timeout, or
+cancellation. Failure to
+confirm process-tree cleanup remains a bounded, counted containment incident.
+Temporary-workspace deletion failure records fail-closed
+`validator_stage_cleanup_failed` evidence and increments the distinct
+`staging_cleanup_failures` counter; deletion failure can still leave a stale
+stage. Staging is validator input, not artifact publication or a sealed-manifest
+replacement.
+
+The current fixed stage limit is 20 files, 10 MiB per file, 10 MiB aggregate,
+and 200 characters per staged relative path. It is distinct from artifact
+delivery quotas and the configurable serialized request/response limits.
+
+The child uses the current Python interpreter without a shell, a sanitized
+environment whose `TEMP`/`TMP` on Windows or `TMPDIR` on POSIX point into its controlled
+working directory, closed inherited descriptors where supported, and a fresh
+process group. Spawn failure, timeout, crash, malformed or oversized response, and
+staging failure become bounded error evidence with stable parent-supplied
+reasons. An unconfirmed process-tree cleanup is reflected in error evidence or
+the content-free cleanup counter, depending on the original outcome. Existing
+required/optional aggregation then records whether validation accepts the
+candidate; the isolated check never falls back inline. Afterward, the explicit
+`allow_unverified_fallback` policy may still select and deliver a usable failed
+candidate with its validation outcome preserved as described above. Runner
+failure itself does not define a new lifecycle transition.
+
+On POSIX the child also applies available standard-library CPU, address-space,
+file-size, open-descriptor, and child-process limits. Windows retains the
+wall-clock deadline, bounded pipes, staging, protocol checks, and process-tree
+cleanup on a best-effort basis, but does not claim those POSIX resource limits.
+A child still runs as the coordinator's operating-system user, so neither
+platform provides mandatory filesystem confidentiality or reliable network
+denial through this boundary.
+On Windows the stage inherits the host temporary root's ACL; POSIX mode bits do
+not establish a private DACL, so operators must secure that root.
+The process group is not a parent-death primitive: abrupt coordinator loss is
+not an ordinary cancellation path. POSIX installs an early hard child alarm;
+Windows has no equivalent child-side alarm. A successfully assigned parent-owned
+Job Object adds best-effort kill-on-close cleanup, but the pre-assignment and
+restrictive-outer-Job gaps remain, and restart does not discover an unassigned
+validator orphaned by the prior process.
+
+Generated code is parsed as data only. Production validation does not import a
+generated module, run its top-level statements, invoke a shell/build script,
+install packages, execute tests, start a browser, or perform generated-code
+networking. This boundary adds parser-process containment, not behavioral
+validation or a hostile-code sandbox. See
+[ADR 0013](adr/0013-parser-heavy-validators-bounded-process-boundary.md).
 
 ## Result model and compatibility projection
 
@@ -971,7 +1073,19 @@ is coherent, durable enrollment is required, TLS or a private authenticated
 overlay is declared, config and state paths pass safety checks, and public pitch
 has an explicit acknowledgement when enabled. `/health` publishes only safe
 protection state; the private `/v1/operator/health` identifies the process,
-mode, held lock, and preflight warnings.
+mode, held lock, preflight warnings, and the content-free
+`validator_process` registry/runner diagnostics and process-local counters.
+
+Preflight also validates `validator_execution_mode`,
+`validator_subprocess_timeout_seconds`, `validator_subprocess_memory_mb`,
+`validator_subprocess_request_max_bytes`, and
+`validator_subprocess_response_max_bytes`. Trusted alpha accepts `auto` or
+`subprocess` and rejects `inline`; local mode warns that `inline` weakens parser
+containment. Invalid trusted values are errors. Invalid local values warn and
+fall back to bounded defaults. The defaults are `auto`, 10 seconds, 256 MiB,
+2 MiB request bytes, and 32 KiB response bytes. Inclusive accepted ranges are
+1–120 seconds, 128–1,024 MiB, 16 KiB–16 MiB request bytes, and 1–256 KiB
+response bytes. Booleans and other non-integer numeric values are invalid.
 
 Exactly one coordinator may own a state directory. An operating-system lock is
 acquired before migrations and background work; a second process fails closed.
@@ -1030,9 +1144,9 @@ envelopes contain no raw key, requester credential, prompt, or result.
 Protocol v1 does not provide a durable worker queue, automatic execution resume,
 durable node sessions, per-node public-key identity, physical-machine identity,
 built-in TLS, multi-user accounts, a general network-policy enforcement layer,
-process isolation,
-generated-code sandboxing, malicious-output detection, permissionless
-settlement, Sybil resistance, externally anchored artifact attestation, durable
+general hostile-code process isolation, generated-code sandboxing,
+malicious-output detection, permissionless settlement, Sybil resistance,
+externally anchored artifact attestation, durable
 execution-level post-hoc verification, or proof that arbitrary generated output
 is correct. One coordinator process is the only supported owner of a state
 directory. It is intended for a small private group whose operators and node
@@ -1040,6 +1154,11 @@ holders are known and trusted. These limitations must not be represented as
 solved by the normalized API. Idempotent canonical submission is not durable
 scheduling, user identity, workflow resumption, or exactly-once execution of
 external effects.
+
+The bounded validator process isolates trusted built-in parser failures. It
+does not provide container, VM, WASM, gVisor, or Firecracker isolation;
+same-user filesystem confidentiality; reliable network denial; arbitrary
+validator plugins; generated-code execution; or behavioral proof.
 
 Capability descriptors are self-reported claims, not observed performance,
 trust, correctness, physical-machine identity, or hardware/model attestation.

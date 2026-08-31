@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 import config
 from coordinator_lock import CoordinatorLock
 from scripts import preflight
@@ -25,8 +27,98 @@ def test_valid_trusted_alpha_configuration_passes_without_disclosing_secrets(tmp
     assert report.ok
     assert report.mode == "trusted_alpha"
     assert _check(report, "coordinator_lock").status == "pass"
+    assert _check(report, "validator_execution_mode").status == "pass"
+    for name in config.VALIDATOR_SUBPROCESS_NUMERIC_BOUNDS:
+        assert _check(report, name).status == "pass"
     for name in ("viewer_key", "pitch_key", "node_secret"):
         assert stored[name] not in rendered
+
+
+def test_trusted_alpha_rejects_inline_validator_execution(tmp_path):
+    path, stored = _trusted_config(tmp_path)
+    stored["validator_execution_mode"] = "inline"
+    config.save(stored, path)
+
+    report = preflight.run_preflight(path, state_dir=tmp_path)
+
+    assert not report.ok
+    assert _check(report, "validator_execution_mode").status == "error"
+    assert "weaker local-development" in _check(
+        report, "validator_execution_mode"
+    ).message
+
+
+def test_local_inline_validator_execution_is_an_explicit_warning(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "deployment_mode": "local",
+                "validator_execution_mode": "inline",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = preflight.run_preflight(path, state_dir=tmp_path)
+
+    assert report.ok
+    assert _check(report, "validator_execution_mode").status == "warning"
+
+
+def test_trusted_alpha_accepts_forced_subprocess_validator_execution(tmp_path):
+    path, stored = _trusted_config(tmp_path)
+    stored["validator_execution_mode"] = "subprocess"
+    config.save(stored, path)
+
+    report = preflight.run_preflight(path, state_dir=tmp_path)
+
+    assert report.ok
+    assert _check(report, "validator_execution_mode").status == "pass"
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("validator_execution_mode", "process"),
+        ("validator_subprocess_timeout_seconds", True),
+        ("validator_subprocess_memory_mb", 1_025),
+        ("validator_subprocess_request_max_bytes", 16_383),
+        ("validator_subprocess_response_max_bytes", 256 * 1_024 + 1),
+    ],
+)
+def test_trusted_alpha_rejects_invalid_validator_runner_config(
+    tmp_path,
+    name,
+    value,
+):
+    path, stored = _trusted_config(tmp_path)
+    stored[name] = value
+    config.save(stored, path)
+
+    report = preflight.run_preflight(path, state_dir=tmp_path)
+
+    assert not report.ok
+    assert _check(report, name).status == "error"
+
+
+def test_local_invalid_validator_runner_config_warns_for_every_field(tmp_path):
+    path = tmp_path / "config.json"
+    invalid = {
+        "deployment_mode": "local",
+        "validator_execution_mode": "process",
+        "validator_subprocess_timeout_seconds": False,
+        "validator_subprocess_memory_mb": 127,
+        "validator_subprocess_request_max_bytes": 16 * 1_024 * 1_024 + 1,
+        "validator_subprocess_response_max_bytes": 1_023,
+    }
+    path.write_text(json.dumps(invalid), encoding="utf-8")
+
+    report = preflight.run_preflight(path, state_dir=tmp_path)
+
+    assert report.ok
+    for name in invalid.keys() - {"deployment_mode"}:
+        assert _check(report, name).status == "warning"
 
 
 def test_malformed_trusted_alpha_configuration_fails(tmp_path):

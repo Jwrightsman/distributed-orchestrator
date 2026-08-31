@@ -27,7 +27,11 @@ flowchart TD
     B --> X
     D --> V[Validator registry]
     E --> V
-    V --> P
+    V --> M{Execution class and configured mode}
+    M --> J[Bounded inline checks]
+    M --> K[Staged copies + validator runner process]
+    J --> P
+    K --> P
     P --> F[Artifact registry]
     F --> G[Viewer-authenticated APIs]
     P --> H[Explicit redacted share capability]
@@ -391,7 +395,15 @@ flowchart TD
     P[Explicit policy] --> X[Additional validators]
     F --> R
     X --> R
-    R --> E[Versioned evidence]
+    R --> M{Parent-owned execution policy}
+    M -->|inline_trusted| I[Bounded inline check]
+    M -->|inline_compatibility| I
+    M -->|subprocess_isolated| P[Copy selected inputs to fresh stage]
+    P --> Q[Strict ValidatorRunnerRequestV1 over stdin]
+    Q --> U[Allowlisted child process]
+    U --> W[Strict ValidatorRunnerResponseV1 over stdout]
+    I --> E[Versioned evidence]
+    W --> E
     E --> S[ValidationSummaryV1]
     S --> L[Lifecycle remains separate]
     S --> A[Assurance: unverified / structural / deterministic / model_judged]
@@ -402,8 +414,52 @@ validators. `require_all` affects only explicit required validators. Structural
 checks report structure; JSON Schema reports deterministic contract
 conformance. Current validators do not prove general behavioral correctness.
 
+In `auto`, the registry classifies `code_parse`, `structured_json`, and
+`json_schema` as `subprocess_isolated`. `nonempty`, `artifact_extraction`,
+`artifact_contract`, and `file_manifest` are `inline_trusted`. Forced
+`subprocess` supports every current built-in; explicit `inline` is a weaker
+local-development mode and trusted-alpha preflight rejects it. Evidence records
+`inline_compatibility` when that setting overrides an isolated parser, rather
+than relabeling it `inline_trusted`. The registry is a closed allowlist and
+cannot load an import path, command, callable, or plugin.
+
+The parent sends only a versioned, size-bounded, validator-specific JSON request
+on stdin and accepts one strict bounded response on stdout. Identity and version
+must match, unknown fields fail closed, and the parent—not the child—supplies
+required/optional source, assurance, behavioral-correctness, execution-mode,
+containment, and applicable termination metadata. Bounded child detail remains
+non-authoritative. Spawn failure, timeout, crash, malformed or oversized
+response, and staging error become bounded error evidence. An unconfirmed
+process-tree cleanup is reflected in error evidence or the content-free cleanup
+counter, depending on the original outcome; an isolated validator never falls
+back inline.
+
+File-consuming child checks receive regular-file copies from the authoritative
+candidate subtree in a fresh staging directory. File count, file
+size, aggregate size, and relative-path length are bounded; traversal,
+symlinks, special files, and another candidate's files are excluded. Staged
+destinations are fresh byte copies rather than hard links. Process-tree
+termination and reaping are attempted before stage deletion; inability to
+confirm process-tree cleanup is a separately diagnosable containment failure.
+Temporary-workspace deletion failure records fail-closed
+`validator_stage_cleanup_failed` evidence and increments the distinct
+`staging_cleanup_failures` counter; it can still leave a stale stage requiring
+operator cleanup.
+
+The runner's timeout is clamped to the execution's remaining deadline.
+Cancellation and timeout request process-group termination and descendant
+cleanup; inability to confirm reaping is counted. POSIX additionally applies available CPU, address-
+space, file-size, descriptor, and child-process limits. Windows retains wall-
+clock, bounded-pipe, staging, and best-effort process-cleanup controls, but
+neither those controls nor a same-user subprocess provide mandatory filesystem
+confidentiality. POSIX private modes are applied where supported; on Windows the
+stage inherits the host temporary root's ACL and its privacy is operator-managed.
+Generated code is parsed as data and is never imported or executed.
+
 See [ADR 0004](adr/0004-lifecycle-vs-assurance.md) for why lifecycle and
-assurance are separate.
+assurance are separate, and
+[ADR 0013](adr/0013-parser-heavy-validators-bounded-process-boundary.md) for the
+process-containment boundary and its platform limits.
 
 ## Artifact and sharing boundary
 
@@ -478,6 +534,7 @@ and cookie behavior are in [ACCESS_CONTROL.md](ACCESS_CONTROL.md).
 | Worker queue and in-flight coroutine | **No** | lost; never represented as still running |
 | Connected nodes, sessions, and breaker state | **No** | enrolled workers authenticate again; operational state resets |
 | Shadow operational fallback counters | **No** | reset on process start and report their new `reset_at` timestamp |
+| Validator-runner operational counters | **No** | content-free totals reset on process start; terminal validation evidence remains durable with the execution |
 
 Reconciliation makes non-resumable loss truthful; it is not durable scheduling
 or failover. Submission mappings are retained indefinitely during trusted alpha.
@@ -502,8 +559,11 @@ then has an independently revocable bearer credential. Pitch submission may use
 one shared `pitch_key`, and viewers may use one shared `viewer_key`.
 Constant-time comparisons and enrollment/session/attempt binding reduce
 specific attacks but do not prove physical-machine identity, provide TLS,
-multi-user authorization, Sybil resistance, attestation, or sandboxing. The
-intended deployment remains a small private group over TLS or a private
+multi-user authorization, Sybil resistance, attestation, or hostile-code
+sandboxing. The bounded validator child is a same-user containment boundary,
+not mandatory access control, guaranteed network denial, or a place to execute
+generated code. The intended deployment remains a small private group over TLS
+or a private
 authenticated overlay. All pitch-key holders share an idempotency scope;
 open-mode peer scoping is development-grade and is not user identity. See
 [THREAT_MODEL.md](THREAT_MODEL.md).

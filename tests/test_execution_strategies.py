@@ -429,10 +429,10 @@ async def test_candidate_directory_failure_does_not_cancel_peers(tmp_path, monke
 async def test_candidate_extraction_failure_does_not_cancel_peers(tmp_path, monkeypatch):
     original = strategies.ensemble.materialise
 
-    def flaky_materialise(candidate, root):
+    def flaky_materialise(candidate, root, **kwargs):
         if candidate.index == 2:
             raise RuntimeError("extractor failed")
-        return original(candidate, root)
+        return original(candidate, root, **kwargs)
 
     monkeypatch.setattr(strategies.ensemble, "materialise", flaky_materialise)
     monkeypatch.setattr(strategies, "generate", lambda *args, **kwargs: asyncio.sleep(0, result="ok"))

@@ -95,9 +95,11 @@ def test_bare_valid_expression_is_not_a_python_file():
     assert extract_code_blocks("Hello" + " world" * 20) == []
 
 
-def test_syntactically_broken_python_is_not_extracted():
+def test_syntactically_broken_raw_python_is_deferred_to_bounded_validation():
     text = "import os\n\ndef broken(:\n    return 1\n"
-    assert extract_code_blocks(text) == []
+    blocks = extract_code_blocks(text)
+
+    assert blocks == [{"lang": "python", "code": text.strip()}]
 
 
 def test_fenced_blocks_still_win_over_the_raw_fallback():

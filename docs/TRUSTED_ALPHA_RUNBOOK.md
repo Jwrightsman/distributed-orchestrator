@@ -18,6 +18,30 @@ python scripts/preflight.py \
 docker compose up -d --build
 ```
 
+Keep the validator runner in its recommended default mode, or force every
+built-in through it:
+
+```json
+{
+  "validator_execution_mode": "auto",
+  "validator_subprocess_timeout_seconds": 10,
+  "validator_subprocess_memory_mb": 256,
+  "validator_subprocess_request_max_bytes": 2097152,
+  "validator_subprocess_response_max_bytes": 32768
+}
+```
+
+`auto` runs `code_parse`, `structured_json`, and `json_schema` in a child
+process and keeps `nonempty`, `artifact_extraction`, `artifact_contract`, and
+`file_manifest` inline. `subprocess` runs every current built-in in a child.
+Trusted-alpha preflight rejects `inline`; it is weaker local-development
+compatibility only. In local evidence, an overridden isolated parser is labeled
+`inline_compatibility`, not `inline_trusted`. Preflight checks all five fields and rejects booleans,
+non-integers, and values outside these strict inclusive ranges: timeout 1–120
+seconds, memory 128–1,024 MiB, request 16 KiB–16 MiB, and response 1–256 KiB.
+Local mode
+warns and restores a bounded default for invalid values.
+
 Preflight must pass before the coordinator starts. It intentionally fails if
 another process holds the state-directory lock. Do not delete or rename the
 lock file to bypass that result.
@@ -246,6 +270,33 @@ docker compose logs --tail 200 orchestrator ollama
 Logs and events can contain operational identifiers and failure details; task
 content may be sensitive. Share only the minimum necessary excerpt. Reverse
 proxy access logs must redact share-token path segments.
+
+For an execution that reached validation, inspect each evidence item's
+parent-authored execution mode, runner protocol version, containment level,
+duration, and termination reason when present. Treat bounded child detail and
+ordinary validation reasons as non-authoritative. The child cannot set
+assurance, required/optional status, contract-floor source, or behavioral-
+correctness claims. Content-free runner counters distinguish starts, valid
+responses, validation failures, timeouts, crashes, malformed responses,
+oversized requests and responses, spawn and staging failures, cancellations,
+and process-tree and staging-workspace cleanup failures. They reset on
+coordinator restart and are operational diagnostics, not lifecycle authority.
+Workspace deletion failure records `validator_stage_cleanup_failed` evidence
+and increments `staging_cleanup_failures`; it may still leave a stale stage.
+
+The counters and classifications are under the protected operator-health
+response's `validator_process.runner.process_local_counters` and
+`validator_process.validators` fields. Do not copy that protected response to a
+public incident report.
+
+On POSIX, confirm the expected CPU, address-space, output-file, descriptor, and
+child-process limits are available. On Windows, expect wall-clock enforcement,
+bounded pipes, staging, a fresh process group, and best-effort cleanup, but not those POSIX
+resource-limit guarantees. Always record OS and Python version with a runner
+incident. Do not diagnose a failure by switching trusted alpha to `inline`.
+On Windows, verify that the service account's temporary root has an appropriately
+private ACL; validator stages inherit it because POSIX mode bits do not install a
+Windows DACL.
 
 ### Inspect scoped capability evidence
 
@@ -537,7 +588,14 @@ already downloaded.
    queued lifecycle is not evidence of correctness; a completed lifecycle can
    still be unverified or partial.
 3. Inspect `deadline_at`, unit summaries, placement telemetry, cancellation,
-   interruption, and structured errors.
+   interruption, structured errors, and validation evidence. A
+   `validator_timeout`, crash, malformed/oversized response, spawn failure, or
+   process-tree cleanup failure is a failed check, not permission to retry that
+   isolated validator inline. Confirm the child has been reaped and inspect
+   whether the staging directory was removed before investigating host pressure
+   or configuration. A `validator_stage_cleanup_failed` result is fail-closed
+   evidence and increments `staging_cleanup_failures`; remove only a confirmed
+   stale validator directory after confirming no live runner owns it.
 4. Cancel idempotently if work should stop:
 
    ```bash
@@ -561,6 +619,16 @@ already downloaded.
 If the coordinator itself is unresponsive, collect diagnostics, stop it once,
 run full preflight, and restart. Do not start a second process against the same
 directory as a recovery technique.
+
+A validator child still running after the parent reported timeout/cancellation,
+or after the coordinator crashed, is a containment incident. POSIX children
+have an early hard alarm; Windows has no equivalent child-side alarm or restart
+orphan discovery. Record the execution ID when available, timestamps,
+OS/Python version, bounded termination reason when present, and process relationship without
+capturing command arguments, environment, staged source, raw stderr, or output
+content. Stop the affected coordinator once, clean up only the confirmed child
+process tree, and keep trusted alpha unavailable until the cleanup path is
+understood. The runner is not a same-user security boundary.
 
 ## 14. Collect a diagnostic bundle
 
@@ -593,6 +661,12 @@ nonces, session secrets, and artifact contents. Their scoped model, timing, and
 outcome aggregates are still private operational inventory. Do not include the
 raw database or protected response in a shareable bundle. The health report is
 best-effort experiment telemetry, not execution authority or node reputation.
+
+Apply the same handling to validator-runner evidence and process counters. They
+are designed to omit content, but their execution IDs, timings, platform
+containment levels, and failure distribution remain private operational data.
+Do not add staged files, request/response bodies, schemas, raw stderr, child
+environment, or process arguments to the bundle.
 
 Do not add idempotency keys, attempt nonces, or node session tokens to the
 bundle. Persistence failure logs should identify only the execution, commit
