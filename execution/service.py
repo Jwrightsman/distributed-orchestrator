@@ -37,6 +37,7 @@ from execution.persistence import (
 )
 from execution.registry import StrategyRegistry, StrategySelector
 from execution.strategies import DagStrategy, EnsembleStrategy, StrategyContext
+from execution.validator_process import ValidatorProcessSettings
 from execution.validators import ValidatorRegistry
 
 logger = logging.getLogger("mycelium.execution")
@@ -110,7 +111,9 @@ class ExecutionService:
         self.store = store or ExecutionStore()
         self.registry = registry or self._default_registry()
         self.selector = selector or StrategySelector()
-        self.validators = validators or ValidatorRegistry.default()
+        self.validators = validators or ValidatorRegistry.default(
+            process_settings=ValidatorProcessSettings.from_config(get_config())
+        )
         self.artifacts = artifacts or ArtifactStore(self.store.path)
         self._background: dict[str, asyncio.Task] = {}
         self._controls: dict[str, ExecutionControl] = {}

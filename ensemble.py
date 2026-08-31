@@ -35,7 +35,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import orchestrator
-from extract import check_code_files, extract_code_files
+from execution.validators import check_code_files_isolated
+from extract import extract_code_files
 
 # One model call per candidate. The system prompt is deliberately the *same*
 # builder prompt decomposition uses, so a comparison between the two isolates
@@ -76,7 +77,12 @@ def _system_prompt() -> str:
     return orchestrator.BUILDER_SYSTEM + ENSEMBLE_SYSTEM_SUFFIX
 
 
-def materialise(result: CandidateResult, output_dir: Path) -> CandidateResult:
+def materialise(
+    result: CandidateResult,
+    output_dir: Path,
+    *,
+    validate_parsers: bool = True,
+) -> CandidateResult:
     """Write a candidate's files to disk and run the cheap structural checks.
 
     Cheap means: no browser. Extraction and parse are the first filter, and they
@@ -86,7 +92,17 @@ def materialise(result: CandidateResult, output_dir: Path) -> CandidateResult:
     cand_dir = output_dir / f"candidate_{result.index}"
     cand_dir.mkdir(parents=True, exist_ok=True)
     result.files = extract_code_files(result.raw_output, cand_dir)
-    result.problems = check_code_files(result.files) if result.files else ["nothing extracted"]
+    if not result.files:
+        result.problems = ["nothing extracted"]
+    elif validate_parsers:
+        result.problems = check_code_files_isolated(
+            result.files,
+            artifact_root=cand_dir / "code",
+        )
+    else:
+        # Canonical execution immediately runs the registry's owned async
+        # validation path with deadline, cancellation, and artifact snapshot.
+        result.problems = []
     return result
 
 

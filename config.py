@@ -18,10 +18,38 @@ TRUSTED_ALPHA_MARKER = ".mycelium-trusted-alpha"
 VALID_DEPLOYMENT_MODES = frozenset({"local", "trusted_alpha"})
 VALID_NODE_ENROLLMENT_MODES = frozenset({"compat", "required"})
 VALID_CAPABILITY_EVIDENCE_MODES = frozenset({"off", "shadow"})
+VALID_VALIDATOR_EXECUTION_MODES = frozenset({"auto", "subprocess", "inline"})
 MIN_CAPABILITY_EVIDENCE_SAMPLES = 1
 MAX_CAPABILITY_EVIDENCE_SAMPLES = 1_000
+MIN_VALIDATOR_SUBPROCESS_TIMEOUT_SECONDS = 1
+MAX_VALIDATOR_SUBPROCESS_TIMEOUT_SECONDS = 120
+MIN_VALIDATOR_SUBPROCESS_MEMORY_MB = 128
+MAX_VALIDATOR_SUBPROCESS_MEMORY_MB = 1_024
+MIN_VALIDATOR_SUBPROCESS_REQUEST_MAX_BYTES = 16 * 1_024
+MAX_VALIDATOR_SUBPROCESS_REQUEST_MAX_BYTES = 16 * 1_024 * 1_024
+MIN_VALIDATOR_SUBPROCESS_RESPONSE_MAX_BYTES = 1 * 1_024
+MAX_VALIDATOR_SUBPROCESS_RESPONSE_MAX_BYTES = 256 * 1_024
 MIN_STATIC_CREDENTIAL_LENGTH = 32
 GENERATED_SECRET_BYTES = 32
+
+VALIDATOR_SUBPROCESS_NUMERIC_BOUNDS = {
+    "validator_subprocess_timeout_seconds": (
+        MIN_VALIDATOR_SUBPROCESS_TIMEOUT_SECONDS,
+        MAX_VALIDATOR_SUBPROCESS_TIMEOUT_SECONDS,
+    ),
+    "validator_subprocess_memory_mb": (
+        MIN_VALIDATOR_SUBPROCESS_MEMORY_MB,
+        MAX_VALIDATOR_SUBPROCESS_MEMORY_MB,
+    ),
+    "validator_subprocess_request_max_bytes": (
+        MIN_VALIDATOR_SUBPROCESS_REQUEST_MAX_BYTES,
+        MAX_VALIDATOR_SUBPROCESS_REQUEST_MAX_BYTES,
+    ),
+    "validator_subprocess_response_max_bytes": (
+        MIN_VALIDATOR_SUBPROCESS_RESPONSE_MAX_BYTES,
+        MAX_VALIDATOR_SUBPROCESS_RESPONSE_MAX_BYTES,
+    ),
+}
 
 _LOG = logging.getLogger("mycelium.config")
 
@@ -196,6 +224,18 @@ DEFAULTS = {
     # A scoped aggregate remains insufficient until it has this many samples.
     "capability_evidence_min_samples": 5,
 
+    # Parser-heavy built-in validators run out of process in the recommended
+    # automatic mode. "subprocess" sends every compatible built-in through
+    # the runner; "inline" is a weaker local-development compatibility mode.
+    "validator_execution_mode": "auto",
+    # These limits are deliberately independent of model-call timeouts. The
+    # runner will additionally clamp its wall-clock budget to the remaining
+    # canonical execution deadline.
+    "validator_subprocess_timeout_seconds": 10,
+    "validator_subprocess_memory_mb": 256,
+    "validator_subprocess_request_max_bytes": 2 * 1_024 * 1_024,
+    "validator_subprocess_response_max_bytes": 32 * 1_024,
+
     # Sampled output agreement (optional)
     # Fraction of builder tasks that get sent to a SECOND node as well, so the
     # shapes of the two answers can be compared. Agreement is not correctness,
@@ -351,6 +391,43 @@ def load(
         overrides["capability_evidence_min_samples"] = DEFAULTS[
             "capability_evidence_min_samples"
         ]
+
+    configured_validator_mode = overrides.get(
+        "validator_execution_mode", DEFAULTS["validator_execution_mode"]
+    )
+    valid_validator_mode = (
+        isinstance(configured_validator_mode, str)
+        and configured_validator_mode in VALID_VALIDATOR_EXECUTION_MODES
+    )
+    if not valid_validator_mode:
+        if effective_strict:
+            raise ConfigError(
+                "validator_execution_mode must be one of: "
+                + ", ".join(sorted(VALID_VALIDATOR_EXECUTION_MODES))
+            )
+        _LOG.warning("Invalid validator_execution_mode; using auto")
+        overrides["validator_execution_mode"] = DEFAULTS[
+            "validator_execution_mode"
+        ]
+
+    for field_name, (minimum, maximum) in VALIDATOR_SUBPROCESS_NUMERIC_BOUNDS.items():
+        configured_value = overrides.get(field_name, DEFAULTS[field_name])
+        valid_value = (
+            type(configured_value) is int
+            and minimum <= configured_value <= maximum
+        )
+        if valid_value:
+            continue
+        if effective_strict:
+            raise ConfigError(
+                f"{field_name} must be an integer between {minimum} and {maximum}"
+            )
+        _LOG.warning(
+            "Invalid %s; using the default of %d",
+            field_name,
+            DEFAULTS[field_name],
+        )
+        overrides[field_name] = DEFAULTS[field_name]
 
     config = DEFAULTS.copy()
     config.update(overrides)
