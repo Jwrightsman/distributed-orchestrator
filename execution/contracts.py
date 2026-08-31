@@ -48,6 +48,8 @@ ValidationAggregationV1 = Literal["all", "any"]
 
 MAX_ARTIFACTS_V1 = 20
 SUPPORTED_JSON_SCHEMA_DRAFT_V1 = "https://json-schema.org/draft/2020-12/schema"
+MAX_JSON_SCHEMA_DEPTH_V1 = 32
+MAX_JSON_SCHEMA_NODES_V1 = 2_048
 
 
 def normalize_manifest_path(value: str) -> str:
@@ -84,6 +86,31 @@ def normalize_manifest_path(value: str) -> str:
     if normalized in ("", ".") or normalized.startswith("../"):
         raise ValueError("required file paths must be normalized relative paths")
     return normalized
+
+
+def _validate_bounded_schema_shape(value: dict[str, Any]) -> None:
+    """Bound meta-schema work before invoking jsonschema in the coordinator."""
+
+    nodes = 0
+    stack: list[tuple[Any, int]] = [(value, 0)]
+    while stack:
+        item, depth = stack.pop()
+        nodes += 1
+        if nodes > MAX_JSON_SCHEMA_NODES_V1:
+            raise ValueError("json_schema contains too many values")
+        if depth > MAX_JSON_SCHEMA_DEPTH_V1:
+            raise ValueError("json_schema is nested too deeply")
+        if isinstance(item, dict):
+            if len(item) > 256:
+                raise ValueError("json_schema object contains too many members")
+            for key, child in item.items():
+                if not isinstance(key, str) or len(key) > 200:
+                    raise ValueError("json_schema keys must be bounded strings")
+                stack.append((child, depth + 1))
+        elif isinstance(item, list):
+            if len(item) > 256:
+                raise ValueError("json_schema array contains too many items")
+            stack.extend((child, depth + 1) for child in item)
 
 
 class ProtocolModel(BaseModel):
@@ -175,9 +202,10 @@ class OutputContractV1(ProtocolModel):
     def bounded_schema(cls, value: dict[str, Any] | None):
         if value is None:
             return None
+        _validate_bounded_schema_shape(value)
         try:
             raw = json.dumps(value, separators=(",", ":"), allow_nan=False)
-        except (TypeError, ValueError) as exc:
+        except (TypeError, ValueError, RecursionError) as exc:
             raise ValueError(f"json_schema must contain JSON-compatible values: {exc}") from exc
         if len(raw.encode("utf-8")) > 16_384:
             raise ValueError("json_schema must be 16384 bytes or fewer")
@@ -190,6 +218,8 @@ class OutputContractV1(ProtocolModel):
             Draft202012Validator.check_schema(value)
         except SchemaError as exc:
             raise ValueError(f"json_schema is malformed: {exc.message}") from exc
+        except (MemoryError, RecursionError) as exc:
+            raise ValueError("json_schema could not be checked within protocol bounds") from exc
         return value
 
     @model_validator(mode="after")
