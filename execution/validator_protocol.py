@@ -12,12 +12,21 @@ import json
 import math
 import re
 from pathlib import PurePosixPath, PureWindowsPath
-from typing import Any, Literal, Mapping, TypeVar
+from typing import Any, Literal, Mapping, TypeAlias, TypeVar, overload
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 VALIDATOR_RUNNER_PROTOCOL_VERSION_V1 = "1"
+VALIDATOR_RUNNER_PROTOCOL_VERSION_V2 = "2"
+
+# The output path is protocol-owned rather than caller-selected.  Candidate
+# artifact names are forbidden from occupying this directory in V2 requests.
+VALIDATOR_OUTPUT_RESERVED_DIRECTORY_V2 = "__mycelium_validator_input__"
+VALIDATOR_OUTPUT_RESERVED_NAMESPACE_V2 = VALIDATOR_OUTPUT_RESERVED_DIRECTORY_V2
+VALIDATOR_OUTPUT_REFERENCE_PATH_V2 = (
+    f"{VALIDATOR_OUTPUT_RESERVED_DIRECTORY_V2}/output.utf8"
+)
 
 VALIDATOR_VERSIONS_V1: Mapping[str, str] = {
     "nonempty": "2",
@@ -28,6 +37,7 @@ VALIDATOR_VERSIONS_V1: Mapping[str, str] = {
     "artifact_extraction": "2",
     "artifact_contract": "1",
 }
+VALIDATOR_VERSIONS_V2: Mapping[str, str] = VALIDATOR_VERSIONS_V1
 
 ValidatorNameV1 = Literal[
     "nonempty",
@@ -38,6 +48,7 @@ ValidatorNameV1 = Literal[
     "artifact_extraction",
     "artifact_contract",
 ]
+ValidatorNameV2 = ValidatorNameV1
 
 MAX_VALIDATOR_RUNNER_REQUEST_BYTES_V1 = 16 * 1024 * 1024
 MAX_VALIDATOR_RUNNER_RESPONSE_BYTES_V1 = 256 * 1024
@@ -46,6 +57,17 @@ MAX_VALIDATOR_SCHEMA_BYTES_V1 = 16 * 1024
 MAX_VALIDATOR_STAGED_FILES_V1 = 20
 MAX_VALIDATOR_STAGED_PATH_LENGTH_V1 = 200
 MAX_VALIDATOR_FAILURE_REASON_LENGTH_V1 = 500
+
+# V2 changes transport, not these protocol-wide ceilings.  The request limit
+# applies to the JSON control envelope; output bytes are independently bounded
+# by the output reference below.
+MAX_VALIDATOR_RUNNER_REQUEST_BYTES_V2 = MAX_VALIDATOR_RUNNER_REQUEST_BYTES_V1
+MAX_VALIDATOR_RUNNER_RESPONSE_BYTES_V2 = MAX_VALIDATOR_RUNNER_RESPONSE_BYTES_V1
+MAX_VALIDATOR_OUTPUT_BYTES_V2 = MAX_VALIDATOR_OUTPUT_BYTES_V1
+MAX_VALIDATOR_SCHEMA_BYTES_V2 = MAX_VALIDATOR_SCHEMA_BYTES_V1
+MAX_VALIDATOR_STAGED_FILES_V2 = MAX_VALIDATOR_STAGED_FILES_V1
+MAX_VALIDATOR_STAGED_PATH_LENGTH_V2 = MAX_VALIDATOR_STAGED_PATH_LENGTH_V1
+MAX_VALIDATOR_FAILURE_REASON_LENGTH_V2 = MAX_VALIDATOR_FAILURE_REASON_LENGTH_V1
 
 MIN_VALIDATOR_MEMORY_BYTES_V1 = 128 * 1024 * 1024
 MAX_VALIDATOR_MEMORY_BYTES_V1 = 1024 * 1024 * 1024
@@ -226,6 +248,27 @@ def _reject_reserved_detail_keys(value: dict[str, Any]) -> None:
             pending.extend(item)
 
 
+def _reject_v2_private_detail_keys(value: dict[str, Any]) -> None:
+    """Reject private output-reference fields anywhere in V2 child detail."""
+
+    pending: list[Any] = [value]
+    seen_containers: set[int] = set()
+    while pending:
+        item = pending.pop()
+        if not isinstance(item, (dict, list)):
+            continue
+        identity = id(item)
+        if identity in seen_containers:
+            continue
+        seen_containers.add(identity)
+        if isinstance(item, dict):
+            if _V2_PRIVATE_DETAIL_KEYS.intersection(item):
+                raise ValueError("validator detail contains private V2 transport metadata")
+            pending.extend(item.values())
+        else:
+            pending.extend(item)
+
+
 def validate_bounded_detail(value: dict[str, Any]) -> dict[str, Any]:
     """Validate child-supplied detail without permitting unbounded evidence."""
 
@@ -329,6 +372,90 @@ class ValidatorRunnerLimitsV1(_RunnerProtocolModel):
     )
 
 
+_OUTPUT_VALIDATORS = frozenset({"nonempty", "structured_json", "json_schema"})
+_PATH_VALIDATORS = frozenset(
+    {
+        "file_manifest",
+        "code_parse",
+        "artifact_extraction",
+        "artifact_contract",
+    }
+)
+
+_V2_PRIVATE_DETAIL_KEYS = frozenset(
+    {
+        "byte_length",
+        "encoding",
+        "output_reference",
+        "relative_path",
+        "sha256",
+    }
+)
+
+_V2_INFRASTRUCTURE_FAILURE_REASONS = frozenset(
+    {
+        "validator_execution_error",
+        "validator_output_digest_mismatch",
+        "validator_output_file_missing",
+        "validator_output_file_not_regular",
+        "validator_output_invalid_utf8",
+        "validator_output_oversized",
+        "validator_output_reference_invalid",
+        "validator_output_reference_missing",
+        "validator_output_size_mismatch",
+        "validator_response_oversized",
+        "validator_runner_protocol_error",
+    }
+)
+
+_V2_JSON_TYPES = frozenset(
+    {"NoneType", "array", "bool", "float", "int", "object", "str"}
+)
+_CONTRACT_VALIDATORS = frozenset({"json_schema", "file_manifest", "artifact_contract"})
+
+
+def _validate_minimal_request_payload(
+    *,
+    validator_name: str,
+    contract: ValidatorContractProjectionV1 | None,
+    staged_files: list[str],
+    has_output: bool,
+    missing_output_description: str,
+    supplied_output_description: str,
+) -> None:
+    if validator_name in _OUTPUT_VALIDATORS and not has_output:
+        raise ValueError(f"selected validator requires {missing_output_description}")
+    if validator_name not in _OUTPUT_VALIDATORS and has_output:
+        raise ValueError(f"selected validator does not accept {supplied_output_description}")
+    if validator_name not in _PATH_VALIDATORS and staged_files:
+        raise ValueError("selected validator does not accept staged files")
+    if validator_name not in _CONTRACT_VALIDATORS and contract is not None:
+        raise ValueError("selected validator does not accept a contract projection")
+    if validator_name == "json_schema":
+        if contract is None or contract.json_schema is None:
+            raise ValueError("json_schema requires a bounded schema projection")
+        if (
+            contract.artifact_count is not None
+            or contract.format is not None
+            or contract.required_files is not None
+        ):
+            raise ValueError("json_schema accepts only the bounded schema projection")
+    if validator_name == "file_manifest":
+        if contract is None or not contract.required_files:
+            raise ValueError("file_manifest requires a bounded required-file projection")
+        if (
+            contract.artifact_count is not None
+            or contract.format is not None
+            or contract.json_schema is not None
+        ):
+            raise ValueError("file_manifest accepts only required-file projection data")
+    if validator_name == "artifact_contract":
+        if contract is None or contract.artifact_count is None:
+            raise ValueError("artifact_contract requires an artifact-count projection")
+        if contract.required_files is not None or contract.json_schema is not None:
+            raise ValueError("artifact_contract projection contains unrelated fields")
+
+
 class ValidatorRunnerRequestV1(_RunnerProtocolModel):
     protocol_version: Literal["1"] = VALIDATOR_RUNNER_PROTOCOL_VERSION_V1
     validator_name: ValidatorNameV1
@@ -362,46 +489,14 @@ class ValidatorRunnerRequestV1(_RunnerProtocolModel):
     def known_identity_and_minimal_payload(self):
         if VALIDATOR_VERSIONS_V1[self.validator_name] != self.validator_version:
             raise ValueError("validator version does not match the built-in allowlist")
-
-        output_validators = {"nonempty", "structured_json", "json_schema"}
-        path_validators = {
-            "file_manifest",
-            "code_parse",
-            "artifact_extraction",
-            "artifact_contract",
-        }
-        contract_validators = {"json_schema", "file_manifest", "artifact_contract"}
-        if self.validator_name in output_validators and self.output is None:
-            raise ValueError("selected validator requires bounded output")
-        if self.validator_name not in output_validators and self.output is not None:
-            raise ValueError("selected validator does not accept output")
-        if self.validator_name not in path_validators and self.staged_files:
-            raise ValueError("selected validator does not accept staged files")
-        if self.validator_name not in contract_validators and self.contract is not None:
-            raise ValueError("selected validator does not accept a contract projection")
-        if self.validator_name == "json_schema":
-            if self.contract is None or self.contract.json_schema is None:
-                raise ValueError("json_schema requires a bounded schema projection")
-            if (
-                self.contract.artifact_count is not None
-                or self.contract.format is not None
-                or self.contract.required_files is not None
-            ):
-                raise ValueError("json_schema accepts only the bounded schema projection")
-        if self.validator_name == "file_manifest":
-            if self.contract is None or not self.contract.required_files:
-                raise ValueError("file_manifest requires a bounded required-file projection")
-            if (
-                self.contract.artifact_count is not None
-                or self.contract.format is not None
-                or self.contract.json_schema is not None
-            ):
-                raise ValueError("file_manifest accepts only required-file projection data")
-        if self.validator_name == "artifact_contract":
-            if self.contract is None or self.contract.artifact_count is None:
-                raise ValueError("artifact_contract requires an artifact-count projection")
-            if self.contract.required_files is not None or self.contract.json_schema is not None:
-                raise ValueError("artifact_contract projection contains unrelated fields")
+        _validate_minimal_request_payload(
+            validator_name=self.validator_name,
+            contract=self.contract,
+            staged_files=self.staged_files,
+            has_output=self.output is not None,
+            missing_output_description="bounded output",
+            supplied_output_description="output",
+        )
         return self
 
 
@@ -430,17 +525,180 @@ class ValidatorRunnerResponseV1(_RunnerProtocolModel):
     def known_identity_and_coherent_outcome(self):
         if VALIDATOR_VERSIONS_V1[self.validator_name] != self.validator_version:
             raise ValueError("validator version does not match the built-in allowlist")
-        if self.ok and self.failure_reason is not None:
-            raise ValueError("successful validator responses cannot carry a failure reason")
-        if not self.ok and not self.failure_reason:
-            raise ValueError("failed validator responses require a bounded failure reason")
+        _validate_response_outcome(ok=self.ok, failure_reason=self.failure_reason)
         return self
 
 
+def _validate_response_outcome(*, ok: bool, failure_reason: str | None) -> None:
+    if ok and failure_reason is not None:
+        raise ValueError("successful validator responses cannot carry a failure reason")
+    if not ok and not failure_reason:
+        raise ValueError("failed validator responses require a bounded failure reason")
+
+
+ValidatorContractProjectionV2 = ValidatorContractProjectionV1
+ValidatorRunnerLimitsV2 = ValidatorRunnerLimitsV1
+
+
+class ValidatorOutputReferenceV2(_RunnerProtocolModel):
+    """Parent-authored binding for the one reserved staged output file."""
+
+    relative_path: Literal[VALIDATOR_OUTPUT_REFERENCE_PATH_V2]
+    encoding: Literal["utf-8"]
+    byte_length: int = Field(ge=0, le=MAX_VALIDATOR_OUTPUT_BYTES_V2)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class ValidatorRunnerRequestV2(_RunnerProtocolModel):
+    protocol_version: Literal["2"] = VALIDATOR_RUNNER_PROTOCOL_VERSION_V2
+    validator_name: ValidatorNameV2
+    validator_version: str = Field(min_length=1, max_length=32)
+    output_reference: ValidatorOutputReferenceV2 | None = None
+    contract: ValidatorContractProjectionV2 | None = None
+    staged_files: list[str] = Field(default_factory=list, max_length=MAX_VALIDATOR_STAGED_FILES_V2)
+    limits: ValidatorRunnerLimitsV2 = Field(default_factory=ValidatorRunnerLimitsV2)
+
+    @field_validator("staged_files")
+    @classmethod
+    def normalized_staged_files(cls, values: list[str]) -> list[str]:
+        clean = [normalize_staged_relative_path(value) for value in values]
+        if len({value.casefold() for value in clean}) != len(clean):
+            raise ValueError("staged file paths must be unique")
+        reserved = VALIDATOR_OUTPUT_RESERVED_DIRECTORY_V2.casefold()
+        if any(
+            value.casefold() == reserved or value.casefold().startswith(f"{reserved}/")
+            for value in clean
+        ):
+            raise ValueError("staged file paths cannot occupy the reserved output namespace")
+        return clean
+
+    @model_validator(mode="after")
+    def known_identity_and_minimal_payload(self):
+        if VALIDATOR_VERSIONS_V2[self.validator_name] != self.validator_version:
+            raise ValueError("validator version does not match the built-in allowlist")
+        _validate_minimal_request_payload(
+            validator_name=self.validator_name,
+            contract=self.contract,
+            staged_files=self.staged_files,
+            has_output=self.output_reference is not None,
+            missing_output_description="an output reference",
+            supplied_output_description="an output reference",
+        )
+        return self
+
+
+class ValidatorRunnerResponseV2(_RunnerProtocolModel):
+    protocol_version: Literal["2"] = VALIDATOR_RUNNER_PROTOCOL_VERSION_V2
+    validator_name: ValidatorNameV2
+    validator_version: str = Field(min_length=1, max_length=32)
+    ok: bool
+    score: float | None = Field(default=None, ge=0.0, le=1.0)
+    detail: dict[str, Any] = Field(default_factory=dict, max_length=_MAX_DETAIL_CONTAINER_ITEMS)
+    failure_reason: str | None = Field(default=None, max_length=MAX_VALIDATOR_FAILURE_REASON_LENGTH_V2)
+
+    @field_validator("detail")
+    @classmethod
+    def bounded_detail(cls, value: dict[str, Any]) -> dict[str, Any]:
+        value = validate_bounded_detail(value)
+        _reject_v2_private_detail_keys(value)
+        return value
+
+    @field_validator("failure_reason")
+    @classmethod
+    def bounded_safe_reason(cls, value: str | None) -> str | None:
+        if value is not None and contains_absolute_path_fragment(value):
+            raise ValueError("absolute paths are forbidden in validator responses")
+        return value
+
+    @model_validator(mode="after")
+    def known_identity_and_coherent_outcome(self):
+        if VALIDATOR_VERSIONS_V2[self.validator_name] != self.validator_version:
+            raise ValueError("validator version does not match the built-in allowlist")
+        _validate_response_outcome(ok=self.ok, failure_reason=self.failure_reason)
+        _validate_v2_output_response(
+            validator_name=self.validator_name,
+            ok=self.ok,
+            score=self.score,
+            detail=self.detail,
+            failure_reason=self.failure_reason,
+        )
+        return self
+
+
+def _validate_v2_output_response(
+    *,
+    validator_name: ValidatorNameV2,
+    ok: bool,
+    score: float | None,
+    detail: dict[str, Any],
+    failure_reason: str | None,
+) -> None:
+    """Constrain output-consuming evidence to content-free built-in shapes."""
+
+    if validator_name not in _OUTPUT_VALIDATORS:
+        return
+    if failure_reason in _V2_INFRASTRUCTURE_FAILURE_REASONS:
+        if ok or score is not None or detail:
+            raise ValueError("validator infrastructure failures require empty evidence")
+        return
+    if score != (1.0 if ok else 0.0):
+        raise ValueError("output-validator response score is incoherent")
+
+    if validator_name == "nonempty":
+        output_bytes = detail.get("output_bytes")
+        if (
+            set(detail) != {"output_bytes"}
+            or type(output_bytes) is not int
+            or not 0 <= output_bytes <= MAX_VALIDATOR_OUTPUT_BYTES_V2
+        ):
+            raise ValueError("nonempty response detail does not match its built-in shape")
+        if ok:
+            if output_bytes == 0 or failure_reason is not None:
+                raise ValueError("nonempty success response is incoherent")
+        elif output_bytes != 0 or failure_reason != "candidate output is empty":
+            raise ValueError("nonempty failure response is incoherent")
+        return
+
+    if validator_name == "structured_json":
+        if ok:
+            if set(detail) != {"json_type"} or detail.get("json_type") not in _V2_JSON_TYPES:
+                raise ValueError("structured_json response detail is not allowlisted")
+        elif detail or failure_reason != "output is not valid JSON":
+            raise ValueError("structured_json failure response is not allowlisted")
+        return
+
+    if ok:
+        if detail != {"schema_valid": True, "claim": "contract_conformance"}:
+            raise ValueError("json_schema response detail is not allowlisted")
+    elif detail or failure_reason not in {
+        "JSON Schema input could not be parsed",
+        "JSON Schema validation failed",
+    }:
+        raise ValueError("json_schema failure response is not allowlisted")
+
+
+ValidatorRunnerRequest: TypeAlias = ValidatorRunnerRequestV1 | ValidatorRunnerRequestV2
+ValidatorRunnerResponse: TypeAlias = ValidatorRunnerResponseV1 | ValidatorRunnerResponseV2
+
+
+@overload
 def ensure_response_identity(
     request: ValidatorRunnerRequestV1,
     response: ValidatorRunnerResponseV1,
-) -> ValidatorRunnerResponseV1:
+) -> ValidatorRunnerResponseV1: ...
+
+
+@overload
+def ensure_response_identity(
+    request: ValidatorRunnerRequestV2,
+    response: ValidatorRunnerResponseV2,
+) -> ValidatorRunnerResponseV2: ...
+
+
+def ensure_response_identity(
+    request: ValidatorRunnerRequest,
+    response: ValidatorRunnerResponse,
+) -> ValidatorRunnerResponse:
     if (
         response.protocol_version != request.protocol_version
         or response.validator_name != request.validator_name
@@ -513,23 +771,53 @@ def dump_bounded_json_bytes(value: Any, *, max_bytes: int) -> bytes:
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
 
-def _parse_model(raw: bytes, model: type[ModelT], *, max_bytes: int, error_code: str) -> ModelT:
-    parsed = load_bounded_json_bytes(raw, max_bytes=max_bytes)
+def _validate_parsed_model(parsed: Any, model: type[ModelT], *, error_code: str) -> ModelT:
     try:
         return model.model_validate(parsed)
     except Exception as exc:
         raise ValidatorProtocolError(error_code) from exc
 
 
+def _read_protocol_version(parsed: Any) -> str:
+    if not isinstance(parsed, dict):
+        raise ValidatorProtocolError("validator_protocol_version_invalid")
+    if "protocol_version" not in parsed:
+        raise ValidatorProtocolError("validator_protocol_version_missing")
+    version = parsed["protocol_version"]
+    if not isinstance(version, str) or not re.fullmatch(r"[1-9][0-9]{0,3}", version):
+        raise ValidatorProtocolError("validator_protocol_version_invalid")
+    if version not in {
+        VALIDATOR_RUNNER_PROTOCOL_VERSION_V1,
+        VALIDATOR_RUNNER_PROTOCOL_VERSION_V2,
+    }:
+        raise ValidatorProtocolError("validator_protocol_version_unsupported")
+    return version
+
+
 def parse_runner_request_bytes(
     raw: bytes,
     *,
-    max_bytes: int = MAX_VALIDATOR_RUNNER_REQUEST_BYTES_V1,
-) -> ValidatorRunnerRequestV1:
-    return _parse_model(
+    max_bytes: int = MAX_VALIDATOR_RUNNER_REQUEST_BYTES_V2,
+) -> ValidatorRunnerRequest:
+    parsed = load_bounded_json_bytes(
         raw,
-        ValidatorRunnerRequestV1,
-        max_bytes=min(max_bytes, MAX_VALIDATOR_RUNNER_REQUEST_BYTES_V1),
+        max_bytes=min(
+            max_bytes,
+            max(
+                MAX_VALIDATOR_RUNNER_REQUEST_BYTES_V1,
+                MAX_VALIDATOR_RUNNER_REQUEST_BYTES_V2,
+            ),
+        ),
+    )
+    version = _read_protocol_version(parsed)
+    model: type[ValidatorRunnerRequestV1] | type[ValidatorRunnerRequestV2]
+    if version == VALIDATOR_RUNNER_PROTOCOL_VERSION_V1:
+        model = ValidatorRunnerRequestV1
+    else:
+        model = ValidatorRunnerRequestV2
+    return _validate_parsed_model(
+        parsed,
+        model,
         error_code="validator_runner_request_invalid",
     )
 
@@ -537,35 +825,64 @@ def parse_runner_request_bytes(
 def parse_runner_response_bytes(
     raw: bytes,
     *,
-    request: ValidatorRunnerRequestV1 | None = None,
-    max_bytes: int = MAX_VALIDATOR_RUNNER_RESPONSE_BYTES_V1,
-) -> ValidatorRunnerResponseV1:
-    response = _parse_model(
+    request: ValidatorRunnerRequest | None = None,
+    max_bytes: int = MAX_VALIDATOR_RUNNER_RESPONSE_BYTES_V2,
+) -> ValidatorRunnerResponse:
+    parsed = load_bounded_json_bytes(
         raw,
-        ValidatorRunnerResponseV1,
-        max_bytes=min(max_bytes, MAX_VALIDATOR_RUNNER_RESPONSE_BYTES_V1),
+        max_bytes=min(
+            max_bytes,
+            max(
+                MAX_VALIDATOR_RUNNER_RESPONSE_BYTES_V1,
+                MAX_VALIDATOR_RUNNER_RESPONSE_BYTES_V2,
+            ),
+        ),
+    )
+    version = _read_protocol_version(parsed)
+    model: type[ValidatorRunnerResponseV1] | type[ValidatorRunnerResponseV2]
+    if version == VALIDATOR_RUNNER_PROTOCOL_VERSION_V1:
+        model = ValidatorRunnerResponseV1
+    else:
+        model = ValidatorRunnerResponseV2
+    response = _validate_parsed_model(
+        parsed,
+        model,
         error_code="validator_runner_response_invalid",
     )
     return ensure_response_identity(request, response) if request is not None else response
 
 
 def dump_runner_request_bytes(
-    request: ValidatorRunnerRequestV1,
+    request: ValidatorRunnerRequest,
     *,
-    max_bytes: int = MAX_VALIDATOR_RUNNER_REQUEST_BYTES_V1,
+    max_bytes: int = MAX_VALIDATOR_RUNNER_REQUEST_BYTES_V2,
 ) -> bytes:
+    if not isinstance(request, (ValidatorRunnerRequestV1, ValidatorRunnerRequestV2)):
+        raise ValidatorProtocolError("validator_runner_request_invalid")
+    hard_max = (
+        MAX_VALIDATOR_RUNNER_REQUEST_BYTES_V1
+        if isinstance(request, ValidatorRunnerRequestV1)
+        else MAX_VALIDATOR_RUNNER_REQUEST_BYTES_V2
+    )
     return dump_bounded_json_bytes(
         request,
-        max_bytes=min(max_bytes, MAX_VALIDATOR_RUNNER_REQUEST_BYTES_V1),
+        max_bytes=min(max_bytes, hard_max),
     )
 
 
 def dump_runner_response_bytes(
-    response: ValidatorRunnerResponseV1,
+    response: ValidatorRunnerResponse,
     *,
-    max_bytes: int = MAX_VALIDATOR_RUNNER_RESPONSE_BYTES_V1,
+    max_bytes: int = MAX_VALIDATOR_RUNNER_RESPONSE_BYTES_V2,
 ) -> bytes:
+    if not isinstance(response, (ValidatorRunnerResponseV1, ValidatorRunnerResponseV2)):
+        raise ValidatorProtocolError("validator_runner_response_invalid")
+    hard_max = (
+        MAX_VALIDATOR_RUNNER_RESPONSE_BYTES_V1
+        if isinstance(response, ValidatorRunnerResponseV1)
+        else MAX_VALIDATOR_RUNNER_RESPONSE_BYTES_V2
+    )
     return dump_bounded_json_bytes(
         response,
-        max_bytes=min(max_bytes, MAX_VALIDATOR_RUNNER_RESPONSE_BYTES_V1),
+        max_bytes=min(max_bytes, hard_max),
     )

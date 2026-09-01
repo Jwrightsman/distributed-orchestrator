@@ -14,12 +14,21 @@ from pathlib import Path
 import pytest
 
 from execution.artifacts import ArtifactEntryV1
+from execution.validator_protocol import (
+    MAX_VALIDATOR_OUTPUT_BYTES_V2,
+    VALIDATOR_OUTPUT_REFERENCE_PATH_V2,
+    VALIDATOR_OUTPUT_RESERVED_DIRECTORY_V2,
+)
 from execution.validator_staging import (
     StagingLimits,
+    ValidatorOutputReferenceError,
+    ValidatorOutputStagingError,
     ValidatorStagingAborted,
     ValidatorStagingIntegrityError,
     ValidatorStagingLimitError,
     ValidatorStagingSecurityError,
+    read_staged_validator_output,
+    stage_validator_output,
     stage_validator_files,
     validate_validator_file_names,
 )
@@ -65,6 +74,390 @@ def _stage(
         limits=limits,
     )
     return destination, relative
+
+
+def _output_stage_root(tmp_path: Path) -> Path:
+    stage = tmp_path / "validator-stage"
+    stage.mkdir(mode=0o700)
+    return stage
+
+
+def _write_referenced_output(stage: Path, payload: bytes) -> Path:
+    target = stage.joinpath(*VALIDATOR_OUTPUT_REFERENCE_PATH_V2.split("/"))
+    target.parent.mkdir(mode=0o700)
+    target.write_bytes(payload)
+    return target
+
+
+def _read_reference(stage: Path, payload: bytes, **overrides) -> str:
+    values = {
+        "staging_root": stage,
+        "relative_path": VALIDATOR_OUTPUT_REFERENCE_PATH_V2,
+        "encoding": "utf-8",
+        "byte_length": len(payload),
+        "sha256": hashlib.sha256(payload).hexdigest(),
+    }
+    values.update(overrides)
+    return read_staged_validator_output(**values)
+
+
+def test_output_stage_round_trips_exact_utf8_through_fixed_reference(tmp_path):
+    stage = _output_stage_root(tmp_path)
+    output = '{"message":"snowman ☃ and emoji \U0001f642"}'
+
+    reference = stage_validator_output(
+        output=output,
+        staging_root=stage,
+        max_output_bytes=1024,
+    )
+
+    encoded = output.encode("utf-8")
+    target = stage.joinpath(*VALIDATOR_OUTPUT_REFERENCE_PATH_V2.split("/"))
+    assert reference.relative_path == VALIDATOR_OUTPUT_REFERENCE_PATH_V2
+    assert reference.byte_length == len(encoded)
+    assert reference.sha256 == hashlib.sha256(encoded).hexdigest()
+    assert target.read_bytes() == encoded
+    assert _read_reference(stage, encoded) == output
+    if os.name == "posix":
+        assert stat.S_IMODE(target.parent.stat().st_mode) == 0o700
+        assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
+
+def test_output_stage_honors_exact_authoritative_byte_boundary(tmp_path):
+    stage = _output_stage_root(tmp_path)
+
+    reference = stage_validator_output(
+        output="1234",
+        staging_root=stage,
+        max_output_bytes=4,
+    )
+
+    assert reference.byte_length == 4
+    assert _read_reference(stage, b"1234") == "1234"
+
+
+def test_output_stage_rejects_authoritative_limit_before_file_creation(tmp_path):
+    stage = _output_stage_root(tmp_path)
+
+    with pytest.raises(ValidatorOutputStagingError) as raised:
+        stage_validator_output(
+            output="12345",
+            staging_root=stage,
+            max_output_bytes=4,
+        )
+
+    assert raised.value.code == "validator_output_oversized"
+    assert not (stage / VALIDATOR_OUTPUT_RESERVED_DIRECTORY_V2).exists()
+
+
+def test_output_stage_rejects_unencodable_text_without_content(tmp_path):
+    stage = _output_stage_root(tmp_path)
+    sensitive = "SENSITIVE_OUTPUT_\ud800"
+
+    with pytest.raises(ValidatorOutputStagingError) as raised:
+        stage_validator_output(
+            output=sensitive,
+            staging_root=stage,
+            max_output_bytes=1024,
+        )
+
+    assert raised.value.code == "validator_output_invalid_utf8"
+    assert str(raised.value) == "validator_output_invalid_utf8"
+    assert "SENSITIVE_OUTPUT" not in str(raised.value)
+    assert not (stage / VALIDATOR_OUTPUT_RESERVED_DIRECTORY_V2).exists()
+
+
+def test_cancellation_during_output_write_removes_partial_namespace(tmp_path):
+    stage = _output_stage_root(tmp_path)
+    checks = 0
+
+    def abort_reason():
+        nonlocal checks
+        checks += 1
+        return "validator_cancelled" if checks >= 3 else None
+
+    with pytest.raises(ValidatorStagingAborted) as raised:
+        stage_validator_output(
+            output="x" * (2 * 1024 * 1024),
+            staging_root=stage,
+            max_output_bytes=2 * 1024 * 1024,
+            abort_reason=abort_reason,
+        )
+
+    assert raised.value.reason == "validator_cancelled"
+    assert not (stage / VALIDATOR_OUTPUT_RESERVED_DIRECTORY_V2).exists()
+
+
+def test_existing_output_namespace_is_not_reused_or_removed(tmp_path):
+    stage = _output_stage_root(tmp_path)
+    namespace = stage / VALIDATOR_OUTPUT_RESERVED_DIRECTORY_V2
+    namespace.mkdir()
+    sentinel = namespace / "keep.txt"
+    sentinel.write_text("keep", encoding="utf-8")
+
+    with pytest.raises(ValidatorOutputStagingError) as raised:
+        stage_validator_output(
+            output="safe",
+            staging_root=stage,
+            max_output_bytes=1024,
+        )
+
+    assert raised.value.code == "validator_output_staging_failed"
+    assert sentinel.read_text(encoding="utf-8") == "keep"
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "/output.utf8",
+        "../output.utf8",
+        "C:/output.utf8",
+        r"__mycelium_validator_input__\output.utf8",
+        "__mycelium_validator_input__/other.utf8",
+    ],
+)
+def test_output_reader_accepts_only_the_fixed_reference_path(tmp_path, relative_path):
+    stage = _output_stage_root(tmp_path)
+    payload = b"safe"
+    _write_referenced_output(stage, payload)
+
+    with pytest.raises(ValidatorOutputReferenceError) as raised:
+        _read_reference(stage, payload, relative_path=relative_path)
+
+    assert raised.value.code == "validator_output_reference_invalid"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        ({"encoding": "UTF-8"}, "validator_output_reference_invalid"),
+        ({"byte_length": True}, "validator_output_reference_invalid"),
+        ({"byte_length": -1}, "validator_output_reference_invalid"),
+        ({"sha256": "A" * 64}, "validator_output_reference_invalid"),
+        ({"sha256": "0" * 63}, "validator_output_reference_invalid"),
+    ],
+)
+def test_output_reader_rejects_malformed_reference_metadata(tmp_path, overrides, expected):
+    stage = _output_stage_root(tmp_path)
+    payload = b"safe"
+    _write_referenced_output(stage, payload)
+
+    with pytest.raises(ValidatorOutputReferenceError) as raised:
+        _read_reference(stage, payload, **overrides)
+
+    assert raised.value.code == expected
+
+
+def test_output_reader_reports_missing_file_without_private_path(tmp_path):
+    stage = _output_stage_root(tmp_path)
+    sensitive_root = str(stage)
+
+    with pytest.raises(ValidatorOutputReferenceError) as raised:
+        _read_reference(stage, b"missing")
+
+    assert raised.value.code == "validator_output_file_missing"
+    assert str(raised.value) == "validator_output_file_missing"
+    assert sensitive_root not in str(raised.value)
+
+
+def test_output_reader_rejects_declared_size_mismatch(tmp_path):
+    stage = _output_stage_root(tmp_path)
+    payload = b"exact bytes"
+    _write_referenced_output(stage, payload)
+
+    with pytest.raises(ValidatorOutputReferenceError) as raised:
+        _read_reference(stage, payload, byte_length=len(payload) - 1)
+
+    assert raised.value.code == "validator_output_size_mismatch"
+
+
+def test_output_reader_rejects_exact_byte_digest_mismatch(tmp_path):
+    stage = _output_stage_root(tmp_path)
+    payload = b"exact bytes"
+    _write_referenced_output(stage, payload)
+
+    with pytest.raises(ValidatorOutputReferenceError) as raised:
+        _read_reference(stage, payload, sha256="0" * 64)
+
+    assert raised.value.code == "validator_output_digest_mismatch"
+    assert "0" * 64 not in str(raised.value)
+
+
+def test_output_reader_rejects_invalid_utf8_after_integrity_checks(tmp_path):
+    stage = _output_stage_root(tmp_path)
+    payload = b"\xff\xfe"
+    _write_referenced_output(stage, payload)
+
+    with pytest.raises(ValidatorOutputReferenceError) as raised:
+        _read_reference(stage, payload)
+
+    assert raised.value.code == "validator_output_invalid_utf8"
+
+
+def test_output_reader_rejects_oversized_file_without_reading_it(tmp_path, monkeypatch):
+    stage = _output_stage_root(tmp_path)
+    target = _write_referenced_output(stage, b"")
+    target.write_bytes(b"")
+    with target.open("r+b") as handle:
+        handle.truncate(MAX_VALIDATOR_OUTPUT_BYTES_V2 + 1)
+
+    def unexpected_read(*_args, **_kwargs):
+        raise AssertionError("oversized output body was read")
+
+    monkeypatch.setattr("execution.validator_staging.os.read", unexpected_read)
+    with pytest.raises(ValidatorOutputReferenceError) as raised:
+        _read_reference(
+            stage,
+            b"",
+            byte_length=MAX_VALIDATOR_OUTPUT_BYTES_V2,
+        )
+
+    assert raised.value.code == "validator_output_oversized"
+
+
+def test_output_reader_opens_fixed_file_only_once(tmp_path, monkeypatch):
+    stage = _output_stage_root(tmp_path)
+    payload = b"one descriptor"
+    _write_referenced_output(stage, payload)
+    original_open = os.open
+    target_opens = 0
+
+    def tracked_open(path, *args, **kwargs):
+        nonlocal target_opens
+        if str(path).replace("\\", "/").endswith("/output.utf8") or path == "output.utf8":
+            target_opens += 1
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr("execution.validator_staging.os.open", tracked_open)
+
+    assert _read_reference(stage, payload) == "one descriptor"
+    assert target_opens == 1
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX descriptor replacement coverage")
+def test_output_reader_consumes_open_descriptor_after_path_replacement(tmp_path, monkeypatch):
+    stage = _output_stage_root(tmp_path)
+    payload = b"descriptor-bound bytes"
+    target = _write_referenced_output(stage, payload)
+    moved = target.with_name("opened-output")
+    original_read = os.read
+    replaced = False
+
+    def replace_path_then_read(descriptor, maximum):
+        nonlocal replaced
+        if not replaced:
+            replaced = True
+            target.rename(moved)
+            target.write_bytes(b"different path bytes")
+        return original_read(descriptor, maximum)
+
+    monkeypatch.setattr("execution.validator_staging.os.read", replace_path_then_read)
+
+    assert _read_reference(stage, payload) == payload.decode("utf-8")
+    assert target.read_bytes() == b"different path bytes"
+
+
+def test_output_reader_rejects_directory_target(tmp_path):
+    stage = _output_stage_root(tmp_path)
+    target = stage.joinpath(*VALIDATOR_OUTPUT_REFERENCE_PATH_V2.split("/"))
+    target.mkdir(parents=True)
+
+    with pytest.raises(ValidatorOutputReferenceError) as raised:
+        _read_reference(stage, b"")
+
+    assert raised.value.code == "validator_output_file_not_regular"
+
+
+def test_output_reader_rejects_symlink_target(tmp_path):
+    stage = _output_stage_root(tmp_path)
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside", encoding="utf-8")
+    target = stage.joinpath(*VALIDATOR_OUTPUT_REFERENCE_PATH_V2.split("/"))
+    target.parent.mkdir()
+    try:
+        target.symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("file symlinks are unavailable")
+
+    with pytest.raises(ValidatorOutputReferenceError) as raised:
+        _read_reference(stage, b"outside")
+
+    assert raised.value.code == "validator_output_file_not_regular"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows junction coverage")
+def test_output_reader_rejects_windows_reparse_namespace(tmp_path):
+    import _winapi
+
+    stage = _output_stage_root(tmp_path)
+    outside = tmp_path / "outside-output"
+    outside.mkdir()
+    (outside / "output.utf8").write_bytes(b"outside")
+    namespace = stage / VALIDATOR_OUTPUT_RESERVED_DIRECTORY_V2
+    _winapi.CreateJunction(str(outside), str(namespace))
+
+    with pytest.raises(ValidatorOutputReferenceError) as raised:
+        _read_reference(stage, b"outside")
+
+    assert raised.value.code == "validator_output_file_not_regular"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX special-file coverage")
+def test_output_reader_rejects_fifo_without_opening_it(tmp_path):
+    stage = _output_stage_root(tmp_path)
+    target = stage.joinpath(*VALIDATOR_OUTPUT_REFERENCE_PATH_V2.split("/"))
+    target.parent.mkdir()
+    os.mkfifo(target)
+
+    with pytest.raises(ValidatorOutputReferenceError) as raised:
+        _read_reference(stage, b"")
+
+    assert raised.value.code == "validator_output_file_not_regular"
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or not hasattr(socket, "AF_UNIX"),
+    reason="Unix-domain socket coverage",
+)
+def test_output_reader_rejects_socket_without_opening_it(tmp_path):
+    stage = _output_stage_root(tmp_path)
+    target = stage.joinpath(*VALIDATOR_OUTPUT_REFERENCE_PATH_V2.split("/"))
+    target.parent.mkdir()
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        listener.bind(str(target))
+        with pytest.raises(ValidatorOutputReferenceError) as raised:
+            _read_reference(stage, b"")
+    finally:
+        listener.close()
+
+    assert raised.value.code == "validator_output_file_not_regular"
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        VALIDATOR_OUTPUT_RESERVED_DIRECTORY_V2,
+        f"{VALIDATOR_OUTPUT_RESERVED_DIRECTORY_V2}/candidate.py",
+        f"{VALIDATOR_OUTPUT_RESERVED_DIRECTORY_V2.upper()}/candidate.py",
+    ],
+)
+def test_artifact_selection_rejects_reserved_output_namespace(tmp_path, relative_path):
+    root, subtree = _tree(tmp_path)
+    source = subtree.joinpath(*relative_path.split("/"))
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("candidate", encoding="utf-8")
+
+    with pytest.raises(ValidatorStagingSecurityError, match="reserved"):
+        validate_validator_file_names(
+            authoritative_root=root,
+            authoritative_subtree=subtree,
+            selected_files=[source],
+        )
+    with pytest.raises(ValidatorStagingSecurityError, match="reserved"):
+        _stage(tmp_path, root, subtree, [source])
+
+    assert not (tmp_path / "stage").exists()
 
 
 def test_normal_files_are_copied_with_only_normalized_relative_paths(tmp_path):
