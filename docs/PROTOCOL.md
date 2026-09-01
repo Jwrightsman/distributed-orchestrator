@@ -391,19 +391,53 @@ rejects it. In that mode evidence labels normally inline checks
 `inline_trusted` and overridden isolated parsers `inline_compatibility`. An
 isolated validator never silently falls back inline after a runner failure.
 
-Parent and child exchange strict `ValidatorRunnerRequestV1` and
-`ValidatorRunnerResponseV1` JSON over bounded stdin/stdout. The request can
-contain only protocol and built-in identity/version, minimal bounded output or
-the validator-specific bounded contract projection, validated normalized
-logical filenames,
-and parent-clamped limits. It
-cannot name a module, executable, shell command, arbitrary callable, database,
-credential, session, nonce, or unrelated execution. Unknown fields, invalid or
-mismatched identity/version, malformed JSON, excessive depth/items/strings, an
-recognized bare or delimiter-prefixed absolute POSIX/Windows/UNC host-path
-pattern, any `file://` pattern in response keys or values, and over-limit
-request/response bytes fail closed. The protocol has no
-host-path field, and child path-like detail is never authoritative.
+New parent calls exchange strict `ValidatorRunnerRequestV2` and
+`ValidatorRunnerResponseV2` JSON over bounded stdin/stdout. The request contains
+control metadata only: protocol and built-in identity/version, an optional
+output reference, the validator-specific bounded contract projection,
+validated normalized logical filenames, and parent-clamped limits. It never
+contains the generated output body and cannot name a module, executable, shell
+command, arbitrary callable, database, credential, session, nonce, or unrelated
+execution.
+
+The V2 output reference has this exact shape and fixed server-owned path:
+
+```json
+{
+  "relative_path": "__mycelium_validator_input__/output.utf8",
+  "encoding": "utf-8",
+  "byte_length": 12345,
+  "sha256": "<64 lowercase hexadecimal characters>"
+}
+```
+
+The path and encoding are literals, `byte_length` is an integer from zero
+through 10,485,760, SHA-256 is lowercase hexadecimal, and unknown fields are
+forbidden. `nonempty`, `structured_json`, and `json_schema` require the
+reference; file-only validators reject it. The child cannot select a different
+relative or host path.
+
+V1 remains explicitly parseable and round-trippable for compatibility and
+focused tests, including its inline output field. New production parent calls
+emit V2 only. Parsing first requires a bounded string `protocol_version` and
+then selects exactly that strict model. A missing, malformed, or unknown
+version fails clearly; malformed V2 is not interpreted as V1; and a V2 failure
+does not cause a V1 retry or inline execution. Response protocol version,
+validator identity, and validator version must match the request.
+
+Unknown fields, invalid or mismatched identity/version, malformed JSON,
+excessive depth/items/strings, a recognized bare or delimiter-prefixed absolute
+POSIX/Windows/UNC host-path pattern, any `file://` pattern in response keys or
+values, and over-limit request/response bytes fail closed. The response wire
+model has no host-path field, and child path-like detail is never authoritative.
+
+`validator_subprocess_request_max_bytes` bounds only the serialized JSON control
+metadata. Its default is 2 MiB. The referenced raw UTF-8 output is independently
+bounded by the execution's authoritative `ExecutionRequestV1.max_output_bytes`,
+whose canonical maximum is 10,485,760 bytes. Exact-boundary output can reach an
+applicable isolated validator without JSON escaping or JSON-in-JSON expansion
+consuming the control-message budget. Increasing the V1 request limit is not the
+transport solution and no second configurable output ceiling exists.
 
 The response contains only identity/version, boolean outcome, bounded optional
 score/detail, and bounded failure reason. Child detail and ordinary validation
@@ -411,7 +445,11 @@ reasons are bounded but non-authoritative. The authoritative parent adds
 required/optional and contract-floor source, assurance, behavioral-correctness,
 duration, execution mode, runner protocol version, platform containment level,
 and termination reason when applicable. No child response can raise assurance
-or claim behavioral correctness.
+or claim behavioral correctness. V2 recursively forbids private reference field
+names in response detail. For output-consuming validators, detail, score, and
+ordinary failure reasons must also match the selected built-in's closed response
+shape; a child attempt to echo output or transport metadata is rejected as a
+malformed response before evidence is assembled.
 
 Artifact-aware subprocess checks can receive only normalized logical names from
 the authoritative selected candidate subtree. Canonical strategy paths bind
@@ -427,6 +465,36 @@ limit is 20 files, 10 MiB per file, 10 MiB aggregate, and 200 characters per
 relative path. Standalone compatibility callers without an ArtifactStore retain
 the root/path/type/size boundary without the optional snapshot hash check.
 
+For every output-consuming subprocess check, the parent strictly encodes the
+canonical output as UTF-8, enforces the execution byte budget before spawn, and
+exclusively creates
+`__mycelium_validator_input__/output.utf8` inside the fresh workspace. It uses
+descriptor-relative and no-follow operations where supported, applies POSIX
+mode `0700` to the reserved directory and `0600` to the file, writes and hashes
+the exact bytes, and closes the file before process creation. The reserved
+namespace and every descendant are forbidden candidate artifact paths, with
+portable collision handling. The output path is never derived from task data,
+model text, a manifest, or a caller-selected field.
+
+The child confines the fixed path to the stage root and rejects missing files,
+symlinks, Windows reparse points, directories, FIFOs, sockets, devices, and
+other nonregular targets. It opens the file once and validates through that
+descriptor, checking regular-file identity, the hard maximum, exact declared
+byte length, constant-time SHA-256 equality over the bytes consumed, and strict
+UTF-8 decoding before calling the selected built-in. Reference, file-type,
+size, digest, UTF-8, and oversize failures use stable content-free reasons and
+fail as runner infrastructure errors. The child never receives a coordinator
+artifact root.
+
+The bounded output-reference reason family is
+`validator_output_reference_missing`, `validator_output_reference_invalid`,
+`validator_output_file_missing`, `validator_output_file_not_regular`,
+`validator_output_size_mismatch`, `validator_output_digest_mismatch`,
+`validator_output_invalid_utf8`, and `validator_output_oversized`. Parent-side
+exclusive-write failure is reported separately as content-free
+`validator_output_staging_failed`. None includes a path, digest, body, excerpt,
+or decoder error text.
+
 When `artifact_extraction`, `artifact_contract`, or `file_manifest` is forced
 through `subprocess`, the request carries only the validated names and bounded
 contract projection. The child runs in an empty private directory; the parent
@@ -436,7 +504,8 @@ snapshot-membership, file-count, portable-duplicate, and relative-path checks
 still apply, while content-copy byte limits do not.
 
 Process-tree termination and reaping are attempted before private-workspace
-removal on success, failure, timeout, or cancellation. Failure to
+removal on success, validation or reference failure, malformed response, crash,
+spawn failure, timeout, or cancellation. Failure to
 confirm process-tree cleanup remains a bounded, counted containment incident.
 Temporary-workspace deletion failure records fail-closed
 `validator_stage_cleanup_failed` evidence and increments the distinct
@@ -448,15 +517,25 @@ configurable serialized request/response limits.
 The child uses the current Python interpreter without a shell, a sanitized
 environment whose `TEMP`/`TMP` on Windows or `TMPDIR` on POSIX point into its controlled
 working directory, closed inherited descriptors where supported, and a fresh
-process group. Spawn failure, timeout, crash, malformed or oversized response, and
-staging failure become bounded error evidence with stable parent-supplied
-reasons. An unconfirmed process-tree cleanup is reflected in error evidence or
+process group. Spawn failure, timeout, crash, malformed or oversized response,
+and artifact/output staging or output-reference failure become bounded error
+evidence with stable parent-supplied reasons. An unconfirmed process-tree
+cleanup is reflected in error evidence or
 the content-free cleanup counter, depending on the original outcome. Existing
 required/optional aggregation then records whether validation accepts the
 candidate; the isolated check never falls back inline. Afterward, the explicit
 `allow_unverified_fallback` policy may still select and deliver a usable failed
 candidate with its validation outcome preserved as described above. Runner
 failure itself does not define a new lifecycle transition.
+
+Parent-authored evidence may record protocol version `2`, execution mode,
+containment level, termination reason, and existing bounded validator detail.
+It does not expose the output reference, reserved private path, expected or
+observed digest, generated body, output excerpt, or child environment. Logs,
+metrics, and operator counters follow the same content-free rule;
+validator-runner metadata adds none of those fields to public executions or
+shares. This does not redefine their existing result-content policy.
+Output-reference counters use only fixed low-cardinality failure categories.
 
 On POSIX the child also applies available standard-library CPU, address-space,
 file-size, open-descriptor, and child-process limits. Windows retains the
@@ -1096,6 +1175,9 @@ fall back to bounded defaults. The defaults are `auto`, 10 seconds, 256 MiB,
 2 MiB request bytes, and 32 KiB response bytes. Inclusive accepted ranges are
 1–120 seconds, 128–1,024 MiB, 16 KiB–16 MiB request bytes, and 1–256 KiB
 response bytes. Booleans and other non-integer numeric values are invalid.
+The request-byte setting is the V2 JSON control-envelope limit; it does not
+reduce the execution's separately authoritative output byte budget. Output
+staging has no additional operator-configurable ceiling.
 
 Exactly one coordinator may own a state directory. An operating-system lock is
 acquired before migrations and background work; a second process fails closed.

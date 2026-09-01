@@ -1,6 +1,6 @@
-# Handoff — Mycelium Theme 3A Bounded Validator Process Isolation
+# Handoff — Mycelium Theme 3A.1 Validator Output References
 
-_Updated August 31, 2026._
+_Updated September 1, 2026._
 
 ## Read these first
 
@@ -36,12 +36,15 @@ he must act on, and warn before anything network-facing. Never install, join, or
 run Mycelium on a machine without that machine owner's explicit informed
 consent.
 
-Theme 3A puts parser-heavy, trusted built-in validators behind a bounded child-
-process boundary. It contains parser failures, validates only selected candidate
-inputs, copies bytes only for `code_parse`, clamps work to the remaining
-execution deadline, records fail-closed
-validation evidence, and adds parent-authored execution metadata and content-
-free counters. It does not
+Theme 3A.1 preserves Theme 3A's bounded child-process architecture and removes
+an accidental transport mismatch: canonical output can reach 10 MiB, but V1
+embedded that output in a JSON request whose default control limit was 2 MiB.
+New parent calls stage exact UTF-8 output privately and send a fixed-path,
+hash-and-size-bound V2 reference as control metadata. It contains parser
+failures, validates only selected candidate inputs, copies artifact bytes only
+for `code_parse`, clamps work to the remaining execution deadline, records fail-
+closed validation evidence, and adds parent-authored execution metadata and
+content-free counters. It does not
 execute generated code, establish same-user filesystem confidentiality,
 guarantee network denial, or add containers, VMs, WASM, plugins, behavioral
 validation, workflow resumption, or coordinator HA. Theme 2.1 capability and
@@ -49,9 +52,9 @@ evidence behavior remains a retained prerequisite below.
 
 ## Branch and review
 
-- Branch: `codex/theme-3a-validator-process-isolation`
-- Base: latest default branch after Theme 2.1, starting at
-  `79986be455c3f35ee9671f09d8a25f70550b040c`
+- Branch: `codex/theme-3a-1-validator-output-reference`
+- Base: latest default branch after Theme 3A / PR #63, starting at
+  `086b14d547c96867007553c6c3f78f939ce7519c`
 - Merge: review explicitly; do not auto-merge
 - Current decision/handoff records: `HANDOFF.md` and
   `docs/adr/0013-parser-heavy-validators-bounded-process-boundary.md`
@@ -65,7 +68,7 @@ manual results separately where containment expectations differ. The Windows
 results are recorded below; Ubuntu/POSIX verification remains pending until the
 PR checks pass.
 
-## Theme 3A architecture
+## Theme 3A.1 architecture
 
 - `auto` is the default. It classifies `code_parse`, `structured_json`, and
   `json_schema` as `subprocess_isolated`; `nonempty`,
@@ -79,17 +82,23 @@ PR checks pass.
 - Runner defaults are 10 seconds, 256 MiB, 2 MiB request, and 32 KiB response.
   Strict inclusive config bounds are respectively 1–120 seconds, 128–1,024
   MiB, 16 KiB–16 MiB, and 1–256 KiB. Booleans and non-integer values are
-  invalid; trusted loading raises while local loading warns and defaults.
-- The registry remains a closed built-in allowlist. The strict version-1
-  request/response protocol cannot name an import, executable, shell command,
-  arbitrary callable, plugin, credential, database, or unrelated execution.
-  Task content, generated output, schemas, and filenames are not process
-  arguments.
-- Parent and child use bounded JSON over stdin/stdout. Unknown fields,
+  invalid; trusted loading raises while local loading warns and defaults. The
+  request setting bounds V2 JSON control metadata only. It does not reduce the
+  execution's authoritative `max_output_bytes`, whose canonical maximum is 10
+  MiB, and no separate validator-output setting exists.
+- The registry remains a closed built-in allowlist. New parent calls emit the
+  strict V2 request/response protocol. Output-consuming checks stage exact UTF-8
+  bytes at `__mycelium_validator_input__/output.utf8`; the request carries only
+  that literal path, `encoding="utf-8"`, exact byte length, and lowercase
+  SHA-256. V1 with inline output remains explicitly parseable for compatibility
+  tests, but a malformed or failed V2 message is never treated or retried as V1
+  and never triggers inline fallback.
+- Parent and child use bounded control JSON over stdin/stdout. Unknown fields,
   identity/version mismatch, malformed or excessive values, recognized bare or
   delimiter-prefixed absolute POSIX/Windows/UNC host-path patterns, or any
   `file://` pattern in response keys/values, and
-  over-limit bytes fail closed. The protocol has no host-path field. The parent owns assurance,
+  over-limit bytes fail closed. The V2 JSON never contains the generated body,
+  and the protocol has no arbitrary host-path field. The parent owns assurance,
   behavioral-correctness, required/optional/source, execution-mode,
   containment, and termination metadata.
 - Artifact-aware child checks receive only normalized names selected from the
@@ -101,6 +110,14 @@ PR checks pass.
   receive logical names in an empty private directory and do not copy or rehash
   content. Process-tree termination and reaping are attempted before workspace
   removal.
+- The output namespace and every descendant are forbidden candidate artifact
+  paths. The parent creates the output file exclusively with private modes where
+  supported, enforces the execution byte budget, hashes the exact bytes, checks
+  cancellation/deadline state during staging, and closes the file before spawn.
+  The child accepts no alternate path, rejects links/reparse points and
+  nonregular targets, opens once, and verifies confinement, descriptor identity,
+  hard and declared size, constant-time digest equality, and strict UTF-8 before
+  dispatching to the allowlisted validator.
 - The runner uses the current interpreter without a shell, a sanitized
   environment whose temp variables point into its controlled work directory, a
   fresh working directory/process group, bounded I/O, and a timeout clamped to
@@ -122,12 +139,14 @@ PR checks pass.
   kill-on-close behavior, but a pre-assignment escape or unassigned runner can
   survive coordinator crash; there is no child-side alarm, durable PID registry,
   or restart orphan discovery.
-- Spawn, timeout, crash, protocol, oversize, staging, and stage-cleanup failures become bounded
+- Spawn, timeout, crash, protocol, oversize, output-reference, artifact/output
+  staging, and stage-cleanup failures become bounded
   error evidence. An unconfirmed process-tree cleanup is reflected in error
   evidence or the content-free cleanup counter, depending on the original
   outcome. Parent-authored metadata and content-free
   process counters omit prompts, output, schemas, source contents, credentials,
-  raw stderr, host paths, and arbitrary exceptions.
+  raw stderr, host paths, private reference fields/digests, and arbitrary
+  exceptions.
 - `code_parse` parses generated files as data. It never imports a generated
   module or runs top-level statements, shells, build scripts, tests, browsers,
   package installers, or generated networking. Structural success is not
@@ -433,8 +452,8 @@ filenames, or generic “verified” badges:
 | Deliverable vs audit download | `artifact_manifest_url` and `/download` for deliverables; `audit_manifest_url`, `role=audit`, and `/audit-download` for non-deliverable audit material. Keep the separation explicit. |
 | Lifecycle status | `lifecycle_status`: queued, running, completed, failed, cancelled, interrupted. Use it for control flow. |
 | Validation outcome | `validation_outcome`: passed, failed, partial, not run. Present separately from lifecycle. |
-| Validator execution boundary | Parent-owned validation evidence exposes execution mode, runner protocol version, platform containment level, applicable termination reason, and duration around bounded non-authoritative child detail. Render `subprocess_isolated` as an isolated process check, `inline_compatibility` as a weaker same-process compatibility check, and `inline_trusted` as a bounded inline check; never call any of them a sandbox or render raw child output, stderr, schemas, files, or host paths. |
-| Validator runner health | `validator_process` object on private `/v1/operator/health`: configured mode, registered validator policies, runner protocol/containment level, process-local counter reset time and content-free outcome totals. Label it operational process health, not correctness or durable lifecycle truth. |
+| Validator execution boundary | Parent-owned validation evidence exposes execution mode, runner protocol version, platform containment level, applicable termination reason, and duration around bounded non-authoritative child detail. New isolated runs report protocol `2`; render `subprocess_isolated` as an isolated process check, `inline_compatibility` as a weaker same-process compatibility check, and `inline_trusted` as a bounded inline check. Never call any of them a sandbox or render raw child output, stderr, schemas, files, host paths, output references, or digests. |
+| Validator runner health | `validator_process` object on private `/v1/operator/health`: configured mode, registered validator policies, runner protocol/containment level, process-local counter reset time and content-free outcome totals, including output staging/reference/size/digest/UTF-8/oversize failures. Label it operational process health, not correctness or durable lifecycle truth; do not expose private reference fields. |
 | Assurance level | `assurance_level` plus validation summary/evidence. Describe the exact checks; never collapse it to a generic verified badge. |
 | Post-hoc verification | `posthoc_verification_status`, timestamps, agreement, and reason. RC1 trusted-alpha is disabled; show that plainly without changing original assurance. |
 | Canonical submission replay | `Idempotency-Replayed` appears only on keyed canonical POST responses. `false` means created; `true` means an existing execution was returned. Never label it exactly-once execution or workflow resumption. |
@@ -497,6 +516,9 @@ arbitrary generated output is correct.
 Approved Theme 3A wording is “bounded process containment for trusted built-in
 parsers.” Do not shorten it to “sandboxed validation,” “safe hostile-code
 execution,” “filesystem isolation,” “network isolation,” or “behavior tested.”
+For Theme 3A.1, describe the transport as a “fixed, hash-and-size-bound private
+workspace output reference.” Do not call the digest attestation, public
+provenance, tamper-proof storage, or same-user filesystem isolation.
 
 ## Release/operator checklist
 
@@ -553,8 +575,24 @@ execution,” “filesystem isolation,” “network isolation,” or “behavio
     bounded copied bytes, forced metadata validators receive only validated
     names, and generated Python side effects and exceptions are parsed without
     import or execution.
+18. Exercise V2 with small, escaping-heavy, greater-than-2-MiB, near/exact-
+    10-MiB, and over-limit output. Confirm the control JSON contains no output
+    sentinel, the output is removed after every lifecycle path, reference
+    path/type/size/digest/UTF-8 tampering and reserved-namespace collisions fail
+    closed, V1 is never emitted or used as fallback, and private reference
+    metadata appears in no evidence, health response, metric, log, or share.
 
-## Theme 3A branch verification
+## Theme 3A.1 branch verification
+
+The final integrator must record the ending SHA and exact focused/full Windows
+results for protocol, staging, validator, contract, lifecycle, persistence,
+attempt-authority, Ruff, import, trusted-alpha harness, restart recovery,
+Compose, and `git diff --check` on the completed tree. GitHub's configured
+Ubuntu/Python 3.14 jobs remain the authoritative POSIX descriptor/symlink/FIFO/
+socket/process gate. Do not copy the historical Theme 3A counts below into a
+Theme 3A.1 completion claim.
+
+## Historical Theme 3A branch verification
 
 Local final branch gates completed on September 1, 2026 from the clean Theme 3A
 commit range. The exact Windows results are:

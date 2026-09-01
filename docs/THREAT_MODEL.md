@@ -33,7 +33,7 @@ boundary.
 | Viewer, pitch, and admission secrets | local config/environment and HTTP headers | private reads, unwanted compute use, or initial worker admission |
 | Canonical submission identity | digest-only SQLite mapping to an execution | duplicate execution after retry, key conflict, or a mapping whose execution is missing |
 | Artifact integrity baseline | sealed manifest rows/hash in SQLite plus files on disk | ordinary file drift, database/file loss, or host-level joint tampering |
-| Validator runner inputs and evidence | bounded protocol messages, temporary `code_parse` copies or validated metadata-only logical names, process memory, and durable parent-owned evidence envelope/metadata with bounded child detail | parser resource exhaustion, stage escape, secret or host-path disclosure, orphan process, or false assurance metadata |
+| Validator runner inputs and evidence | bounded protocol metadata, a fixed hash-and-size-bound temporary output reference, temporary `code_parse` copies or validated metadata-only logical names, process memory, and durable parent-owned evidence envelope/metadata with bounded child detail | parser resource exhaustion, output-reference substitution, stage escape, secret or host-path disclosure, orphan process, or false assurance metadata |
 | Contribution history | SQLite plus `ledger.json` compatibility projection | misattribution or misleading claims about correctness/value |
 | Contributor hardware | worker machines | sustained model inference, disk use for the model, prompt disclosure |
 | Orchestrator availability and backups | one locked state directory, SQLite/files, and operator-created archives | total service interruption, stale restore, or lost process-local queue/session work |
@@ -92,7 +92,7 @@ Requester ── pitch_key + optional scoped retry key ──▶ ORCHESTRATOR
 | Worker I/O bounds | per-attempt result/stream byte cap, error cap, cumulative stream batch/rate limits, bounded fanout | semantic safety of allowed output or transport-level denial of service |
 | Result quarantine | 500 bounded diagnostics with hash and at most 4 KiB preview outside operational execution | malware analysis or a complete forensic archive |
 | Total execution deadline | shared remaining budget for strategy, local calls, worker waits, validation, and finalization | forcibly stopping an external process that ignores cancellation |
-| Bounded validator runner | closed built-in allowlist; strict versioned stdin/stdout; parent-clamped timeout and response; bounded regular-file copies for `code_parse`; validated logical names and an empty private directory for metadata-only checks; process-group cleanup; best-effort Windows Job Object with kill-on-close and one-active-process limit; available POSIX CPU/memory/file/descriptor/process limits; parent-owned authoritative metadata with bounded child detail | hostile native-code isolation, same-user filesystem confidentiality, reliable network denial, guaranteed Windows Job assignment or POSIX-equivalent resource limits, behavioral correctness, or generated-code execution safety |
+| Bounded validator runner | closed built-in allowlist; strict V2 control-only stdin and bounded stdout; canonical-budgeted output staged at one fixed reserved path and bound by exact size/SHA-256/UTF-8; bounded regular-file copies for `code_parse`; validated logical names and an empty private directory for metadata-only checks; process-group cleanup; best-effort Windows Job Object with kill-on-close and one-active-process limit; available POSIX CPU/memory/file/descriptor/process limits; parent-owned authoritative metadata with bounded child detail | hostile native-code isolation, same-user filesystem confidentiality, reliable network denial, guaranteed Windows Job assignment or POSIX-equivalent resource limits, behavioral correctness, or generated-code execution safety |
 | Restart reconciliation | truthful `interrupted` state for non-resumable executions/jobs and active attempts | resuming lost process-local work |
 | Durable-before-publication lifecycle | required commit before live snapshot, normal event, project-memory/legacy mirror, callback, response, or terminal state/artifact publication through canonical shares and legacy run/history/demo surfaces | durable event delivery, external transactionality, or coordinator HA |
 | Structural event retention | per-event allowlists before memory, SQLite, broadcast, and replay; startup redaction of historical payloads; generated tokens live-stream-only | removing sensitive text from pre-upgrade backups, proxy logs, or already copied event data |
@@ -341,7 +341,15 @@ not behavioral proof. Do not execute generated code without review.
 
 In the default `auto` mode, parser-heavy built-ins (`code_parse`,
 `structured_json`, and `json_schema`) run in a bounded child process. The
-request and response are strict and size-bounded. `code_parse` receives bounded
+V2 request contains strict size-bounded control metadata and the response is
+strict and bounded. The generated output body is not embedded in that request.
+For output-consuming checks, the parent writes the exact strict UTF-8 bytes to
+one fixed reserved file in the fresh workspace and binds its literal path,
+encoding, exact byte length, and lowercase SHA-256 in the request. The
+execution's canonical `max_output_bytes` remains the authoritative output limit
+up to 10 MiB; the default 2 MiB request limit applies only to control metadata.
+V1 is retained for explicit parsing/tests, never emitted by new parent calls or
+used as a downgrade after V2 failure. `code_parse` receives bounded
 file copies from only the authoritative candidate subtree. Metadata-only
 validators forced through `subprocess` receive validated normalized logical
 names and an empty private directory, without copying or rehashing artifact
@@ -356,6 +364,17 @@ The launcher fixes child `cwd` to the parent-created private validator directory
 The runner resolves it once and supplies that explicit `stage_root` to the
 closed dispatcher; strict request data cannot choose or replace the root. An
 ambient or operator launch directory is therefore not protocol authority.
+
+The reserved `__mycelium_validator_input__` namespace and all descendants are
+rejected as candidate artifact paths. The parent uses exclusive creation,
+no-follow and descriptor-relative operations where supported, private POSIX
+modes, and inherited Windows temporary-root ACLs; it writes/hashes the exact
+bytes and closes the file before spawn. The child accepts no alternate path,
+rejects links/reparse points and nonregular targets, opens the file once, and
+checks confinement, descriptor identity, hard and declared size, constant-time
+digest equality, and strict UTF-8 before invoking the allowlisted built-in.
+These checks reduce accidental substitution and race exposure. They do not
+prevent a malicious same-user process from attempting access to the workspace.
 
 This boundary contains trusted parser failures; it is not a hostile-code
 sandbox. The child shares the coordinator's OS user and can therefore attempt
@@ -382,8 +401,9 @@ an unassigned Windows runner or pre-assignment escape can outlive the
 coordinator, and restart does not discover it. Operators must check for a
 confirmed prior runner after a crash.
 
-Staged copies live under the operating-system temporary directory, with private
-POSIX modes where supported. On Windows they inherit the temporary root's ACL;
+Staged artifact copies and output references live under the operating-system
+temporary directory, with private POSIX modes where supported. On Windows they
+inherit the temporary root's ACL;
 mode bits do not establish a private DACL, so operators must secure that root.
 The implementation attempts process-tree cleanup before stage removal, but
 an abrupt coordinator/host failure or a deletion failure can leave generated
@@ -392,6 +412,13 @@ source in a `mycelium-validator-*` directory. A handled deletion failure records
 `staging_cleanup_failures`; an abrupt host loss may preclude either record.
 There is no startup stale-stage sweeper or secure-erasure guarantee; incident response must include
 temporary-storage review after confirming no live runner owns the directory.
+
+Output-reference failure reasons and counters are content-free categories. They
+do not retain the generated body or excerpts, output JSON keys/values, schema,
+reserved private path, expected or observed digest, credentials, child
+environment, raw stderr, absolute workspace path, or arbitrary exception text.
+Runner metadata added to public executions or shares likewise contains none of
+the private reference fields; existing result disclosure rules are unchanged.
 
 `network_policy` is recorded intent only. No OS firewall, container policy,
 syscall filter, tool broker, or worker enforcement consumes it today. In
