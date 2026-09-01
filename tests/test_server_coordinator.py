@@ -33,7 +33,7 @@ def test_operator_health_is_private_and_reports_process_identity(tmp_path):
             "subprocess",
             "inline",
         }
-        assert validator_health["runner"]["runner_protocol_version"] == "1"
+        assert validator_health["runner"]["runner_protocol_version"] == "2"
         assert "process_local_counters" in validator_health["runner"]
         assert "not correctness" in validator_health["runner"]["statement"]
         assert settings["viewer_key"] not in response.text

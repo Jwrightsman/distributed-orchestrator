@@ -135,9 +135,18 @@ def _read_request_bytes() -> bytes:
 
 
 def _stable_failure_response(request, reason: str):
-    from execution.validator_protocol import ValidatorRunnerResponseV1
+    from execution.validator_protocol import (
+        ValidatorRunnerRequestV2,
+        ValidatorRunnerResponseV1,
+        ValidatorRunnerResponseV2,
+    )
 
-    return ValidatorRunnerResponseV1(
+    response_model = (
+        ValidatorRunnerResponseV2
+        if isinstance(request, ValidatorRunnerRequestV2)
+        else ValidatorRunnerResponseV1
+    )
+    return response_model(
         validator_name=request.validator_name,
         validator_version=request.validator_version,
         ok=False,
@@ -148,14 +157,21 @@ def _stable_failure_response(request, reason: str):
 
 def _execute_request(request, dispatcher: Callable[[Any], Any]):
     from execution.validator_protocol import (
+        ValidatorRunnerRequestV2,
         ValidatorRunnerResponseV1,
+        ValidatorRunnerResponseV2,
         ensure_response_identity,
     )
 
     try:
         response = dispatcher(request)
-        if not isinstance(response, ValidatorRunnerResponseV1):
-            response = ValidatorRunnerResponseV1.model_validate(response)
+        response_model = (
+            ValidatorRunnerResponseV2
+            if isinstance(request, ValidatorRunnerRequestV2)
+            else ValidatorRunnerResponseV1
+        )
+        if not isinstance(response, response_model):
+            response = response_model.model_validate(response)
         return ensure_response_identity(request, response)
     except BaseException:
         return _stable_failure_response(request, "validator_execution_error")
@@ -165,7 +181,7 @@ def _fallback_bytes() -> bytes:
     # A malformed request has no trustworthy identity.  The parent compares the
     # response against its own request and therefore rejects this fixed identity.
     return (
-        b'{"protocol_version":"1","validator_name":"nonempty",'
+        b'{"protocol_version":"2","validator_name":"nonempty",'
         b'"validator_version":"2","ok":false,"score":null,"detail":{},'
         b'"failure_reason":"validator_runner_protocol_error"}'
     )
@@ -198,16 +214,16 @@ def main() -> int:
                 sys.path.insert(0, str(repository_root))
 
             from execution.validator_protocol import (
-                MAX_VALIDATOR_RUNNER_REQUEST_BYTES_V1,
-                MAX_VALIDATOR_RUNNER_RESPONSE_BYTES_V1,
+                MAX_VALIDATOR_RUNNER_REQUEST_BYTES_V2,
+                MAX_VALIDATOR_RUNNER_RESPONSE_BYTES_V2,
                 ValidatorProtocolError,
                 dump_runner_response_bytes,
                 parse_runner_request_bytes,
             )
 
             if (
-                MAX_VALIDATOR_RUNNER_REQUEST_BYTES_V1 != _HARD_REQUEST_BYTES
-                or MAX_VALIDATOR_RUNNER_RESPONSE_BYTES_V1 != _HARD_RESPONSE_BYTES
+                MAX_VALIDATOR_RUNNER_REQUEST_BYTES_V2 != _HARD_REQUEST_BYTES
+                or MAX_VALIDATOR_RUNNER_RESPONSE_BYTES_V2 != _HARD_RESPONSE_BYTES
             ):
                 raise RuntimeError("runner_hard_limit_mismatch")
             request = parse_runner_request_bytes(_read_request_bytes())

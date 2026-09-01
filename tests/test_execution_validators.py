@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import subprocess
@@ -18,6 +19,10 @@ from execution.contracts import ExecutionRequestV1, OutputContractV1
 from execution.validator_process import (
     ValidatorProcessExecutor,
     ValidatorProcessSettings,
+)
+from execution.validator_protocol import (
+    MAX_VALIDATOR_OUTPUT_BYTES_V2,
+    VALIDATOR_OUTPUT_REFERENCE_PATH_V2,
 )
 from execution.validators import ValidatorRegistry, check_code_files_isolated_async
 
@@ -84,6 +89,7 @@ def _execute_output_validator(
     executor: ValidatorProcessExecutor,
     *,
     output: str = "{}",
+    max_output_bytes: int = 10 * 1024 * 1024,
     deadline_monotonic: float | None = None,
     cancel_event: threading.Event | None = None,
 ):
@@ -94,6 +100,7 @@ def _execute_output_validator(
         files=[],
         contract=None,
         artifact_root=None,
+        max_output_bytes=max_output_bytes,
         deadline_monotonic=deadline_monotonic,
         cancel_event=cancel_event,
     )
@@ -125,7 +132,7 @@ import sys
 request = json.load(sys.stdin)
 json.dump(
     {
-        "protocol_version": "1",
+        "protocol_version": request["protocol_version"],
         "validator_name": request["validator_name"],
         "validator_version": request["validator_version"],
         "ok": True,
@@ -149,6 +156,17 @@ time.sleep(60)
 
 def _by_name(evidence):
     return {item.validator_name: item for item in evidence}
+
+
+def _json_document_with_exact_utf8_size(size: int) -> str:
+    prefix = '{"payload":"'
+    suffix = '"}'
+    payload_size = size - len(prefix.encode("utf-8")) - len(suffix.encode("utf-8"))
+    if payload_size < 0:
+        raise ValueError("requested JSON fixture size is too small")
+    output = prefix + ("x" * payload_size) + suffix
+    assert len(output.encode("utf-8")) == size
+    return output
 
 
 def test_code_parse_runs_in_child_and_staging_is_removed(tmp_path):
@@ -182,7 +200,7 @@ def test_code_parse_runs_in_child_and_staging_is_removed(tmp_path):
     parsed = _by_name(evidence)["code_parse"]
     assert parsed.status == "passed"
     assert parsed.evidence["execution_mode"] == "subprocess_isolated"
-    assert parsed.evidence["runner_protocol_version"] == "1"
+    assert parsed.evidence["runner_protocol_version"] == "2"
     assert parsed.proves_behavioral_correctness is False
     assert len(recorder.processes) == 1
     assert recorder.processes[0].pid != os.getpid()
@@ -244,6 +262,289 @@ def test_json_schema_and_structured_json_run_in_children():
     assert by_name["json_schema"].evidence["execution_mode"] == "subprocess_isolated"
     assert len(recorder.processes) == 2
     assert all(process.returncode == 0 for process in recorder.processes)
+
+
+def test_structured_json_above_control_message_limit_runs_in_child():
+    recorder = _PopenRecorder()
+    registry = ValidatorRegistry.default(
+        process_executor=ValidatorProcessExecutor(
+            _settings(),
+            popen_factory=recorder,
+        )
+    )
+    output = json.dumps(
+        {"payload": "x" * (2 * 1024 * 1024)},
+        separators=(",", ":"),
+    )
+    request = ExecutionRequestV1(
+        task="return a large JSON document",
+        max_output_bytes=10 * 1024 * 1024,
+        output_contract={"kind": "structured_json"},
+    )
+
+    assert len(output.encode("utf-8")) > 2 * 1024 * 1024
+    evidence = registry.validate(request, output, [])
+
+    assert _by_name(evidence)["structured_json"].status == "passed"
+    assert registry.accepted(evidence) is True
+    assert len(recorder.processes) == 1
+
+
+def test_json_schema_above_control_message_limit_runs_in_child():
+    recorder = _PopenRecorder()
+    registry = ValidatorRegistry.default(
+        process_executor=ValidatorProcessExecutor(
+            _settings(),
+            popen_factory=recorder,
+        )
+    )
+    output = json.dumps(
+        {"payload": "x" * (2 * 1024 * 1024)},
+        separators=(",", ":"),
+    )
+    request = ExecutionRequestV1(
+        task="return a large schema-bound JSON document",
+        max_output_bytes=10 * 1024 * 1024,
+        output_contract={
+            "kind": "structured_json",
+            "json_schema": {
+                "type": "object",
+                "properties": {"payload": {"type": "string"}},
+                "required": ["payload"],
+                "additionalProperties": False,
+            },
+        },
+    )
+
+    assert len(output.encode("utf-8")) > 2 * 1024 * 1024
+    evidence = registry.validate(request, output, [])
+    by_name = _by_name(evidence)
+
+    assert by_name["structured_json"].status == "passed"
+    assert by_name["json_schema"].status == "passed"
+    assert registry.accepted(evidence) is True
+    assert len(recorder.processes) == 2
+
+
+def test_escaping_heavy_output_does_not_consume_control_message_budget():
+    recorder = _PopenRecorder()
+    registry = ValidatorRegistry.default(
+        process_executor=ValidatorProcessExecutor(
+            _settings(),
+            popen_factory=recorder,
+        )
+    )
+    output = json.dumps(
+        {"payload": '"\\' * 300_000},
+        separators=(",", ":"),
+    )
+    request = ExecutionRequestV1(
+        task="return escaping-heavy JSON",
+        max_output_bytes=10 * 1024 * 1024,
+        output_contract={"kind": "structured_json"},
+    )
+    raw_output_bytes = len(output.encode("utf-8"))
+    legacy_inline_bytes = len(
+        json.dumps({"output": output}, separators=(",", ":")).encode("utf-8")
+    )
+
+    assert raw_output_bytes < 2 * 1024 * 1024
+    assert legacy_inline_bytes > 2 * 1024 * 1024
+    evidence = registry.validate(request, output, [])
+
+    assert _by_name(evidence)["structured_json"].status == "passed"
+    assert registry.accepted(evidence) is True
+    assert len(recorder.processes) == 1
+
+
+def test_exact_canonical_output_boundary_reaches_structured_json_validator():
+    recorder = _PopenRecorder()
+    registry = ValidatorRegistry.default(
+        process_executor=ValidatorProcessExecutor(
+            _settings(),
+            popen_factory=recorder,
+        )
+    )
+    output = _json_document_with_exact_utf8_size(MAX_VALIDATOR_OUTPUT_BYTES_V2)
+    request = ExecutionRequestV1(
+        task="return a maximum-size JSON document",
+        max_output_bytes=MAX_VALIDATOR_OUTPUT_BYTES_V2,
+        output_contract={"kind": "structured_json"},
+    )
+
+    evidence = registry.validate(request, output, [])
+
+    assert _by_name(evidence)["structured_json"].status == "passed"
+    assert registry.accepted(evidence) is True
+    assert len(recorder.processes) == 1
+
+
+def test_request_output_limit_is_exact_parent_staging_authority():
+    recorder = _PopenRecorder()
+    registry = ValidatorRegistry.default(
+        process_executor=ValidatorProcessExecutor(
+            _settings(),
+            popen_factory=recorder,
+        )
+    )
+    exact = _json_document_with_exact_utf8_size(1024)
+    request = ExecutionRequestV1(
+        task="return bounded JSON",
+        max_output_bytes=1024,
+        output_contract={"kind": "structured_json"},
+    )
+
+    exact_evidence = registry.validate(request, exact, [])
+    oversized_evidence = registry.validate(request, exact + " ", [])
+
+    assert _by_name(exact_evidence)["structured_json"].status == "passed"
+    oversized = _by_name(oversized_evidence)["structured_json"]
+    assert oversized.status == "error"
+    assert oversized.failure_reason == "validator_output_oversized"
+    assert oversized.evidence["termination_reason"] == "validator_output_oversized"
+    assert len(recorder.processes) == 1
+
+
+def test_output_above_canonical_limit_is_rejected_before_spawn():
+    recorder = _PopenRecorder()
+    outcome = _execute_output_validator(
+        ValidatorProcessExecutor(
+            _settings(),
+            popen_factory=recorder,
+        ),
+        output="x" * (MAX_VALIDATOR_OUTPUT_BYTES_V2 + 1),
+        max_output_bytes=MAX_VALIDATOR_OUTPUT_BYTES_V2,
+    )
+
+    assert outcome.completed is False
+    assert outcome.failure_reason == "validator_output_oversized"
+    assert recorder.processes == []
+
+
+def test_parent_v2_control_message_never_contains_generated_output(tmp_path):
+    sentinel = "DISTINCTIVE_OUTPUT_BODY_MUST_NOT_ENTER_CONTROL_JSON"
+    observation = tmp_path / "control-observation.json"
+    script = _write_runner(
+        tmp_path,
+        f"""
+import json
+from pathlib import Path
+import sys
+raw = sys.stdin.buffer.read()
+request = json.loads(raw)
+Path({str(observation)!r}).write_text(
+    json.dumps({{
+        "protocol_is_v2": request["protocol_version"] == "2",
+        "inline_output_present": "output" in request,
+        "sentinel_in_control": {sentinel!r}.encode() in raw,
+    }}),
+    encoding="utf-8",
+)
+json.dump(
+    {{
+        "protocol_version": request["protocol_version"],
+        "validator_name": request["validator_name"],
+        "validator_version": request["validator_version"],
+        "ok": True,
+        "score": 1.0,
+        "detail": {{"json_type": "object"}},
+        "failure_reason": None,
+    }},
+    sys.stdout,
+)
+""",
+    )
+    executor = _script_executor(script)
+
+    outcome = _execute_output_validator(
+        executor,
+        output=json.dumps({"payload": sentinel}),
+    )
+    rendered_health = json.dumps(executor.diagnostics(), sort_keys=True)
+
+    assert outcome.completed is True
+    assert outcome.detail == {"json_type": "object"}
+    assert json.loads(observation.read_text(encoding="utf-8")) == {
+        "protocol_is_v2": True,
+        "inline_output_present": False,
+        "sentinel_in_control": False,
+    }
+    assert sentinel not in json.dumps(outcome.__dict__, sort_keys=True)
+    assert sentinel not in rendered_health
+
+
+@pytest.mark.parametrize("echo_channel", ["detail", "failure_reason"])
+def test_child_cannot_echo_generated_output_into_parent_evidence(
+    tmp_path,
+    caplog,
+    echo_channel,
+):
+    sentinel = "PRIVATE_GENERATED_OUTPUT_SENTINEL"
+    script = _write_runner(
+        tmp_path,
+        f"""
+import json
+import sys
+request = json.load(sys.stdin)
+json.dump(
+    {{
+        "protocol_version": request["protocol_version"],
+        "validator_name": request["validator_name"],
+        "validator_version": request["validator_version"],
+        "ok": {echo_channel == "detail"!r},
+        "score": 1.0 if {echo_channel == "detail"!r} else 0.0,
+        "detail": {{"echo": {sentinel!r}}} if {echo_channel == "detail"!r} else {{}},
+        "failure_reason": {sentinel!r} if {echo_channel == "failure_reason"!r} else None,
+    }},
+    sys.stdout,
+)
+""",
+    )
+    executor = _script_executor(script)
+
+    outcome = _execute_output_validator(
+        executor,
+        output=json.dumps({"payload": sentinel}),
+    )
+    rendered = json.dumps(outcome.__dict__, sort_keys=True)
+
+    assert outcome.completed is False
+    assert outcome.failure_reason == "validator_malformed_response"
+    assert sentinel not in rendered
+    assert sentinel not in json.dumps(executor.diagnostics(), sort_keys=True)
+    assert sentinel not in caplog.text
+
+
+def test_v2_response_failure_never_downgrades_to_v1(tmp_path):
+    script = _write_runner(
+        tmp_path,
+        r"""
+import json
+import sys
+request = json.load(sys.stdin)
+json.dump(
+    {
+        "protocol_version": "1",
+        "validator_name": request["validator_name"],
+        "validator_version": request["validator_version"],
+        "ok": True,
+        "score": 1.0,
+        "detail": {},
+        "failure_reason": None,
+    },
+    sys.stdout,
+)
+""",
+    )
+    recorder = _PopenRecorder()
+
+    outcome = _execute_output_validator(
+        _script_executor(script, recorder=recorder),
+    )
+
+    assert outcome.completed is False
+    assert outcome.failure_reason == "validator_malformed_response"
+    assert len(recorder.processes) == 1
 
 
 def test_inline_safe_validator_preserves_behavior_without_spawning():
@@ -390,6 +691,52 @@ def test_forced_metadata_validators_do_not_copy_artifact_content(tmp_path):
         assert outcome.ok is True
 
     assert observed_inputs == [(), (), ()]
+
+
+def test_file_only_parent_request_is_v2_without_output_reference(tmp_path):
+    artifact = tmp_path / "result.txt"
+    artifact.write_text("metadata only", encoding="utf-8")
+    script = _write_runner(
+        tmp_path,
+        r"""
+import json
+import sys
+request = json.load(sys.stdin)
+json.dump(
+    {
+        "protocol_version": request["protocol_version"],
+        "validator_name": request["validator_name"],
+        "validator_version": request["validator_version"],
+        "ok": True,
+        "score": 1.0,
+        "detail": {
+            "protocol_is_v2": request["protocol_version"] == "2",
+            "output_reference_present": "output_reference" in request,
+        },
+        "failure_reason": None,
+    },
+    sys.stdout,
+)
+""",
+    )
+
+    outcome = ValidatorProcessExecutor(
+        _settings(mode="subprocess"),
+        command_factory=lambda _work_directory: (sys.executable, "-I", str(script)),
+    ).execute(
+        validator_name="artifact_extraction",
+        validator_version="2",
+        output="ignored by the file-only validator",
+        files=[artifact],
+        contract=None,
+        artifact_root=tmp_path,
+    )
+
+    assert outcome.completed is True
+    assert outcome.detail == {
+        "protocol_is_v2": True,
+        "output_reference_present": False,
+    }
 
 
 def test_forced_metadata_validators_preserve_large_artifact_compatibility(tmp_path):
@@ -541,6 +888,105 @@ def test_python_and_html_parsing_never_executes_generated_content(tmp_path):
     assert not shell_marker.exists()
 
 
+@pytest.mark.parametrize(
+    ("output", "expected_ok"),
+    [('{"answer":42}', True), ("not valid JSON", False)],
+)
+def test_private_output_stage_is_present_at_spawn_and_removed_after_result(
+    output,
+    expected_ok,
+):
+    work_directories: list[Path] = []
+    observed: list[tuple[bytes, int | None, int | None]] = []
+
+    def command(work_directory: Path):
+        work_directories.append(work_directory)
+        return ValidatorProcessExecutor._default_command(work_directory)
+
+    def inspect_then_spawn(**kwargs):
+        cwd = Path(kwargs["cwd"])
+        target = cwd.joinpath(*VALIDATOR_OUTPUT_REFERENCE_PATH_V2.split("/"))
+        namespace_mode = file_mode = None
+        if os.name == "posix":
+            namespace_mode = target.parent.stat().st_mode & 0o777
+            file_mode = target.stat().st_mode & 0o777
+        observed.append((target.read_bytes(), namespace_mode, file_mode))
+        return subprocess.Popen(**kwargs)
+
+    executor = ValidatorProcessExecutor(
+        _settings(),
+        command_factory=command,
+        popen_factory=inspect_then_spawn,
+    )
+
+    outcome = _execute_output_validator(executor, output=output)
+
+    assert outcome.completed is True
+    assert outcome.ok is expected_ok
+    assert observed == [
+        (
+            output.encode("utf-8"),
+            0o700 if os.name == "posix" else None,
+            0o600 if os.name == "posix" else None,
+        )
+    ]
+    assert all(not directory.exists() for directory in work_directories)
+
+
+@pytest.mark.parametrize(
+    ("source", "expected_reason", "deadline_seconds"),
+    [
+        ("import sys\nsys.stdin.buffer.read()\nsys.stdout.write('{')", "validator_malformed_response", 5.0),
+        ("import sys\nsys.exit(7)", "validator_crash", 5.0),
+        (_SLEEP_RUNNER, "validator_timeout", 0.2),
+    ],
+)
+def test_staged_output_is_removed_after_abnormal_child_exit(
+    tmp_path,
+    source,
+    expected_reason,
+    deadline_seconds,
+):
+    script = _write_runner(tmp_path, source)
+    recorder = _PopenRecorder()
+    work_directories: list[Path] = []
+    executor = _script_executor(
+        script,
+        recorder=recorder,
+        work_directories=work_directories,
+    )
+
+    outcome = _execute_output_validator(
+        executor,
+        deadline_monotonic=time.monotonic() + deadline_seconds,
+    )
+
+    assert outcome.completed is False
+    assert outcome.failure_reason == expected_reason
+    assert recorder.processes[0].poll() is not None
+    assert all(not directory.exists() for directory in work_directories)
+
+
+def test_spawn_failure_removes_staged_output(tmp_path):
+    script = _write_runner(tmp_path, _VALID_RESPONSE_RUNNER)
+    work_directories: list[Path] = []
+
+    def fail_spawn(**_kwargs):
+        raise OSError("synthetic spawn failure")
+
+    executor = _script_executor(
+        script,
+        recorder=fail_spawn,
+        work_directories=work_directories,
+    )
+
+    outcome = _execute_output_validator(executor)
+
+    assert outcome.completed is False
+    assert outcome.failure_reason == "validator_spawn_failed"
+    assert all(not directory.exists() for directory in work_directories)
+
+
 def test_timeout_terminates_reaps_and_removes_stage(tmp_path):
     script = _write_runner(tmp_path, _SLEEP_RUNNER)
     artifact = tmp_path / "main.py"
@@ -682,6 +1128,51 @@ def test_deadline_expiry_after_staging_prevents_process_spawn(tmp_path, monkeypa
     assert recorder.processes == []
 
 
+def test_cancellation_during_large_output_staging_prevents_spawn_and_cleans_workspace(
+    tmp_path,
+    monkeypatch,
+):
+    recorder = _PopenRecorder()
+    executor = ValidatorProcessExecutor(
+        _settings(),
+        popen_factory=recorder,
+    )
+    original_stage = validator_process_module.stage_validator_output
+    workspace = tmp_path / "owned-validator-workspace"
+
+    def create_known_workspace(**_kwargs):
+        workspace.mkdir()
+        return str(workspace)
+
+    def cancel_during_stage(**kwargs):
+        checks = 0
+
+        def abort_reason():
+            nonlocal checks
+            checks += 1
+            return "validator_cancelled" if checks >= 3 else None
+
+        kwargs["abort_reason"] = abort_reason
+        return original_stage(**kwargs)
+
+    monkeypatch.setattr(validator_process_module.tempfile, "mkdtemp", create_known_workspace)
+    monkeypatch.setattr(
+        validator_process_module,
+        "stage_validator_output",
+        cancel_during_stage,
+    )
+
+    outcome = _execute_output_validator(
+        executor,
+        output="x" * (2 * 1024 * 1024),
+    )
+
+    assert outcome.completed is False
+    assert outcome.failure_reason == "validator_cancelled"
+    assert recorder.processes == []
+    assert not workspace.exists()
+
+
 def test_unconfirmed_cleanup_fails_closed_and_counts_once(tmp_path, monkeypatch):
     script = _write_runner(tmp_path, _VALID_RESPONSE_RUNNER)
     executor = _script_executor(script)
@@ -780,7 +1271,7 @@ with open({str(pid_file)!r}, "w", encoding="utf-8") as handle:
     handle.write(str(descendant.pid))
 json.dump(
     {{
-        "protocol_version": "1",
+        "protocol_version": request["protocol_version"],
         "validator_name": request["validator_name"],
         "validator_version": request["validator_version"],
         "ok": True,
@@ -833,12 +1324,12 @@ except OSError:
     pass
 json.dump(
     {{
-        "protocol_version": "1",
+        "protocol_version": request["protocol_version"],
         "validator_name": request["validator_name"],
         "validator_version": request["validator_version"],
         "ok": True,
         "score": 1.0,
-        "detail": {{"descendant_spawned": spawned}},
+        "detail": {{"json_type": "object"}},
         "failure_reason": None,
     }},
     sys.stdout,
@@ -1039,7 +1530,7 @@ import sys
 request = json.load(sys.stdin)
 json.dump(
     {
-        "protocol_version": "1",
+        "protocol_version": request["protocol_version"],
         "validator_name": request["validator_name"],
         "validator_version": request["validator_version"],
         "ok": True,
@@ -1060,16 +1551,123 @@ json.dump(
     assert outcome.detail == {}
 
 
+@pytest.mark.parametrize(
+    ("tamper", "expected_reason", "specific_counter"),
+    [
+        ("missing", "validator_output_file_missing", None),
+        ("not_regular", "validator_output_file_not_regular", None),
+        ("size", "validator_output_size_mismatch", "output_size_mismatches"),
+        ("digest", "validator_output_digest_mismatch", "output_digest_mismatches"),
+        ("oversized", "validator_output_oversized", "output_oversized_failures"),
+    ],
+)
+def test_child_output_reference_failures_are_infrastructure_errors(
+    tamper,
+    expected_reason,
+    specific_counter,
+):
+    processes: list[subprocess.Popen[bytes]] = []
+    work_directories: list[Path] = []
+
+    def command(work_directory: Path):
+        work_directories.append(work_directory)
+        return ValidatorProcessExecutor._default_command(work_directory)
+
+    def tamper_then_spawn(**kwargs):
+        cwd = Path(kwargs["cwd"])
+        target = cwd.joinpath(*VALIDATOR_OUTPUT_REFERENCE_PATH_V2.split("/"))
+        if tamper == "missing":
+            target.unlink()
+        elif tamper == "not_regular":
+            target.unlink()
+            target.mkdir()
+        elif tamper == "size":
+            target.write_bytes(target.read_bytes() + b"x")
+        elif tamper == "digest":
+            target.write_bytes(b"[]")
+        elif tamper == "oversized":
+            with target.open("r+b") as handle:
+                handle.truncate(MAX_VALIDATOR_OUTPUT_BYTES_V2 + 1)
+        process = subprocess.Popen(**kwargs)
+        processes.append(process)
+        return process
+
+    executor = ValidatorProcessExecutor(
+        _settings(),
+        command_factory=command,
+        popen_factory=tamper_then_spawn,
+    )
+    before = executor.diagnostics()["process_local_counters"]
+
+    outcome = _execute_output_validator(executor)
+    after = executor.diagnostics()["process_local_counters"]
+
+    assert outcome.completed is False
+    assert outcome.ok is False
+    assert outcome.failure_reason == expected_reason
+    assert outcome.termination_reason == expected_reason
+    assert outcome.detail == {}
+    assert after["output_reference_failures"] == before["output_reference_failures"] + 1
+    if specific_counter is not None:
+        assert after[specific_counter] == before[specific_counter] + 1
+    assert len(processes) == 1
+    assert processes[0].poll() is not None
+    assert all(not directory.exists() for directory in work_directories)
+
+
+def test_child_invalid_utf8_reference_failure_is_content_free(tmp_path, monkeypatch, caplog):
+    original_stage = validator_process_module.stage_validator_output
+    sentinel = "SENSITIVE_VALIDATOR_OUTPUT"
+
+    def stage_invalid_utf8(**kwargs):
+        reference = original_stage(**kwargs)
+        target = Path(kwargs["staging_root"]).joinpath(
+            *VALIDATOR_OUTPUT_REFERENCE_PATH_V2.split("/")
+        )
+        invalid = b"\xff" * reference.byte_length
+        target.write_bytes(invalid)
+        return type(reference)(
+            relative_path=reference.relative_path,
+            byte_length=reference.byte_length,
+            sha256=hashlib.sha256(invalid).hexdigest(),
+        )
+
+    monkeypatch.setattr(
+        validator_process_module,
+        "stage_validator_output",
+        stage_invalid_utf8,
+    )
+    registry = ValidatorRegistry.default()
+    request = ExecutionRequestV1(
+        task=f"do not expose {sentinel}",
+        output_contract={"kind": "structured_json"},
+    )
+
+    evidence = registry.validate(request, "{}", [])
+    rendered = json.dumps(
+        [item.model_dump(mode="json") for item in evidence],
+        sort_keys=True,
+    )
+
+    invalid = _by_name(evidence)["structured_json"]
+    assert invalid.status == "error"
+    assert invalid.failure_reason == "validator_output_invalid_utf8"
+    assert invalid.evidence["termination_reason"] == "validator_output_invalid_utf8"
+    assert VALIDATOR_OUTPUT_REFERENCE_PATH_V2 not in rendered
+    assert sentinel not in rendered
+    assert sentinel not in caplog.text
+
+
 def test_oversized_request_is_rejected_before_spawn(tmp_path):
     script = _write_runner(tmp_path, _VALID_RESPONSE_RUNNER)
     recorder = _PopenRecorder()
     executor = _script_executor(
         script,
-        settings=_settings(request_max_bytes=16 * 1024, response_max_bytes=1024),
+        settings=_settings(request_max_bytes=256, response_max_bytes=1024),
         recorder=recorder,
     )
 
-    outcome = _execute_output_validator(executor, output="x" * (20 * 1024))
+    outcome = _execute_output_validator(executor)
 
     assert outcome.completed is False
     assert outcome.failure_reason == "validator_request_oversized"
@@ -1133,23 +1731,29 @@ def test_sensitive_environment_and_payload_are_absent_from_launch_and_evidence(
 
 def test_child_observes_no_unallowlisted_environment_variable(tmp_path, monkeypatch):
     monkeypatch.setenv("MYCELIUM_VALIDATOR_TEST_SECRET", "present-in-parent")
+    observation = tmp_path / "environment-observation.txt"
     script = _write_runner(
         tmp_path,
-        r"""
+        f"""
 import json
 import os
+from pathlib import Path
 import sys
 request = json.load(sys.stdin)
+Path({str(observation)!r}).write_text(
+    str("MYCELIUM_VALIDATOR_TEST_SECRET" in os.environ),
+    encoding="utf-8",
+)
 json.dump(
-    {
-        "protocol_version": "1",
+    {{
+        "protocol_version": request["protocol_version"],
         "validator_name": request["validator_name"],
         "validator_version": request["validator_version"],
         "ok": True,
         "score": 1.0,
-        "detail": {"secret_present": "MYCELIUM_VALIDATOR_TEST_SECRET" in os.environ},
+        "detail": {{"json_type": "object"}},
         "failure_reason": None,
-    },
+    }},
     sys.stdout,
 )
 """,
@@ -1158,7 +1762,8 @@ json.dump(
     outcome = _execute_output_validator(_script_executor(script))
 
     assert outcome.completed is True
-    assert outcome.detail == {"secret_present": False}
+    assert outcome.detail == {"json_type": "object"}
+    assert observation.read_text(encoding="utf-8") == "False"
 
 
 def test_runner_sanitizer_keeps_temporary_files_inside_owned_workspace(
@@ -1167,6 +1772,7 @@ def test_runner_sanitizer_keeps_temporary_files_inside_owned_workspace(
 ):
     monkeypatch.setenv("MYCELIUM_VALIDATOR_TEST_SECRET", "present-in-parent")
     repository_root = Path(__file__).resolve().parents[1]
+    observation = tmp_path / "temporary-observation.json"
     script = _write_runner(
         tmp_path,
         f"""
@@ -1180,19 +1786,23 @@ from execution.validator_runner import _sanitize_environment
 _sanitize_environment()
 tempfile.tempdir = None
 request = json.load(sys.stdin)
+Path({str(observation)!r}).write_text(
+    json.dumps({{
+        "secret_present": "MYCELIUM_VALIDATOR_TEST_SECRET" in os.environ,
+        "temporary_is_controlled": (
+            Path(tempfile.gettempdir()).resolve() == Path.cwd().resolve().parent
+        ),
+    }}),
+    encoding="utf-8",
+)
 json.dump(
     {{
-        "protocol_version": "1",
+        "protocol_version": request["protocol_version"],
         "validator_name": request["validator_name"],
         "validator_version": request["validator_version"],
         "ok": True,
         "score": 1.0,
-        "detail": {{
-            "secret_present": "MYCELIUM_VALIDATOR_TEST_SECRET" in os.environ,
-            "temporary_is_controlled": (
-                Path(tempfile.gettempdir()).resolve() == Path.cwd().resolve().parent
-            ),
-        }},
+        "detail": {{"json_type": "object"}},
         "failure_reason": None,
     }},
     sys.stdout,
@@ -1203,7 +1813,8 @@ json.dump(
     outcome = _execute_output_validator(_script_executor(script))
 
     assert outcome.completed is True
-    assert outcome.detail == {
+    assert outcome.detail == {"json_type": "object"}
+    assert json.loads(observation.read_text(encoding="utf-8")) == {
         "secret_present": False,
         "temporary_is_controlled": True,
     }
@@ -1213,6 +1824,7 @@ json.dump(
 def test_unrelated_inheritable_file_descriptor_is_closed(tmp_path):
     unrelated = tmp_path / "unrelated.txt"
     unrelated.write_text("private", encoding="utf-8")
+    observation = tmp_path / "descriptor-observation.txt"
     descriptor = os.open(unrelated, os.O_RDONLY)
     try:
         os.set_inheritable(descriptor, True)
@@ -1229,14 +1841,16 @@ try:
     leaked = (status.st_dev, status.st_ino) == ({expected.st_dev}, {expected.st_ino})
 except OSError:
     leaked = False
+from pathlib import Path
+Path({str(observation)!r}).write_text(str(leaked), encoding="utf-8")
 json.dump(
     {{
-        "protocol_version": "1",
+        "protocol_version": request["protocol_version"],
         "validator_name": request["validator_name"],
         "validator_version": request["validator_version"],
         "ok": True,
         "score": 1.0,
-        "detail": {{"unrelated_descriptor_inherited": leaked}},
+        "detail": {{"json_type": "object"}},
         "failure_reason": None,
     }},
     sys.stdout,
@@ -1249,7 +1863,8 @@ json.dump(
         os.close(descriptor)
 
     assert outcome.completed is True
-    assert outcome.detail == {"unrelated_descriptor_inherited": False}
+    assert outcome.detail == {"json_type": "object"}
+    assert observation.read_text(encoding="utf-8") == "False"
 
 
 @pytest.mark.skipif(
@@ -1272,7 +1887,7 @@ _apply_request_posix_limits(limits)
 allocation = bytearray(limits.memory_bytes + 64 * 1024 * 1024)
 json.dump(
     {{
-        "protocol_version": "1",
+        "protocol_version": request["protocol_version"],
         "validator_name": request["validator_name"],
         "validator_version": request["validator_version"],
         "ok": True,
@@ -1304,8 +1919,13 @@ json.dump(
 async def test_async_cancellation_terminates_and_reaps_child(tmp_path):
     script = _write_runner(tmp_path, _SLEEP_RUNNER)
     recorder = _PopenRecorder()
+    work_directories: list[Path] = []
     registry = ValidatorRegistry.default(
-        process_executor=_script_executor(script, recorder=recorder)
+        process_executor=_script_executor(
+            script,
+            recorder=recorder,
+            work_directories=work_directories,
+        )
     )
     request = ExecutionRequestV1(
         task="validate JSON",
@@ -1329,6 +1949,7 @@ async def test_async_cancellation_terminates_and_reaps_child(tmp_path):
 
     assert len(recorder.processes) == 1
     assert recorder.processes[0].poll() is not None
+    assert all(not directory.exists() for directory in work_directories)
 
 
 @pytest.mark.asyncio
@@ -1464,7 +2085,7 @@ def test_process_diagnostics_are_bounded_operational_health(tmp_path):
     assert counters["subprocess_runs"] >= before + 1
     assert counters["successful_responses"] >= 1
     assert counters["reset_at"].endswith("+00:00")
-    assert diagnostics["runner_protocol_version"] == "1"
+    assert diagnostics["runner_protocol_version"] == "2"
     assert "not correctness" in diagnostics["statement"]
     assert "reputation" in diagnostics["statement"]
     assert "hostile-code sandbox" in diagnostics["statement"]

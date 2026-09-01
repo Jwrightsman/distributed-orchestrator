@@ -33,8 +33,16 @@ from execution.validator_process import (
     ValidatorProcessSettings,
 )
 from execution.validator_protocol import (
-    ValidatorRunnerRequestV1,
+    VALIDATOR_RUNNER_PROTOCOL_VERSION_V2,
+    ValidatorRunnerRequest,
+    ValidatorRunnerRequestV2,
+    ValidatorRunnerResponse,
     ValidatorRunnerResponseV1,
+    ValidatorRunnerResponseV2,
+)
+from execution.validator_staging import (
+    ValidatorOutputReferenceError,
+    read_staged_validator_output,
 )
 from extract import check_code_files
 
@@ -426,10 +434,10 @@ _BUILTIN_VALIDATOR_TYPES = (
 
 
 def execute_runner_request(
-    request: ValidatorRunnerRequestV1,
+    request: ValidatorRunnerRequest,
     *,
     stage_root: Path,
-) -> ValidatorRunnerResponseV1:
+) -> ValidatorRunnerResponse:
     """Execute one already validated built-in request inside the child.
 
     The request protocol owns the allowlist.  Assurance, required/optional
@@ -453,16 +461,42 @@ def execute_runner_request(
     # necessary nor desirable inside the child.  Only code_parse receives
     # copied content beneath stage_root.  Metadata validators receive already
     # validated logical names and must not resolve them back to host paths.
-    contract = request.contract
     stage_root = stage_root.resolve(strict=True)
+    if isinstance(request, ValidatorRunnerRequestV2):
+        output = ""
+        if request.output_reference is not None:
+            try:
+                output = read_staged_validator_output(
+                    staging_root=stage_root,
+                    relative_path=request.output_reference.relative_path,
+                    encoding=request.output_reference.encoding,
+                    byte_length=request.output_reference.byte_length,
+                    sha256=request.output_reference.sha256,
+                )
+            except ValidatorOutputReferenceError as exc:
+                return ValidatorRunnerResponseV2(
+                    validator_name=request.validator_name,
+                    validator_version=request.validator_version,
+                    ok=False,
+                    detail={},
+                    failure_reason=exc.code,
+                )
+        response_model: type[ValidatorRunnerResponseV1] | type[ValidatorRunnerResponseV2] = (
+            ValidatorRunnerResponseV2
+        )
+    else:
+        output = request.output or ""
+        response_model = ValidatorRunnerResponseV1
+
+    contract = request.contract
     value = ValidationInput(
-        output=request.output or "",
+        output=output,
         files=list(request.staged_files),
         contract=contract,
         artifact_root=stage_root if request.validator_name == "code_parse" else None,
     )
     ok, score, detail, reason = validator.validate(value)
-    return ValidatorRunnerResponseV1(
+    return response_model(
         validator_name=validator.name,
         validator_version=validator.version,
         ok=ok,
@@ -742,7 +776,9 @@ class ValidatorRegistry:
                     "execution_mode": execution_mode,
                     "validator_execution_policy": validator.execution_policy,
                     "runner_protocol_version": (
-                        "1" if execution_mode == "subprocess_isolated" else None
+                        VALIDATOR_RUNNER_PROTOCOL_VERSION_V2
+                        if execution_mode == "subprocess_isolated"
+                        else None
                     ),
                     "containment_level": (
                         "coordinator_process"
@@ -783,6 +819,7 @@ class ValidatorRegistry:
                         files=files,
                         contract=request.output_contract,
                         artifact_root=artifact_root,
+                        max_output_bytes=request.max_output_bytes,
                         authoritative_artifact_root=authoritative_artifact_root,
                         validated_entries=validated_entries,
                         deadline_monotonic=deadline_monotonic,

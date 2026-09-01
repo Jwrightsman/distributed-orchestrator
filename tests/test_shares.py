@@ -144,8 +144,15 @@ def test_public_projection_is_allowlist_based_and_path_free(tmp_path):
         ),
     )
     record = store.get_active(created.token)
+    validator_digest = "a9" * 32
+    validator_reference = "__mycelium_validator_input__/output.utf8"
+    execution = _execution()
+    execution["validation_evidence"][0]["evidence"]["output_reference"] = {
+        "relative_path": validator_reference,
+        "sha256": validator_digest,
+    }
     public = redact_execution_for_share(
-        _execution(), record, manifest=_manifest(), token=created.token
+        execution, record, manifest=_manifest(), token=created.token
     ).model_dump(mode="json")
     serialized = str(public)
 
@@ -163,6 +170,8 @@ def test_public_projection_is_allowlist_based_and_path_free(tmp_path):
         "private-hostname",
         "private-attempt",
         "server_path",
+        validator_digest,
+        validator_reference,
     ):
         assert private not in serialized
 

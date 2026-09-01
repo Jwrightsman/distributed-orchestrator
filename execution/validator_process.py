@@ -26,18 +26,24 @@ from typing import Any, Callable, Literal, Mapping, Protocol, Sequence
 from execution.artifacts import ArtifactEntryV1
 from execution.contracts import OutputContractV1
 from execution.validator_protocol import (
+    MAX_VALIDATOR_OUTPUT_BYTES_V2,
+    VALIDATOR_RUNNER_PROTOCOL_VERSION_V2,
     ValidatorContractProjectionV1,
+    ValidatorOutputReferenceV2,
     ValidatorProtocolError,
-    ValidatorRunnerLimitsV1,
-    ValidatorRunnerRequestV1,
+    ValidatorRunnerLimitsV2,
+    ValidatorRunnerRequestV2,
     dump_runner_request_bytes,
     parse_runner_response_bytes,
 )
 from execution.validator_staging import (
+    StagedValidatorOutput,
     StagingLimits,
+    ValidatorOutputStagingError,
     ValidatorStagingAborted,
     ValidatorStagingCleanupError,
     ValidatorStagingError,
+    stage_validator_output,
     stage_validator_files,
     validate_validator_file_names,
 )
@@ -107,6 +113,12 @@ class ValidatorProcessCounters:
     staging_cleanup_failures: int = 0
     cancellations: int = 0
     process_cleanup_failures: int = 0
+    output_staging_failures: int = 0
+    output_reference_failures: int = 0
+    output_size_mismatches: int = 0
+    output_digest_mismatches: int = 0
+    output_utf8_failures: int = 0
+    output_oversized_failures: int = 0
 
 
 class _CounterStore:
@@ -490,7 +502,7 @@ class ValidatorProcessExecutor:
     def diagnostics(self) -> dict[str, Any]:
         return {
             "execution_mode": self.settings.execution_mode,
-            "runner_protocol_version": "1",
+            "runner_protocol_version": VALIDATOR_RUNNER_PROTOCOL_VERSION_V2,
             "containment_level": _containment_level(),
             "process_local_counters": self._counters.snapshot(),
             "statement": (
@@ -584,6 +596,7 @@ class ValidatorProcessExecutor:
         files: Sequence[str | Path],
         contract: OutputContractV1 | None,
         artifact_root: str | Path | None,
+        max_output_bytes: int | None = None,
         authoritative_artifact_root: str | Path | None = None,
         validated_entries: Sequence[ArtifactEntryV1] | None = None,
         deadline_monotonic: float | None = None,
@@ -597,6 +610,7 @@ class ValidatorProcessExecutor:
                 files=files,
                 contract=contract,
                 artifact_root=artifact_root,
+                max_output_bytes=max_output_bytes,
                 authoritative_artifact_root=authoritative_artifact_root,
                 validated_entries=validated_entries,
                 deadline_monotonic=deadline_monotonic,
@@ -619,6 +633,7 @@ class ValidatorProcessExecutor:
         files: Sequence[str | Path],
         contract: OutputContractV1 | None,
         artifact_root: str | Path | None,
+        max_output_bytes: int | None = None,
         authoritative_artifact_root: str | Path | None = None,
         validated_entries: Sequence[ArtifactEntryV1] | None = None,
         deadline_monotonic: float | None = None,
@@ -673,6 +688,40 @@ class ValidatorProcessExecutor:
             except (OSError, ValidatorStagingError, ValueError, TypeError):
                 return self._error("validator_input_rejected", counter="staging_failures")
 
+            staged_output: StagedValidatorOutput | None = None
+            if validator_name in self._OUTPUT_VALIDATORS:
+                if (
+                    type(max_output_bytes) is not int
+                    or not 1 <= max_output_bytes <= MAX_VALIDATOR_OUTPUT_BYTES_V2
+                ):
+                    return self._error("validator_request_invalid")
+                try:
+                    staged_output = stage_validator_output(
+                        output=output,
+                        staging_root=staging_root,
+                        max_output_bytes=max_output_bytes,
+                        abort_reason=abort_reason,
+                    )
+                except ValidatorStagingAborted as exc:
+                    return aborted_outcome(exc.reason)
+                except ValidatorStagingCleanupError:
+                    return self._error(
+                        "validator_stage_cleanup_failed",
+                        counter="staging_cleanup_failures",
+                    )
+                except ValidatorOutputStagingError as exc:
+                    self._counters.increment("output_staging_failures")
+                    if exc.code == "validator_output_invalid_utf8":
+                        self._counters.increment("output_utf8_failures")
+                    elif exc.code == "validator_output_oversized":
+                        self._counters.increment("output_oversized_failures")
+                    return self._error(exc.code)
+                except (OSError, ValidatorStagingError, ValueError, TypeError):
+                    return self._error(
+                        "validator_output_reference_invalid",
+                        counter="output_staging_failures",
+                    )
+
             current_abort = abort_reason()
             if current_abort is not None:
                 return aborted_outcome(current_abort)
@@ -685,13 +734,23 @@ class ValidatorProcessExecutor:
                     if validator_name in self._CONTRACT_VALIDATORS
                     else None
                 )
-                request = ValidatorRunnerRequestV1(
+                output_reference = (
+                    ValidatorOutputReferenceV2(
+                        relative_path=staged_output.relative_path,
+                        encoding="utf-8",
+                        byte_length=staged_output.byte_length,
+                        sha256=staged_output.sha256,
+                    )
+                    if staged_output is not None
+                    else None
+                )
+                request = ValidatorRunnerRequestV2(
                     validator_name=validator_name,
                     validator_version=validator_version,
-                    output=output if validator_name in self._OUTPUT_VALIDATORS else None,
+                    output_reference=output_reference,
                     contract=projection,
                     staged_files=list(staged_files),
-                    limits=ValidatorRunnerLimitsV1(
+                    limits=ValidatorRunnerLimitsV2(
                         wall_time_seconds=max(0.1, min(float(remaining), 120.0)),
                         cpu_time_seconds=max(1, min(math.ceil(remaining), 120)),
                         memory_bytes=self.settings.memory_mb * 1024 * 1024,
@@ -905,12 +964,31 @@ class ValidatorProcessExecutor:
                     "validator_execution_error",
                     "validator_runner_protocol_error",
                     "validator_response_oversized",
+                    "validator_output_reference_missing",
+                    "validator_output_reference_invalid",
+                    "validator_output_file_missing",
+                    "validator_output_file_not_regular",
+                    "validator_output_size_mismatch",
+                    "validator_output_digest_mismatch",
+                    "validator_output_invalid_utf8",
+                    "validator_output_oversized",
                 }
                 infrastructure_failure = (
                     response.failure_reason in infrastructure_failure_reasons
                 )
                 if response.failure_reason == "validator_response_oversized":
                     self._counters.increment("oversized_responses")
+                elif response.failure_reason in infrastructure_failure_reasons:
+                    if response.failure_reason.startswith("validator_output_"):
+                        self._counters.increment("output_reference_failures")
+                    if response.failure_reason == "validator_output_size_mismatch":
+                        self._counters.increment("output_size_mismatches")
+                    elif response.failure_reason == "validator_output_digest_mismatch":
+                        self._counters.increment("output_digest_mismatches")
+                    elif response.failure_reason == "validator_output_invalid_utf8":
+                        self._counters.increment("output_utf8_failures")
+                    elif response.failure_reason == "validator_output_oversized":
+                        self._counters.increment("output_oversized_failures")
                 elif not response.ok and not infrastructure_failure:
                     self._counters.increment("validation_failures")
                 return ValidatorProcessOutcome(
