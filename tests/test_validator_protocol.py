@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from execution import validator_runner
 from execution.validator_protocol import (
     MAX_VALIDATOR_RUNNER_REQUEST_BYTES_V1,
+    _RESERVED_DETAIL_KEYS,
     ValidatorContractProjectionV1,
     ValidatorProtocolError,
     ValidatorRunnerRequestV1,
@@ -134,24 +135,23 @@ def test_response_rejects_unknown_fields():
 
 
 @pytest.mark.parametrize(
-    "reserved_key",
-    [
-        "assurance_level",
-        "proves_behavioral_correctness",
-        "execution_mode",
-        "containment_level",
-        "required",
-        "status",
-    ],
+    "reserved_key", sorted(_RESERVED_DETAIL_KEYS)
 )
-def test_response_detail_cannot_supply_parent_authoritative_metadata(reserved_key):
+@pytest.mark.parametrize("nesting", ["top_level", "nested_object", "object_in_list"])
+def test_response_detail_cannot_supply_parent_authoritative_metadata(reserved_key, nesting):
+    detail = {reserved_key: "forged"}
+    if nesting == "nested_object":
+        detail = {"descriptive": detail}
+    elif nesting == "object_in_list":
+        detail = {"descriptive": [{"nested": detail}]}
+
     response = {
         "protocol_version": "1",
         "validator_name": "nonempty",
         "validator_version": "2",
         "ok": True,
         "score": 1.0,
-        "detail": {reserved_key: "forged"},
+        "detail": detail,
         "failure_reason": None,
     }
 
@@ -297,6 +297,48 @@ def test_staged_paths_are_normalized_and_portably_unique():
             validator_name="code_parse",
             validator_version="2",
             staged_files=["code/main.py", "CODE/main.py"],
+        )
+
+
+@pytest.mark.parametrize(
+    ("validator_name", "validator_version", "contract"),
+    [
+        ("code_parse", "2", None),
+        ("artifact_extraction", "2", None),
+        (
+            "artifact_contract",
+            "1",
+            ValidatorContractProjectionV1(artifact_count=1),
+        ),
+        (
+            "file_manifest",
+            "2",
+            ValidatorContractProjectionV1(required_files=["result.txt"]),
+        ),
+    ],
+)
+def test_path_validators_accept_bounded_logical_names(
+    validator_name,
+    validator_version,
+    contract,
+):
+    request = ValidatorRunnerRequestV1(
+        validator_name=validator_name,
+        validator_version=validator_version,
+        contract=contract,
+        staged_files=["result.txt"],
+    )
+
+    assert request.staged_files == ["result.txt"]
+
+
+def test_non_path_validator_rejects_logical_file_names():
+    with pytest.raises(ValidationError, match="does not accept staged files"):
+        ValidatorRunnerRequestV1(
+            validator_name="nonempty",
+            validator_version="2",
+            output="complete",
+            staged_files=["result.txt"],
         )
 
 

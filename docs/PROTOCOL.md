@@ -394,7 +394,8 @@ isolated validator never silently falls back inline after a runner failure.
 Parent and child exchange strict `ValidatorRunnerRequestV1` and
 `ValidatorRunnerResponseV1` JSON over bounded stdin/stdout. The request can
 contain only protocol and built-in identity/version, minimal bounded output or
-the validator-specific bounded contract projection, staged relative filenames,
+the validator-specific bounded contract projection, validated normalized
+logical filenames,
 and parent-clamped limits. It
 cannot name a module, executable, shell command, arbitrary callable, database,
 credential, session, nonce, or unrelated execution. Unknown fields, invalid or
@@ -412,28 +413,37 @@ duration, execution mode, runner protocol version, platform containment level,
 and termination reason when applicable. No child response can raise assurance
 or claim behavioral correctness.
 
-File-consuming subprocess checks receive regular-file copies from only the
-authoritative selected candidate subtree. Canonical strategy paths bind both
-repair-time parsing and registry validation to the current validated entry
-snapshot and shared executor. Standalone compatibility callers without an
-ArtifactStore still enforce root/path/type/size limits without that optional
-snapshot. The parent rejects traversal,
-symlinks, special files, duplicate portable paths, out-of-root inputs, and
-authoritative size/hash changes; enforces file-count, per-file, aggregate, and
-relative-path limits; and copies bytes without hard links into a fresh
-stage with private POSIX modes where supported. Process-tree termination and
-reaping are attempted before stage removal on success, failure, timeout, or
-cancellation. Failure to
+Artifact-aware subprocess checks can receive only normalized logical names from
+the authoritative selected candidate subtree. Canonical strategy paths bind
+both repair-time parsing and registry validation to the current validated entry
+snapshot and shared executor. The parent rejects traversal, symlinks, special
+files, duplicate portable paths, out-of-root inputs, names outside the supplied
+snapshot, excessive file counts, and overlong relative paths.
+
+`code_parse` additionally receives fresh regular-file byte copies. Its content
+path enforces per-file and aggregate size limits, checks authoritative size and
+SHA-256 when supplied, and never creates hard links. The current fixed copy
+limit is 20 files, 10 MiB per file, 10 MiB aggregate, and 200 characters per
+relative path. Standalone compatibility callers without an ArtifactStore retain
+the root/path/type/size boundary without the optional snapshot hash check.
+
+When `artifact_extraction`, `artifact_contract`, or `file_manifest` is forced
+through `subprocess`, the request carries only the validated names and bounded
+contract projection. The child runs in an empty private directory; the parent
+does not copy or rehash artifact content for those metadata-only checks. The
+same root/subtree confinement, regular-file and symlink/special-file rejection,
+snapshot-membership, file-count, portable-duplicate, and relative-path checks
+still apply, while content-copy byte limits do not.
+
+Process-tree termination and reaping are attempted before private-workspace
+removal on success, failure, timeout, or cancellation. Failure to
 confirm process-tree cleanup remains a bounded, counted containment incident.
 Temporary-workspace deletion failure records fail-closed
 `validator_stage_cleanup_failed` evidence and increments the distinct
 `staging_cleanup_failures` counter; deletion failure can still leave a stale
 stage. Staging is validator input, not artifact publication or a sealed-manifest
-replacement.
-
-The current fixed stage limit is 20 files, 10 MiB per file, 10 MiB aggregate,
-and 200 characters per staged relative path. It is distinct from artifact
-delivery quotas and the configurable serialized request/response limits.
+replacement. Copy limits are distinct from artifact delivery quotas and the
+configurable serialized request/response limits.
 
 The child uses the current Python interpreter without a shell, a sanitized
 environment whose `TEMP`/`TMP` on Windows or `TMPDIR` on POSIX point into its controlled

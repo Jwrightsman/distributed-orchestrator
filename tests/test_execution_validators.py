@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 import execution.validator_process as validator_process_module
-from execution.contracts import ExecutionRequestV1
+from execution.contracts import ExecutionRequestV1, OutputContractV1
 from execution.validator_process import (
     ValidatorProcessExecutor,
     ValidatorProcessSettings,
@@ -336,6 +336,125 @@ def test_forced_subprocess_mode_supports_minimal_file_contract_projections(
     assert by_name["artifact_contract"].evidence["execution_mode"] == "subprocess_isolated"
     if contract_kind == "file_manifest":
         assert by_name["file_manifest"].status == "passed"
+
+
+def test_forced_metadata_validators_do_not_copy_artifact_content(tmp_path):
+    artifact = tmp_path / "result.txt"
+    artifact.write_text("metadata only", encoding="utf-8")
+    observed_inputs: list[tuple[str, ...]] = []
+
+    def inspect_then_spawn(**kwargs):
+        cwd = Path(kwargs["cwd"])
+        observed_inputs.append(
+            tuple(sorted(path.relative_to(cwd).as_posix() for path in cwd.rglob("*")))
+        )
+        return subprocess.Popen(**kwargs)
+
+    executor = ValidatorProcessExecutor(
+        _settings(mode="subprocess"),
+        popen_factory=inspect_then_spawn,
+    )
+    cases = (
+        ("artifact_extraction", None),
+        (
+            "artifact_contract",
+            OutputContractV1(
+                kind="single_artifact",
+                artifact_count=1,
+                format="txt",
+            ),
+        ),
+        (
+            "file_manifest",
+            OutputContractV1(
+                kind="file_manifest",
+                required_files=["result.txt"],
+            ),
+        ),
+    )
+
+    for name, contract in cases:
+        outcome = executor.execute(
+            validator_name=name,
+            validator_version={
+                "artifact_extraction": "2",
+                "artifact_contract": "1",
+                "file_manifest": "2",
+            }[name],
+            output="",
+            files=[artifact],
+            contract=contract,
+            artifact_root=tmp_path,
+        )
+        assert outcome.completed is True
+        assert outcome.ok is True
+
+    assert observed_inputs == [(), (), ()]
+
+
+def test_forced_metadata_validators_preserve_large_artifact_compatibility(tmp_path):
+    artifact = tmp_path / "result.txt"
+    artifact.write_bytes(b"x" * (10 * 1024 * 1024 + 1))
+    registry = ValidatorRegistry.default(
+        process_settings=_settings(mode="subprocess")
+    )
+    request = ExecutionRequestV1(
+        task="return one large file",
+        output_contract={
+            "kind": "single_artifact",
+            "format": "txt",
+            "artifact_count": 1,
+        },
+    )
+
+    evidence = registry.validate(
+        request,
+        "complete",
+        [str(artifact)],
+        artifact_root=tmp_path,
+    )
+
+    assert registry.accepted(evidence) is True
+    by_name = _by_name(evidence)
+    assert by_name["artifact_extraction"].status == "passed"
+    assert by_name["artifact_contract"].status == "passed"
+
+
+def test_empty_metadata_input_reaches_child_as_validation_failure():
+    outcome = ValidatorProcessExecutor(_settings(mode="subprocess")).execute(
+        validator_name="artifact_extraction",
+        validator_version="2",
+        output="",
+        files=[],
+        contract=None,
+        artifact_root=None,
+    )
+
+    assert outcome.completed is True
+    assert outcome.ok is False
+    assert outcome.failure_reason == "no artifacts were extracted"
+
+
+def test_code_parse_receives_copied_content_at_spawn(tmp_path):
+    artifact = tmp_path / "main.py"
+    artifact.write_text("VALUE = 1\n", encoding="utf-8")
+    observed_payloads: list[str] = []
+
+    def inspect_then_spawn(**kwargs):
+        cwd = Path(kwargs["cwd"])
+        observed_payloads.append((cwd / "main.py").read_text(encoding="utf-8"))
+        return subprocess.Popen(**kwargs)
+
+    executor = ValidatorProcessExecutor(
+        _settings(),
+        popen_factory=inspect_then_spawn,
+    )
+
+    outcome = _execute_file_validator(executor, artifact)
+
+    assert outcome.completed is True
+    assert outcome.ok is True
+    assert observed_payloads == ["VALUE = 1\n"]
 
 
 def test_explicit_inline_mode_is_visible_as_weaker_compatibility(tmp_path):
@@ -771,6 +890,78 @@ def test_spawn_failure_is_error_and_never_falls_back_inline():
     assert isolated.failure_reason == "validator_spawn_failed"
     assert isolated.evidence["execution_mode"] == "subprocess_isolated"
     assert registry.accepted(evidence) is False
+
+
+def test_helper_thread_setup_failure_terminates_and_reaps_spawned_child(
+    tmp_path,
+    monkeypatch,
+):
+    script = _write_runner(tmp_path, _SLEEP_RUNNER)
+    recorder = _PopenRecorder()
+    executor = _script_executor(script, recorder=recorder)
+    before = executor.diagnostics()["process_local_counters"]["spawn_failures"]
+
+    def fail_thread_start(_thread):
+        raise RuntimeError("synthetic helper setup failure with sensitive text")
+
+    monkeypatch.setattr(threading.Thread, "start", fail_thread_start)
+    outcome = _execute_output_validator(executor)
+
+    after = executor.diagnostics()["process_local_counters"]["spawn_failures"]
+    assert outcome.completed is False
+    assert outcome.failure_reason == "validator_spawn_failed"
+    assert outcome.detail == {}
+    assert after == before + 1
+    assert len(recorder.processes) == 1
+    assert recorder.processes[0].poll() is not None
+
+
+def test_untracked_job_setup_failure_closes_job_and_reaps_child(
+    tmp_path,
+    monkeypatch,
+):
+    script = _write_runner(tmp_path, _SLEEP_RUNNER)
+    recorder = _PopenRecorder()
+    executor = _script_executor(script, recorder=recorder)
+    terminate_calls: list[subprocess.Popen[bytes]] = []
+    original_terminate = validator_process_module._terminate_process_tree
+
+    class FailingAssignmentJob:
+        terminate_called = False
+        close_called = False
+
+        def assign(self, _process):
+            raise RuntimeError("synthetic assignment failure with sensitive text")
+
+        def terminate(self):
+            self.terminate_called = True
+            return False
+
+        def close(self):
+            self.close_called = True
+            return True
+
+    job = FailingAssignmentJob()
+
+    def tracked_terminate(process):
+        terminate_calls.append(process)
+        return original_terminate(process)
+
+    monkeypatch.setattr(validator_process_module, "_create_windows_job", lambda: job)
+    monkeypatch.setattr(
+        validator_process_module,
+        "_terminate_process_tree",
+        tracked_terminate,
+    )
+
+    outcome = _execute_output_validator(executor)
+
+    assert outcome.completed is False
+    assert outcome.failure_reason == "validator_process_cleanup_failed"
+    assert job.terminate_called is True
+    assert job.close_called is True
+    assert terminate_calls == recorder.processes
+    assert recorder.processes[0].poll() is not None
 
 
 @pytest.mark.parametrize(

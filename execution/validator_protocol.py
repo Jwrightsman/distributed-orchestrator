@@ -205,11 +205,31 @@ def _walk_bounded_json(
     visit(value, 0)
 
 
+def _reject_reserved_detail_keys(value: dict[str, Any]) -> None:
+    """Reject parent-authoritative names anywhere in child detail."""
+
+    pending: list[Any] = [value]
+    seen_containers: set[int] = set()
+    while pending:
+        item = pending.pop()
+        if not isinstance(item, (dict, list)):
+            continue
+        identity = id(item)
+        if identity in seen_containers:
+            continue
+        seen_containers.add(identity)
+        if isinstance(item, dict):
+            if _RESERVED_DETAIL_KEYS.intersection(item):
+                raise ValueError("validator detail contains parent-authoritative metadata")
+            pending.extend(item.values())
+        else:
+            pending.extend(item)
+
+
 def validate_bounded_detail(value: dict[str, Any]) -> dict[str, Any]:
     """Validate child-supplied detail without permitting unbounded evidence."""
 
-    if _RESERVED_DETAIL_KEYS.intersection(value):
-        raise ValueError("validator detail contains parent-authoritative metadata")
+    _reject_reserved_detail_keys(value)
 
     _walk_bounded_json(
         value,
@@ -344,13 +364,18 @@ class ValidatorRunnerRequestV1(_RunnerProtocolModel):
             raise ValueError("validator version does not match the built-in allowlist")
 
         output_validators = {"nonempty", "structured_json", "json_schema"}
-        file_validators = {"file_manifest", "code_parse", "artifact_extraction", "artifact_contract"}
+        path_validators = {
+            "file_manifest",
+            "code_parse",
+            "artifact_extraction",
+            "artifact_contract",
+        }
         contract_validators = {"json_schema", "file_manifest", "artifact_contract"}
         if self.validator_name in output_validators and self.output is None:
             raise ValueError("selected validator requires bounded output")
         if self.validator_name not in output_validators and self.output is not None:
             raise ValueError("selected validator does not accept output")
-        if self.validator_name not in file_validators and self.staged_files:
+        if self.validator_name not in path_validators and self.staged_files:
             raise ValueError("selected validator does not accept staged files")
         if self.validator_name not in contract_validators and self.contract is not None:
             raise ValueError("selected validator does not accept a contract projection")

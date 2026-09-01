@@ -29,7 +29,7 @@ flowchart TD
     E --> V
     V --> M{Execution class and configured mode}
     M --> J[Bounded inline checks]
-    M --> K[Staged copies + validator runner process]
+    M --> K[Validated inputs + validator runner process]
     J --> P
     K --> P
     P --> F[Artifact registry]
@@ -398,8 +398,13 @@ flowchart TD
     R --> M{Parent-owned execution policy}
     M -->|inline_trusted| I[Bounded inline check]
     M -->|inline_compatibility| I
-    M -->|subprocess_isolated| P[Copy selected inputs to fresh stage]
-    P --> Q[Strict ValidatorRunnerRequestV1 over stdin]
+    M -->|subprocess_isolated| B{Validator input kind}
+    B -->|code_parse| C[Copy bounded selected bytes]
+    B -->|artifact metadata| N[Validate logical names; empty cwd]
+    B -->|output only| D[Private empty cwd]
+    C --> Q[Strict ValidatorRunnerRequestV1 over stdin]
+    N --> Q
+    D --> Q
     Q --> U[Allowlisted child process]
     U --> W[Strict ValidatorRunnerResponseV1 over stdout]
     I --> E[Versioned evidence]
@@ -434,12 +439,17 @@ process-tree cleanup is reflected in error evidence or the content-free cleanup
 counter, depending on the original outcome; an isolated validator never falls
 back inline.
 
-File-consuming child checks receive regular-file copies from the authoritative
-candidate subtree in a fresh staging directory. File count, file
-size, aggregate size, and relative-path length are bounded; traversal,
-symlinks, special files, and another candidate's files are excluded. Staged
-destinations are fresh byte copies rather than hard links. Process-tree
-termination and reaping are attempted before stage deletion; inability to
+`code_parse` receives bounded regular-file copies from the authoritative
+candidate subtree in a fresh private directory. File count, per-file and
+aggregate size, and relative-path length are bounded; traversal, symlinks,
+special files, snapshot changes, and another candidate's files are excluded.
+Destinations are fresh byte copies rather than hard links. When forced through
+the subprocess, `artifact_extraction`, `artifact_contract`, and `file_manifest`
+receive only validated normalized logical names in an empty private directory.
+The same root/subtree, regular-file, symlink/special-file,
+snapshot-membership, file-count, and path checks apply, but metadata-only
+validation neither copies nor rehashes file content. Process-tree termination
+and reaping are attempted before private-directory deletion; inability to
 confirm process-tree cleanup is a separately diagnosable containment failure.
 Temporary-workspace deletion failure records fail-closed
 `validator_stage_cleanup_failed` evidence and increments the distinct

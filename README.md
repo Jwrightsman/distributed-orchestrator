@@ -16,7 +16,7 @@ active model, no auth required. **Agents:** read [AGENTS.md](AGENTS.md) first;
 it states plainly that installing this on a machine requires that machine
 owner's consent.
 
-> **Status (September 2026):** The current target is a **small private trusted alpha**. Execution protocol v1 has DAG and ensemble strategies, durable per-node bearer enrollment with independent revocation, process-local sessions, server-authoritative worker attempts, commit-before-publication lifecycle truth, requester-scoped canonical retry idempotency, authenticated artifact delivery, and explicit redacted shares. The Theme 3A branch adds a bounded subprocess boundary for parser-heavy built-in validators; its local gates pass while Ubuntu CI and merge remain pending. The scheduler is still process-local, enrollment is not physical-machine identity or Sybil resistance, and generated code is not sandboxed or executed by production validation. See [the protocol](docs/PROTOCOL.md), [access model](docs/ACCESS_CONTROL.md), and [threat model](docs/THREAT_MODEL.md).
+> **Status (September 2026):** The current target is a **small private trusted alpha**. Execution protocol v1 has DAG and ensemble strategies, durable per-node bearer enrollment with independent revocation, process-local sessions, server-authoritative worker attempts, commit-before-publication lifecycle truth, requester-scoped canonical retry idempotency, authenticated artifact delivery, explicit redacted shares, and bounded subprocess containment for parser-heavy built-in validators. The scheduler is still process-local, enrollment is not physical-machine identity or Sybil resistance, and generated code is not sandboxed or executed by production validation. See [the protocol](docs/PROTOCOL.md), [access model](docs/ACCESS_CONTROL.md), and [threat model](docs/THREAT_MODEL.md).
 
 ## Positioning
 
@@ -76,7 +76,10 @@ execution. Neither control makes the process-local scheduler resumable.
 Parser-heavy built-in validators run through a strict versioned subprocess
 protocol by default. `code_parse`, structured JSON parsing, and JSON Schema
 validation are isolated; simple bounded checks remain inline. Operators can
-force every built-in through the runner. This contains parser failures and
+force every built-in through the runner. `code_parse` receives bounded copied
+file bytes; forced metadata-only checks receive validated normalized logical
+names in an empty private working directory, so they do not copy large artifact
+content merely to inspect the manifest shape. This contains parser failures and
 bounds time, I/O, staging, and available POSIX resources; it does not import or
 execute generated code and is not a hostile-code, filesystem, or network
 sandbox. See [ADR 0013](docs/adr/0013-parser-heavy-validators-bounded-process-boundary.md).
@@ -477,7 +480,7 @@ a reference, not a promise of dates.
 - [x] Required execution commit before live/event/callback/response and terminal artifact/share publication
 - [x] Requester-scoped, digest-only idempotency for canonical HTTP submission
 - [x] Separate lifecycle, validation outcome, assurance, and check summaries
-- [ ] Bounded, versioned subprocess containment for parser-heavy built-in validators, with staged file copies and fail-closed evidence — implemented with local gates passing on the Theme 3A branch; check this only after Ubuntu CI and merge
+- [x] Bounded, versioned subprocess containment for parser-heavy built-in validators, with bounded content copies, metadata-minimal inputs, and fail-closed evidence
 - [x] Viewer-protected private routes and explicit redacted share capabilities
 - [x] Path-safe sealed artifact manifests, deliverable/audit bundles, files, ZIPs, hashes, quotas, and retention
 - [x] **Persistent DAG project memory** — `projects/<id>/memory.md` is loaded by the DAG pipeline; ensemble/direct reject `project_id` until selected-result-only updates exist

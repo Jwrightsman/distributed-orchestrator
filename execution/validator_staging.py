@@ -1,9 +1,11 @@
-"""Copy validator inputs into a bounded, path-safe staging directory.
+"""Validate and stage validator inputs behind a bounded path boundary.
 
 The validator runner must never receive the coordinator's live artifact paths.
-This module narrows a registered/validated subtree to an explicit file list and
-copies those bytes into a fresh caller-owned directory.  It deliberately does
-not create hard links, preserve source metadata, or return host paths.
+This module narrows a registered/validated subtree to an explicit file list.
+Content-reading validators receive copied bytes in a fresh caller-owned
+directory; metadata-only validators can receive the same validated normalized
+logical names without copying bytes they do not consume.  The module never
+returns host paths.
 
 The caller remains responsible for deleting a successful stage after the child
 process has terminated.  A failed staging attempt removes every partial copy.
@@ -246,6 +248,7 @@ def _select_sources(
     selected_files: Sequence[str | Path],
     claims: dict[str, ArtifactEntryV1] | None,
     limits: StagingLimits,
+    abort_reason: Callable[[], str | None] | None,
 ) -> list[_SelectedSource]:
     if len(selected_files) > limits.max_files:
         raise ValidatorStagingLimitError("validator staging file-count limit exceeded")
@@ -253,6 +256,7 @@ def _select_sources(
     selected: list[_SelectedSource] = []
     portable_seen: set[str] = set()
     for raw_value in selected_files:
+        _raise_if_aborted(abort_reason)
         raw = Path(raw_value)
         lexical = raw.absolute() if raw.is_absolute() else subtree / raw
         staged_relative = _portable_relative(lexical, subtree, kind="selected input")
@@ -288,7 +292,66 @@ def _select_sources(
                 claim=claim,
             )
         )
+    _raise_if_aborted(abort_reason)
     return selected
+
+
+def _validate_selection(
+    *,
+    authoritative_root: str | Path,
+    authoritative_subtree: str | Path | None,
+    selected_files: Sequence[str | Path],
+    limits: StagingLimits | None,
+    validated_entries: Iterable[ArtifactEntryV1] | None,
+    abort_reason: Callable[[], str | None] | None,
+) -> tuple[Path, os.stat_result, list[_SelectedSource]]:
+    effective_limits = limits or StagingLimits()
+    if not isinstance(effective_limits, StagingLimits):
+        raise TypeError("limits must be a StagingLimits instance")
+    if isinstance(selected_files, (str, bytes)) or not isinstance(selected_files, Sequence):
+        raise TypeError("selected_files must be a sequence of paths")
+
+    _raise_if_aborted(abort_reason)
+    root, _ = _validate_root(authoritative_root)
+    subtree, subtree_stat = _resolve_subtree(root, authoritative_subtree)
+    claims = _claim_map(validated_entries)
+    selected = _select_sources(
+        root=root,
+        subtree=subtree,
+        selected_files=selected_files,
+        claims=claims,
+        limits=effective_limits,
+        abort_reason=abort_reason,
+    )
+    return subtree, subtree_stat, selected
+
+
+def validate_validator_file_names(
+    *,
+    authoritative_root: str | Path,
+    authoritative_subtree: str | Path | None,
+    selected_files: Sequence[str | Path],
+    limits: StagingLimits | None = None,
+    validated_entries: Iterable[ArtifactEntryV1] | None = None,
+    abort_reason: Callable[[], str | None] | None = None,
+) -> tuple[str, ...]:
+    """Return bounded logical names without reading or copying artifact bytes.
+
+    This uses the same root, subtree, regular-file, link/reparse, snapshot-
+    membership, count, uniqueness, and relative-path checks as byte staging.
+    It deliberately does not verify live byte size or hashes because the
+    metadata-only validators consume names and counts, not file contents.
+    """
+
+    _, _, selected = _validate_selection(
+        authoritative_root=authoritative_root,
+        authoritative_subtree=authoritative_subtree,
+        selected_files=selected_files,
+        limits=limits,
+        validated_entries=validated_entries,
+        abort_reason=abort_reason,
+    )
+    return tuple(item.staged_relative_path for item in selected)
 
 
 _SECURE_DIRFD_OPEN = (
@@ -538,22 +601,13 @@ def stage_validator_files(
     """
 
     effective_limits = limits or StagingLimits()
-    if not isinstance(effective_limits, StagingLimits):
-        raise TypeError("limits must be a StagingLimits instance")
-    if isinstance(selected_files, (str, bytes)) or not isinstance(selected_files, Sequence):
-        raise TypeError("selected_files must be a sequence of paths")
-
-    _raise_if_aborted(abort_reason)
-
-    root, _ = _validate_root(authoritative_root)
-    subtree, subtree_stat = _resolve_subtree(root, authoritative_subtree)
-    claims = _claim_map(validated_entries)
-    selected = _select_sources(
-        root=root,
-        subtree=subtree,
+    subtree, subtree_stat, selected = _validate_selection(
+        authoritative_root=authoritative_root,
+        authoritative_subtree=authoritative_subtree,
         selected_files=selected_files,
-        claims=claims,
         limits=effective_limits,
+        validated_entries=validated_entries,
+        abort_reason=abort_reason,
     )
 
     _raise_if_aborted(abort_reason)

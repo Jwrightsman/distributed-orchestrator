@@ -34,6 +34,12 @@ built-in through it:
 `auto` runs `code_parse`, `structured_json`, and `json_schema` in a child
 process and keeps `nonempty`, `artifact_extraction`, `artifact_contract`, and
 `file_manifest` inline. `subprocess` runs every current built-in in a child.
+`code_parse` receives bounded copied bytes. In forced `subprocess` mode,
+`artifact_extraction`, `artifact_contract`, and `file_manifest` receive only
+validated normalized logical names and an empty private working directory; the
+parent applies root/subtree, regular-file, symlink/special-file,
+snapshot-membership, file-count, and path checks but does not copy or rehash
+artifact content for those metadata-only checks.
 Trusted-alpha preflight rejects `inline`; it is weaker local-development
 compatibility only. In local evidence, an overridden isolated parser is labeled
 `inline_compatibility`, not `inline_trusted`. Preflight checks all five fields and rejects booleans,
@@ -291,12 +297,13 @@ public incident report.
 
 On POSIX, confirm the expected CPU, address-space, output-file, descriptor, and
 child-process limits are available. On Windows, expect wall-clock enforcement,
-bounded pipes, staging, a fresh process group, and best-effort cleanup, but not those POSIX
-resource-limit guarantees. Always record OS and Python version with a runner
-incident. Do not diagnose a failure by switching trusted alpha to `inline`.
-On Windows, verify that the service account's temporary root has an appropriately
-private ACL; validator stages inherit it because POSIX mode bits do not install a
-Windows DACL.
+bounded pipes, private validator directories, a fresh process group, and
+best-effort cleanup, but not those POSIX resource-limit guarantees. Always
+record OS and Python version with a runner incident. Do not diagnose a failure
+by switching trusted alpha to `inline`. On Windows, verify that the service
+account's temporary root has an appropriately private ACL; validator working
+directories and any staged `code_parse` bytes inherit it because POSIX mode bits
+do not install a Windows DACL.
 
 ### Inspect scoped capability evidence
 

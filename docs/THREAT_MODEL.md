@@ -33,7 +33,7 @@ boundary.
 | Viewer, pitch, and admission secrets | local config/environment and HTTP headers | private reads, unwanted compute use, or initial worker admission |
 | Canonical submission identity | digest-only SQLite mapping to an execution | duplicate execution after retry, key conflict, or a mapping whose execution is missing |
 | Artifact integrity baseline | sealed manifest rows/hash in SQLite plus files on disk | ordinary file drift, database/file loss, or host-level joint tampering |
-| Validator runner inputs and evidence | bounded protocol messages, temporary staged copies, process memory, and durable parent-owned evidence envelope/metadata with bounded child detail | parser resource exhaustion, stage escape, secret or host-path disclosure, orphan process, or false assurance metadata |
+| Validator runner inputs and evidence | bounded protocol messages, temporary `code_parse` copies or validated metadata-only logical names, process memory, and durable parent-owned evidence envelope/metadata with bounded child detail | parser resource exhaustion, stage escape, secret or host-path disclosure, orphan process, or false assurance metadata |
 | Contribution history | SQLite plus `ledger.json` compatibility projection | misattribution or misleading claims about correctness/value |
 | Contributor hardware | worker machines | sustained model inference, disk use for the model, prompt disclosure |
 | Orchestrator availability and backups | one locked state directory, SQLite/files, and operator-created archives | total service interruption, stale restore, or lost process-local queue/session work |
@@ -92,7 +92,7 @@ Requester ── pitch_key + optional scoped retry key ──▶ ORCHESTRATOR
 | Worker I/O bounds | per-attempt result/stream byte cap, error cap, cumulative stream batch/rate limits, bounded fanout | semantic safety of allowed output or transport-level denial of service |
 | Result quarantine | 500 bounded diagnostics with hash and at most 4 KiB preview outside operational execution | malware analysis or a complete forensic archive |
 | Total execution deadline | shared remaining budget for strategy, local calls, worker waits, validation, and finalization | forcibly stopping an external process that ignores cancellation |
-| Bounded validator runner | closed built-in allowlist; strict versioned stdin/stdout; parent-clamped timeout and response; staged regular-file copies; process-group cleanup; best-effort Windows Job Object with kill-on-close and one-active-process limit; available POSIX CPU/memory/file/descriptor/process limits; parent-owned authoritative metadata with bounded child detail | hostile native-code isolation, same-user filesystem confidentiality, reliable network denial, guaranteed Windows Job assignment or POSIX-equivalent resource limits, behavioral correctness, or generated-code execution safety |
+| Bounded validator runner | closed built-in allowlist; strict versioned stdin/stdout; parent-clamped timeout and response; bounded regular-file copies for `code_parse`; validated logical names and an empty private directory for metadata-only checks; process-group cleanup; best-effort Windows Job Object with kill-on-close and one-active-process limit; available POSIX CPU/memory/file/descriptor/process limits; parent-owned authoritative metadata with bounded child detail | hostile native-code isolation, same-user filesystem confidentiality, reliable network denial, guaranteed Windows Job assignment or POSIX-equivalent resource limits, behavioral correctness, or generated-code execution safety |
 | Restart reconciliation | truthful `interrupted` state for non-resumable executions/jobs and active attempts | resuming lost process-local work |
 | Durable-before-publication lifecycle | required commit before live snapshot, normal event, project-memory/legacy mirror, callback, response, or terminal state/artifact publication through canonical shares and legacy run/history/demo surfaces | durable event delivery, external transactionality, or coordinator HA |
 | Structural event retention | per-event allowlists before memory, SQLite, broadcast, and replay; startup redaction of historical payloads; generated tokens live-stream-only | removing sensitive text from pre-upgrade backups, proxy logs, or already copied event data |
@@ -341,13 +341,18 @@ not behavioral proof. Do not execute generated code without review.
 
 In the default `auto` mode, parser-heavy built-ins (`code_parse`,
 `structured_json`, and `json_schema`) run in a bounded child process. The
-request and response are strict and size-bounded, file inputs are copied from
-only the authoritative candidate subtree, the environment is sanitized, and
-timeout/cancellation requests process-tree cleanup and counts inability to
-confirm it. Simple bounded checks remain inline. Forced `subprocess` supports every current built-in; explicit `inline`
+request and response are strict and size-bounded. `code_parse` receives bounded
+file copies from only the authoritative candidate subtree. Metadata-only
+validators forced through `subprocess` receive validated normalized logical
+names and an empty private directory, without copying or rehashing artifact
+content. The same root/subtree, regular-file, symlink/special-file,
+snapshot-membership, path, and count validation applies to those names. The
+environment is sanitized, and timeout/cancellation requests process-tree
+cleanup and counts inability to confirm it. Simple bounded checks remain inline.
+Forced `subprocess` supports every current built-in; explicit `inline`
 is a weaker local-development mode rejected by trusted-alpha preflight.
 
-The launcher fixes child `cwd` to the parent-created staged-input directory.
+The launcher fixes child `cwd` to the parent-created private validator directory.
 The runner resolves it once and supplies that explicit `stage_root` to the
 closed dispatcher; strict request data cannot choose or replace the root. An
 ambient or operator launch directory is therefore not protocol authority.

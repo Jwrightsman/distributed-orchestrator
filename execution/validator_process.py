@@ -39,6 +39,7 @@ from execution.validator_staging import (
     ValidatorStagingCleanupError,
     ValidatorStagingError,
     stage_validator_files,
+    validate_validator_file_names,
 )
 
 
@@ -407,8 +408,14 @@ def _terminate_process_tree(process: subprocess.Popen[bytes]) -> bool:
 
     windows_job = getattr(process, "_mycelium_validator_job", None)
     if isinstance(windows_job, _WindowsJob):
-        windows_job.terminate()
-        closed = windows_job.close()
+        try:
+            windows_job.terminate()
+        except Exception:
+            pass
+        try:
+            closed = windows_job.close()
+        except Exception:
+            closed = False
         if closed:
             try:
                 delattr(process, "_mycelium_validator_job")
@@ -454,9 +461,11 @@ def _terminate_process_tree(process: subprocess.Popen[bytes]) -> bool:
 class ValidatorProcessExecutor:
     """Launch one fixed built-in runner with bounded, secret-free I/O."""
 
-    _FILE_VALIDATORS = frozenset(
+    _PATH_VALIDATORS = frozenset(
         {"file_manifest", "code_parse", "artifact_extraction", "artifact_contract"}
     )
+    _CONTENT_FILE_VALIDATORS = frozenset({"code_parse"})
+    _METADATA_FILE_VALIDATORS = _PATH_VALIDATORS - _CONTENT_FILE_VALIDATORS
     _OUTPUT_VALIDATORS = frozenset({"nonempty", "structured_json", "json_schema"})
     _CONTRACT_VALIDATORS = frozenset({"json_schema", "file_manifest", "artifact_contract"})
 
@@ -516,6 +525,7 @@ class ValidatorProcessExecutor:
     def _staged_files(
         self,
         *,
+        validator_name: str,
         selected_files: Sequence[str | Path],
         artifact_root: str | Path | None,
         authoritative_artifact_root: str | Path | None,
@@ -542,15 +552,28 @@ class ValidatorProcessExecutor:
                 if process_relative.is_relative_to(subtree):
                     selected_path = process_relative
             normalized_files.append(selected_path)
-        return stage_validator_files(
-            authoritative_root=authority,
-            authoritative_subtree=subtree,
-            selected_files=normalized_files,
-            staging_root=staging_root,
-            limits=StagingLimits(),
-            validated_entries=validated_entries,
-            abort_reason=abort_reason,
-        )
+        selection = {
+            "authoritative_root": authority,
+            "authoritative_subtree": subtree,
+            "selected_files": normalized_files,
+            "limits": StagingLimits(),
+            "validated_entries": validated_entries,
+            "abort_reason": abort_reason,
+        }
+        if validator_name in self._CONTENT_FILE_VALIDATORS:
+            return stage_validator_files(
+                **selection,
+                staging_root=staging_root,
+            )
+        if validator_name in self._METADATA_FILE_VALIDATORS:
+            logical_names = validate_validator_file_names(**selection)
+            staging_root.mkdir(mode=0o700)
+            try:
+                os.chmod(staging_root, 0o700)
+            except OSError:
+                pass
+            return logical_names
+        raise ValidatorStagingError("validator does not accept artifact paths")
 
     def execute(
         self,
@@ -632,7 +655,8 @@ class ValidatorProcessExecutor:
             staging_root = work_directory / "input"
             try:
                 staged_files = self._staged_files(
-                    selected_files=files if validator_name in self._FILE_VALIDATORS else (),
+                    validator_name=validator_name,
+                    selected_files=files if validator_name in self._PATH_VALIDATORS else (),
                     artifact_root=artifact_root,
                     authoritative_artifact_root=authoritative_artifact_root,
                     validated_entries=validated_entries,
@@ -720,47 +744,96 @@ class ValidatorProcessExecutor:
                     0,
                 )
             windows_job = _create_windows_job()
+            started_threads: list[threading.Thread] = []
             try:
                 process = self._popen_factory(**launch)
-                self._counters.increment("subprocess_runs")
             except (OSError, ValueError, subprocess.SubprocessError):
                 if windows_job is not None:
                     windows_job.close()
                 return self._error("validator_spawn_failed", counter="spawn_failures")
-            if windows_job is not None:
-                if windows_job.assign(process):
-                    setattr(process, "_mycelium_validator_job", windows_job)
-                else:
-                    windows_job.close()
+            try:
+                self._counters.increment("subprocess_runs")
+                if windows_job is not None:
+                    if windows_job.assign(process):
+                        setattr(process, "_mycelium_validator_job", windows_job)
+                    else:
+                        windows_job.close()
 
-            assert process.stdin is not None
-            assert process.stdout is not None
-            assert process.stderr is not None
-            stdout_capture = _PipeCapture(
-                process.stdout,
-                self.settings.response_max_bytes,
-                True,
-            )
-            stderr_capture = _PipeCapture(process.stderr, 8192, False)
-            stdout_thread = threading.Thread(target=stdout_capture.run, daemon=True)
-            stderr_thread = threading.Thread(target=stderr_capture.run, daemon=True)
-            stdout_thread.start()
-            stderr_thread.start()
-
-            def write_request() -> None:
-                try:
-                    process.stdin.write(request_bytes)
-                    process.stdin.flush()
-                except (BrokenPipeError, OSError, ValueError):
-                    pass
-                finally:
+                assert process.stdin is not None
+                assert process.stdout is not None
+                assert process.stderr is not None
+                stdout_capture = _PipeCapture(
+                    process.stdout,
+                    self.settings.response_max_bytes,
+                    True,
+                )
+                stderr_capture = _PipeCapture(process.stderr, 8192, False)
+                stdout_thread = threading.Thread(target=stdout_capture.run, daemon=True)
+                stderr_thread = threading.Thread(target=stderr_capture.run, daemon=True)
+                for thread in (stdout_thread, stderr_thread):
                     try:
-                        process.stdin.close()
-                    except (OSError, ValueError):
-                        pass
+                        thread.start()
+                    finally:
+                        if thread.ident is not None:
+                            started_threads.append(thread)
 
-            stdin_thread = threading.Thread(target=write_request, daemon=True)
-            stdin_thread.start()
+                def write_request() -> None:
+                    try:
+                        process.stdin.write(request_bytes)
+                        process.stdin.flush()
+                    except (BrokenPipeError, OSError, ValueError):
+                        pass
+                    finally:
+                        try:
+                            process.stdin.close()
+                        except (OSError, ValueError):
+                            pass
+
+                stdin_thread = threading.Thread(target=write_request, daemon=True)
+                try:
+                    stdin_thread.start()
+                finally:
+                    if stdin_thread.ident is not None:
+                        started_threads.append(stdin_thread)
+            except BaseException as setup_error:
+                cleanup_failed = False
+                attached_job = getattr(process, "_mycelium_validator_job", None)
+                if windows_job is not None and attached_job is not windows_job:
+                    # Assignment or attribute setup may have failed after the
+                    # OS accepted the child.  Closing an untracked kill-on-close
+                    # job is part of owning that post-spawn failure path.
+                    try:
+                        job_terminated = windows_job.terminate()
+                    except Exception:
+                        job_terminated = False
+                    try:
+                        job_closed = windows_job.close()
+                    except Exception:
+                        job_closed = False
+                    if not job_terminated or not job_closed:
+                        cleanup_failed = True
+                if not _terminate_process_tree(process):
+                    cleanup_failed = True
+                if cleanup_failed:
+                    self._counters.increment("process_cleanup_failures")
+                helper_deadline = time.monotonic() + 1.0
+                for thread in started_threads:
+                    remaining_cleanup = helper_deadline - time.monotonic()
+                    if remaining_cleanup <= 0:
+                        break
+                    thread.join(timeout=remaining_cleanup)
+                if all(not thread.is_alive() for thread in started_threads):
+                    for stream in (process.stdin, process.stdout, process.stderr):
+                        try:
+                            if stream is not None:
+                                stream.close()
+                        except (OSError, ValueError):
+                            pass
+                if not isinstance(setup_error, Exception):
+                    raise
+                if cleanup_failed:
+                    return self._error("validator_process_cleanup_failed")
+                return self._error("validator_spawn_failed", counter="spawn_failures")
 
             cleanup_failure_recorded = False
             outcome: ValidatorProcessOutcome | None = None

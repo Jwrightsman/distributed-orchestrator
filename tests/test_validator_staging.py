@@ -21,6 +21,7 @@ from execution.validator_staging import (
     ValidatorStagingLimitError,
     ValidatorStagingSecurityError,
     stage_validator_files,
+    validate_validator_file_names,
 )
 
 
@@ -104,10 +105,80 @@ def test_stream_copy_does_not_create_hard_links(tmp_path):
     assert os.path.samefile(source, staged) is False
 
 
+def test_metadata_name_validation_uses_shared_selection_without_reading_bytes(
+    tmp_path,
+    monkeypatch,
+):
+    root, subtree = _tree(tmp_path)
+    source = subtree / "nested" / "large.txt"
+    source.parent.mkdir()
+    source.write_bytes(b"x" * 32)
+
+    def unexpected_open(*_args, **_kwargs):
+        raise AssertionError("metadata-only validation opened artifact content")
+
+    monkeypatch.setattr("execution.validator_staging._open_source", unexpected_open)
+    relative = validate_validator_file_names(
+        authoritative_root=root,
+        authoritative_subtree=subtree,
+        selected_files=[source],
+        validated_entries=[_entry(root, source, size=999, digest="0" * 64)],
+    )
+
+    assert relative == ("nested/large.txt",)
+
+
+def test_metadata_name_validation_rejects_missing_snapshot_entry(tmp_path):
+    root, subtree = _tree(tmp_path)
+    selected = subtree / "main.py"
+    selected.write_text("selected", encoding="utf-8")
+    other = root / "candidate_2" / "code" / "main.py"
+    other.parent.mkdir(parents=True)
+    other.write_text("other", encoding="utf-8")
+
+    with pytest.raises(ValidatorStagingIntegrityError, match="absent"):
+        validate_validator_file_names(
+            authoritative_root=root,
+            authoritative_subtree=subtree,
+            selected_files=[selected],
+            validated_entries=[_entry(root, other)],
+        )
+
+
+def test_metadata_name_validation_can_abort_during_selection(tmp_path):
+    root, subtree = _tree(tmp_path)
+    files = [subtree / f"{index}.txt" for index in range(3)]
+    for path in files:
+        path.write_text("x", encoding="utf-8")
+    checks = 0
+
+    def abort_reason():
+        nonlocal checks
+        checks += 1
+        return "validator_cancelled" if checks >= 3 else None
+
+    with pytest.raises(ValidatorStagingAborted) as raised:
+        validate_validator_file_names(
+            authoritative_root=root,
+            authoritative_subtree=subtree,
+            selected_files=files,
+            abort_reason=abort_reason,
+        )
+
+    assert raised.value.reason == "validator_cancelled"
+
+
 @pytest.mark.parametrize("selected", ["../secret.py", "nested/../../secret.py"])
 def test_traversal_is_rejected_and_partial_stage_is_absent(tmp_path, selected):
     root, subtree = _tree(tmp_path)
     (root / "candidate_1" / "secret.py").write_text("secret", encoding="utf-8")
+
+    with pytest.raises(ValidatorStagingSecurityError):
+        validate_validator_file_names(
+            authoritative_root=root,
+            authoritative_subtree=subtree,
+            selected_files=[selected],
+        )
 
     with pytest.raises(ValidatorStagingSecurityError):
         _stage(tmp_path, root, subtree, [selected])
@@ -136,6 +207,13 @@ def test_symlink_file_is_rejected(tmp_path):
         link.symlink_to(outside)
     except (OSError, NotImplementedError):
         pytest.skip("file symlinks are unavailable")
+
+    with pytest.raises(ValidatorStagingSecurityError, match="symlink|reparse"):
+        validate_validator_file_names(
+            authoritative_root=root,
+            authoritative_subtree=subtree,
+            selected_files=[link],
+        )
 
     with pytest.raises(ValidatorStagingSecurityError, match="symlink|reparse"):
         _stage(tmp_path, root, subtree, [link])

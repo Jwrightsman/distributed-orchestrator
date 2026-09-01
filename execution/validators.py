@@ -450,14 +450,16 @@ def execute_runner_request(
     # The strict wire projection deliberately omits every contract field this
     # selected validator does not consume.  Built-ins only read the projected
     # attributes, so reconstructing a broader canonical contract is neither
-    # necessary nor desirable inside the child.
+    # necessary nor desirable inside the child.  Only code_parse receives
+    # copied content beneath stage_root.  Metadata validators receive already
+    # validated logical names and must not resolve them back to host paths.
     contract = request.contract
     stage_root = stage_root.resolve(strict=True)
     value = ValidationInput(
         output=request.output or "",
         files=list(request.staged_files),
         contract=contract,
-        artifact_root=stage_root,
+        artifact_root=stage_root if request.validator_name == "code_parse" else None,
     )
     ok, score, detail, reason = validator.validate(value)
     return ValidatorRunnerResponseV1(

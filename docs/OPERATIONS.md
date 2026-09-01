@@ -683,36 +683,48 @@ Each child is launched without a shell, with a sanitized environment whose
 closed inherited file descriptors where supported, a fresh working directory,
 and a new process group or platform equivalent. The parent sends one strict versioned
 JSON request on stdin and accepts one strict bounded JSON response on stdout.
-The launcher fixes child `cwd` to the parent-created staged-input directory; the
-runner resolves it once and passes it as explicit `stage_root` to the closed
-dispatcher. The request can name staged relative files but cannot select or
-replace that root. Never treat the operator's launch directory as validator
-protocol authority.
+The launcher fixes child `cwd` to the parent-created private validator
+directory; the runner resolves it once and passes it as explicit `stage_root`
+to the closed dispatcher. For `code_parse`, that directory contains bounded
+copied inputs. For metadata-only validators forced through the subprocess it is
+empty. The request can carry validated normalized logical names but cannot
+select or replace the root. Never treat the operator's launch directory as
+validator protocol authority.
 The registry and parent own validator identity, version, required/optional and
 contract-floor status, assurance, behavioral-correctness flag, execution mode,
 containment level, and termination classification. Never infer those fields
 from child output.
 
-File-consuming runs copy only selected regular files from the authoritative
-candidate subtree into a fresh stage. Path, type, identity,
-file-count, per-file, aggregate, and relative-path limits are checked before and
-during copying; symlinks, special files, traversal, and out-of-root paths are
-not accepted. Destination hard links are never created. A regular source may
-itself have other filesystem links; staging always creates a new byte copy.
-Staging another candidate's subtree is an integrity failure. Process-tree
-termination and reaping are attempted before stage removal; inability
-to confirm process-tree cleanup is a containment incident, not a successful
-result.
+`code_parse` copies only selected regular files from the authoritative
+candidate subtree into the private directory. Path, type, identity, file-count,
+per-file, aggregate, and relative-path limits are checked before and during
+copying; symlinks, special files, traversal, snapshot changes, and out-of-root
+paths are not accepted. Destination hard links are never created. A regular
+source may itself have other filesystem links; this path always creates a new
+byte copy. Selecting another candidate's subtree is an integrity failure.
 
-One validator stage currently permits at most 20 files, 10 MiB per file,
-10 MiB aggregate, and a 200-character staged relative path. These are fixed
-validator-staging bounds, separate from—and tighter than—the artifact delivery
-ceilings above. They are not controlled by the four runner settings. An
-otherwise valid registered artifact that exceeds them fails that subprocess
-check with bounded input-rejection evidence.
+The `code_parse` copy path currently permits at most 20 files, 10 MiB per file,
+10 MiB aggregate, and a 200-character relative path. These are fixed validator
+copy bounds, separate from—and tighter than—the artifact delivery ceilings
+above. They are not controlled by the four runner settings. An otherwise valid
+registered artifact that exceeds them fails `code_parse` with bounded
+input-rejection evidence.
 
-The stage lives under the operating system's temporary directory and can
-contain generated source. Normal Python unwinding removes it, but abrupt
+When forced through `subprocess`, `artifact_extraction`, `artifact_contract`,
+and `file_manifest` receive only normalized logical names in an empty private
+directory. The parent still checks the authoritative root and selected subtree,
+regular-file type, symlink/reparse/special-file rejection, snapshot membership,
+portable duplicates, file count, and relative-path length. It does not copy or
+rehash content, so a large artifact does not fail a metadata-only validator
+merely because it exceeds the `code_parse` copy-byte ceiling.
+
+Process-tree termination and reaping are attempted before private-workspace
+removal; inability to confirm process-tree cleanup is a containment incident,
+not a successful result.
+
+The private validator directory lives under the operating system's temporary
+directory and can contain generated source for `code_parse`; metadata-only
+subprocess directories remain empty. Normal Python unwinding removes it, but abrupt
 coordinator termination, host power loss, or an uncatchable kill can leave a
 `mycelium-validator-*` directory. A temporary-workspace deletion error also can
 leave the same kind of stale directory, but it fails closed with

@@ -66,7 +66,8 @@ response bytes are rejected.
 
 The request contains only the protocol version, allowlisted validator identity
 and version, the minimal bounded output or validator-specific contract
-projection, staged relative filenames, and parent-clamped numeric limits. It
+projection, validated normalized logical filenames, and parent-clamped numeric
+limits. It
 cannot name an import, executable, shell command, arbitrary callable, database,
 credential, enrollment, session, attempt nonce, or unrelated execution. Task
 content, generated output, schemas, and filenames are never command-line
@@ -91,41 +92,56 @@ on POSIX inside that directory. It closes inherited descriptors where
 supported and creates a new process group or platform equivalent. Incidental child stdout and stderr are discarded or
 bounded away from the protocol channel; raw stderr is not validation evidence.
 
-The launcher fixes the child `cwd` to the parent-created staged-input directory.
-After its early limits and environment sanitization, the runner resolves that
-directory once and passes it to the closed dispatcher as explicit `stage_root`.
-The strict request can name only staged relative files; it cannot select,
-replace, or derive the filesystem root from an ambient or operator working
-directory.
+The launcher fixes the child `cwd` to the parent-created private validator
+directory. After its early limits and environment sanitization, the runner
+resolves that directory once and passes it to the closed dispatcher as explicit
+`stage_root`. For `code_parse`, that directory contains the bounded copied
+inputs. For metadata-only checks forced through the subprocess, it remains
+empty and the request carries only validated normalized logical filenames. The
+strict request cannot select, replace, or derive the filesystem root from an
+ambient or operator working directory.
 
-### Staged artifact copies
+### Validated artifact inputs and staged copies
 
-A file-consuming runner receives only an explicit bounded set of copies. The
-parent starts from the authoritative artifact root and selected candidate
-subtree. Canonical strategy paths supply the validated entry snapshot to both
-repair-time parsing and registry validation; standalone compatibility callers
-without an ArtifactStore retain the root/path/type/size boundary without that
-optional hash snapshot. A selected source may be relative to the
-subtree or a current-materializer absolute path that resolves inside it; the
-child receives only normalized staged relative names. The parent accepts
-regular files only and rejects traversal, paths outside the selected candidate subtree,
-symlinks, FIFOs, sockets, devices, duplicate portable paths, and changes that
-invalidate the authoritative size or hash claim.
+Every artifact-aware runner receives only an explicit bounded set of normalized
+logical names. The parent starts from the authoritative artifact root and
+selected candidate subtree. Canonical strategy paths supply the validated entry
+snapshot to both repair-time parsing and registry validation; standalone
+compatibility callers without an ArtifactStore retain the root/path/type
+boundary without that optional snapshot membership. A selected source may be
+relative to the subtree or a current-materializer absolute path that resolves
+inside it. The parent accepts regular files only and rejects traversal, paths
+outside the selected candidate subtree, symlinks, FIFOs, sockets, devices,
+duplicate portable paths, and names absent from the supplied authoritative
+snapshot.
 
-The parent enforces file-count, per-file-byte, aggregate-byte, and relative-path
-limits, then copies bytes into a fresh staging directory. It does
-not create hard links or preserve source metadata. The child sees only staged
-relative paths, not coordinator artifact roots. Process-tree termination and
-reaping are attempted before stage removal on success, validation failure,
-timeout, crash, or cancellation. Failure to confirm process-tree
-cleanup is a counted containment incident. Failure to delete the temporary
-workspace records fail-closed `validator_stage_cleanup_failed` evidence and
-increments the distinct `staging_cleanup_failures` counter. The failed deletion
-can still leave a stale `mycelium-validator-*` directory for operator cleanup.
+`code_parse` is the content-consuming file validator. Its subprocess path also
+enforces per-file and aggregate byte limits, opens the selected files safely,
+checks authoritative size and SHA-256 when supplied, and streams bytes into a
+fresh staging directory. It does not create hard links or preserve source
+metadata. The production copy path permits at most 20 files, 10 MiB per file,
+10 MiB aggregate, and 200 characters per staged relative path. These limits are
+separate from artifact delivery quotas and serialized runner request/response
+configuration.
 
-The production stage uses fixed limits of 20 files, 10 MiB per file, 10 MiB
-aggregate, and 200 characters per staged relative path. These are separate from
-artifact delivery quotas and serialized runner request/response configuration.
+`artifact_extraction`, `artifact_contract`, and `file_manifest` consume only
+artifact names and contract projections. When forced through `subprocess`, the
+parent applies the same authoritative root/subtree confinement, regular-file
+and symlink/special-file rejection, snapshot-membership, portable-duplicate,
+file-count, and relative-path checks, but it neither copies nor rehashes file
+content. Their child receives only the normalized logical names and an empty
+private working directory. Large artifact bytes therefore do not cross the
+process boundary merely for a metadata check, and the content-copy byte limits
+do not apply to those checks.
+
+The child never receives a coordinator artifact root. Process-tree termination
+and reaping are attempted before private-workspace removal on success,
+validation failure, timeout, crash, or cancellation. Failure to confirm
+process-tree cleanup is a counted containment incident. Failure to delete the
+temporary workspace records fail-closed `validator_stage_cleanup_failed`
+evidence and increments the distinct `staging_cleanup_failures` counter. The
+failed deletion can still leave a stale `mycelium-validator-*` directory for
+operator cleanup.
 
 This reduces accidental exposure. Because the child runs as the same operating-
 system user, it is not mandatory access control and does not guarantee
@@ -211,9 +227,9 @@ source bytes, credentials, raw stderr, and arbitrary exception text.
 `code_parse` parses supported generated files as data. It does not import a
 generated module, run top-level statements, invoke a shell or compiler build
 step, install a package, open a browser, run tests, or execute generated
-networking. The other built-ins likewise inspect content without executing it.
-Parser success is structural evidence only and does not prove the requested
-behavior.
+networking. The other built-ins inspect bounded content or validated artifact
+metadata without executing it. Parser success is structural evidence only and
+does not prove the requested behavior.
 
 `network_policy` remains recorded caller intent. It is not consumed as a
 firewall or reliable network-denial control for the coordinator, runner,
@@ -228,7 +244,8 @@ workers, model providers, or code an operator later chooses to run.
   and available POSIX resources have explicit finite bounds.
 - Forced-subprocess testing can exercise every current built-in through one
   protocol without opening a plugin mechanism.
-- Process startup and file copying add latency and temporary disk I/O.
+- Process startup adds latency; `code_parse` file copying also adds temporary
+  disk I/O, while metadata-only checks avoid copying artifact content.
 - Containment strength differs by operating system and must be reported rather
   than normalized into an unsupported guarantee.
 - A same-user process can still attempt host access. This decision is not a

@@ -197,13 +197,16 @@ default, read-only base, ephemeral workspace, CPU/memory/time/output limits, no 
 credentials, destroyed after validation. A service boundary, not a helper function inside the
 API process.
 
-> **Narrow prerequisite implemented on the Theme 3A branch (Aug 31; local gates passed
-> Sep 1, Ubuntu CI and merge pending):** parser-heavy trusted built-in validators now use a bounded, versioned child-process protocol with selected-file staging, fail-closed
-> evidence, wall-clock/process cleanup, and available POSIX resource limits. Production
-> validation still never imports or executes generated code. The child shares the coordinator's
-> OS user, does not guarantee filesystem confidentiality or network denial, and is not the
-> hostile-code sandbox described above. Containers, microVMs, WASM, behavioral execution, and
-> arbitrary validator plugins remain deferred.
+> **Narrow prerequisite implemented (August 2026):** parser-heavy trusted
+> built-in validators use a bounded, versioned child-process protocol with
+> fail-closed evidence, wall-clock/process cleanup, and available POSIX resource
+> limits. `code_parse` receives bounded copied bytes; metadata-only validators
+> forced through the runner receive validated logical names without copying
+> artifact content. Production validation still never imports or executes
+> generated code. The child shares the coordinator's OS user, does not guarantee
+> filesystem confidentiality or network denial, and is not the hostile-code
+> sandbox described above. Containers, microVMs, WASM, behavioral execution,
+> and arbitrary validator plugins remain deferred.
 
 **Confidentiality classes.** Every task labeled `local_only` / `trusted_guild` /
 `approved_nodes` / `public_network`, with the UI stating plainly when a prompt will be visible
@@ -497,8 +500,8 @@ memory or storage growth.
 
 ## Changelog
 
-- **2026-08-31** — Recorded the Theme 3A branch's bounded process boundary for
-  trusted parser-heavy built-ins as a narrow prerequisite, while keeping real
+- **2026-08-31** — Added Theme 3A's bounded process boundary for trusted
+  parser-heavy built-ins as a narrow prerequisite, while keeping real
   generated-code sandboxing, reliable network denial, behavioral execution,
   containers, microVMs, and WASM explicitly deferred. Corrected the guild
   section so its no-network sandbox is a future requirement rather than a

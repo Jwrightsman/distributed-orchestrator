@@ -37,8 +37,9 @@ run Mycelium on a machine without that machine owner's explicit informed
 consent.
 
 Theme 3A puts parser-heavy, trusted built-in validators behind a bounded child-
-process boundary. It contains parser failures, stages only selected candidate
-files, clamps work to the remaining execution deadline, records fail-closed
+process boundary. It contains parser failures, validates only selected candidate
+inputs, copies bytes only for `code_parse`, clamps work to the remaining
+execution deadline, records fail-closed
 validation evidence, and adds parent-authored execution metadata and content-
 free counters. It does not
 execute generated code, establish same-user filesystem confidentiality,
@@ -60,8 +61,9 @@ Ruff, import, preflight, and deployment checks. Historical counts in sprint
 records are evidence for those exact revisions, not a substitute for the final
 branch run. The configured GitHub Actions jobs are Ubuntu-only. Theme 3A's
 operating-system split is nevertheless material: report POSIX CI and Windows
-manual results separately where containment expectations differ; Windows
-verification remains pending until such a run is recorded.
+manual results separately where containment expectations differ. The Windows
+results are recorded below; Ubuntu/POSIX verification remains pending until the
+PR checks pass.
 
 ## Theme 3A architecture
 
@@ -90,11 +92,15 @@ verification remains pending until such a run is recorded.
   over-limit bytes fail closed. The protocol has no host-path field. The parent owns assurance,
   behavioral-correctness, required/optional/source, execution-mode,
   containment, and termination metadata.
-- File-consuming child checks receive only regular-file copies selected from
-  the authoritative candidate subtree. Staging rejects traversal, symlinks,
-  reparse points, special files, another candidate, and size/hash/identity
-  drift; enforces count, per-file, aggregate, and path bounds; uses no hard
-  links. Process-tree termination and reaping are attempted before stage removal.
+- Artifact-aware child checks receive only normalized names selected from the
+  authoritative candidate subtree. Selection rejects traversal, symlinks,
+  reparse points, special files, another candidate, portable duplicates, and
+  names absent from the supplied snapshot; it enforces count and path bounds.
+  `code_parse` additionally receives fresh bounded byte copies, checks
+  size/hash/identity drift, and uses no hard links. Forced metadata-only checks
+  receive logical names in an empty private directory and do not copy or rehash
+  content. Process-tree termination and reaping are attempted before workspace
+  removal.
 - The runner uses the current interpreter without a shell, a sanitized
   environment whose temp variables point into its controlled work directory, a
   fresh working directory/process group, bounded I/O, and a timeout clamped to
@@ -542,9 +548,11 @@ execution,” “filesystem isolation,” “network isolation,” or “behavio
 16. Exercise protocol malformed/oversized/identity failures; parser timeout,
     crash, spawn, stdout, memory, environment, descriptor, cancellation, and
     process-tree cleanup cases; and POSIX/Windows-specific expectations.
-17. Exercise staging traversal, symlink/reparse, special-file, count/size,
-    cleanup, and candidate-isolation cases. Confirm generated Python side
-    effects and exceptions are parsed without import or execution.
+17. Exercise input traversal, symlink/reparse, special-file, count/path,
+    cleanup, and candidate-isolation cases. Confirm only `code_parse` receives
+    bounded copied bytes, forced metadata validators receive only validated
+    names, and generated Python side effects and exceptions are parsed without
+    import or execution.
 
 ## Theme 3A branch verification
 
@@ -552,14 +560,14 @@ Local final branch gates completed on September 1, 2026 from the clean Theme 3A
 commit range. The exact Windows results are:
 
 - `python -m pytest -q tests/test_execution_validators.py tests/test_validator_protocol.py tests/test_validator_staging.py`:
-  96 passed, 5 skipped;
+  143 passed, 5 skipped;
 - `python -m pytest -q tests/test_execution_contracts.py tests/test_artifacts.py tests/test_execution_strategies.py tests/test_execution_interfaces.py`:
   86 passed;
 - `python -m pytest -q tests/test_execution_lifecycle.py tests/test_execution_persistence.py tests/test_durable_execution_truth.py tests/test_attempt_authority.py`:
   87 passed;
 - `python -m pytest -q tests/test_trusted_validation.py tests/test_code_check.py tests/test_extract.py tests/test_extract_repair.py tests/test_config.py tests/test_preflight.py tests/test_access_control.py`:
   175 passed;
-- `python -m pytest -q`: 1,295 passed, 8 skipped;
+- `python -m pytest -q`: 1,342 passed, 8 skipped;
 - `python -m ruff check .`: passed;
 - `python -c "import server"`: passed;
 - `python scripts/trusted_alpha_harness.py`: bounded profile passed one
