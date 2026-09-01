@@ -419,17 +419,19 @@ def test_output_reader_rejects_fifo_without_opening_it(tmp_path):
     os.name != "posix" or not hasattr(socket, "AF_UNIX"),
     reason="Unix-domain socket coverage",
 )
-def test_output_reader_rejects_socket_without_opening_it(tmp_path):
-    stage = _output_stage_root(tmp_path)
-    target = stage.joinpath(*VALIDATOR_OUTPUT_REFERENCE_PATH_V2.split("/"))
-    target.parent.mkdir()
-    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    try:
-        listener.bind(str(target))
-        with pytest.raises(ValidatorOutputReferenceError) as raised:
-            _read_reference(stage, b"")
-    finally:
-        listener.close()
+def test_output_reader_rejects_socket_without_opening_it():
+    # AF_UNIX addresses are short on Linux, while hosted pytest paths are long.
+    with tempfile.TemporaryDirectory(prefix="mv-output-sock-") as temporary:
+        stage = _output_stage_root(Path(temporary))
+        target = stage.joinpath(*VALIDATOR_OUTPUT_REFERENCE_PATH_V2.split("/"))
+        target.parent.mkdir()
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            listener.bind(str(target))
+            with pytest.raises(ValidatorOutputReferenceError) as raised:
+                _read_reference(stage, b"")
+        finally:
+            listener.close()
 
     assert raised.value.code == "validator_output_file_not_regular"
 
