@@ -6,6 +6,8 @@ execution-scoped delivery. DAG output under `output/` and ensemble output under
 
 This document describes delivery integrity, not content safety. Generated files
 are not sandboxed, scanned for malware, or guaranteed behaviorally correct.
+Production validation may parse staged copies, but it never imports or executes
+generated code.
 
 ## Public models
 
@@ -219,6 +221,81 @@ file changed after a refresh or seal is rejected.
 These checks are performed on the server after filesystem resolution; a string
 prefix check alone is never treated as confinement.
 
+## Validator subprocess input preparation is not publication
+
+The subprocess protocol never supplies the complete registered artifact root or
+a source-artifact host path. For an artifact-aware check, the parent starts from
+the authoritative root and selected candidate subtree. Canonical registry
+validation and repair-time parsing bind input selection to the validation
+pipeline's current entry snapshot and shared executor. Standalone compatibility
+callers without an ArtifactStore retain the relevant root/path/type boundary
+without that optional snapshot. Preterminal candidate roots may still be
+`active`; validator input preparation does not require or create a terminal
+seal.
+
+Only the explicit selected file list is eligible. Every artifact-aware
+subprocess path:
+
+- accepts a relative source path beneath the selected candidate subtree or a
+  current-materializer absolute source path that resolves inside that same
+  subtree, then exposes only a normalized relative staged name; traversal,
+  duplicate portable names, another candidate's subtree, and any resolution
+  outside the authoritative root are rejected;
+- accepts regular files only and rejects symlinks, reparse points, FIFOs,
+  sockets, devices, and non-directory path components;
+- enforces file-count and relative-path bounds, rejects portable-name
+  duplicates, and requires supplied authoritative snapshot membership; and
+- returns only normalized relative logical filenames to the runner.
+
+`code_parse` additionally checks source identity while opening and, when an
+authoritative entry is supplied, checks its expected size and SHA-256. It
+streams the bytes into new files with private POSIX modes where supported in a
+fresh directory, without hard links or preserved source metadata. Its fixed
+copy limits are 20 files, 10 MiB per file, 10 MiB aggregate, and 200 characters
+per relative path. Those limits are deliberately separate from the larger
+artifact manifest/download quotas and from the configurable runner
+request/response limits. A registered artifact can therefore remain
+deliverable while being too large for `code_parse`; that check fails closed
+with bounded input-rejection evidence.
+
+`artifact_extraction`, `artifact_contract`, and `file_manifest` use only names
+and contract metadata. When forced through the subprocess, their child receives
+the validated names and an empty private working directory. The parent does not
+open, copy, or rehash file content for these metadata-only checks, so the
+`code_parse` per-file and aggregate byte ceilings do not apply. Root/subtree
+confinement, regular-file and symlink/reparse/special-file rejection,
+snapshot-membership, portable-duplicate, file-count, and relative-path checks
+still apply.
+
+POSIX uses descriptor-relative no-follow opens where available. Windows rejects
+known reparse components and compares file identity before and after open, but
+its remaining path race resistance is best effort because the Python standard
+library does not expose the same `openat`/`O_NOFOLLOW` primitives. Windows mode
+bits do not establish a private DACL; stage privacy instead inherits the
+operator-secured temporary root's ACL.
+
+On a copy error the parent attempts to remove the partial input; failure of that
+attempt becomes a staging failure. Normal successful, validation-failure,
+timeout, crash, and cancellation paths attempt process-tree termination and
+reaping before stage removal. Inability to confirm process-tree cleanup is a
+separately counted containment incident, not a successful validator result.
+Failure solely to remove the owning temporary workspace fails closed with
+`validator_stage_cleanup_failed` evidence and increments the distinct
+`staging_cleanup_failures` counter. The failed deletion can still leave a stale
+stage.
+The child does not receive SQLite files, coordinator configuration, enrollment
+identity, share credentials, source-control credentials, unrelated executions,
+or another candidate's files through the protocol or stage.
+
+Copied bytes and validated logical names are transient validator inputs. They
+are not manifest entries, deliverables, audit downloads, a sealed baseline,
+lifecycle truth, or a configured retention root. An abrupt coordinator/host failure can leave a
+`mycelium-validator-*` directory in the operating-system temporary
+area; no startup sweeper removes it. Because the runner has the same OS user as the coordinator,
+staging narrows accidental exposure but is not mandatory access control or a
+filesystem-confidentiality guarantee. See
+[ADR 0013](adr/0013-parser-heavy-validators-bounded-process-boundary.md).
+
 ## Media types and hashes
 
 Media types come from the normalized filename through Python's MIME database;
@@ -315,6 +392,9 @@ share remains readable.
   serialized into canonical or share responses.
 - Share validator diagnostics are generic because raw failure text may contain
   internal filesystem paths.
+- Validator input path/type/snapshot failure, or `code_parse` size/hash/copy
+  failure, becomes bounded validation error evidence. It does not publish a
+  partial working directory or silently run an isolated validator inline.
 - The explicit private `role=audit` and deprecated `role=all` views can include
   internal records because the viewer is the trusted operator role. The default
   private view and public shares apply narrower role allowlists.
@@ -323,7 +403,8 @@ share remains readable.
 
 Artifact controls do not provide content moderation, antivirus scanning,
 provenance signatures, externally anchored content addressing, encryption at
-rest, per-user ownership, or generated-code isolation. The backup tools preserve
+rest, per-user ownership, generated-code isolation, or same-user validator
+filesystem confidentiality. The backup tools preserve
 the local sealed baseline but do not turn it into an independent attestation. A
 compromised orchestrator host can change artifacts and their SQLite metadata.
 Hash recomputation detects ordinary drift at read time; it does not defend

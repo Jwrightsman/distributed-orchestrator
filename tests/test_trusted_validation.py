@@ -34,6 +34,21 @@ def test_malformed_json_schema_is_rejected_at_request_validation():
         )
 
 
+def test_deep_json_schema_is_rejected_before_meta_schema_parser_runs():
+    schema = {"type": "object"}
+    for _ in range(40):
+        schema = {"properties": {"nested": schema}}
+
+    with pytest.raises(ValidationError, match="nested too deeply"):
+        ExecutionRequestV1(
+            task="return data",
+            output_contract={
+                "kind": "structured_json",
+                "json_schema": schema,
+            },
+        )
+
+
 def test_contract_floor_cannot_be_removed_by_explicit_validators():
     request = ExecutionRequestV1(
         task="return data",
@@ -243,7 +258,7 @@ def test_code_contract_does_not_claim_an_unsupported_parser_ran(tmp_path):
 
     assert parsed.status == "failed"
     assert parsed.evidence["checked_files"] == []
-    assert parsed.evidence["unsupported_files"] == [file_path]
+    assert parsed.evidence["unsupported_files"] == ["main.js"]
     assert "code_parse:main.js" in summary.checks_not_run
 
 

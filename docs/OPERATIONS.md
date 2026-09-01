@@ -22,6 +22,9 @@ coordinator on a local filesystem serving a small private trusted alpha.
 - Workers can read every prompt assigned to them.
 - Placement, confidentiality, and network policy are recorded intent, not an
   operating-system or network sandbox.
+- The validator subprocess contains trusted built-in parsers; it is not
+  same-user filesystem confidentiality, reliable network denial, or a safe
+  generated-code execution environment.
 - A sealed artifact manifest is local hash evidence, not a signature or an
   attestation of origin, safety, or correctness.
 - Contribution points record accepted compute. They are not money, payment,
@@ -40,6 +43,7 @@ coordinator on a local filesystem serving a small private trusted alpha.
 | Scoped capability observations and projection receipts | SQLite (`events.db`) | Append-only records retained; bounded missing-only startup reconciliation repairs missed projections without changing settlement |
 | Shadow decisions and successful operational-health events | Separate SQLite (`capability-shadow-health.db`) | Append-only decisions and admission/evaluation rows survive; deterministic identities prevent replay double count; writer locks are isolated from authoritative `events.db` |
 | Shadow health-store, containment, and callback fallback counters | Memory | Reset at process start; protected reporting exposes their new `reset_at` timestamp |
+| Validator-runner operational counters | Memory | Content-free totals reset at process start; terminal validation evidence remains durable with its execution |
 | Shares and revocation metadata | SQLite | Retained; plaintext share token is never stored |
 | Contribution records | SQLite | Authoritative; JSON ledger is only a compatibility projection |
 | Artifact roots, entries, hashes, roles, seal state | SQLite plus files | Retained if both database and artifact trees are restored together |
@@ -160,7 +164,10 @@ boundaries remain cached while active.
 One total deadline begins at canonical submission and covers semaphore wait,
 planning, execution, review, revision, validation, and final manifest work.
 Cancellation is idempotent, records request/terminal timestamps, cancels
-queued/active attempts, and rejects late results. Deadline exhaustion is a
+queued/active attempts, requests active validator-child termination/reaping,
+waits boundedly for cleanup ownership, and rejects late results. A validator's
+configured wall time is clamped to this
+remaining execution budget. Deadline exhaustion is a
 retryable terminal failure; coordinator restart is an interrupted retryable
 terminal state. Neither creates resumable scheduler state.
 
@@ -646,11 +653,164 @@ generated tokens remain live-stream-only. Offline database backups or exports
 created before this upgrade may still contain historical prompt or output text
 and require operator-managed rotation or sanitization.
 
+## Validator process containment
+
+Use `validator_execution_mode="auto"` for normal operation. It runs
+`code_parse`, `structured_json`, and `json_schema` as
+`subprocess_isolated`; `nonempty`, `artifact_extraction`,
+`artifact_contract`, and `file_manifest` remain `inline_trusted`. Mode
+`subprocess` sends every current built-in through the runner. Mode `inline` is
+weaker local-development compatibility and trusted-alpha preflight rejects it.
+Evidence uses `inline_compatibility` for a normally isolated parser overridden
+by that setting; normally inline checks remain `inline_trusted`.
+
+The default runner settings are:
+
+| Setting | Default | Inclusive bounds | Operational purpose |
+| --- | --- | --- | --- |
+| `validator_subprocess_timeout_seconds` | 10 | 1–120 seconds | per-check wall time, additionally clamped to the execution's remaining deadline |
+| `validator_subprocess_memory_mb` | 256 | 128–1,024 MiB | requested address-space ceiling where POSIX provides the resource limit |
+| `validator_subprocess_request_max_bytes` | 2 MiB | 16 KiB–16 MiB | maximum serialized parent request before spawn |
+| `validator_subprocess_response_max_bytes` | 32 KiB | 1–256 KiB | maximum accepted child response |
+
+The bounds in this table are strict and inclusive; booleans and non-integer
+values are invalid. Preflight checks every field. Trusted-alpha
+loading/preflight fails on an invalid value, while local mode warns and
+restores the default.
+
+Each child is launched without a shell, with a sanitized environment whose
+`TEMP`/`TMP` on Windows or `TMPDIR` on POSIX point into its controlled working directory,
+closed inherited file descriptors where supported, a fresh working directory,
+and a new process group or platform equivalent. The parent sends one strict versioned
+JSON request on stdin and accepts one strict bounded JSON response on stdout.
+The launcher fixes child `cwd` to the parent-created private validator
+directory; the runner resolves it once and passes it as explicit `stage_root`
+to the closed dispatcher. For `code_parse`, that directory contains bounded
+copied inputs. For metadata-only validators forced through the subprocess it is
+empty. The request can carry validated normalized logical names but cannot
+select or replace the root. Never treat the operator's launch directory as
+validator protocol authority.
+The registry and parent own validator identity, version, required/optional and
+contract-floor status, assurance, behavioral-correctness flag, execution mode,
+containment level, and termination classification. Never infer those fields
+from child output.
+
+`code_parse` copies only selected regular files from the authoritative
+candidate subtree into the private directory. Path, type, identity, file-count,
+per-file, aggregate, and relative-path limits are checked before and during
+copying; symlinks, special files, traversal, snapshot changes, and out-of-root
+paths are not accepted. Destination hard links are never created. A regular
+source may itself have other filesystem links; this path always creates a new
+byte copy. Selecting another candidate's subtree is an integrity failure.
+
+The `code_parse` copy path currently permits at most 20 files, 10 MiB per file,
+10 MiB aggregate, and a 200-character relative path. These are fixed validator
+copy bounds, separate from—and tighter than—the artifact delivery ceilings
+above. They are not controlled by the four runner settings. An otherwise valid
+registered artifact that exceeds them fails `code_parse` with bounded
+input-rejection evidence.
+
+When forced through `subprocess`, `artifact_extraction`, `artifact_contract`,
+and `file_manifest` receive only normalized logical names in an empty private
+directory. The parent still checks the authoritative root and selected subtree,
+regular-file type, symlink/reparse/special-file rejection, snapshot membership,
+portable duplicates, file count, and relative-path length. It does not copy or
+rehash content, so a large artifact does not fail a metadata-only validator
+merely because it exceeds the `code_parse` copy-byte ceiling.
+
+Process-tree termination and reaping are attempted before private-workspace
+removal; inability to confirm process-tree cleanup is a containment incident,
+not a successful result.
+
+The private validator directory lives under the operating system's temporary
+directory and can contain generated source for `code_parse`; metadata-only
+subprocess directories remain empty. Normal Python unwinding removes it, but abrupt
+coordinator termination, host power loss, or an uncatchable kill can leave a
+`mycelium-validator-*` directory. A temporary-workspace deletion error also can
+leave the same kind of stale directory, but it fails closed with
+`validator_stage_cleanup_failed` evidence and increments
+`staging_cleanup_failures`, distinct from `process_cleanup_failures`. There is
+no startup stale-stage sweeper. After an
+incident, stop the coordinator, identify only directories with that exact
+prefix that are not owned by a live runner, and remove them under the host's
+ordinary sensitive-temporary-file policy. Temporary-directory permissions and
+normal cleanup are not secure erasure.
+Staging is neither artifact sealing nor terminal publication authority.
+
+Spawn failure, timeout, crash, malformed/mismatched/oversized response, and
+staging failure produce bounded error evidence. An unconfirmed process-tree
+cleanup is reflected in error evidence or a content-free cleanup counter,
+depending on the original outcome. Neither case triggers an inline fallback for
+an isolated validator.
+Existing validation policy records whether the candidate passes. The explicit
+`allow_unverified_fallback` policy may later select and deliver a usable failed
+candidate while preserving its failed/partial validation outcome. There are no
+runner retries. Do not restart
+a whole execution merely to hide a required validator failure; inspect the
+stable reason, the execution deadline, and host resource pressure first.
+
+POSIX hosts additionally apply available CPU, address-space, output-file,
+open-descriptor, and child-process limits. Windows retains bounded pipes,
+wall-clock enforcement, staging, a fresh process group, and process-tree
+cleanup on a best-effort basis. Before spawn the parent best-effort creates and
+configures a per-run Windows Job Object; immediately after spawn it attempts to
+assign the runner with kill-on-close and an active-process limit of one.
+Successful assignment strengthens descendant prevention, cleanup, and
+coordinator-exit handling, but does not provide the POSIX CPU, address-space,
+output-file, or descriptor limits.
+
+Job creation/configuration or assignment may fail, including inside a
+restrictive enclosing Job Object. The process is not spawned suspended, so work
+or a descendant created before assignment is outside the new Job's guarantees.
+The existing process-group and `taskkill /T` path remains the live-parent
+fallback. Evidence reports `windows_process_tree_best_effort` whether Job
+assignment succeeded or the fallback is in use; do not infer Job membership
+from that label. Windows path-race resistance is also best effort where
+descriptor-relative no-follow opens are unavailable.
+Windows mode bits do not install a private DACL; secure the service account's
+temporary root because validator stages inherit that ACL.
+Record the operating system when investigating a containment failure.
+
+The process group alone does not kill the child when the coordinator crashes.
+A successfully assigned Windows Job Object closes with the coordinator and
+requests termination of its assigned runner, but best-effort assignment and the
+pre-assignment window leave a residual orphan path. There is no Linux
+parent-death signal or durable runner PID registry. A POSIX child installs an
+early hard alarm of about 125 seconds; Windows has no equivalent child-side
+alarm, so an unassigned runner or pre-assignment escape can outlive the
+coordinator and a restart will not discover it. After abrupt coordinator loss,
+inspect for a confirmed prior `validator_runner.py` process before returning the
+deployment to service. Treat any survivor as a containment incident and
+terminate only the confirmed runner tree.
+
+Validation evidence exposes bounded child result detail inside a parent-owned
+envelope. Required/optional source, assurance, behavioral-correctness,
+execution/containment mode, and applicable termination metadata are
+parent-authored and authoritative.
+
+The `validator_process` field of private `/v1/operator/health` reports the
+registered classifications, configured mode, runner protocol/containment level,
+reset time, and content-free totals from the service-owned canonical executor.
+The exact counter fields are `reset_at`, `subprocess_runs`,
+`successful_responses`, `validation_failures`, `timeouts`, `crashes`,
+`malformed_responses`, `oversized_requests`, `oversized_responses`,
+`spawn_failures`, `staging_failures`, `staging_cleanup_failures`,
+`cancellations`, and `process_cleanup_failures`.
+These process counters reset on restart and are not execution authority.
+Prompts, output bodies, schemas, source bytes, credentials, raw stderr, host
+paths, and arbitrary exception text must never enter logs, evidence, or
+counters.
+
+See
+[ADR 0013](adr/0013-parser-heavy-validators-bounded-process-boundary.md) for the
+decision and platform boundary.
+
 ## Generated artifact safety
 
 Parsing, browser loading, structural checks, contract validation, deterministic
-checks, and AI review are distinct evidence. None is a malware scan or complete
-sandbox. Before opening or executing an artifact:
+checks, and AI review are distinct evidence. Production `code_parse` only
+parses and never imports or executes generated modules. None of these checks is
+a malware scan or complete sandbox. Before opening or executing an artifact:
 
 1. inspect the deliverable and its declared contract;
 2. read validation outcome and individual evidence, including checks not run;
@@ -732,6 +892,7 @@ fields directly:
 | Lifecycle | `lifecycle_status`, timestamps, cancellation/interruption fields, `retryable` | Never derive lifecycle from assurance or the legacy `status` projection |
 | Submission replay | `Idempotency-Replayed` response header; structured 409/422/503 `detail.code` values | Preserve the key only with its logical request; never display it as a user identity or an exactly-once guarantee |
 | Validation | `validation_outcome`, `validation_summary`, `validation_evidence` | Show passed, failed, skipped, and not-run checks; “partial” is not “correct” |
+| Validator containment | Parent-authored validation evidence: execution mode, runner protocol version, containment level, termination reason when applicable, and duration | Describe the actual check and platform boundary; never call a same-user subprocess a sandbox or expose raw child output/stderr |
 | Assurance | `assurance_level` plus each evidence item's level and `proves_behavioral_correctness` | Suggested labels: Not checked, Structure checked, Contract validated, Behavior tested, AI reviewed; avoid a generic badge |
 | Legacy post-hoc verification | `posthoc_verification_status`, `_started_at`, `_completed_at`, `_agreement`, `_reason` | Separate from terminal validation and scoped capability evidence; trusted-alpha reports `disabled`, not silently pending |
 | Share administration | Private list: `share_id`, `created_at`, `expires_at`, `revoked_at`, `last_accessed_at`, artifact/candidate/node-redaction flags | Plaintext token appears only in create response; never expect it from list or persist it in analytics/logs |
@@ -746,7 +907,8 @@ change.
 The trusted-alpha controls make private invited operation reviewable; they do
 not provide public-network readiness. Remaining structural limits include shared
 instance-wide keys, process-local scheduling and node sessions, no public-key
-node identity, no coordinator HA, no generated-code sandbox, no remote
+node identity, no coordinator HA, no generated-code sandbox, no same-user
+filesystem confidentiality or guaranteed runner network denial, no remote
 attestation, self-reported capability descriptors, no evidence-driven production
 routing, no signed artifact provenance, and provisional model quality with
 high run-to-run variance. Open-mode peer scoping is not durable identity, and

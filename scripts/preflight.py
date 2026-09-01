@@ -145,6 +145,66 @@ def run_preflight(
     settings.update(overrides)
     settings["deployment_mode"] = mode
 
+    validator_mode = settings.get("validator_execution_mode")
+    if (
+        not isinstance(validator_mode, str)
+        or validator_mode not in app_config.VALID_VALIDATOR_EXECUTION_MODES
+    ):
+        checks.append(
+            Check(
+                "validator_execution_mode",
+                "error" if trusted else "warning",
+                "validator_execution_mode must be auto, subprocess, or inline; "
+                "local compatibility falls back to auto",
+            )
+        )
+    elif validator_mode == "inline":
+        checks.append(
+            Check(
+                "validator_execution_mode",
+                "error" if trusted else "warning",
+                "inline validator execution lacks the parser process boundary and "
+                "is only a weaker local-development compatibility mode",
+            )
+        )
+    elif validator_mode == "auto":
+        checks.append(
+            Check(
+                "validator_execution_mode",
+                "pass",
+                "automatic validator execution policy is enabled",
+            )
+        )
+    else:
+        checks.append(
+            Check(
+                "validator_execution_mode",
+                "pass",
+                "compatible built-in validators are required to use subprocess execution",
+            )
+        )
+
+    for field_name, (minimum, maximum) in (
+        app_config.VALIDATOR_SUBPROCESS_NUMERIC_BOUNDS.items()
+    ):
+        configured_value = settings.get(field_name)
+        valid_value = (
+            type(configured_value) is int
+            and minimum <= configured_value <= maximum
+        )
+        checks.append(
+            Check(
+                field_name,
+                "pass" if valid_value else ("error" if trusted else "warning"),
+                (
+                    f"{field_name} is within the supported inclusive bounds"
+                    if valid_value
+                    else f"{field_name} must be an integer between {minimum} and "
+                    f"{maximum}; local compatibility falls back to the default"
+                ),
+            )
+        )
+
     enrollment_mode = settings.get("node_enrollment_mode")
     if (
         not isinstance(enrollment_mode, str)

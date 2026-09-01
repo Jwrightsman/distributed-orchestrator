@@ -1,6 +1,6 @@
 # Threat model
 
-_Implemented state on August 25, 2026. This describes current controls and
+_Implemented state on August 31, 2026. This describes current controls and
 current gaps, not the intended end state._
 
 **One-sentence version:** Mycelium is suitable for a small private trusted
@@ -12,8 +12,10 @@ durable, session-bound attempt before execution can consume it; protects
 sensitive read routes in deployment mode; seals role-scoped artifact manifests;
 enforces one coordinator per state directory; commits lifecycle truth before
 publication; deduplicates requester-scoped canonical retries; and adds durable
-per-node bearer enrollment with independent revocation and attempt attribution.
-It did not add public-key/physical-machine identity, TLS, sandboxing, multi-user accounts,
+per-node bearer enrollment with independent revocation and attempt attribution,
+and contains parser-heavy built-in validators in bounded child processes.
+It did not add public-key/physical-machine identity, TLS, a hostile generated-code
+sandbox, multi-user accounts,
 durable scheduling, attestation, Sybil resistance, or a hostile-host trust
 boundary.
 
@@ -31,6 +33,7 @@ boundary.
 | Viewer, pitch, and admission secrets | local config/environment and HTTP headers | private reads, unwanted compute use, or initial worker admission |
 | Canonical submission identity | digest-only SQLite mapping to an execution | duplicate execution after retry, key conflict, or a mapping whose execution is missing |
 | Artifact integrity baseline | sealed manifest rows/hash in SQLite plus files on disk | ordinary file drift, database/file loss, or host-level joint tampering |
+| Validator runner inputs and evidence | bounded protocol messages, temporary `code_parse` copies or validated metadata-only logical names, process memory, and durable parent-owned evidence envelope/metadata with bounded child detail | parser resource exhaustion, stage escape, secret or host-path disclosure, orphan process, or false assurance metadata |
 | Contribution history | SQLite plus `ledger.json` compatibility projection | misattribution or misleading claims about correctness/value |
 | Contributor hardware | worker machines | sustained model inference, disk use for the model, prompt disclosure |
 | Orchestrator availability and backups | one locked state directory, SQLite/files, and operator-created archives | total service interruption, stale restore, or lost process-local queue/session work |
@@ -57,6 +60,9 @@ Requester ── pitch_key + optional scoped retry key ──▶ ORCHESTRATOR
 
 - The orchestrator process and host filesystem are inside the primary trust
   boundary.
+- A validator child is a separate failure and resource-containment process, but
+  it runs as the orchestrator's operating-system user. It is not outside a
+  mandatory-access-control or filesystem-confidentiality boundary.
 - Requesters, viewers, workers, and share holders are outside it.
 - The three configured static secrets represent different authority. Possessing
   one must not imply possessing the other two.
@@ -86,6 +92,7 @@ Requester ── pitch_key + optional scoped retry key ──▶ ORCHESTRATOR
 | Worker I/O bounds | per-attempt result/stream byte cap, error cap, cumulative stream batch/rate limits, bounded fanout | semantic safety of allowed output or transport-level denial of service |
 | Result quarantine | 500 bounded diagnostics with hash and at most 4 KiB preview outside operational execution | malware analysis or a complete forensic archive |
 | Total execution deadline | shared remaining budget for strategy, local calls, worker waits, validation, and finalization | forcibly stopping an external process that ignores cancellation |
+| Bounded validator runner | closed built-in allowlist; strict versioned stdin/stdout; parent-clamped timeout and response; bounded regular-file copies for `code_parse`; validated logical names and an empty private directory for metadata-only checks; process-group cleanup; best-effort Windows Job Object with kill-on-close and one-active-process limit; available POSIX CPU/memory/file/descriptor/process limits; parent-owned authoritative metadata with bounded child detail | hostile native-code isolation, same-user filesystem confidentiality, reliable network denial, guaranteed Windows Job assignment or POSIX-equivalent resource limits, behavioral correctness, or generated-code execution safety |
 | Restart reconciliation | truthful `interrupted` state for non-resumable executions/jobs and active attempts | resuming lost process-local work |
 | Durable-before-publication lifecycle | required commit before live snapshot, normal event, project-memory/legacy mirror, callback, response, or terminal state/artifact publication through canonical shares and legacy run/history/demo surfaces | durable event delivery, external transactionality, or coordinator HA |
 | Structural event retention | per-event allowlists before memory, SQLite, broadcast, and replay; startup redaction of historical payloads; generated tokens live-stream-only | removing sensitive text from pre-upgrade backups, proxy logs, or already copied event data |
@@ -326,15 +333,72 @@ may therefore remain valid after its artifact files have expired.
 
 ## 9. Generated code and `network_policy`
 
-Generated code is not sandboxed. Structural parsing and JSON Schema checks are
-validation evidence, not security boundaries and not behavioral proof. Do not
-execute generated code without review.
+Generated code is not sandboxed. Production `code_parse` treats it as data: it
+does not import a generated module, run top-level statements, invoke a shell or
+build script, install packages, run tests, start a browser, or execute generated
+networking. Structural parsing and JSON Schema checks are validation evidence,
+not behavioral proof. Do not execute generated code without review.
+
+In the default `auto` mode, parser-heavy built-ins (`code_parse`,
+`structured_json`, and `json_schema`) run in a bounded child process. The
+request and response are strict and size-bounded. `code_parse` receives bounded
+file copies from only the authoritative candidate subtree. Metadata-only
+validators forced through `subprocess` receive validated normalized logical
+names and an empty private directory, without copying or rehashing artifact
+content. The same root/subtree, regular-file, symlink/special-file,
+snapshot-membership, path, and count validation applies to those names. The
+environment is sanitized, and timeout/cancellation requests process-tree
+cleanup and counts inability to confirm it. Simple bounded checks remain inline.
+Forced `subprocess` supports every current built-in; explicit `inline`
+is a weaker local-development mode rejected by trusted-alpha preflight.
+
+The launcher fixes child `cwd` to the parent-created private validator directory.
+The runner resolves it once and supplies that explicit `stage_root` to the
+closed dispatcher; strict request data cannot choose or replace the root. An
+ambient or operator launch directory is therefore not protocol authority.
+
+This boundary contains trusted parser failures; it is not a hostile-code
+sandbox. The child shares the coordinator's OS user and can therefore attempt
+filesystem access outside the stage unless a separately administered host
+policy prevents it. POSIX resource limits are defense in depth. Windows retains
+wall time, bounded I/O, staging, and best-effort process cleanup. A per-run Job
+Object is best-effort configured with kill-on-close and an active-process limit
+of one, then assigned immediately after spawn. Successful assignment prevents
+additional active processes in that Job and improves parent-exit cleanup, but
+does not provide POSIX-equivalent CPU, address-space, output-file, or descriptor
+limits. Containers, VMs, WASM, gVisor,
+Firecracker, arbitrary validator plugins, and behavioral code execution remain
+out of scope.
+
+Job creation/configuration or assignment may fail, including inside a
+restrictive enclosing Job Object, and the runner is not suspended during the
+spawn-to-assignment window. A process or descendant outside successful Job
+assignment retains only the live-parent process-group/`taskkill /T` fallback.
+The containment label remains `windows_process_tree_best_effort`; it is not
+proof of Job membership. The implementation has no Linux parent-death signal,
+Windows child-side alarm, or durable runner PID registry. After abrupt
+coordinator loss, the POSIX child has an early hard alarm of about 125 seconds;
+an unassigned Windows runner or pre-assignment escape can outlive the
+coordinator, and restart does not discover it. Operators must check for a
+confirmed prior runner after a crash.
+
+Staged copies live under the operating-system temporary directory, with private
+POSIX modes where supported. On Windows they inherit the temporary root's ACL;
+mode bits do not establish a private DACL, so operators must secure that root.
+The implementation attempts process-tree cleanup before stage removal, but
+an abrupt coordinator/host failure or a deletion failure can leave generated
+source in a `mycelium-validator-*` directory. A handled deletion failure records
+`validator_stage_cleanup_failed` evidence and increments
+`staging_cleanup_failures`; an abrupt host loss may preclude either record.
+There is no startup stale-stage sweeper or secure-erasure guarantee; incident response must include
+temporary-storage review after confirming no live runner owns the directory.
 
 `network_policy` is recorded intent only. No OS firewall, container policy,
 syscall filter, tool broker, or worker enforcement consumes it today. In
 particular, `network_policy="disabled"` must not be advertised as guaranteed
-network isolation. The worker normally runs only inference, but custom model
-providers and later operator execution are outside this field's control.
+network isolation. The validator runner does not make that field enforceable.
+The worker normally runs only inference, but parser dependencies, custom model
+providers, and later operator execution are outside this field's control.
 
 ## 10. Lifecycle and availability
 
@@ -457,7 +521,14 @@ request-count and concurrency cap reduce abuse; they do not eliminate it.
   scheduling state.
 - No built-in HTTPS; enrollment/session secrets and content require external
   TLS or a private authenticated overlay.
-- No generated-code or model-executor sandbox.
+- No generated-code or model-executor sandbox. The validator child contains
+  allowlisted parser failures only; it is not same-user filesystem isolation.
+- Windows lacks the runner's POSIX CPU, address-space, output-file, descriptor,
+  and unconditional child-process resource-limit guarantees. Job Object
+  assignment, cleanup, and path-race resistance remain best effort.
+- Coordinator crash has no universal cross-platform parent-death enforcement or
+  restart orphan discovery; an unassigned Windows validator or pre-assignment
+  escape may survive until operator cleanup.
 - `network_policy` is not enforced.
 - Process-local scheduler, node sessions, connected-node state, and breaker state.
 - One orchestrator and no failover.
@@ -486,7 +557,8 @@ request-count and concurrency cap reduce abuse; they do not eliminate it.
 Run Mycelium on hardware you control, or among a small invited group whose node
 operators you trust. Use `deployment_mode=trusted_alpha`, run preflight, set
 independent strong `node_secret`, `pitch_key`, and `viewer_key` values, require
-durable enrollment, and allow exactly one process to own the state directory
+durable enrollment, keep `validator_execution_mode` at `auto` or
+`subprocess`, and allow exactly one process to own the state directory
 before binding beyond localhost. Use TLS or a private authenticated overlay;
 configure access logs to redact share capabilities and never capture
 idempotency, admission, enrollment, session, or attempt credentials; keep

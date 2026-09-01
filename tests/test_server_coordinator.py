@@ -27,6 +27,15 @@ def test_operator_health_is_private_and_reports_process_identity(tmp_path):
         assert payload["deployment_mode"] == "local"
         assert payload["single_coordinator_lock"] is True
         assert len(payload["instance_id"]) == 32
+        validator_health = payload["validator_process"]
+        assert validator_health["configured_execution_mode"] in {
+            "auto",
+            "subprocess",
+            "inline",
+        }
+        assert validator_health["runner"]["runner_protocol_version"] == "1"
+        assert "process_local_counters" in validator_health["runner"]
+        assert "not correctness" in validator_health["runner"]["statement"]
         assert settings["viewer_key"] not in response.text
 
     # Lifespan shutdown releases the kernel lock for the next coordinator.

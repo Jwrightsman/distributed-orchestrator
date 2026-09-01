@@ -1,25 +1,27 @@
-# Handoff — Mycelium Theme 2.1 Capability and Evidence Closeout
+# Handoff — Mycelium Theme 3A Bounded Validator Process Isolation
 
-_Updated August 26, 2026._
+_Updated August 31, 2026._
 
 ## Read these first
 
-1. `docs/adr/0011-node-capabilities-versioned-claims.md` — typed claim and hard
+1. `docs/adr/0013-parser-heavy-validators-bounded-process-boundary.md` — current
+   validator classification, protocol, staging, containment, and security limits
+2. `docs/adr/0011-node-capabilities-versioned-claims.md` — typed claim and hard
    matching boundary
-2. `docs/adr/0012-observed-capability-evidence-shadow-only.md` — scoped evidence,
+3. `docs/adr/0012-observed-capability-evidence-shadow-only.md` — scoped evidence,
    shadow-only policy, and operational-health boundary
-3. `docs/experiments/capability-evidence-shadow.md` — live thresholds and the
+4. `docs/experiments/capability-evidence-shadow.md` — live thresholds and the
    future-active no-go gates
-4. `docs/ARCHITECTURE.md` and `docs/PROTOCOL.md` — current system and normative
+5. `docs/ARCHITECTURE.md` and `docs/PROTOCOL.md` — current system and normative
    execution/client/worker contracts
-5. `docs/TRUSTED_ALPHA_RUNBOOK.md` and `docs/OPERATIONS.md` — protected reporting,
+6. `docs/TRUSTED_ALPHA_RUNBOOK.md` and `docs/OPERATIONS.md` — protected reporting,
    deployment, backup, and recovery procedure
-6. `docs/adr/0010-durable-enrollment-identity.md` — retained enrollment identity
+7. `docs/adr/0010-durable-enrollment-identity.md` — retained enrollment identity
    foundation
-7. `MASTER_PLAN.md` — current direction and freeze boundary
-8. `docs/audits/2026-08-23-comparative-architecture-audit.md` — historical,
+8. `MASTER_PLAN.md` — current direction and freeze boundary
+9. `docs/audits/2026-08-23-comparative-architecture-audit.md` — historical,
    non-normative architecture research; do not rewrite it as current policy
-9. `CLAUDE.md` and `AGENTS.md` — repository and consent rules
+10. `CLAUDE.md` and `AGENTS.md` — repository and consent rules
 
 `SPRINT_DURABLE_NODE_ENROLLMENT.md`, `SPRINT_DURABLE_EXECUTION_TRUTH.md`,
 `SPRINT_TRUSTED_ALPHA_RC1.md`, `SPRINT_STRATEGY_PROTOCOL.md`,
@@ -34,31 +36,110 @@ he must act on, and warn before anything network-facing. Never install, join, or
 run Mycelium on a machine without that machine owner's explicit informed
 consent.
 
-Theme 2.1 is a bounded capability/evidence closeout on the trusted-alpha
-backend. It enforces a typed node's claimed output capacity through the shared
-hard matcher, makes shadow-pipeline operational failures measurable without
-making them authoritative, and exposes immutable identity as a prerequisite for
-any future active experiment. It does not authorize active evidence routing,
-reputation, marketplace/payment logic, capacity-weighted scheduling, worker
-concurrency, a third evidence mode, attestation, public-key identity, workflow
-resumption, or coordinator HA. Frontend work may consume the protected
-diagnostics below without changing their meanings.
+Theme 3A puts parser-heavy, trusted built-in validators behind a bounded child-
+process boundary. It contains parser failures, validates only selected candidate
+inputs, copies bytes only for `code_parse`, clamps work to the remaining
+execution deadline, records fail-closed
+validation evidence, and adds parent-authored execution metadata and content-
+free counters. It does not
+execute generated code, establish same-user filesystem confidentiality,
+guarantee network denial, or add containers, VMs, WASM, plugins, behavioral
+validation, workflow resumption, or coordinator HA. Theme 2.1 capability and
+evidence behavior remains a retained prerequisite below.
 
 ## Branch and review
 
-- Branch: `codex/theme-2-1-capability-evidence-closeout`
-- Base: latest default branch after PR #61, starting at
-  `d6d12da176741962611a13f2130097bc880959c5`
+- Branch: `codex/theme-3a-validator-process-isolation`
+- Base: latest default branch after Theme 2.1, starting at
+  `79986be455c3f35ee9671f09d8a25f70550b040c`
 - Merge: review explicitly; do not auto-merge
-- Current handoff/experiment records: `HANDOFF.md` and
-  `docs/experiments/capability-evidence-shadow.md`
+- Current decision/handoff records: `HANDOFF.md` and
+  `docs/adr/0013-parser-heavy-validators-bounded-process-boundary.md`
 
 The final integrator must record the current commit range and current full-suite,
 Ruff, import, preflight, and deployment checks. Historical counts in sprint
 records are evidence for those exact revisions, not a substitute for the final
-branch run.
+branch run. The configured GitHub Actions jobs are Ubuntu-only. Theme 3A's
+operating-system split is nevertheless material: report POSIX CI and Windows
+manual results separately where containment expectations differ. The Windows
+results are recorded below; Ubuntu/POSIX verification remains pending until the
+PR checks pass.
 
-## Theme 2.1 architecture
+## Theme 3A architecture
+
+- `auto` is the default. It classifies `code_parse`, `structured_json`, and
+  `json_schema` as `subprocess_isolated`; `nonempty`,
+  `artifact_extraction`, `artifact_contract`, and `file_manifest` are
+  `inline_trusted`.
+- Forced `subprocess` supports every current built-in. Explicit `inline` is a
+  weaker local-development/debug mode, and trusted-alpha preflight rejects it.
+  Evidence records an overridden isolated parser as `inline_compatibility`;
+  required isolated checks never silently fall back inline after a runner
+  failure.
+- Runner defaults are 10 seconds, 256 MiB, 2 MiB request, and 32 KiB response.
+  Strict inclusive config bounds are respectively 1–120 seconds, 128–1,024
+  MiB, 16 KiB–16 MiB, and 1–256 KiB. Booleans and non-integer values are
+  invalid; trusted loading raises while local loading warns and defaults.
+- The registry remains a closed built-in allowlist. The strict version-1
+  request/response protocol cannot name an import, executable, shell command,
+  arbitrary callable, plugin, credential, database, or unrelated execution.
+  Task content, generated output, schemas, and filenames are not process
+  arguments.
+- Parent and child use bounded JSON over stdin/stdout. Unknown fields,
+  identity/version mismatch, malformed or excessive values, recognized bare or
+  delimiter-prefixed absolute POSIX/Windows/UNC host-path patterns, or any
+  `file://` pattern in response keys/values, and
+  over-limit bytes fail closed. The protocol has no host-path field. The parent owns assurance,
+  behavioral-correctness, required/optional/source, execution-mode,
+  containment, and termination metadata.
+- Artifact-aware child checks receive only normalized names selected from the
+  authoritative candidate subtree. Selection rejects traversal, symlinks,
+  reparse points, special files, another candidate, portable duplicates, and
+  names absent from the supplied snapshot; it enforces count and path bounds.
+  `code_parse` additionally receives fresh bounded byte copies, checks
+  size/hash/identity drift, and uses no hard links. Forced metadata-only checks
+  receive logical names in an empty private directory and do not copy or rehash
+  content. Process-tree termination and reaping are attempted before workspace
+  removal.
+- The runner uses the current interpreter without a shell, a sanitized
+  environment whose temp variables point into its controlled work directory, a
+  fresh working directory/process group, bounded I/O, and a timeout clamped to
+  the canonical repair/registry validation's remaining deadline.
+  Cancellation and timeout request process-tree termination and reaping;
+  failure to confirm process-tree cleanup is separately counted as a containment
+  incident. Failure to delete the temporary workspace fails closed with
+  `validator_stage_cleanup_failed` evidence and increments the distinct
+  `staging_cleanup_failures` counter; the leftover directory still requires
+  operator cleanup.
+- POSIX applies available CPU, address-space, file-size, descriptor, and child-
+  process limits. Windows retains wall-clock, bounded-pipe, staging, and
+  best-effort cleanup controls but does not claim those POSIX guarantees;
+  Windows path-race resistance is best effort within standard-library support,
+  and stage privacy relies on the operator-secured temporary root's inherited
+  ACL rather than POSIX mode bits.
+  A process group is not parent-death enforcement: POSIX has an early hard
+  child alarm. Successful Windows Job Object assignment adds best-effort
+  kill-on-close behavior, but a pre-assignment escape or unassigned runner can
+  survive coordinator crash; there is no child-side alarm, durable PID registry,
+  or restart orphan discovery.
+- Spawn, timeout, crash, protocol, oversize, staging, and stage-cleanup failures become bounded
+  error evidence. An unconfirmed process-tree cleanup is reflected in error
+  evidence or the content-free cleanup counter, depending on the original
+  outcome. Parent-authored metadata and content-free
+  process counters omit prompts, output, schemas, source contents, credentials,
+  raw stderr, host paths, and arbitrary exceptions.
+- `code_parse` parses generated files as data. It never imports a generated
+  module or runs top-level statements, shells, build scripts, tests, browsers,
+  package installers, or generated networking. Structural success is not
+  behavioral correctness.
+- The same-user subprocess is containment, not mandatory access control or a
+  hostile-code sandbox. `network_policy` remains recorded intent. Containers,
+  VMs, WASM, gVisor, Firecracker, plugins, and executable behavioral validation
+  remain deferred.
+
+Decision: [ADR 0013](docs/adr/0013-parser-heavy-validators-bounded-process-boundary.md).
+
+## Theme 2.1 architecture retained
 
 - `limits.max_output_bytes` is a claimed hard placement limit for typed nodes.
   The coordinator passes the canonical execution's authoritative
@@ -352,6 +433,8 @@ filenames, or generic “verified” badges:
 | Deliverable vs audit download | `artifact_manifest_url` and `/download` for deliverables; `audit_manifest_url`, `role=audit`, and `/audit-download` for non-deliverable audit material. Keep the separation explicit. |
 | Lifecycle status | `lifecycle_status`: queued, running, completed, failed, cancelled, interrupted. Use it for control flow. |
 | Validation outcome | `validation_outcome`: passed, failed, partial, not run. Present separately from lifecycle. |
+| Validator execution boundary | Parent-owned validation evidence exposes execution mode, runner protocol version, platform containment level, applicable termination reason, and duration around bounded non-authoritative child detail. Render `subprocess_isolated` as an isolated process check, `inline_compatibility` as a weaker same-process compatibility check, and `inline_trusted` as a bounded inline check; never call any of them a sandbox or render raw child output, stderr, schemas, files, or host paths. |
+| Validator runner health | `validator_process` object on private `/v1/operator/health`: configured mode, registered validator policies, runner protocol/containment level, process-local counter reset time and content-free outcome totals. Label it operational process health, not correctness or durable lifecycle truth. |
 | Assurance level | `assurance_level` plus validation summary/evidence. Describe the exact checks; never collapse it to a generic verified badge. |
 | Post-hoc verification | `posthoc_verification_status`, timestamps, agreement, and reason. RC1 trusted-alpha is disabled; show that plainly without changing original assurance. |
 | Canonical submission replay | `Idempotency-Replayed` appears only on keyed canonical POST responses. `false` means created; `true` means an existing execution was returned. Never label it exactly-once execution or workflow resumption. |
@@ -411,6 +494,10 @@ attestation, exactly-once external side effects, open-mode peer identity, active
 evidence-based routing, node reputation, parallel worker handouts, or proof that
 arbitrary generated output is correct.
 
+Approved Theme 3A wording is “bounded process containment for trusted built-in
+parsers.” Do not shorten it to “sandboxed validation,” “safe hostile-code
+execution,” “filesystem isolation,” “network isolation,” or “behavior tested.”
+
 ## Release/operator checklist
 
 1. Run `python scripts/preflight.py` against the intended config/state paths.
@@ -455,7 +542,50 @@ arbitrary generated output is correct.
     preference. Confirm there is no active evidence mode and no worker
     concurrency.
 
-## Theme 2.1 branch verification
+15. Exercise `auto`, forced `subprocess`, and local `inline`; confirm trusted-
+    alpha preflight rejects `inline`, every built-in supports forced subprocess,
+    and an isolated failure never falls back inline.
+16. Exercise protocol malformed/oversized/identity failures; parser timeout,
+    crash, spawn, stdout, memory, environment, descriptor, cancellation, and
+    process-tree cleanup cases; and POSIX/Windows-specific expectations.
+17. Exercise input traversal, symlink/reparse, special-file, count/path,
+    cleanup, and candidate-isolation cases. Confirm only `code_parse` receives
+    bounded copied bytes, forced metadata validators receive only validated
+    names, and generated Python side effects and exceptions are parsed without
+    import or execution.
+
+## Theme 3A branch verification
+
+Local final branch gates completed on September 1, 2026 from the clean Theme 3A
+commit range. The exact Windows results are:
+
+- `python -m pytest -q tests/test_execution_validators.py tests/test_validator_protocol.py tests/test_validator_staging.py`:
+  143 passed, 5 skipped;
+- `python -m pytest -q tests/test_execution_contracts.py tests/test_artifacts.py tests/test_execution_strategies.py tests/test_execution_interfaces.py`:
+  86 passed;
+- `python -m pytest -q tests/test_execution_lifecycle.py tests/test_execution_persistence.py tests/test_durable_execution_truth.py tests/test_attempt_authority.py`:
+  87 passed;
+- `python -m pytest -q tests/test_trusted_validation.py tests/test_code_check.py tests/test_extract.py tests/test_extract_repair.py tests/test_config.py tests/test_preflight.py tests/test_access_control.py`:
+  175 passed;
+- `python -m pytest -q`: 1,342 passed, 8 skipped;
+- `python -m ruff check .`: passed;
+- `python -c "import server"`: passed;
+- `python scripts/trusted_alpha_harness.py`: bounded profile passed one
+  iteration, including 64 focused tests across 43 selectors;
+- `python scripts/restart_recovery.py`: 17/17 checks passed;
+- `docker compose config`: passed; and
+- `git diff --check`: passed.
+
+The five focused skips are the POSIX process-group, inherited-descriptor,
+address-space-limit, FIFO, and Unix-socket cases on this Windows host. The full
+suite's additional skips are existing platform/dependency-specific cases.
+Ubuntu/POSIX tests could not be run locally because the Docker Linux engine was
+unavailable and the current session could not start its service; no dependency
+was installed. The repository's configured CI target is Ubuntu with Python
+3.14, so its PR checks remain the authoritative POSIX gate. Do not claim
+cross-platform completion until those checks pass.
+
+## Historical Theme 2.1 branch verification
 
 The working tree based on
 `d6d12da176741962611a13f2130097bc880959c5` completed these gates on August 26,

@@ -19,7 +19,8 @@ import platform
 from ollama_client import generate, generate_stream, strip_thinking
 from config import get as get_config
 from ledger import log_contribution
-from extract import check_code_files, extract_code_files
+from execution.validators import check_code_files_isolated_async
+from extract import extract_code_files
 import prompts
 
 OUTPUT_DIR = Path("output")
@@ -457,6 +458,11 @@ async def extract_and_repair(
     project_dir: Path,
     builder_outputs: dict[str, str] | None = None,
     allow_repair: bool = True,
+    validator_process_executor=None,
+    validator_deadline_monotonic: float | None = None,
+    validator_cancel_event=None,
+    validator_artifact_store=None,
+    validator_execution_id: str | None = None,
 ) -> tuple[str | None, list[str], list[str]]:
     """Extract code files, verify them mechanically, and repair once if broken.
 
@@ -470,8 +476,34 @@ async def extract_and_repair(
     the distributed path so both produce the same guarantees.
     """
     extract_source = final_output if final_output else review_output
+    async def parse_files(paths: list[str], artifact_root: Path) -> list[str]:
+        if not paths:
+            return []
+        authoritative_root = None
+        validated_entries = None
+        if validator_artifact_store is not None and validator_execution_id is not None:
+            subtree = artifact_root.relative_to(project_dir).as_posix()
+            validated_entries = await asyncio.to_thread(
+                validator_artifact_store.validate_subtree,
+                validator_execution_id,
+                subtree,
+            )
+            authoritative_root = await asyncio.to_thread(
+                validator_artifact_store.root_path,
+                validator_execution_id,
+            )
+        return await check_code_files_isolated_async(
+            paths,
+            artifact_root=artifact_root,
+            authoritative_artifact_root=authoritative_root,
+            validated_entries=validated_entries,
+            process_executor=validator_process_executor,
+            deadline_monotonic=validator_deadline_monotonic,
+            cancel_event=validator_cancel_event,
+        )
+
     code_files = extract_code_files(extract_source, project_dir)
-    code_problems = check_code_files(code_files)
+    code_problems = await parse_files(code_files, project_dir / "code")
 
     if not code_problems or not final_output or not allow_repair:
         return final_output, code_files, code_problems
@@ -487,7 +519,9 @@ async def extract_and_repair(
     candidate_dir.mkdir(exist_ok=True)
     try:
         candidate_files = extract_code_files(repaired, candidate_dir)
-        if len(check_code_files(candidate_files)) >= len(code_problems):
+        if len(await parse_files(candidate_files, candidate_dir / "code")) >= len(
+            code_problems
+        ):
             return final_output, code_files, code_problems  # no improvement
     finally:
         shutil.rmtree(candidate_dir, ignore_errors=True)
@@ -497,7 +531,7 @@ async def extract_and_repair(
     for stale in (project_dir / "code").glob("*"):
         stale.unlink()
     code_files = extract_code_files(final_output, project_dir)
-    return final_output, code_files, check_code_files(code_files)
+    return final_output, code_files, await parse_files(code_files, project_dir / "code")
 
 
 async def review(task: str, subtasks: list[dict], results: dict[int, str], memory_context: str = "") -> str:
@@ -660,6 +694,10 @@ async def run_pipeline(
     placement_fallback: str | None = None,
     on_revision_start=None,
     on_artifact_root=None,
+    validator_process_executor=None,
+    validator_deadline_monotonic: float | None = None,
+    validator_cancel_event=None,
+    validator_artifact_store=None,
 ) -> dict:
     """Run the full planner -> builder -> reviewer pipeline.
 
@@ -862,6 +900,11 @@ async def run_pipeline(
             f"builder {st['id']} ({st['title']})": results[st["id"]] for st in subtasks
         },
         allow_repair=revision_enabled,
+        validator_process_executor=validator_process_executor,
+        validator_deadline_monotonic=validator_deadline_monotonic,
+        validator_cancel_event=validator_cancel_event,
+        validator_artifact_store=validator_artifact_store,
+        validator_execution_id=execution_id,
     )
 
     log = {

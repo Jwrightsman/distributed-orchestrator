@@ -1,7 +1,7 @@
 # ROADMAP — Mycelium
 
 _The single home for everything not being built right now: the long-term vision, deferred
-engineering, external review findings, and speculative ideas. Last updated: August 14, 2026._
+engineering, external review findings, and speculative ideas. Last updated: August 31, 2026._
 
 **What lives where.** `MASTER_PLAN.md` is direction and the launch plan. `SPRINT_*.md` is the
 active work with its Session Log. `HANDOFF.md` is state for the next session. **This file is
@@ -197,6 +197,17 @@ default, read-only base, ephemeral workspace, CPU/memory/time/output limits, no 
 credentials, destroyed after validation. A service boundary, not a helper function inside the
 API process.
 
+> **Narrow prerequisite implemented (August 2026):** parser-heavy trusted
+> built-in validators use a bounded, versioned child-process protocol with
+> fail-closed evidence, wall-clock/process cleanup, and available POSIX resource
+> limits. `code_parse` receives bounded copied bytes; metadata-only validators
+> forced through the runner receive validated logical names without copying
+> artifact content. Production validation still never imports or executes
+> generated code. The child shares the coordinator's OS user, does not guarantee
+> filesystem confidentiality or network denial, and is not the hostile-code
+> sandbox described above. Containers, microVMs, WASM, behavioral execution,
+> and arbitrary validator plugins remain deferred.
+
 **Confidentiality classes.** Every task labeled `local_only` / `trusted_guild` /
 `approved_nodes` / `public_network`, with the UI stating plainly when a prompt will be visible
 to third-party operators.
@@ -346,8 +357,10 @@ governance, fork rights.
 
 **What the network won't build, decided collectively.** The guild sets the boundary, not a
 founder and not a board. The starting position: nothing that facilitates harm, mass surveillance,
-or exploitation — and agent execution stays scoped so no task can reach network resources outside
-its own sandbox. Boundary changes need a supermajority; any member can flag an active project for
+or exploitation — and any future generated-code execution must stay scoped so no task can reach
+network resources outside its sandbox. That sandbox is a future requirement, not a current
+guarantee; `network_policy` remains recorded intent. Boundary changes need a supermajority; any
+member can flag an active project for
 emergency review and halt it pending that review. Slow and deliberate on purpose. A single person
 deciding this is the failure mode, whichever direction they decide in.
 
@@ -487,6 +500,12 @@ memory or storage growth.
 
 ## Changelog
 
+- **2026-08-31** — Added Theme 3A's bounded process boundary for trusted
+  parser-heavy built-ins as a narrow prerequisite, while keeping real
+  generated-code sandboxing, reliable network denial, behavioral execution,
+  containers, microVMs, and WASM explicitly deferred. Corrected the guild
+  section so its no-network sandbox is a future requirement rather than a
+  description of current enforcement.
 - **2026-08-14** — Created. Consolidates the full project vision, the deferred technical work,
   the August 2026 external review, and the speculative ideas that predate the code.
 - **2026-08-14** — Completeness pass against the full design history. Added: contributor rights

@@ -12,7 +12,7 @@ from typing import Any, Callable
 import ensemble
 import orchestrator
 from execution.contracts import DagOptionsV1, EnsembleOptionsV1
-from execution.artifacts import ArtifactError, ArtifactStore
+from execution.artifacts import ArtifactEntryV1, ArtifactError, ArtifactStore
 from execution.dispatch import DispatchResult, Dispatcher, ExecutionUnit, PlacementDecision
 from execution.registry import ExecutionStrategy, StrategyOutcome
 from execution.validators import ValidatorRegistry
@@ -43,14 +43,27 @@ class StrategyContext:
         if self.deadline_monotonic is not None and time.monotonic() >= self.deadline_monotonic:
             raise TimeoutError("execution deadline exceeded")
 
-    async def validate_candidate(self, request, output: str, files: list[str], *, artifact_root: Path):
-        """Run synchronous validators off-loop under the execution deadline."""
-        return await self.run_blocking(
-            self.validators.validate,
+    async def validate_candidate(
+        self,
+        request,
+        output: str,
+        files: list[str],
+        *,
+        artifact_root: Path,
+        authoritative_artifact_root: Path | None = None,
+        validated_entries: list[ArtifactEntryV1] | None = None,
+    ):
+        """Run validators with explicit deadline and cancellation ownership."""
+        self.ensure_active()
+        return await self.validators.validate_async(
             request,
             output,
             files,
             artifact_root=artifact_root,
+            authoritative_artifact_root=authoritative_artifact_root,
+            validated_entries=validated_entries,
+            deadline_monotonic=self.deadline_monotonic,
+            cancel_event=self.cancel_event,
         )
 
     async def run_blocking(self, function, *args, **kwargs):
@@ -194,16 +207,40 @@ class DagStrategy(ExecutionStrategy):
                 "revision_started", {"strategy": self.identifier, "revision_pass": revision_pass}
             ),
             on_artifact_root=artifact_root_ready,
+            validator_process_executor=context.validators.process_executor,
+            validator_deadline_monotonic=context.deadline_monotonic,
+            validator_cancel_event=context.cancel_event,
+            validator_artifact_store=context.artifacts,
         )
 
         files = [str(path) for path in result.get("code_files", [])]
         project_dir = Path(result.get("project_dir", ""))
+        validation_root = (
+            project_dir / "code" if (project_dir / "code").is_dir() else project_dir
+        )
+        validated_entries: list[ArtifactEntryV1] | None = None
+        authoritative_root: Path | None = None
+        if context.artifacts and files:
+            if context.artifact_registration_error:
+                raise ArtifactError(context.artifact_registration_error)
+            subtree = validation_root.relative_to(project_dir).as_posix()
+            validated_entries = await context.run_blocking(
+                context.artifacts.validate_subtree,
+                context.execution_id,
+                subtree,
+            )
+            authoritative_root = await context.run_blocking(
+                context.artifacts.root_path,
+                context.execution_id,
+            )
         context.ensure_active()
         validation = await context.validate_candidate(
             request,
             result.get("final_output") or result.get("review", ""),
             files,
-            artifact_root=(project_dir / "code") if (project_dir / "code").is_dir() else project_dir,
+            artifact_root=validation_root,
+            authoritative_artifact_root=authoritative_root,
+            validated_entries=validated_entries,
         )
         for evidence in validation:
             context.emit(
@@ -371,21 +408,40 @@ class EnsembleStrategy(ExecutionStrategy):
                         encoding="utf-8",
                     )
                     failure_stage = "artifact_extraction"
-                    candidate = await context.run_blocking(ensemble.materialise, candidate, root)
+                    candidate = await context.run_blocking(
+                        ensemble.materialise,
+                        candidate,
+                        root,
+                        validate_parsers=False,
+                    )
                     files = list(candidate.files)
                     failure_stage = "manifest_creation"
+                    validated_entries: list[ArtifactEntryV1] | None = None
+                    authoritative_root: Path | None = None
+                    validation_root = (
+                        candidate_dir / "code"
+                        if (candidate_dir / "code").is_dir()
+                        else candidate_dir
+                    )
                     if context.artifacts:
-                        await context.run_blocking(
+                        subtree = validation_root.relative_to(root).as_posix()
+                        validated_entries = await context.run_blocking(
                             context.artifacts.validate_subtree,
                             context.execution_id,
-                            f"candidate_{index}",
+                            subtree,
+                        )
+                        authoritative_root = await context.run_blocking(
+                            context.artifacts.root_path,
+                            context.execution_id,
                         )
                     failure_stage = "validation"
                     evidence = await context.validate_candidate(
                         request,
                         dispatched.output,
                         files,
-                        artifact_root=(candidate_dir / "code") if (candidate_dir / "code").is_dir() else candidate_dir,
+                        artifact_root=validation_root,
+                        authoritative_artifact_root=authoritative_root,
+                        validated_entries=validated_entries,
                     )
                     failure_stage = None
             except asyncio.CancelledError:

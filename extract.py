@@ -62,20 +62,15 @@ def _looks_like_python_module(stripped: str) -> bool:
     namedtuple` — no fence, no shebang — and the extractor produced **zero
     files**. The deliverable was fine; nothing runnable reached the user.
 
-    Two conditions, and both matter:
-
-    - it must actually parse as Python, which rules out prose; and
-    - it must contain a real construct (import/def/class), because bare prose
-      like `Hello` is *also* a syntactically valid Python expression, so parsing
-      alone would happily turn an apology into a .py file.
+    Extraction is deliberately syntax-neutral.  Parser-heavy checks belong to
+    the bounded validator runner, after the bytes have been materialized and
+    staged.  Here we require only a line-oriented module construct; malformed
+    Python may therefore be extracted and then rejected by ``code_parse``.
     """
-    if not any(marker in stripped for marker in ("import ", "def ", "class ")):
-        return False
-    try:
-        ast.parse(stripped)
-    except (SyntaxError, ValueError, MemoryError, RecursionError):
-        return False
-    return True
+    return any(
+        re.match(r"^\s*(?:from\s+\S+\s+import\s+|import\s+|async\s+def\s+|def\s+|class\s+)", line)
+        for line in stripped.splitlines()[:200]
+    )
 
 
 def _detect_raw_document(text: str) -> dict | None:
@@ -142,16 +137,16 @@ def check_code_files(paths: list[str]) -> list[str]:
         except OSError:
             continue
 
-        if path.suffix == ".py":
+        if path.suffix.lower() == ".py":
             try:
                 ast.parse(source)
             except SyntaxError as e:
-                line = e.text.strip() if e.text else ""
                 problems.append(
-                    f"{path.name} is not valid Python: {e.msg} (line {e.lineno})"
-                    + (f" — the offending line is: {line}" if line else "")
+                    f"{path.name} is not valid Python (line {e.lineno})"
                 )
-        elif path.suffix == ".html":
+            except (MemoryError, RecursionError, ValueError) as exc:
+                problems.append(f"{path.name} could not be parsed ({type(exc).__name__})")
+        elif path.suffix.lower() == ".html":
             lowered = source.lower()
             for marker, description in _HTML_REQUIRED:
                 if marker not in lowered:

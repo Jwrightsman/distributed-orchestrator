@@ -47,13 +47,15 @@ def test_valid_python_has_no_problems(tmp_path):
     assert check_code_files([_write(tmp_path, "main.py", GOOD_PY)]) == []
 
 
-def test_syntax_error_detected_with_line_and_source(tmp_path):
+def test_syntax_error_detected_with_line_but_without_source_content(tmp_path):
     problems = check_code_files([_write(tmp_path, "main.py", BAD_PY)])
     assert len(problems) == 1
     assert "main.py is not valid Python" in problems[0]
-    # The message must be actionable for the reviser: line number + the line
+    # The bounded child response keeps the parser category and line number but
+    # never echoes generated source content into evidence or logs.
     assert "line 4" in problems[0]
-    assert "for e in expenses" in problems[0] or "amount" in problems[0]
+    assert "for e in expenses" not in problems[0]
+    assert "amount" not in problems[0]
 
 
 def test_valid_html_has_no_problems(tmp_path):

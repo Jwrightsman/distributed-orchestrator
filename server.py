@@ -198,12 +198,17 @@ async def request_validation_exception_handler(_request, exc):
 async def operator_health():
     """Private process identity and deployment-mode health for operators."""
     identity = getattr(app.state, "coordinator_identity", None)
+    try:
+        validator_diagnostics = get_execution_service().validators.diagnostics()
+    except Exception:
+        validator_diagnostics = {"status": "unavailable"}
     return {
         "status": "ok" if identity is not None else "starting",
         "instance_id": identity.instance_id if identity is not None else None,
         "deployment_mode": getattr(app.state, "deployment_mode", "unknown"),
         "single_coordinator_lock": identity is not None,
         "preflight_warnings": list(getattr(app.state, "preflight_warnings", ())),
+        "validator_process": validator_diagnostics,
     }
 
 
