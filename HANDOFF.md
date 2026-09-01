@@ -548,55 +548,34 @@ execution,” “filesystem isolation,” “network isolation,” or “behavio
 
 ## Theme 3A branch verification
 
-Final branch gates are pending. Do not convert focused slice results
-or historical Theme 2.1 counts into a full-branch claim. Before review, record
-the exact ending SHA and results for the focused validator/protocol/staging,
-validation-policy, artifact, lifecycle, persistence, and cancellation suites;
-the full test suite; Ruff; server import; trusted-alpha harness; restart
-recovery; Compose configuration; diff check; and every configured Ubuntu CI
-job. Record a separate manual Windows run before making a cross-platform claim.
-Report commands not run and every platform-specific skip.
+Local final branch gates completed on September 1, 2026 from the clean Theme 3A
+commit range. The exact Windows results are:
 
-Focused slice evidence available before integration, all from the current
-Windows host unless stated otherwise:
+- `python -m pytest -q tests/test_execution_validators.py tests/test_validator_protocol.py tests/test_validator_staging.py`:
+  96 passed, 5 skipped;
+- `python -m pytest -q tests/test_execution_contracts.py tests/test_artifacts.py tests/test_execution_strategies.py tests/test_execution_interfaces.py`:
+  86 passed;
+- `python -m pytest -q tests/test_execution_lifecycle.py tests/test_execution_persistence.py tests/test_durable_execution_truth.py tests/test_attempt_authority.py`:
+  87 passed;
+- `python -m pytest -q tests/test_trusted_validation.py tests/test_code_check.py tests/test_extract.py tests/test_extract_repair.py tests/test_config.py tests/test_preflight.py tests/test_access_control.py`:
+  175 passed;
+- `python -m pytest -q`: 1,295 passed, 8 skipped;
+- `python -m ruff check .`: passed;
+- `python -c "import server"`: passed;
+- `python scripts/trusted_alpha_harness.py`: bounded profile passed one
+  iteration, including 64 focused tests across 43 selectors;
+- `python scripts/restart_recovery.py`: 17/17 checks passed;
+- `docker compose config`: passed; and
+- `git diff --check`: passed.
 
-- configuration and preflight tests: 72 passed;
-- deployment configuration tests: 11 passed, 1 skipped;
-- targeted Ruff for configuration/preflight files: passed; and
-- protocol tests: 26 passed; staging/artifact/validation focus: 74 passed,
-  2 skipped (reported by their respective implementation slices).
-
-The skipped cases have not established the POSIX-only resource and process-group
-paths. Configured Ubuntu CI and a complete documented Windows platform run are
-both still pending as final branch evidence.
-
-These counts come from different intermediate working-tree states and are not a
-release gate.
-
-### Offline checkpoint (August 31, 2026)
-
-The branch was intentionally paused for the operator after the final relative-
-artifact-root regression fix. Current checkpoint evidence on Windows:
-
-- validator protocol/staging/process focus before that last path-normalization
-  fix: 94 passed, 5 platform-specific skips;
-- the new relative-root regression plus the unrelated worker-identity failure
-  rerun: 2 passed;
-- full-suite attempt before the last path-normalization fix: 1,292 passed,
-  8 skipped, 1 failed in the pre-existing concurrent Windows worker-identity
-  lock test; its isolated rerun passed;
-- an earlier full-suite attempt on the branch passed 1,292 with 8 skips, but it
-  predates the last cleanup and relative-root changes and is not the final gate;
-- `python -m ruff check .`: passed after the last fix; and
-- `git diff --check`: passed after the last fix, with only Git's CRLF conversion
-  notices.
-
-Ubuntu/POSIX containment remains unrun locally: the Docker client was present,
-but the Linux engine/service was unavailable and could not be started with this
-session's permissions. Resume by rerunning the complete suite from the checkpoint
-commit, then run server import, trusted-alpha harness, restart recovery, Compose
-configuration, and the configured Ubuntu CI jobs before publishing the PR as
-ready for review.
+The five focused skips are the POSIX process-group, inherited-descriptor,
+address-space-limit, FIFO, and Unix-socket cases on this Windows host. The full
+suite's additional skips are existing platform/dependency-specific cases.
+Ubuntu/POSIX tests could not be run locally because the Docker Linux engine was
+unavailable and the current session could not start its service; no dependency
+was installed. The repository's configured CI target is Ubuntu with Python
+3.14, so its PR checks remain the authoritative POSIX gate. Do not claim
+cross-platform completion until those checks pass.
 
 ## Historical Theme 2.1 branch verification
 

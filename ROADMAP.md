@@ -197,8 +197,8 @@ default, read-only base, ephemeral workspace, CPU/memory/time/output limits, no 
 credentials, destroyed after validation. A service boundary, not a helper function inside the
 API process.
 
-> **Narrow prerequisite implemented on the Theme 3A branch (Aug 31; final gates and merge
-> pending):** parser-heavy trusted built-in validators now use a bounded, versioned child-process protocol with selected-file staging, fail-closed
+> **Narrow prerequisite implemented on the Theme 3A branch (Aug 31; local gates passed
+> Sep 1, Ubuntu CI and merge pending):** parser-heavy trusted built-in validators now use a bounded, versioned child-process protocol with selected-file staging, fail-closed
 > evidence, wall-clock/process cleanup, and available POSIX resource limits. Production
 > validation still never imports or executes generated code. The child shares the coordinator's
 > OS user, does not guarantee filesystem confidentiality or network denial, and is not the
