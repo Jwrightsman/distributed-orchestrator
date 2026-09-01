@@ -7,6 +7,7 @@ import os
 import socket
 import stat
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -184,16 +185,21 @@ def test_fifo_is_rejected_without_opening_it(tmp_path):
     os.name != "posix" or not hasattr(socket, "AF_UNIX"),
     reason="Unix-domain socket coverage",
 )
-def test_socket_is_rejected(tmp_path):
-    root, subtree = _tree(tmp_path)
-    socket_path = subtree / "validator.sock"
-    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    try:
-        listener.bind(str(socket_path))
-        with pytest.raises(ValidatorStagingSecurityError, match="regular file"):
-            _stage(tmp_path, root, subtree, [socket_path])
-    finally:
-        listener.close()
+def test_socket_is_rejected():
+    # Linux limits AF_UNIX addresses to roughly 108 bytes. GitHub Actions uses
+    # a deliberately long pytest workspace, so build this fixture directly
+    # below the system temp root while retaining the full authoritative tree.
+    with tempfile.TemporaryDirectory(prefix="mv-sock-") as temporary:
+        short_root = Path(temporary)
+        root, subtree = _tree(short_root)
+        socket_path = subtree / "validator.sock"
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            listener.bind(str(socket_path))
+            with pytest.raises(ValidatorStagingSecurityError, match="regular file"):
+                _stage(short_root, root, subtree, [socket_path])
+        finally:
+            listener.close()
 
 
 def test_file_count_limit_is_enforced_before_stage_creation(tmp_path):
