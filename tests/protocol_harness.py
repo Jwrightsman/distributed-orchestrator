@@ -285,9 +285,15 @@ class CoordinatorHarness:
         )
 
         self._saved: dict[tuple[Any, str], Any] = {}
+        # Capture everything, including DEBUG, so the secret scan sees every
+        # line the coordinator emits. The root level is restored in close():
+        # leaving the whole process at DEBUG would change how every later test
+        # in the same session behaves.
         self._log_handler = _CapturingLogHandler()
-        logging.getLogger().addHandler(self._log_handler)
-        logging.getLogger().setLevel(logging.DEBUG)
+        self._root_logger = logging.getLogger()
+        self._root_level = self._root_logger.level
+        self._root_logger.addHandler(self._log_handler)
+        self._root_logger.setLevel(logging.DEBUG)
 
         self._patch(sqlite_store, "RetryConnection", _FaultingConnection)
         _ACTIVE_INJECTOR = self.faults
@@ -375,7 +381,8 @@ class CoordinatorHarness:
             self.client.__exit__(None, None, None)
         except Exception:  # pragma: no cover - teardown must not mask a finding
             pass
-        logging.getLogger().removeHandler(self._log_handler)
+        self._root_logger.removeHandler(self._log_handler)
+        self._root_logger.setLevel(self._root_level)
         for (target, name), value in self._saved.items():
             setattr(target, name, value)
         self._saved.clear()

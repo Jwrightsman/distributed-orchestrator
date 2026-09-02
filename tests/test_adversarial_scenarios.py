@@ -213,6 +213,45 @@ def test_a_real_lifespan_restart_agrees_with_the_campaign_restart(tmp_path):
         harness.close()
 
 
+def test_an_abandoned_session_has_its_lease_reclaimed_and_its_work_requeued(harness):
+    """A laptop closing mid-task is the single most ordinary failure here.
+
+    The worker simply stops talking. After `_NODE_TIMEOUT` the janitor reclaims
+    the node, closes its durable attempt, and puts the unit back on the queue —
+    and the abandoned worker can never settle it afterwards, even if it wakes up
+    holding the original handout.
+    """
+    execution_id = _open_network(harness, labels=("n0", "n1"))
+    handout = _lease(harness, execution_id, "u0", label="n0")
+    abandoned_token = harness.session_tokens["n0"]
+
+    harness.clock.advance(state._NODE_TIMEOUT + 30)
+    harness.janitor()
+
+    assert "n0" not in state.nodes, "an abandoned node stayed in the registry"
+    assert harness.durable_attempts()[handout.attempt_id]["state"] in ("expired", "reclaimed")
+    assert [task["task_id"] for task in state.task_queue] == ["u0"], (
+        "the abandoned unit was not requeued"
+    )
+
+    revived = harness.submit(
+        "u0", harness.result_body(handout), label="n0", token=abandoned_token
+    )
+    assert revived.status_code in (401, 403), revived.text
+    assert harness.durable_receipts() == {}
+    assert harness.durable_credits() == {}
+
+    # The requeued unit is still workable by somebody else, on a new attempt.
+    # The same sweep aged out every node, n1 included, so it reconnects first —
+    # which is exactly what the stock worker does after a poll returns 401.
+    assert harness.register("n1", CREDENTIALS[1], "returning").status_code == 200
+    second = harness.poll("n1")
+    assert second is not None and second.attempt_id != handout.attempt_id
+    assert harness.submit("u0", harness.result_body(second), label="n1").status_code == 200
+    assert len(harness.durable_receipts()) == 1
+    _credit_and_receipt_agree(harness)
+
+
 # ── 2. Clock skew ────────────────────────────────────────────────────
 
 

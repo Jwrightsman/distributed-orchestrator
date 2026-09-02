@@ -228,8 +228,26 @@ duplicate after retry, restart mid-submission, clock skew, duplicate identity re
 oversized or malformed payload, Sybil registration, colluding verifiers, disk-full, crash
 between verification and settlement. Property-based state-machine tests are the right shape.
 
-> The first four exist as of PR #45 (`tests/test_result_binding.py`), as example-based tests
-> rather than property-based ones. The rest are open.
+> **All twelve now have coverage (Theme 1.4).** A Hypothesis `RuleBasedStateMachine`
+> drives the real coordinator against a reference model of the intended protocol
+> (`tests/protocol_model.py`), with ten global invariants asserted after every generated
+> step under adversarial ordering, injected persistence faults, coordinator restarts, and
+> clock movement. The first four keep their example-based tests in
+> `tests/test_result_binding.py` and are now generated as well; the other eight have
+> dedicated deterministic coverage in `tests/test_adversarial_scenarios.py`.
+>
+> Two of the twelve assert *documented behaviour rather than resistance*, because the
+> project does not claim resistance. Sybil registration: a holder of `node_secret` gets N
+> enrollments for N labels, and what is asserted is that each is separately attributed,
+> separately revocable, and earns exactly its own credit. Colluding verifiers: sampled
+> agreement is off by default, describes output shape, and moves no eligibility, ordering,
+> settlement, or credit decision.
+>
+> The campaign found five defects, all in the tests or the model, none in the coordinator —
+> including one that mattered: for several iterations it reported green while never reaching
+> settlement at all. The full findings, the invariant list, the three seams introduced, what
+> the campaign does not cover, and its measured CI cost are in
+> [`docs/adversarial-campaign.md`](docs/adversarial-campaign.md).
 
 ---
 
@@ -500,6 +518,13 @@ memory or storage growth.
 
 ## Changelog
 
+- **2026-09-02** — Theme 1.4 closed the §5 adversarial-tests item. All twelve scenarios now
+  have coverage: a property-based state-machine campaign over the attempt, settlement,
+  enrollment, and execution-lifecycle machines, plus deterministic tests for the eight that
+  were open. Two scenarios are asserted as documented behaviour rather than resistance, which
+  is what the project actually claims. Findings in `docs/adversarial-campaign.md`; the
+  unflattering one — the campaign passing vacuously before it reached settlement — is written
+  up there in full, per §2.
 - **2026-08-31** — Added Theme 3A's bounded process boundary for trusted
   parser-heavy built-ins as a narrow prerequisite, while keeping real
   generated-code sandboxing, reliable network denial, behavioral execution,
