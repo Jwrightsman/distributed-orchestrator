@@ -14,7 +14,9 @@ process has terminated.  A failed staging attempt removes every partial copy.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import os
+import re
 import shutil
 import stat
 from contextlib import contextmanager
@@ -23,9 +25,15 @@ from pathlib import Path, PurePosixPath
 from typing import BinaryIO, Callable, Iterable, Iterator, Sequence
 
 from execution.artifacts import ArtifactEntryV1, ArtifactSecurityError, normalize_relative_path
+from execution.validator_protocol import (
+    MAX_VALIDATOR_OUTPUT_BYTES_V2,
+    VALIDATOR_OUTPUT_REFERENCE_PATH_V2,
+    VALIDATOR_OUTPUT_RESERVED_DIRECTORY_V2,
+)
 
 
 _COPY_CHUNK_BYTES = 1024 * 1024
+_OUTPUT_CHUNK_BYTES = 1024 * 1024
 _HARD_MAX_FILES = 100
 _HARD_MAX_FILE_BYTES = 50 * 1024 * 1024
 _HARD_MAX_AGGREGATE_BYTES = 100 * 1024 * 1024
@@ -60,6 +68,22 @@ class ValidatorStagingAborted(ValidatorStagingError):
             raise ValueError("unsupported validator staging abort reason")
         self.reason = reason
         super().__init__(reason)
+
+
+class ValidatorOutputError(ValidatorStagingError):
+    """Stable, content-free failure while staging or consuming output."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
+
+
+class ValidatorOutputStagingError(ValidatorOutputError):
+    """The parent could not create an exact private output stage."""
+
+
+class ValidatorOutputReferenceError(ValidatorOutputError):
+    """The child could not safely consume the bound output reference."""
 
 
 def _raise_if_aborted(abort_reason: Callable[[], str | None] | None) -> None:
@@ -107,6 +131,15 @@ class _SelectedSource:
     root_relative_path: str
     source_stat: os.stat_result
     claim: ArtifactEntryV1 | None
+
+
+@dataclass(frozen=True)
+class StagedValidatorOutput:
+    """Parent-authored metadata for the one fixed staged-output file."""
+
+    relative_path: str
+    byte_length: int
+    sha256: str
 
 
 def _is_reparse_or_link(path: Path, status: os.stat_result) -> bool:
@@ -163,6 +196,11 @@ def _portable_relative(path: Path, base: Path, *, kind: str) -> str:
         return normalize_relative_path(relative)
     except ArtifactSecurityError as exc:
         raise ValidatorStagingSecurityError(f"{kind} is not a safe relative path") from exc
+
+
+def _occupies_output_namespace(relative_path: str) -> bool:
+    first = PurePosixPath(relative_path).parts[0]
+    return first.casefold() == VALIDATOR_OUTPUT_RESERVED_DIRECTORY_V2.casefold()
 
 
 def _validate_directory_chain(base: Path, directory: Path, *, kind: str) -> os.stat_result:
@@ -260,6 +298,10 @@ def _select_sources(
         raw = Path(raw_value)
         lexical = raw.absolute() if raw.is_absolute() else subtree / raw
         staged_relative = _portable_relative(lexical, subtree, kind="selected input")
+        if _occupies_output_namespace(staged_relative):
+            raise ValidatorStagingSecurityError(
+                "selected input occupies the reserved validator-output namespace"
+            )
         if len(staged_relative) > limits.max_relative_path_length:
             raise ValidatorStagingLimitError("validator staging relative-path limit exceeded")
         portable_key = staged_relative.casefold()
@@ -478,6 +520,368 @@ def _create_destination_parent(staging_root: Path, relative_path: str) -> Path:
         except OSError as exc:
             raise ValidatorStagingSecurityError("staging directory could not be created") from exc
     return current
+
+
+_OUTPUT_REFERENCE_PARTS = PurePosixPath(VALIDATOR_OUTPUT_REFERENCE_PATH_V2).parts
+_OUTPUT_SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+_SECURE_DIRFD_OUTPUT = (
+    _SECURE_DIRFD_OPEN
+    and os.mkdir in getattr(os, "supports_dir_fd", set())
+)
+
+
+def _remove_partial_output_namespace(namespace: Path) -> None:
+    try:
+        status = namespace.lstat()
+    except FileNotFoundError:
+        return
+    if _is_reparse_or_link(namespace, status) or not stat.S_ISDIR(status.st_mode):
+        try:
+            namespace.unlink()
+        except IsADirectoryError:
+            namespace.rmdir()
+        return
+    shutil.rmtree(namespace)
+
+
+@contextmanager
+def _create_output_destination(staging_root: Path) -> Iterator[int]:
+    """Create the fixed output file once and yield its owned descriptor."""
+
+    namespace = staging_root / VALIDATOR_OUTPUT_RESERVED_DIRECTORY_V2
+    output_name = _OUTPUT_REFERENCE_PARTS[-1]
+    descriptors: list[int] = []
+    namespace_created = False
+    completed = False
+    close_failed = False
+    try:
+        try:
+            staging_status = _safe_lstat(staging_root, kind="validator staging root")
+        except ValidatorStagingError:
+            raise ValidatorOutputStagingError("validator_output_staging_failed") from None
+        if not stat.S_ISDIR(staging_status.st_mode):
+            raise ValidatorOutputStagingError("validator_output_staging_failed")
+
+        write_flags = (
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOINHERIT", 0)
+            | getattr(os, "O_BINARY", 0)
+        )
+        if _SECURE_DIRFD_OUTPUT:
+            directory_flags = (
+                os.O_RDONLY
+                | os.O_DIRECTORY
+                | os.O_NOFOLLOW
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NONBLOCK", 0)
+            )
+            root_fd = os.open(staging_root, directory_flags)
+            descriptors.append(root_fd)
+            opened_root = os.fstat(root_fd)
+            if not stat.S_ISDIR(opened_root.st_mode) or not _same_file_identity(
+                staging_status, opened_root
+            ):
+                raise ValidatorOutputStagingError("validator_output_staging_failed")
+
+            os.mkdir(VALIDATOR_OUTPUT_RESERVED_DIRECTORY_V2, 0o700, dir_fd=root_fd)
+            namespace_created = True
+            namespace_fd = os.open(
+                VALIDATOR_OUTPUT_RESERVED_DIRECTORY_V2,
+                directory_flags,
+                dir_fd=root_fd,
+            )
+            descriptors.append(namespace_fd)
+            opened_namespace = os.fstat(namespace_fd)
+            if not stat.S_ISDIR(opened_namespace.st_mode):
+                raise ValidatorOutputStagingError("validator_output_staging_failed")
+            if hasattr(os, "fchmod"):
+                os.fchmod(namespace_fd, 0o700)
+
+            file_fd = os.open(
+                output_name,
+                write_flags | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=namespace_fd,
+            )
+            descriptors.append(file_fd)
+        else:
+            namespace.mkdir(mode=0o700)
+            namespace_created = True
+            try:
+                os.chmod(namespace, 0o700)
+            except OSError:
+                pass
+            namespace_status = _safe_lstat(namespace, kind="validator output namespace")
+            if not stat.S_ISDIR(namespace_status.st_mode):
+                raise ValidatorOutputStagingError("validator_output_staging_failed")
+            output_path = namespace / output_name
+            file_fd = os.open(output_path, write_flags, 0o600)
+            descriptors.append(file_fd)
+            opened_path = _safe_lstat(output_path, kind="validator output file")
+            opened_file = os.fstat(file_fd)
+            current_namespace = _safe_lstat(
+                namespace,
+                kind="validator output namespace",
+            )
+            if (
+                not stat.S_ISREG(opened_file.st_mode)
+                or not _same_file_identity(opened_path, opened_file)
+                or not _same_file_identity(namespace_status, current_namespace)
+            ):
+                raise ValidatorOutputStagingError("validator_output_staging_failed")
+
+        opened_file = os.fstat(file_fd)
+        if not stat.S_ISREG(opened_file.st_mode):
+            raise ValidatorOutputStagingError("validator_output_staging_failed")
+        if hasattr(os, "fchmod"):
+            os.fchmod(file_fd, 0o600)
+        yield file_fd
+        completed = True
+    except (ValidatorStagingAborted, ValidatorStagingCleanupError, ValidatorOutputError):
+        raise
+    except ValidatorStagingError:
+        raise ValidatorOutputStagingError("validator_output_staging_failed") from None
+    except (FileExistsError, OSError):
+        raise ValidatorOutputStagingError("validator_output_staging_failed") from None
+    finally:
+        for descriptor in reversed(descriptors):
+            try:
+                os.close(descriptor)
+            except OSError:
+                close_failed = True
+        if (not completed or close_failed) and namespace_created:
+            try:
+                _remove_partial_output_namespace(namespace)
+            except OSError:
+                raise ValidatorStagingCleanupError(
+                    "partial validator output staging cleanup failed"
+                ) from None
+        if completed and close_failed:
+            raise ValidatorOutputStagingError("validator_output_staging_failed")
+
+
+def stage_validator_output(
+    *,
+    output: str,
+    staging_root: str | Path,
+    max_output_bytes: int,
+    abort_reason: Callable[[], str | None] | None = None,
+) -> StagedValidatorOutput:
+    """Write exact UTF-8 output to the one fixed private workspace path."""
+
+    _raise_if_aborted(abort_reason)
+    if not isinstance(output, str) or type(max_output_bytes) is not int:
+        raise ValidatorOutputStagingError("validator_output_reference_invalid")
+    if not 1 <= max_output_bytes <= MAX_VALIDATOR_OUTPUT_BYTES_V2:
+        raise ValidatorOutputStagingError("validator_output_reference_invalid")
+    try:
+        encoded = output.encode("utf-8", errors="strict")
+    except UnicodeEncodeError:
+        raise ValidatorOutputStagingError("validator_output_invalid_utf8") from None
+    _raise_if_aborted(abort_reason)
+    if len(encoded) > max_output_bytes or len(encoded) > MAX_VALIDATOR_OUTPUT_BYTES_V2:
+        raise ValidatorOutputStagingError("validator_output_oversized")
+
+    digest = hashlib.sha256()
+    written_total = 0
+    with _create_output_destination(Path(staging_root)) as destination_fd:
+        view = memoryview(encoded)
+        while written_total < len(view):
+            _raise_if_aborted(abort_reason)
+            upper = min(written_total + _OUTPUT_CHUNK_BYTES, len(view))
+            written = os.write(destination_fd, view[written_total:upper])
+            if written <= 0:
+                raise ValidatorOutputStagingError("validator_output_staging_failed")
+            digest.update(view[written_total : written_total + written])
+            written_total += written
+        _raise_if_aborted(abort_reason)
+        final = os.fstat(destination_fd)
+        if not stat.S_ISREG(final.st_mode) or final.st_size != written_total:
+            raise ValidatorOutputStagingError("validator_output_staging_failed")
+    _raise_if_aborted(abort_reason)
+    return StagedValidatorOutput(
+        relative_path=VALIDATOR_OUTPUT_REFERENCE_PATH_V2,
+        byte_length=written_total,
+        sha256=digest.hexdigest(),
+    )
+
+
+def _reference_lstat(path: Path) -> os.stat_result:
+    try:
+        status = path.lstat()
+    except FileNotFoundError:
+        raise ValidatorOutputReferenceError("validator_output_file_missing") from None
+    except OSError:
+        raise ValidatorOutputReferenceError("validator_output_reference_invalid") from None
+    if _is_reparse_or_link(path, status):
+        raise ValidatorOutputReferenceError("validator_output_file_not_regular")
+    return status
+
+
+@contextmanager
+def _open_output_reference(staging_root: Path) -> Iterator[int]:
+    """Open the fixed staged output once, without following path components."""
+
+    namespace = staging_root / VALIDATOR_OUTPUT_RESERVED_DIRECTORY_V2
+    output_path = namespace / _OUTPUT_REFERENCE_PARTS[-1]
+    root_status = _reference_lstat(staging_root)
+    namespace_status = _reference_lstat(namespace)
+    output_status = _reference_lstat(output_path)
+    if (
+        not stat.S_ISDIR(root_status.st_mode)
+        or not stat.S_ISDIR(namespace_status.st_mode)
+        or not stat.S_ISREG(output_status.st_mode)
+    ):
+        raise ValidatorOutputReferenceError("validator_output_file_not_regular")
+
+    try:
+        resolved_root = staging_root.resolve(strict=True)
+        resolved_output = output_path.resolve(strict=True)
+    except OSError:
+        raise ValidatorOutputReferenceError("validator_output_file_missing") from None
+    if not resolved_output.is_relative_to(resolved_root):
+        raise ValidatorOutputReferenceError("validator_output_reference_invalid")
+
+    descriptors: list[int] = []
+    try:
+        read_flags = (
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOINHERIT", 0)
+            | getattr(os, "O_BINARY", 0)
+        )
+        if _SECURE_DIRFD_OPEN:
+            directory_flags = (
+                read_flags
+                | os.O_DIRECTORY
+                | os.O_NOFOLLOW
+                | getattr(os, "O_NONBLOCK", 0)
+            )
+            root_fd = os.open(staging_root, directory_flags)
+            descriptors.append(root_fd)
+            opened_root = os.fstat(root_fd)
+            if not stat.S_ISDIR(opened_root.st_mode) or not _same_file_identity(
+                root_status, opened_root
+            ):
+                raise ValidatorOutputReferenceError("validator_output_reference_invalid")
+
+            namespace_fd = os.open(
+                VALIDATOR_OUTPUT_RESERVED_DIRECTORY_V2,
+                directory_flags,
+                dir_fd=root_fd,
+            )
+            descriptors.append(namespace_fd)
+            opened_namespace = os.fstat(namespace_fd)
+            if not stat.S_ISDIR(opened_namespace.st_mode) or not _same_file_identity(
+                namespace_status, opened_namespace
+            ):
+                raise ValidatorOutputReferenceError("validator_output_reference_invalid")
+
+            file_fd = os.open(
+                _OUTPUT_REFERENCE_PARTS[-1],
+                read_flags | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0),
+                dir_fd=namespace_fd,
+            )
+            descriptors.append(file_fd)
+        else:
+            file_fd = os.open(output_path, read_flags)
+            descriptors.append(file_fd)
+            current_namespace = _reference_lstat(namespace)
+            current_output = _reference_lstat(output_path)
+            if (
+                not _same_file_identity(namespace_status, current_namespace)
+                or not _same_file_identity(output_status, current_output)
+            ):
+                raise ValidatorOutputReferenceError("validator_output_reference_invalid")
+
+        opened_file = os.fstat(file_fd)
+        if not stat.S_ISREG(opened_file.st_mode):
+            raise ValidatorOutputReferenceError("validator_output_file_not_regular")
+        if not _same_file_identity(output_status, opened_file):
+            raise ValidatorOutputReferenceError("validator_output_reference_invalid")
+        yield file_fd
+    except FileNotFoundError:
+        raise ValidatorOutputReferenceError("validator_output_file_missing") from None
+    except OSError:
+        raise ValidatorOutputReferenceError("validator_output_reference_invalid") from None
+    finally:
+        for descriptor in reversed(descriptors):
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
+def read_staged_validator_output(
+    *,
+    staging_root: str | Path,
+    relative_path: str,
+    encoding: str,
+    byte_length: int,
+    sha256: str,
+) -> str:
+    """Read and verify one V2 output reference through a single file descriptor."""
+
+    if (
+        relative_path != VALIDATOR_OUTPUT_REFERENCE_PATH_V2
+        or encoding != "utf-8"
+        or type(byte_length) is not int
+        or not 0 <= byte_length <= MAX_VALIDATOR_OUTPUT_BYTES_V2
+        or not isinstance(sha256, str)
+        or _OUTPUT_SHA256_PATTERN.fullmatch(sha256) is None
+    ):
+        raise ValidatorOutputReferenceError("validator_output_reference_invalid")
+
+    digest = hashlib.sha256()
+    payload = bytearray()
+    with _open_output_reference(Path(staging_root)) as source_fd:
+        initial = os.fstat(source_fd)
+        if not stat.S_ISREG(initial.st_mode):
+            raise ValidatorOutputReferenceError("validator_output_file_not_regular")
+        if initial.st_size > MAX_VALIDATOR_OUTPUT_BYTES_V2:
+            raise ValidatorOutputReferenceError("validator_output_oversized")
+        if initial.st_size != byte_length:
+            raise ValidatorOutputReferenceError("validator_output_size_mismatch")
+
+        remaining = byte_length
+        while remaining:
+            try:
+                chunk = os.read(source_fd, min(_OUTPUT_CHUNK_BYTES, remaining))
+            except OSError:
+                raise ValidatorOutputReferenceError(
+                    "validator_output_reference_invalid"
+                ) from None
+            if not chunk:
+                raise ValidatorOutputReferenceError("validator_output_size_mismatch")
+            payload.extend(chunk)
+            digest.update(chunk)
+            remaining -= len(chunk)
+
+        if byte_length < MAX_VALIDATOR_OUTPUT_BYTES_V2:
+            try:
+                extra = os.read(source_fd, 1)
+            except OSError:
+                raise ValidatorOutputReferenceError(
+                    "validator_output_reference_invalid"
+                ) from None
+            if extra:
+                raise ValidatorOutputReferenceError("validator_output_size_mismatch")
+
+        final = os.fstat(source_fd)
+        if final.st_size > MAX_VALIDATOR_OUTPUT_BYTES_V2:
+            raise ValidatorOutputReferenceError("validator_output_oversized")
+        if final.st_size != byte_length:
+            raise ValidatorOutputReferenceError("validator_output_size_mismatch")
+
+    if not hmac.compare_digest(digest.hexdigest(), sha256):
+        raise ValidatorOutputReferenceError("validator_output_digest_mismatch")
+    try:
+        return payload.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        raise ValidatorOutputReferenceError("validator_output_invalid_utf8") from None
 
 
 def _copy_one(

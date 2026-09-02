@@ -391,7 +391,7 @@ settlement. It is not authority.
 ```mermaid
 flowchart TD
     O[Generated output + materialized files] --> R[ValidatorRegistry]
-    C[Output contract] --> F[Mandatory contract floor]
+    K[Output contract] --> F[Mandatory contract floor]
     P[Explicit policy] --> X[Additional validators]
     F --> R
     X --> R
@@ -399,14 +399,15 @@ flowchart TD
     M -->|inline_trusted| I[Bounded inline check]
     M -->|inline_compatibility| I
     M -->|subprocess_isolated| B{Validator input kind}
-    B -->|code_parse| C[Copy bounded selected bytes]
+    B -->|code_parse| C[Copy bounded selected artifact bytes]
     B -->|artifact metadata| N[Validate logical names; empty cwd]
-    B -->|output only| D[Private empty cwd]
-    C --> Q[Strict ValidatorRunnerRequestV1 over stdin]
+    B -->|output consumer| D[Stage exact UTF-8 at fixed private path]
+    D --> H[Bind fixed path + byte length + SHA-256]
+    C --> Q[Strict ValidatorRunnerRequestV2 metadata over stdin]
     N --> Q
-    D --> Q
+    H --> Q
     Q --> U[Allowlisted child process]
-    U --> W[Strict ValidatorRunnerResponseV1 over stdout]
+    U --> W[Strict ValidatorRunnerResponseV2 over stdout]
     I --> E[Versioned evidence]
     W --> E
     E --> S[ValidationSummaryV1]
@@ -428,16 +429,38 @@ local-development mode and trusted-alpha preflight rejects it. Evidence records
 than relabeling it `inline_trusted`. The registry is a closed allowlist and
 cannot load an import path, command, callable, or plugin.
 
-The parent sends only a versioned, size-bounded, validator-specific JSON request
-on stdin and accepts one strict bounded response on stdout. Identity and version
+New parent calls send only a V2, size-bounded, validator-specific JSON control
+request on stdin and accept one strict bounded V2 response on stdout. The
+control envelope never contains the generated output body. For `nonempty`,
+`structured_json`, and `json_schema`, the parent instead stages the exact
+strict UTF-8 bytes at the fixed reserved path
+`__mycelium_validator_input__/output.utf8` and binds that path, encoding, byte
+length, and lowercase SHA-256 in the request. The canonical
+`ExecutionRequestV1.max_output_bytes` remains authoritative up to 10 MiB;
+the default 2 MiB `validator_subprocess_request_max_bytes` limits only control
+metadata. Identity and version
 must match, unknown fields fail closed, and the parent—not the child—supplies
 required/optional source, assurance, behavioral-correctness, execution-mode,
 containment, and applicable termination metadata. Bounded child detail remains
 non-authoritative. Spawn failure, timeout, crash, malformed or oversized
-response, and staging error become bounded error evidence. An unconfirmed
+response, output-reference failure, and staging error become bounded error
+evidence. V1 remains explicitly parseable for compatibility tests, but new
+parent calls do not emit it; a malformed or failed V2 exchange is never
+reinterpreted, retried as V1, or run inline. An unconfirmed
 process-tree cleanup is reflected in error evidence or the content-free cleanup
 counter, depending on the original outcome; an isolated validator never falls
 back inline.
+
+The output namespace is parent-owned and ephemeral. Candidate artifact paths
+cannot occupy it. The parent creates the file exclusively with private modes
+where supported, hashes the exact bytes, closes it before spawn, and checks
+cancellation/deadline state during staging. The child accepts no alternate
+path, rejects links/reparse points and nonregular targets, opens the file once,
+and verifies confinement, descriptor identity, exact size, digest, and strict
+UTF-8 before dispatching the string to the allowlisted validator. Stable
+content-free failures and process counters expose reference integrity and
+staging health without publishing the output, digest, private path, schema, or
+raw exception.
 
 `code_parse` receives bounded regular-file copies from the authoritative
 candidate subtree in a fresh private directory. File count, per-file and
@@ -456,7 +479,11 @@ Temporary-workspace deletion failure records fail-closed
 `staging_cleanup_failures` counter; it can still leave a stale stage requiring
 operator cleanup.
 
-The runner's timeout is clamped to the execution's remaining deadline.
+The output file and copied artifact inputs share the fresh private workspace and
+the existing lifecycle cleanup owner. Process-tree termination/reaping precedes
+workspace deletion after success, validation failure, reference/protocol
+failure, crash, timeout, cancellation, or spawn failure. The runner's timeout is
+clamped to the execution's remaining deadline.
 Cancellation and timeout request process-group termination and descendant
 cleanup; inability to confirm reaping is counted. POSIX additionally applies available CPU, address-
 space, file-size, descriptor, and child-process limits. Windows retains wall-
@@ -545,6 +572,7 @@ and cookie behavior are in [ACCESS_CONTROL.md](ACCESS_CONTROL.md).
 | Connected nodes, sessions, and breaker state | **No** | enrolled workers authenticate again; operational state resets |
 | Shadow operational fallback counters | **No** | reset on process start and report their new `reset_at` timestamp |
 | Validator-runner operational counters | **No** | content-free totals reset on process start; terminal validation evidence remains durable with the execution |
+| Validator staged output/reference | **No** | exact UTF-8 bytes exist only in the fresh temporary workspace for one check and are removed with it; the private reference object/path/digest are not persisted as runner evidence, while pre-existing bounded validator byte-count detail is unchanged |
 
 Reconciliation makes non-resumable loss truthful; it is not durable scheduling
 or failover. Submission mappings are retained indefinitely during trusted alpha.

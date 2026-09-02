@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-31
+- Transport amendment: 2026-09-01 (runner protocol V2)
 - Decision scope: built-in validator execution, parent/child protocol, artifact
   staging, resource containment, and validation evidence
 
@@ -19,6 +20,15 @@ untrusted, even though the validator implementations are closed, trusted
 built-ins. The required boundary is therefore a bounded process boundary for
 trusted parser code, not a way to execute arbitrary generated code and not a
 hostile-code sandbox.
+
+The original V1 runner request placed output-consuming validators' complete
+generated output inside the JSON control message. Canonical execution permits
+up to 10,485,760 UTF-8 bytes, while the default subprocess request limit is 2
+MiB. A valid `structured_json` or `json_schema` result could therefore fail
+before parsing solely because JSON-in-JSON transport exceeded the control limit;
+escaping could amplify the mismatch. The output budget and the control-message
+budget have different purposes and must not impose an accidental smaller output
+ceiling on one another.
 
 ## Decision
 
@@ -57,21 +67,50 @@ bounded default.
 
 ### Versioned, strict parent/child protocol
 
-The parent serializes `ValidatorRunnerRequestV1` as bounded UTF-8 JSON on
-standard input. The child returns exactly one bounded
-`ValidatorRunnerResponseV1` as UTF-8 JSON on standard output. Unknown fields,
-unknown validator identities, version mismatches, malformed JSON, excessive
-nesting or collection sizes, non-finite numbers, and over-limit request or
-response bytes are rejected.
+New parent-side executions serialize `ValidatorRunnerRequestV2` as bounded
+UTF-8 JSON on standard input. The child returns exactly one bounded
+`ValidatorRunnerResponseV2` as UTF-8 JSON on standard output. The parser first
+reads an explicit bounded string `protocol_version`, then dispatches to that
+version's strict model. Missing, malformed, and unsupported versions are stable
+protocol failures. A response must use the request's version and exact
+allowlisted validator identity. A malformed V2 message is never interpreted as
+V1, and V2 failure never triggers a V1 retry or inline fallback.
 
-The request contains only the protocol version, allowlisted validator identity
-and version, the minimal bounded output or validator-specific contract
-projection, validated normalized logical filenames, and parent-clamped numeric
-limits. It
+V1 remains explicitly parseable for compatibility and focused protocol tests.
+It retains its inline `output` field and is not emitted by new production parent
+calls. Unknown fields, unknown validator identities, version mismatches,
+malformed JSON, excessive nesting or collection sizes, non-finite numbers, and
+over-limit request or response bytes are rejected in both versions.
+
+The V2 JSON request contains only the protocol version, allowlisted validator
+identity and version, an optional fixed-path output reference, the
+validator-specific bounded contract projection, validated normalized logical
+filenames, and parent-clamped numeric limits. The reference is required for
+`nonempty`, `structured_json`, and `json_schema` and forbidden for file-only
+validators. It is exactly:
+
+```json
+{
+  "relative_path": "__mycelium_validator_input__/output.utf8",
+  "encoding": "utf-8",
+  "byte_length": 12345,
+  "sha256": "<64 lowercase hexadecimal characters>"
+}
+```
+
+The path and encoding are literals, the byte length is bounded at 10,485,760,
+the digest is lowercase SHA-256, and unknown fields are forbidden. The request
 cannot name an import, executable, shell command, arbitrary callable, database,
 credential, enrollment, session, attempt nonce, or unrelated execution. Task
-content, generated output, schemas, and filenames are never command-line
-arguments.
+content and generated output are not present in V2 JSON, process arguments, or
+the child environment. Schemas and filenames remain bounded control metadata;
+none of those values are command-line arguments.
+
+`validator_subprocess_request_max_bytes` therefore limits the serialized JSON
+control envelope. It does not limit the referenced output body. The execution's
+existing `ExecutionRequestV1.max_output_bytes`, itself bounded by the protocol
+maximum of 10,485,760 UTF-8 bytes, remains the authoritative per-execution
+output ceiling. No second configurable output ceiling is introduced.
 
 The response contains only the protocol version, validator identity and
 version, boolean outcome, bounded optional score, bounded detail, and bounded
@@ -83,7 +122,11 @@ assurance, correctness,
 required/optional status, contract-floor source, execution mode, containment
 level, or lifecycle metadata in bounded detail is non-authoritative and cannot
 alter the corresponding parent-owned evidence fields. The parent registry
-remains authoritative for those meanings.
+remains authoritative for those meanings. V2 recursively rejects private
+output-reference field names in detail. Output-consuming validators additionally
+have closed built-in response shapes and exact ordinary failure reasons, so a
+child cannot echo output text, a digest, or the private reference through detail
+or `failure_reason`; an off-shape response is malformed protocol.
 
 The runner is launched with the current Python interpreter without a shell. It
 uses a sanitized environment allowlist, a fresh working directory with private
@@ -96,10 +139,42 @@ The launcher fixes the child `cwd` to the parent-created private validator
 directory. After its early limits and environment sanitization, the runner
 resolves that directory once and passes it to the closed dispatcher as explicit
 `stage_root`. For `code_parse`, that directory contains the bounded copied
-inputs. For metadata-only checks forced through the subprocess, it remains
-empty and the request carries only validated normalized logical filenames. The
-strict request cannot select, replace, or derive the filesystem root from an
-ambient or operator working directory.
+artifact inputs. For an output-consuming validator, it contains the one
+protocol-owned output file in the reserved namespace. For metadata-only checks
+forced through the subprocess, it remains empty and the request carries only
+validated normalized logical filenames. The strict request cannot select,
+replace, or derive the filesystem root from an ambient or operator working
+directory.
+
+### Private generated-output staging
+
+Before process creation, the parent strictly encodes the exact canonical output
+as UTF-8 and enforces the execution's authoritative byte budget and the hard 10
+MiB protocol maximum. Inside the fresh workspace it exclusively creates
+`__mycelium_validator_input__/output.utf8`, uses no-follow and descriptor-
+relative operations where the standard library and platform expose them,
+applies POSIX mode `0700` to the reserved directory and `0600` to the file, and
+uses the best available inherited private ACL behavior on Windows. It writes
+and hashes the exact bytes, records their exact length, and closes the file
+before spawning the child. Cancellation and the clamped deadline are checked
+during this work.
+
+The reserved namespace is server-owned. Candidate artifact selection and V2
+staged-file validation reject the namespace itself and every descendant, using
+portable case-insensitive collision checks. Task data, model output, artifact
+manifests, and request callers cannot choose or derive another output path.
+
+The child accepts only the fixed path and `utf-8` encoding. It resolves beneath
+the parent-controlled stage root, rejects missing, symlink/reparse, directory,
+FIFO, socket, device, and other nonregular targets, and opens the file once.
+Using that owned descriptor, it rechecks the regular-file identity and size,
+reads at most the declared length plus one byte where the hard ceiling permits,
+verifies exact byte length and SHA-256 with constant-time digest comparison,
+and then decodes strict UTF-8.
+Only the resulting string reaches the selected closed built-in validator.
+Reference, file-type, size, digest, encoding, and oversize failures have stable
+content-free reason codes and are infrastructure failures rather than ordinary
+validator rejection.
 
 ### Validated artifact inputs and staged copies
 
@@ -136,7 +211,8 @@ do not apply to those checks.
 
 The child never receives a coordinator artifact root. Process-tree termination
 and reaping are attempted before private-workspace removal on success,
-validation failure, timeout, crash, or cancellation. Failure to confirm
+validation failure, protocol/reference failure, timeout, crash, spawn failure,
+or cancellation. Failure to confirm
 process-tree cleanup is a counted containment incident. Failure to delete the
 temporary workspace records fail-closed `validator_stage_cleanup_failed`
 evidence and increments the distinct `staging_cleanup_failures` counter. The
@@ -192,7 +268,8 @@ before assignment, can outlive the coordinator until an operator removes it.
 Restart does not discover prior runner processes.
 
 Spawn failure, timeout, crash, signal exit, malformed or mismatched response,
-oversized output, and staging failure become bounded `status="error"` validation
+oversized response, invalid output reference, and artifact/output staging
+failure become bounded `status="error"` validation
 evidence with a stable parent-supplied reason. An unconfirmed process-tree
 cleanup is reflected in error evidence or the content-free cleanup counter,
 depending on the original outcome. Raw exceptions, stderr, input bodies,
@@ -217,10 +294,14 @@ detail and ordinary validation reason remain non-authoritative.
 Process-local, content-free counters distinguish runner starts, valid
 responses, validation failures, timeouts, crashes, malformed or oversized
 responses, oversized requests, spawn and staging failures, cancellations, and
-process-tree and staging-workspace cleanup failures. They are operational
+process-tree and staging-workspace cleanup failures. Separate bounded totals
+cover output staging, output-reference, size, digest, UTF-8, and oversize
+failures. They are operational
 diagnostics, not lifecycle or validation authority, and reset on coordinator
 restart. Logs, evidence, and counters omit prompts, generated output, schemas,
-source bytes, credentials, raw stderr, and arbitrary exception text.
+source bytes, credentials, raw stderr, the private output-reference object/path/
+digest, absolute workspace paths, and arbitrary exception text. Existing
+bounded validator byte-count detail is unchanged; it is not the V2 reference.
 
 ### Parsing remains non-executing
 
@@ -242,6 +323,12 @@ workers, model providers, or code an operator later chooses to run.
   deliberately gives up that separation.
 - Request, response, staging, wall time, parent-directed process-tree cleanup,
   and available POSIX resources have explicit finite bounds.
+- Any valid strict UTF-8 output within the execution's canonical byte budget can
+  reach an applicable isolated validator without the 2 MiB control-envelope
+  default becoming an unintended output ceiling.
+- Output validation adds an ephemeral private file and bounded disk I/O. The V2
+  control message carries only its fixed path, byte count, encoding, and digest,
+  not the generated body.
 - Forced-subprocess testing can exercise every current built-in through one
   protocol without opening a plugin mechanism.
 - Process startup adds latency; `code_parse` file copying also adds temporary
@@ -270,6 +357,14 @@ isolation boundary.
 Rejected because a closed built-in allowlist is necessary for a strict minimal
 protocol. Plugin provenance, installation, permissions, and compatibility are
 separate problems.
+
+### Increase the V1 JSON request limit
+
+Rejected because it would continue to duplicate and JSON-escape the complete
+output, couple two independent limits, increase pipe and parser exposure, and
+still make escaping expansion part of validator eligibility. A fixed,
+hash-and-size-bound workspace reference preserves the canonical output budget
+while keeping the control envelope small.
 
 ### Require containers, gVisor, Firecracker, virtual machines, or WASM now
 

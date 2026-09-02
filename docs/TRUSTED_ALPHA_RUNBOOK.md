@@ -40,6 +40,18 @@ validated normalized logical names and an empty private working directory; the
 parent applies root/subtree, regular-file, symlink/special-file,
 snapshot-membership, file-count, and path checks but does not copy or rehash
 artifact content for those metadata-only checks.
+Output-consuming child checks use runner protocol V2. The parent stages the
+exact canonical UTF-8 output at the fixed reserved private-workspace path and
+sends only its fixed relative path, literal encoding, exact byte length, and
+lowercase SHA-256 in the JSON control envelope. The 2 MiB request setting limits
+that metadata, not the output body; the execution's existing
+`max_output_bytes` remains authoritative up to the canonical 10 MiB maximum.
+Do not raise the control limit to compensate for a large valid output.
+
+New parent calls never emit V1. V1 remains explicitly parseable for focused
+compatibility tests, and a malformed or failed V2 run is never retried as V1 or
+inline. Candidate artifacts cannot occupy the reserved
+`__mycelium_validator_input__` namespace.
 Trusted-alpha preflight rejects `inline`; it is weaker local-development
 compatibility only. In local evidence, an overridden isolated parser is labeled
 `inline_compatibility`, not `inline_trusted`. Preflight checks all five fields and rejects booleans,
@@ -285,7 +297,8 @@ assurance, required/optional status, contract-floor source, or behavioral-
 correctness claims. Content-free runner counters distinguish starts, valid
 responses, validation failures, timeouts, crashes, malformed responses,
 oversized requests and responses, spawn and staging failures, cancellations,
-and process-tree and staging-workspace cleanup failures. They reset on
+process-tree and staging-workspace cleanup failures, plus output staging,
+reference, size, digest, UTF-8, and oversize failures. They reset on
 coordinator restart and are operational diagnostics, not lifecycle authority.
 Workspace deletion failure records `validator_stage_cleanup_failed` evidence
 and increments `staging_cleanup_failures`; it may still leave a stale stage.
@@ -303,7 +316,9 @@ record OS and Python version with a runner incident. Do not diagnose a failure
 by switching trusted alpha to `inline`. On Windows, verify that the service
 account's temporary root has an appropriately private ACL; validator working
 directories and any staged `code_parse` bytes inherit it because POSIX mode bits
-do not install a Windows DACL.
+do not install a Windows DACL. The same applies to the reserved staged-output
+file. A private temporary ACL reduces incidental exposure but a same-user child
+boundary is not mandatory access control or guaranteed confidentiality.
 
 ### Inspect scoped capability evidence
 
@@ -596,13 +611,16 @@ already downloaded.
    still be unverified or partial.
 3. Inspect `deadline_at`, unit summaries, placement telemetry, cancellation,
    interruption, structured errors, and validation evidence. A
-   `validator_timeout`, crash, malformed/oversized response, spawn failure, or
-   process-tree cleanup failure is a failed check, not permission to retry that
+   `validator_timeout`, crash, malformed/oversized response, spawn failure,
+   output staging/reference/integrity failure, or process-tree cleanup failure
+   is a failed check, not permission to retry that
    isolated validator inline. Confirm the child has been reaped and inspect
    whether the staging directory was removed before investigating host pressure
    or configuration. A `validator_stage_cleanup_failed` result is fail-closed
    evidence and increments `staging_cleanup_failures`; remove only a confirmed
-   stale validator directory after confirming no live runner owns it.
+   stale validator directory after confirming no live runner owns it. Never
+   include the staged output, private relative path, reference byte length, or
+   expected/observed digest in an incident ticket or copied operator response.
 4. Cancel idempotently if work should stop:
 
    ```bash
@@ -673,7 +691,10 @@ Apply the same handling to validator-runner evidence and process counters. They
 are designed to omit content, but their execution IDs, timings, platform
 containment levels, and failure distribution remain private operational data.
 Do not add staged files, request/response bodies, schemas, raw stderr, child
-environment, or process arguments to the bundle.
+environment, process arguments, the reserved output-reference path, reference
+byte length, or expected/observed output digest to the bundle. Runner protocol
+V2 does not change the existing policy for the execution result itself; it only
+keeps its private transport metadata out of evidence and diagnostics.
 
 Do not add idempotency keys, attempt nonces, or node session tokens to the
 bundle. Persistence failure logs should identify only the execution, commit

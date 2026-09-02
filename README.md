@@ -79,10 +79,17 @@ validation are isolated; simple bounded checks remain inline. Operators can
 force every built-in through the runner. `code_parse` receives bounded copied
 file bytes; forced metadata-only checks receive validated normalized logical
 names in an empty private working directory, so they do not copy large artifact
-content merely to inspect the manifest shape. This contains parser failures and
-bounds time, I/O, staging, and available POSIX resources; it does not import or
-execute generated code and is not a hostile-code, filesystem, or network
-sandbox. See [ADR 0013](docs/adr/0013-parser-heavy-validators-bounded-process-boundary.md).
+content merely to inspect the manifest shape. Output-consuming child checks use
+protocol V2: the parent writes the exact UTF-8 output to one fixed reserved file
+in the fresh private workspace and sends only its fixed relative path, byte
+length, encoding, and SHA-256 in the bounded JSON control message. The
+execution's canonical output limit remains authoritative up to 10 MiB; the
+default 2 MiB subprocess request limit applies only to control metadata. V1 is
+retained for explicit compatibility parsing and tests, never as an automatic
+fallback. This contains parser failures and bounds time, I/O, staging, and
+available POSIX resources; it does not import or execute generated code and is
+not a hostile-code, same-user filesystem, or network sandbox. See
+[ADR 0013](docs/adr/0013-parser-heavy-validators-bounded-process-boundary.md).
 
 ## Quick start
 
@@ -480,7 +487,7 @@ a reference, not a promise of dates.
 - [x] Required execution commit before live/event/callback/response and terminal artifact/share publication
 - [x] Requester-scoped, digest-only idempotency for canonical HTTP submission
 - [x] Separate lifecycle, validation outcome, assurance, and check summaries
-- [x] Bounded, versioned subprocess containment for parser-heavy built-in validators, with bounded content copies, metadata-minimal inputs, and fail-closed evidence
+- [x] Bounded, versioned subprocess containment for parser-heavy built-in validators, with hash-and-size-bound private output references, bounded artifact copies, metadata-minimal inputs, and fail-closed evidence
 - [x] Viewer-protected private routes and explicit redacted share capabilities
 - [x] Path-safe sealed artifact manifests, deliverable/audit bundles, files, ZIPs, hashes, quotas, and retention
 - [x] **Persistent DAG project memory** — `projects/<id>/memory.md` is loaded by the DAG pipeline; ensemble/direct reject `project_id` until selected-result-only updates exist

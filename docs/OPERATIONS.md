@@ -44,6 +44,7 @@ coordinator on a local filesystem serving a small private trusted alpha.
 | Shadow decisions and successful operational-health events | Separate SQLite (`capability-shadow-health.db`) | Append-only decisions and admission/evaluation rows survive; deterministic identities prevent replay double count; writer locks are isolated from authoritative `events.db` |
 | Shadow health-store, containment, and callback fallback counters | Memory | Reset at process start; protected reporting exposes their new `reset_at` timestamp |
 | Validator-runner operational counters | Memory | Content-free totals reset at process start; terminal validation evidence remains durable with its execution |
+| Validator staged output/reference | Temporary filesystem only | Removed with the one-check workspace after process cleanup; abrupt host/process loss can require sensitive temporary-file incident cleanup |
 | Shares and revocation metadata | SQLite | Retained; plaintext share token is never stored |
 | Contribution records | SQLite | Authoritative; JSON ledger is only a compatibility projection |
 | Artifact roots, entries, hashes, roles, seal state | SQLite plus files | Retained if both database and artifact trees are restored together |
@@ -670,13 +671,19 @@ The default runner settings are:
 | --- | --- | --- | --- |
 | `validator_subprocess_timeout_seconds` | 10 | 1–120 seconds | per-check wall time, additionally clamped to the execution's remaining deadline |
 | `validator_subprocess_memory_mb` | 256 | 128–1,024 MiB | requested address-space ceiling where POSIX provides the resource limit |
-| `validator_subprocess_request_max_bytes` | 2 MiB | 16 KiB–16 MiB | maximum serialized parent request before spawn |
+| `validator_subprocess_request_max_bytes` | 2 MiB | 16 KiB–16 MiB | maximum serialized V2 JSON control metadata before spawn; not an output-body limit |
 | `validator_subprocess_response_max_bytes` | 32 KiB | 1–256 KiB | maximum accepted child response |
 
 The bounds in this table are strict and inclusive; booleans and non-integer
 values are invalid. Preflight checks every field. Trusted-alpha
 loading/preflight fails on an invalid value, while local mode warns and
 restores the default.
+
+The execution's existing `ExecutionRequestV1.max_output_bytes` is the
+authoritative raw UTF-8 output budget, with a canonical maximum of 10 MiB. The
+runner request setting does not reduce that budget and there is no separate
+validator-output configuration. Raising the request limit is neither required
+nor the transport fix for large output.
 
 Each child is launched without a shell, with a sanitized environment whose
 `TEMP`/`TMP` on Windows or `TMPDIR` on POSIX point into its controlled working directory,
@@ -686,14 +693,38 @@ JSON request on stdin and accepts one strict bounded JSON response on stdout.
 The launcher fixes child `cwd` to the parent-created private validator
 directory; the runner resolves it once and passes it as explicit `stage_root`
 to the closed dispatcher. For `code_parse`, that directory contains bounded
-copied inputs. For metadata-only validators forced through the subprocess it is
-empty. The request can carry validated normalized logical names but cannot
-select or replace the root. Never treat the operator's launch directory as
-validator protocol authority.
+copied artifact inputs. For output-consuming checks it contains one exact UTF-8
+output file at the fixed reserved path
+`__mycelium_validator_input__/output.utf8`. For metadata-only validators forced
+through the subprocess it is empty. The request can carry validated normalized
+logical names but cannot select or replace the root. Never treat the operator's
+launch directory as validator protocol authority.
 The registry and parent own validator identity, version, required/optional and
 contract-floor status, assurance, behavioral-correctness flag, execution mode,
 containment level, and termination classification. Never infer those fields
 from child output.
+
+New parent calls emit protocol V2 only. Its bounded JSON contains control
+metadata, not the generated body: the output reference carries the fixed
+relative path, exact UTF-8 byte length, literal `utf-8` encoding, and lowercase
+SHA-256. V1 remains explicitly parseable for compatibility tests; a V2 failure
+does not retry V1 or fall back inline. Protocol version and exact validator
+identity must match in the response.
+
+For `nonempty`, `structured_json`, and `json_schema` in subprocess mode, the
+parent strictly encodes the canonical output, checks its execution byte budget,
+creates the reserved directory/file exclusively with private POSIX modes or the
+best available inherited Windows ACL behavior, writes and hashes the exact
+bytes, and closes the file before spawn. It checks cancellation and the
+effective deadline during staging. Candidate artifacts cannot use the reserved
+namespace or any descendant.
+
+The child accepts only that fixed reference. It confines the target to the
+fresh stage root, rejects links/reparse points and missing or nonregular targets,
+opens the file once, and verifies descriptor identity, hard and declared size,
+SHA-256, and strict UTF-8 before the allowlisted validator receives the text.
+Size, digest, UTF-8, file-type, reference, and oversize failures are stable
+content-free infrastructure failures. They never cause inline fallback.
 
 `code_parse` copies only selected regular files from the authoritative
 candidate subtree into the private directory. Path, type, identity, file-count,
@@ -723,8 +754,9 @@ removal; inability to confirm process-tree cleanup is a containment incident,
 not a successful result.
 
 The private validator directory lives under the operating system's temporary
-directory and can contain generated source for `code_parse`; metadata-only
-subprocess directories remain empty. Normal Python unwinding removes it, but abrupt
+directory and can contain generated source for `code_parse` or a reserved
+staged-output file for an output-consuming validator; metadata-only subprocess
+directories remain empty. Normal Python unwinding removes it, but abrupt
 coordinator termination, host power loss, or an uncatchable kill can leave a
 `mycelium-validator-*` directory. A temporary-workspace deletion error also can
 leave the same kind of stale directory, but it fails closed with
@@ -737,8 +769,9 @@ ordinary sensitive-temporary-file policy. Temporary-directory permissions and
 normal cleanup are not secure erasure.
 Staging is neither artifact sealing nor terminal publication authority.
 
-Spawn failure, timeout, crash, malformed/mismatched/oversized response, and
-staging failure produce bounded error evidence. An unconfirmed process-tree
+Spawn failure, timeout, crash, malformed/mismatched/oversized response,
+artifact/output staging failure, and output-reference failure produce bounded
+error evidence. An unconfirmed process-tree
 cleanup is reflected in error evidence or a content-free cleanup counter,
 depending on the original outcome. Neither case triggers an inline fallback for
 an isolated validator.
@@ -795,11 +828,19 @@ The exact counter fields are `reset_at`, `subprocess_runs`,
 `successful_responses`, `validation_failures`, `timeouts`, `crashes`,
 `malformed_responses`, `oversized_requests`, `oversized_responses`,
 `spawn_failures`, `staging_failures`, `staging_cleanup_failures`,
-`cancellations`, and `process_cleanup_failures`.
+`cancellations`, `process_cleanup_failures`, `output_staging_failures`,
+`output_reference_failures`, `output_size_mismatches`,
+`output_digest_mismatches`, `output_utf8_failures`, and
+`output_oversized_failures`.
 These process counters reset on restart and are not execution authority.
-Prompts, output bodies, schemas, source bytes, credentials, raw stderr, host
-paths, and arbitrary exception text must never enter logs, evidence, or
-counters.
+Prompts, output bodies or excerpts, JSON values/keys, schemas, source bytes,
+credentials, raw stderr, host paths, private output references or digests, and
+arbitrary exception text must never enter logs, evidence, counters, or
+operator-health diagnostics. Existing public result/share content policy is
+unchanged, but validator-runner metadata must not add the private reference,
+path, reference `byte_length`, or digest to those responses. Existing bounded
+validator detail that already reports an ordinary output byte count is
+unchanged and is not the private reference object.
 
 See
 [ADR 0013](adr/0013-parser-heavy-validators-bounded-process-boundary.md) for the
