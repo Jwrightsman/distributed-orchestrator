@@ -59,14 +59,14 @@ evidence behavior remains a retained prerequisite below.
 - Current decision/handoff records: `HANDOFF.md` and
   `docs/adr/0013-parser-heavy-validators-bounded-process-boundary.md`
 
-The final integrator must record the current commit range and current full-suite,
-Ruff, import, preflight, and deployment checks. Historical counts in sprint
-records are evidence for those exact revisions, not a substitute for the final
-branch run. The configured GitHub Actions jobs are Ubuntu-only. Theme 3A's
-operating-system split is nevertheless material: report POSIX CI and Windows
-manual results separately where containment expectations differ. The Windows
-results are recorded below; Ubuntu/POSIX verification remains pending until the
-PR checks pass.
+Historical counts in sprint records are evidence for those exact revisions, not
+a substitute for the final branch run. The configured GitHub Actions jobs are
+Ubuntu-only. Theme 3A's operating-system split is nevertheless material: report
+POSIX CI and Windows manual results separately where containment expectations
+differ. Both are complete for this branch and recorded separately under
+"Theme 3A.1 branch verification" below: the Windows gates were run locally at
+the branch tip, and the configured Ubuntu/Python 3.14 CI jobs passed at that
+same revision.
 
 ## Theme 3A.1 architecture
 
@@ -584,13 +584,46 @@ provenance, tamper-proof storage, or same-user filesystem isolation.
 
 ## Theme 3A.1 branch verification
 
-The final integrator must record the ending SHA and exact focused/full Windows
-results for protocol, staging, validator, contract, lifecycle, persistence,
-attempt-authority, Ruff, import, trusted-alpha harness, restart recovery,
-Compose, and `git diff --check` on the completed tree. GitHub's configured
-Ubuntu/Python 3.14 jobs remain the authoritative POSIX descriptor/symlink/FIFO/
-socket/process gate. Do not copy the historical Theme 3A counts below into a
-Theme 3A.1 completion claim.
+Local final branch gates completed on September 2, 2026 from the clean Theme
+3A.1 commit range `086b14d5..ef23a59e`, with every command run against the tree
+at `ef23a59ea45eba1d58cd092ae75d6a1a75e92021`. The only later commit on this
+branch is the documentation-only commit that records these results, so no code,
+test, or configuration input to the gates below changed after they ran. The
+exact Windows results are:
+
+- `python -m pytest -q tests/test_validator_protocol.py`: 131 passed;
+- `python -m pytest -q tests/test_validator_staging.py`: 55 passed, 5 skipped;
+- `python -m pytest -q tests/test_execution_validators.py`: 64 passed,
+  3 skipped;
+- `python -m pytest -q tests/test_execution_contracts.py`: 21 passed;
+- `python -m pytest -q tests/test_execution_lifecycle.py`: 16 passed;
+- `python -m pytest -q tests/test_execution_persistence.py`: 7 passed;
+- `python -m pytest -q tests/test_durable_execution_truth.py`: 22 passed;
+- `python -m pytest -q tests/test_attempt_authority.py`: 42 passed;
+- `python -m pytest -q`: 1,449 passed, 11 skipped;
+- `python -m ruff check .`: passed;
+- `python -c "import server"`: passed;
+- `python scripts/trusted_alpha_harness.py`: bounded profile passed one
+  iteration, including 64 focused tests across 43 selectors;
+- `python scripts/restart_recovery.py`: 17/17 checks passed;
+- `docker compose config`: passed; and
+- `git diff --check`: passed on both the working tree and the branch range.
+
+The eight focused skips are all POSIX-only cases on this Windows host: the
+staging descriptor-replacement, two special-file, and two Unix-socket cases, and
+the validator process-group, descriptor-inheritance, and `RLIMIT_AS` cases. The
+full suite's three additional skips are existing platform/dependency-specific
+cases unrelated to Theme 3A.1. No test was skipped because of a Theme 3A.1
+behavior gap.
+
+The repository's configured GitHub Actions jobs are Ubuntu with Python 3.14 and
+are the authoritative POSIX descriptor/symlink/FIFO/socket/process gate. Both
+configured runs passed at `ef23a59ea45eba1d58cd092ae75d6a1a75e92021` — the exact
+branch tip verified above — covering the `test`, `trusted-alpha`, and `docker`
+jobs. Windows and POSIX verification are therefore both complete for this
+revision. Do not copy the historical Theme 3A counts below into a Theme 3A.1
+completion claim, and rerun the affected gates before reusing these results for
+any later tree.
 
 ## Historical Theme 3A branch verification
 
