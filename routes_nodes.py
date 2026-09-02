@@ -1213,7 +1213,7 @@ async def next_task(node_id: str, request: Request):
                         if capability_match.selected_model is not None
                         else None
                     )
-                    task["assigned_at"] = time.time()
+                    task["assigned_at"] = state.coordinator_now()
                     execution_deadline = task.get("execution_deadline_at")
                     if execution_deadline and task["assigned_at"] >= float(execution_deadline):
                         _emit("worker_task_expired", {
@@ -1377,6 +1377,9 @@ def _settle_and_publish(
             session_id=session_id,
             enrollment_id=enrollment_id,
             credential_version=credential_version,
+            # Lease expiry is evaluated against coordinator time, never against
+            # anything the submitting worker supplied.
+            now=state.coordinator_now(),
         )
         receipt = outcome.receipt
         state.accepted_result_broker.publish(receipt)
