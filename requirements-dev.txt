@@ -21,3 +21,10 @@ psutil>=5.9.0
 # structurally instead of being loaded in a real browser, and the harness says
 # which check it ran. See evals/README.md.
 #   pip install playwright && playwright install chromium
+
+# Property-based state-machine campaign (tests/test_protocol_state_machine.py).
+# Test-only: nothing under the runtime imports it, and `pip install -r
+# requirements.txt` alone still starts a coordinator. The upper bound is
+# deliberate — RuleBasedStateMachine's shrinking behaviour is what the campaign's
+# counterexample minimisation depends on, and that is a 6.x contract.
+hypothesis>=6.100,<7
