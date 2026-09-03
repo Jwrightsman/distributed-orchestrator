@@ -1190,6 +1190,57 @@ timestamp, malware scan, behavioral verdict, or defense against a host able to
 alter both files and SQLite. Private delivery defaults to deliverables; audit
 material requires its explicit manifest or ZIP route.
 
+## Provenance envelopes
+
+One envelope per execution, created when its artifact manifest seals. It records
+the envelope version; execution, unit, attempt and receipt identifiers; each
+producing enrollment with its node label at settlement and its identity class;
+capability descriptor version and hash; executor kind and version; worker
+protocol version; model provider, name, digest and variant; the ordered
+validators that ran with their outcomes; the sealed manifest digest and per-file
+hashes; the settlement reference; and a creation timestamp.
+
+The envelope is serialized as canonical JSON - sorted keys, compact separators,
+UTF-8 - and hashed with SHA-256 under a domain separator, so identical production
+facts always produce an identical `envelope_digest`. The digest excludes the
+reserved signature slot, because a signature is over the digest.
+
+An execution with several accepted receipts carries one `producers` entry each and
+populates the singular `attempt_id`/`receipt_id` only when there is exactly one.
+Every absent fact - a missing model digest, a legacy session with no enrollment,
+an execution that produced no distributed attempt - is `null` and named in
+`unknown_facts`. Nothing is inferred from a node label, and history predating
+envelopes is not backfilled.
+
+`signature` and `signature_algorithm` are reserved, always `null`, and defined
+now so adding signing later is not a schema break: a signature will be a detached
+signature over `envelope_digest` and nothing else. No signing, key management,
+transparency log, in-toto layout, or SLSA attestation format is implemented.
+
+Artifact bundles carry `mycelium-provenance.json`, which a recipient can check
+offline against the extracted files. The file is additive; the bundle format is
+unchanged for readers that ignore it.
+
+An envelope establishes how artifacts were produced and under whose identity. It
+does not establish that the output is correct, useful, or honest. See
+[ADR 0017](adr/0017-provenance-is-a-binding-of-identity-not-a-claim-of-correctness.md).
+
+## Tamper-evident contribution ledger
+
+Each contribution entry carries `entry_index`, `previous_digest`, and
+`entry_digest` over an explicit list of content columns. The link is written
+inside the same transaction that writes the settlement's receipt and
+contribution, so settlement atomicity is unchanged and a replay or an ambiguous
+commit that retries resolves to the one existing entry - never a second, never a
+gap. Entries written before the chain existed keep NULL links, are the genesis
+boundary, and are counted separately rather than retrofitted.
+
+This is tamper *evidence*, not tamper proofing. It detects accidental corruption,
+a partial restore, and a casual edit. It does not defend against an operator with
+write access to the database, who can rewrite every entry and every link and
+produce a chain that verifies clean. There is no consensus, no external anchor,
+and no third party attesting to anything.
+
 ## Viewer access and explicit shares
 
 Viewer authorization is independent of node and pitch admission. A configured

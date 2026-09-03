@@ -546,6 +546,36 @@ check is the nominal maximum for an otherwise idle live coordinator, subject
 to ordinary scheduler delay and durable-store availability; failed checks are
 diagnosed and retried. Active leases are reclaimed safely after invalidation.
 
+## 8a. Check ledger integrity
+
+### Verify the ledger chain
+
+```bash
+python scripts/ledger_chain_admin.py verify
+python scripts/ledger_chain_admin.py --state-dir /srv/mycelium verify --json
+```
+
+A clean run prints the chained entry count, the pre-chain entry count, and
+`chain: intact`. A break prints the first failing index, its entry ID, the reason,
+and the expected and observed digests, and exits non-zero. Output carries an
+index, an ID, and two digests - no credentials, prompts, outputs, or artifact
+contents can appear, because none of them are in the chained columns.
+
+**What a clean result means:** no entry was changed without also recomputing every
+link after it. That catches disk corruption, a partial restore, a truncated file,
+and a casual edit.
+
+**What it does not mean:** that the recorded work happened, that it was correct,
+that anyone is owed anything, or that this coordinator's own operator has not
+rewritten the ledger. Someone with write access who edits an entry *and*
+recomputes every downstream link produces a chain that verifies clean, and this
+mechanism cannot tell. It is tamper evidence, not tamper proofing, and it is not
+consensus.
+
+**On a break:** stop trusting standings computed from this ledger until you know
+why. Check for a partial restore or disk trouble first; `pre-chain entries` tells
+you how much of the ledger the chain covers at all.
+
 ## 9. Back up
 
 The coordinator may remain online during backup; SQLite is captured through

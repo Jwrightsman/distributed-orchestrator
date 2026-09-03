@@ -616,6 +616,40 @@ deadline, a 64 KiB output cap, per-source active/rate limits, and a global
 active-job cap. It cannot dispatch to contributor nodes or mutate project
 memory.
 
+## Provenance envelopes and the ledger chain
+
+```text
+sealed artifact manifest --+--> provenance_envelope (append-only, one per execution)
+                           |         ^
+accepted receipts ---------+         |  referenced, never written back
+capability snapshots ------+         |
+validator outcomes --------+    terminal execution state (ADR 0009)
+
+settlement transaction ----> contribution row + chain link (same BEGIN IMMEDIATE)
+```
+
+An envelope binds facts that already existed separately - enrollment and node
+label, descriptor version and hash, executor and worker protocol, selected model,
+validator identities and outcomes, sealed per-file hashes - into one durable,
+exportable record. It is created when the manifest seals, references terminal
+state, and can never write to it. Canonical JSON hashed with SHA-256, so the same
+production facts always yield the same digest. Absent facts are recorded as
+unknown and listed, never inferred. A `signature` slot is reserved and never
+populated.
+
+The audit bundle carries `mycelium-provenance.json`, so a recipient can recompute
+the envelope digest and every per-file hash offline, with no coordinator and no
+credential. The addition is additive: a reader that ignores the file extracts the
+same artifacts it always did.
+
+Each ledger entry carries the digest of the one before it, written inside the
+same settlement transaction that writes the receipt and the contribution -
+settlement atomicity is unchanged. Entries predating the chain keep NULL links
+and are counted as the genesis boundary rather than retrofitted.
+`python scripts/ledger_chain_admin.py verify` walks it.
+
+Neither establishes correctness. An envelope says how artifacts were produced and under whose identity; a chain says no entry changed without every link after it also being recomputed. Neither is a claim that the output is right, and neither is tamper *proofing*: an operator with database access can rewrite both. See [ADR 0017](adr/0017-provenance-is-a-binding-of-identity-not-a-claim-of-correctness.md).
+
 ## Extension seams
 
 Six boundaries are written down and asserted by contract tests. There is no
