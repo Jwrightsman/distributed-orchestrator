@@ -608,8 +608,8 @@ Every observation taken on this branch, not a selected one:
 
 | Command | Observations |
 | --- | --- |
-| `pytest -q tests/test_protocol_state_machine.py` | 51.1 s, 55.0 s, 61.9 s, 124.9 s, 128.6 s |
-| `pytest -q tests/test_adversarial_scenarios.py` | 36.6 s, 40.2 s, 43.5 s, 56.9 s, 62.8 s |
+| `pytest -q tests/test_protocol_state_machine.py` | 51.1 s, 55.0 s, 61.9 s, 104.5 s, 111.9 s, 124.9 s, 128.6 s |
+| `pytest -q tests/test_adversarial_scenarios.py` | 36.6 s, 40.2 s, 43.5 s, 49.7 s, 55.4 s, 56.9 s, 62.8 s |
 | both modules in one invocation | 90.8 s, 91.4 s |
 | `pytest -q` (whole suite, with both) | 466.4 s |
 | extended profile (not in `pytest -q`) | 378.3 s |
@@ -622,7 +622,8 @@ point estimate. Re-measure on the runner that matters before quoting a figure.
 Theme 3B-1 added a rule and three floor classes to the campaign and re-measured
 rather than carrying the old figures forward. The range did not move — which,
 given how wide it is, is weak evidence that the additions were cheap rather than
-proof of it.
+proof of it. Theme 4A changed nothing in the campaign and re-measured anyway; the
+observations landed inside the existing range.
 
 What is not in doubt is the direction and the reason. The campaign module got
 slower in Theme 1.5, because the coverage floor showed that at the previous
