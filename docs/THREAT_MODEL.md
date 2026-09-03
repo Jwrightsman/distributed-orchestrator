@@ -476,6 +476,38 @@ token, wallet, transfer, redemption, price, or payment. The host operator can
 still alter SQLite or its compatibility file; the ledger is concurrent-safe and
 idempotent, not tamper-evident against the machine owner.
 
+## 12a. Durable verification evidence is not correctness
+
+Post-hoc verification evidence is durable as of Theme 3B-1. Three properties bound
+what an attacker gains from it, and one limitation is worth stating plainly.
+
+It cannot reach terminal state. Evidence is append-only, has no foreign key into
+executions or attempts, and refuses update and delete at the database. An attacker
+who could write arbitrary evidence still could not reclassify a completed
+execution, unsettle an attempt, alter an artifact seal, or change contribution
+points.
+
+It cannot be laundered into a correctness claim. Deterministic-check and
+agreement outcomes have disjoint vocabularies and separate scopes, structural
+contract-floor validators cannot be recorded here at all, and nothing in the
+schema or the read surface is named for correctness. Sampled agreement remains
+what §11 and ADR 0012 say it is: two outputs of comparable shape, from a
+coordinator that cannot tell which of them is wrong.
+
+It cannot absorb a security event. Malformed or mismatched authority credentials
+are refused as an attribution, so an authentication rejection can never be
+recorded as evidence against a node. Requester cancellation, coordinator
+shutdown, coordinator persistence failure, and verifier unavailability can only
+record that the run did not happen, and are excluded from the sample count.
+
+The limitation: an admitted worker that shapes its output to pass a deterministic
+check, or coordinates with another admitted worker to agree, will produce evidence
+that looks clean. That is the same limitation §6 already states about attempt
+authority, and durability does not change it. Nothing consumes this evidence for
+routing, so today the practical consequence is nil; it becomes a real question
+only if a future assurance ladder acts on it, which is why ADR 0014 defers that
+decision with an explicit list of what would have to be true first.
+
 ## 12. Scoped capability evidence is not reputation
 
 The evidence subsystem records coordinator-observed operational outcomes. Its

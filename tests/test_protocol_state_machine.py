@@ -637,6 +637,34 @@ class ProtocolCampaign(RuleBasedStateMachine):
         )
         self._assert_no_secret_in(response)
 
+    @precondition(lambda self: bool(self.accepted_bodies))
+    @rule(
+        unit_index=st.integers(0, 15),
+        outcome=st.sampled_from(("passed", "failed")),
+        verifier_version=st.sampled_from(("1", "2")),
+    )
+    def record_verification_evidence(
+        self, unit_index: int, outcome: str, verifier_version: str
+    ) -> None:
+        """Append post-hoc verification evidence for an accepted attempt.
+
+        Verification happens after terminal, so the invariants below get to check
+        the thing ADR 0014 is about: that appending evidence moves no lifecycle,
+        no receipt, and no credit, no matter how the sequence interleaves it with
+        restarts and injected faults.
+        """
+        task_ids = sorted(self.accepted_bodies)
+        task_id = task_ids[unit_index % len(task_ids)]
+        handout = self.handouts.get(task_id)
+        if handout is None:
+            return
+        self.harness.record_verification_evidence(
+            execution_id=str(handout.execution_id),
+            attempt_id=handout.attempt_id,
+            outcome=outcome,
+            verifier_version=verifier_version,
+        )
+
     @precondition(lambda self: bool(self.handouts))
     @rule(unit_index=st.integers(0, 15))
     def supersede_attempt(self, unit_index: int) -> None:
@@ -949,6 +977,37 @@ class ProtocolCampaign(RuleBasedStateMachine):
             )
 
     @invariant()
+    def verification_evidence_is_never_authoritative(self) -> None:
+        """Evidence references terminal state; it never reaches back into it.
+
+        Every evidence row names an execution and an attempt. None of them may
+        have moved that attempt out of `settled`, and the receipt count may not
+        have changed because evidence was appended.
+        """
+        attempts = self.harness.durable_attempts()
+        receipts = self.harness.durable_receipts()
+        for row in self.harness.verification_evidence():
+            attempt_id = row["attempt_id"]
+            if attempt_id is None:
+                continue
+            attempt = attempts.get(attempt_id)
+            if attempt is None:
+                continue
+            assert attempt["state"] == "settled", (
+                f"attempt {attempt_id[:8]} carries verification evidence while "
+                f"{attempt['state']}"
+            )
+            assert attempt_id in receipts, (
+                "verification evidence exists for an attempt with no accepted receipt"
+            )
+            assert row["fault_attribution"] != "subject_output" or row["outcome"] in (
+                "passed",
+                "failed",
+                "agreed",
+                "disagreed",
+            )
+
+    @invariant()
     def enrollment_isolation_holds(self) -> None:
         """No enrollment holds a receipt for an attempt issued to another."""
         attempts = self.harness.durable_attempts()
@@ -1007,6 +1066,18 @@ COVERAGE_FLOOR = {
     "persistence_fault_fired_in_submission": 1,
     "restart_with_outstanding_handout": 1,
     "lease_reclaimed_by_janitor": 1,
+    # Added in Theme 3B-1, which touches exactly this subsystem.
+    "capability_observation_recorded": 1,
+    "verification_evidence_recorded": 1,
+    "cross_enrollment_submission_rejected": 1,
+    # `execution_cancelled_while_running` is counted by the harness but is
+    # deliberately *not* floored here. It is unreachable through this surface for
+    # a structural reason rather than a budget one: a background execution task
+    # does not outlive the TestClient request that created it, so no generated
+    # sequence can observe an execution still running and cancel it. Cancelling a
+    # running execution is covered deterministically in
+    # tests/test_execution_lifecycle.py and tests/test_verification_evidence.py.
+    # See docs/adversarial-campaign.md.
 }
 
 

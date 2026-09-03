@@ -91,6 +91,7 @@ On top of that, in any order, including invalid ones:
 | `enqueue_unit` / `poll_for_work` | queue a canonical unit; long-poll and take a server-issued attempt |
 | `submit_correct_result` | the honest worker; its own rule, because everything downstream needs an acceptance |
 | `submit_replayed_result` | the honest retry after a lost response; also its own rule |
+| `record_verification_evidence` | append post-hoc verification evidence for an accepted attempt |
 | `submit_result` | nine mutations: wrong nonce, wrong attempt id, wrong node label, wrong session, wrong execution id, missing contract version, oversized output, error over the character cap, error over the byte cap |
 | `stream_tokens` | attempt-bound token batches against the cumulative budget |
 | `supersede_attempt` | a durable active→superseded transition |
@@ -335,20 +336,41 @@ run.
 
 | Class | Floor | Observed at the CI profile |
 | --- | --- | --- |
-| `settlement_accepted` | 1 | 4 |
-| `settlement_rejected_stale_or_misbound` | 1 | 119 |
-| `settlement_replayed` | 1 | 16 |
-| `idempotency_replayed` | 1 | 3 |
-| `idempotency_conflict` | 1 | **1** |
-| `persistence_fault_fired_in_submission` | 1 | 3 |
-| `restart_with_outstanding_handout` | 1 | 16 |
-| `lease_reclaimed_by_janitor` | 1 | 7 |
+| `settlement_accepted` | 1 | 9 |
+| `settlement_rejected_stale_or_misbound` | 1 | 125 |
+| `settlement_replayed` | 1 | 21 |
+| `idempotency_replayed` | 1 | 2 |
+| `idempotency_conflict` | 1 | 3 |
+| `persistence_fault_fired_in_submission` | 1 | 2 |
+| `restart_with_outstanding_handout` | 1 | 4 |
+| `lease_reclaimed_by_janitor` | 1 | 2 |
+| `capability_observation_recorded` | 1 | 7 |
+| `verification_evidence_recorded` | 1 | 12 |
+| `cross_enrollment_submission_rejected` | 1 | 15 |
 
 Every floor is 1 deliberately. A floor tuned up to the edge of what a profile
 reliably produces becomes flaky, and a flaky guard gets deleted by the next
-person, which is how the guard dies. `idempotency_conflict` is the thin one at
-exactly 1 - if a future change drops it to 0, that is the guard working, and the
-failure message names the class and prints everything the run *did* reach.
+person, which is how the guard dies. `idempotency_replayed` and
+`persistence_fault_fired_in_submission` are the thin ones at 2 - if a future
+change drops one to 0, that is the guard working, and the failure message names
+the class and prints everything the run *did* reach.
+
+Counts change whenever a rule is added or removed, because that changes what the
+generator draws. The four rows above the line were re-measured in Theme 3B-1 for
+that reason rather than carried over.
+
+**One class is counted but deliberately not floored.**
+`execution_cancelled_while_running` is unreachable through this surface for a
+structural reason, not a budget one: a background execution task does not outlive
+the `TestClient` request that created it, so anything still awaiting when the
+request returns is cancelled and lands as `interrupted`, never `cancelled`. That
+was measured, not assumed - the campaign's strategy was made to park so a later
+step could cancel it, and the result was `interrupted` every time, which
+demonstrates the constraint rather than working around it. The parking was
+reverted. Cancelling a genuinely running execution is covered deterministically
+by `tests/test_execution_lifecycle.py`, and its interaction with the verification
+evidence model by
+`tests/test_verification_evidence.py::test_cancelling_a_running_execution_is_never_the_subjects_fault`.
 
 No class was deferred to the extended profile. All eight are reached by the
 default CI profile. Because that profile is derandomized with no example
@@ -586,8 +608,8 @@ Every observation taken on this branch, not a selected one:
 
 | Command | Observations |
 | --- | --- |
-| `pytest -q tests/test_protocol_state_machine.py` | 51.1 s, 124.9 s, 128.6 s |
-| `pytest -q tests/test_adversarial_scenarios.py` | 43.5 s, 62.8 s |
+| `pytest -q tests/test_protocol_state_machine.py` | 51.1 s, 55.0 s, 61.9 s, 124.9 s, 128.6 s |
+| `pytest -q tests/test_adversarial_scenarios.py` | 36.6 s, 40.2 s, 43.5 s, 56.9 s, 62.8 s |
 | both modules in one invocation | 90.8 s, 91.4 s |
 | `pytest -q` (whole suite, with both) | 466.4 s |
 | extended profile (not in `pytest -q`) | 378.3 s |
@@ -596,6 +618,11 @@ The same command varies by 2.5x on this machine, and the two combined runs were
 *faster* than the sum of the modules run alone. So the honest statement is a
 range — **the campaign adds roughly 90–190 s to `pytest -q` here** — and not a
 point estimate. Re-measure on the runner that matters before quoting a figure.
+
+Theme 3B-1 added a rule and three floor classes to the campaign and re-measured
+rather than carrying the old figures forward. The range did not move — which,
+given how wide it is, is weak evidence that the additions were cheap rather than
+proof of it.
 
 What is not in doubt is the direction and the reason. The campaign module got
 slower in Theme 1.5, because the coverage floor showed that at the previous

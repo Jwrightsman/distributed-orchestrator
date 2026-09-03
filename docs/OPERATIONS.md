@@ -545,6 +545,37 @@ is actually lost, rotate again to a different unused path, producing another
 new version. Plaintext cannot and should not be recovered from SQLite. Do not
 copy a credential into a command line, chat, ticket, log, or URL.
 
+## Verification evidence
+
+`GET /v1/operator/verification-evidence` (viewer-protected) reports bounded
+per-scope verification evidence: subject enrollment ID and node label, identity
+class, descriptor hash, executor and model scope, task class, verifier
+kind/name/version, counts by outcome and by fault attribution, a sample count
+beside every rate with the same `capability_evidence_min_samples` floor and
+Wilson interval treatment as capability evidence, the last observed timestamp,
+and the legacy row count held separately. Query parameters: `enrollment_id`,
+`descriptor_hash`, `task_class`, `verifier_kind`, `limit`.
+
+Read it as evidence, not as a verdict. The response says so in its own
+`semantics` block: it is not reputation, not correctness, not assurance, and it
+influences no routing, eligibility, settlement, or contribution decision. An
+agreement count describes whether two runs produced output of comparable *shape*;
+it does not say either output was right, and it is scoped separately from
+deterministic-check outcomes so the two can never be added together. A scope below
+the minimum sample count reports `insufficient_evidence`, which means "not enough
+observations", not "poor".
+
+`not_run` rows record that a verification did not happen and why -- requester
+cancellation, coordinator shutdown, coordinator persistence failure, a deadline
+that had already passed, or an unavailable verifier. They are excluded from the
+attributable sample count, so a cancelled or interrupted run never depresses a
+node's observed rate.
+
+Sampled verification remains off: `verify_rate` defaults to `0.0` and
+trusted-alpha mode disables it regardless. This surface exists because the
+evidence is now durable, not because the feature has been switched on. See
+[ADR 0014](adr/0014-durable-verification-evidence.md).
+
 ## Confidentiality and worker trust
 
 Remote dispatch requires explicit consent and a non-local confidentiality

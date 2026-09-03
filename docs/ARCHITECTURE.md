@@ -263,6 +263,32 @@ they are not capability evidence, assurance, correctness, reputation, or routing
 weight. Active evidence routing remains unimplemented. See
 [ADR 0012](adr/0012-observed-capability-evidence-shadow-only.md).
 
+## Durable verification evidence
+
+```text
+terminal execution  --referenced by-->  verification_evidence  (append-only)
+        ^                                        |
+        |                                        v
+   never written back                   protected operator read
+```
+
+Post-hoc verification produces evidence *about* an execution that is already
+terminal. The arrow only points one way: evidence names an execution, attempt,
+and receipt, and nothing in the evidence path can write to them. There is no
+foreign key back into terminal state, so evidence cannot block or cascade into it
+either, and update/delete are refused by triggers.
+
+The scope is the same shape as scoped capability evidence, plus verifier
+kind/name/version. Deterministic checks and agreement observations are different
+kinds with disjoint outcome vocabularies and separate scopes, so no aggregate can
+turn agreement into a pass rate. Writes are best-effort with process-local
+fallback counters, on the Theme 2.1 pattern.
+
+Nothing consumes this yet. It exists so that a task-class assurance ladder
+(Theme 3B-2) can be built on durable, replay-safe, attribution-aware data rather
+than on a process-local dictionary. See
+[ADR 0014](adr/0014-durable-verification-evidence.md).
+
 ## DAG execution
 
 ```mermaid

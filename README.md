@@ -379,6 +379,7 @@ See **[docs/DEPLOY.md](docs/DEPLOY.md)** for local, private-overlay, and reverse
 | `/projects*` | GET/POST | Private persistent project APIs |
 | `/nodes` | GET | Private connected-worker details |
 | `/v1/operator/node-enrollments` | GET | Private secret-free durable enrollment status and accounting |
+| `/v1/operator/verification-evidence` | GET | Private bounded post-hoc verification evidence; not reputation, not correctness |
 | `/v1/operator/capability-evidence` | GET | Private scoped operational aggregates and shadow-policy counts |
 | `/nodes/register` | POST | Worker node registration |
 | `/nodes/{id}/heartbeat`, `/drain` | POST | Session-bound worker liveness and drain control |
@@ -416,6 +417,24 @@ This is a **Phase 0 private trusted-alpha system**. Here's exactly what's durabl
 **Observed capability evidence is experimental and shadow-only.** Coordinator-recorded deadline outcomes, bounded latency/throughput, candidate-local contract-floor results, and sampled output agreement are kept in separate exact scopes: enrollment, descriptor, executor/model, task class, and evidence role. A changed descriptor or model starts cold; unrelated history is not inherited. `capability_evidence_mode` is `off` by default and accepts only `off` or `shadow`. Shadow mode evaluates a hypothetical preference after the actual handout is durable and cannot change hard eligibility, queue order, or assignment. Fewer than `capability_evidence_min_samples` deadline samples remains insufficient evidence; every rate includes its sample count and Wilson interval. Agreement is not correctness, contract-floor validation is task-specific assurance, contribution points are not reputation, and no global score or active evidence routing exists. See [ADR 0012](docs/adr/0012-observed-capability-evidence-shadow-only.md) and the [experiment report](docs/experiments/capability-evidence-shadow.md).
 
 `scripts/trusted_alpha_harness.py`, `scripts/restart_recovery.py`, and `scripts/soak_test.py` are reproducible operational checks, but do not copy an old pass count into a current claim: rerun them against the commit being deployed. The bounded trusted-alpha harness uses fake executors/workers and no live model. Canonical startup reconciliation truthfully interrupts non-resumable queued/running state rather than leaving it active indefinitely.
+
+**Post-hoc verification evidence is durable, scoped, and consumed by nothing yet.**
+Verification happens after an execution is terminal, and ADR 0009 makes terminal
+state monotonic, so evidence is a separate append-only record that references an
+execution, attempt, and receipt and can never write back to them. Its scope is
+enrollment, descriptor, executor/model, task class, and verifier
+kind/name/version; a changed descriptor, model, or verifier version starts cold.
+Identifiers are deterministic, so replay, restart, and repeated callbacks
+converge on one row while a new verifier version appends rather than overwrites.
+Deterministic-check and agreement outcomes have disjoint vocabularies and
+separate scopes, so agreement is never aggregated into a pass rate, and nothing
+is named for correctness. Every record says who a non-result is owed to;
+cancellation, coordinator shutdown, persistence failure and verifier
+unavailability can only record that the run did not happen, and are excluded from
+the sample count. `verify_rate` remains `0.0` and trusted alpha still disables
+sampled verification -- durability existing is not the same as the feature being
+switched on. There is no score, ranking, or leaderboard, and contribution points
+are unaffected. See [ADR 0014](docs/adr/0014-durable-verification-evidence.md).
 
 > **Memory soak, remeasured:** the historical raw Windows run grew about **1.25 MB per pitch** over 120 pitches (67 MB → 218 MB). Theme 1 found both a real unbounded terminal service cache and substantial cyclic-GC/allocator sawtooth. Terminal request/result snapshots now leave memory after their post-commit observers finish, while durable reads continue from SQLite; the soak also separates one-workflow warmup and settles collectable cycles without changing its 0.5 MB/pitch limit. The final 20-pitch Windows run on this branch measured 78.5 → 85.6 MB (+7.1 MB, 0.36 MB/pitch), with zero retained execution/control/background entries and zero orphaned tasks. Legacy jobs remain intentionally retained for seven days. A post-fix 120-pitch run and a Linux rerun are still needed before making a long-run cross-platform claim.
 
@@ -466,7 +485,7 @@ Stated plainly, because you'll find them anyway:
 - **CPU-only is slow.** A full pitch is minutes, not seconds — the planner, each builder, and the reviewer are each a separate model call, and the reviewer has to re-emit the whole deliverable. A GPU changes this dramatically.
 - **Generated code is not sandboxed.** The pipeline writes runnable files to `output/`. Production validation parses supported code without importing or executing it. In the default `auto` mode, parser-heavy checks use a bounded child-process boundary; the weaker local-only `inline` mode records `inline_compatibility` instead, and trusted-alpha preflight rejects that mode. A same-user child process is not mandatory access control, guaranteed network denial, or a safe place to run hostile generated code. *You* are responsible for reading anything before you run it.
 - **The full threat model is written down**, including the deliberate public allowlist, viewer-protected surfaces, share capabilities, malicious-worker limits, and what still blocks a permissionless network: [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md). Reporting a vulnerability: [SECURITY.md](SECURITY.md).
-- **It's a trusted network, not a trustless one.** Per-node bearer enrollment supports stable attribution and individual revocation; a short-lived server session identifies one incarnation. Neither proves a physical machine, honest operator, model bytes, or Sybil resistance. An authenticated node can still return plausible-looking garbage. Experimental sampled redundant execution remains available only in local mode; trusted-alpha mode disables it until post-hoc evidence has durable semantics. Shape agreement is not proof of correctness.
+- **It's a trusted network, not a trustless one.** Per-node bearer enrollment supports stable attribution and individual revocation; a short-lived server session identifies one incarnation. Neither proves a physical machine, honest operator, model bytes, or Sybil resistance. An authenticated node can still return plausible-looking garbage. Experimental sampled redundant execution remains available only in local mode, and trusted-alpha mode still disables it. Its evidence is now durable (ADR 0014), which removes one blocker but is not by itself a reason to switch it on; the remaining conditions are listed in that ADR. Shape agreement is not proof of correctness.
 - **Capability descriptors are claims, not evidence.** Typed CPU, memory, GPU, model, context, feature, executor, and isolation fields make hard routing deterministic, but an admitted worker can lie about them. A descriptor digest identifies the exact claim used for an attempt; it is not hardware or model attestation. The matcher only excludes ineligible nodes. Optional `verify_rate` sampling is off by default and never changes assignment order; its bounded agreement observations remain separate from correctness and availability. Experimental capability evidence is likewise `off` or shadow-only, never active routing.
 - **One orchestrator, no failover.** DAG planning/review remain on the coordinator; DAG builder units and complete ensemble candidates may run on workers. If the orchestrator goes down, the swarm stops. Durable records reconcile truthfully on restart, but process-local work is not resumed. Reusing an idempotency key returns the same interrupted record; it does not restart it.
 - **No HTTPS, no accounts, no multi-tenancy.** This is a prototype you run for yourself or a group you know.
