@@ -423,6 +423,39 @@ unknown causes are excluded. Contribution points remain separate accepted-comput
 records. To stop shadow evaluation, set `capability_evidence_mode` back to `off`,
 run preflight, and restart; stored observations remain available for diagnosis.
 
+## 7a. Read verification evidence
+
+```bash
+curl -s -H "Cookie: mycelium_viewer=$VIEWER_SESSION" \
+  "http://127.0.0.1:8000/v1/operator/verification-evidence?limit=50" | python -m json.tool
+```
+
+Optional filters: `enrollment_id`, `descriptor_hash`, `task_class`,
+`verifier_kind`.
+
+What you are looking at, and what you are not:
+
+- **Not a verdict on a contributor.** It is not reputation, not correctness, and
+  not assurance. Nothing here has influenced routing, eligibility, settlement, or
+  contribution points, and there is no score or ranking.
+- **`insufficient_evidence: true` means "not enough observations",** not "poor".
+  Every rate is printed beside its sample count and a Wilson interval; read them
+  together or not at all.
+- **Agreement is about shape.** A `sampled_reexecution` scope counts whether two
+  runs produced comparable output, not whether either was right. It is scoped
+  separately from `deterministic_check` outcomes, so the two are never summed.
+- **`counts_by_attribution` explains missing results.** Rows attributed to
+  `requester_cancelled`, `coordinator_shutdown`,
+  `coordinator_persistence_failure`, `pre_assignment_deadline`, or
+  `verifier_unavailable` mean the check did not run and the reason was ours or the
+  requester's, not the node's. They are excluded from the sample count.
+- **`legacy_row_count`** is evidence without enrolled identity. It is held
+  separately and never merged into an enrollment's scope.
+
+In trusted alpha this surface will usually be empty, because `verify_rate` is
+`0.0` and trusted-alpha mode disables sampled verification regardless. That is
+expected. See [ADR 0014](adr/0014-durable-verification-evidence.md).
+
 ## 8. Rotate credentials
 
 Back up first. Rotate one authority at a time with a local command that writes

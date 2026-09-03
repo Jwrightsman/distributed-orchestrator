@@ -1000,6 +1000,59 @@ It neither changes hard eligibility, assignment, or shadow preference nor
 itself suppresses observations; a digestless typed scope continues collecting
 when the existing evidence resolver can otherwise reconstruct it.
 
+## Durable post-hoc verification evidence
+
+Post-hoc verification happens after an execution is terminal. ADR 0009 makes
+terminal state monotonic and never reclassified, so a verification result is not
+allowed to touch it. Evidence is therefore a separate append-only record that
+references an execution, unit, attempt, and accepted receipt without mutating any
+of them, with no foreign key back into them and with update/delete refused by
+database triggers.
+
+Each record carries an exact scope -- subject enrollment ID and identity class,
+descriptor version and hash, executor kind/version, worker protocol version,
+selected model provider/name/digest/variant, task class, and verifier
+kind/name/version. Changing any of these starts a cold scope; history is never
+inherited across a descriptor, model, or verifier-version change. Task class
+reuses the existing `dag_subtask` / `candidate` vocabulary. Rows without enrolled
+identity are classified `legacy`, aggregated separately, and never resolved to an
+enrollment through a reusable node label.
+
+`evidence_id` is a domain-separated SHA-256 over the authoritative identities plus
+verifier identity and version, so replay safety does not depend on in-memory
+de-duplication. Accepted-result replay, restart reconciliation, repeated
+callbacks, event redelivery, and an identical verifier re-run all converge on one
+row. A re-run at a different verifier version appends a new row and never
+overwrites the earlier one.
+
+Two verifier kinds exist and they do not share an outcome vocabulary:
+`deterministic_check` is `passed` / `failed` / `not_run`, and
+`sampled_reexecution` is `agreed` / `disagreed` / `not_run`. `verifier_kind` is
+part of the scope key, so agreement can never contribute to a pass rate. Nothing
+in the model is named for correctness. Structural contract-floor validators
+(`nonempty`, `artifact_extraction`, `artifact_contract`, `file_manifest`) cannot
+be recorded here at all, because a structural failure is not a statement about
+semantic correctness.
+
+Every record carries an explicit fault attribution, and only `subject_output` may
+carry an outcome about the subject -- enforced in code and again as a table
+constraint. Requester cancellation, coordinator shutdown, coordinator persistence
+failure, a pre-assignment deadline, and verifier unavailability can only record
+`not_run`, and `not_run` rows are excluded from the attributable sample count, so
+a cancellation or restart cannot depress a scope's observed rate. Malformed or
+mismatched authority credentials are refused outright: those are security events
+belonging to attempt authority, not evidence about anyone's work.
+
+Evidence writes are best-effort with respect to the execution path. A failure
+increments a process-local counter and never fails an execution, alters
+settlement, changes eligibility, or delays a handout.
+
+This is evidence, not reputation, not correctness, and not assurance. It
+influences no routing, eligibility, settlement, or contribution decision, and
+there is no score, ranking, or leaderboard. Task-class assurance ladders are
+deferred to Theme 3B-2. See
+[ADR 0014](adr/0014-durable-verification-evidence.md).
+
 ## Canonical REST API
 
 | Method and path | Meaning |

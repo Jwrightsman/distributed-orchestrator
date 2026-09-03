@@ -324,7 +324,10 @@ bigger models everywhere.
 verification policy to every distributed route including the direct distributed-pitch path
 (`/pitch/async` samples for verification; `/pitch/distributed` does not) · enforce queue limits
 atomically at enqueue rather than checking once before a wave · persist reputation and verifier
-evidence instead of losing it with the process · finish live config reload (`verify_rate` already
+evidence instead of losing it with the process (**verifier evidence done, Theme 3B-1** —
+durable, scoped, append-only, replay-safe, and never authoritative over terminal state, per
+[ADR 0014](docs/adr/0014-durable-verification-evidence.md); reputation remains unbuilt and is
+not planned, and nothing was re-enabled) · finish live config reload (`verify_rate` already
 re-reads per pitch; nothing else does, and none of it is tested) · UUIDv7/ULID identifiers rather
 than timestamp-derived ones — **narrower than it reads:** job ids, task ids and attempt ids
 are already `uuid4().hex`. What is still timestamp-derived is the *run directory* name
@@ -520,6 +523,16 @@ memory or storage growth.
 
 ## Changelog
 
+- **2026-09-03** — Theme 3B-1 made post-hoc verification evidence durable. It is a separate
+  append-only table that references an execution, attempt, and receipt and cannot write back
+  to any of them, because ADR 0009 makes terminal state monotonic and verification happens
+  after terminal. Scoped like capability evidence plus verifier identity and version, with
+  deterministic IDs so replay, restart, and repeated callbacks converge on one row.
+  Deterministic checks and agreement have disjoint vocabularies and separate scopes, so
+  agreement is never aggregated into a pass rate. No default changed: `verify_rate` is still
+  `0.0` and trusted alpha still disables sampled verification. No reputation, no score, no
+  ranking; contribution points are untouched. Task-class assurance ladders are deferred to
+  Theme 3B-2 with the conditions for re-enabling written down in ADR 0014.
 - **2026-09-02** — Theme 1.5 closed the two loose ends Theme 1.4 left. The adversarial
   campaign now asserts a non-vacuous coverage floor over a whole run, which immediately
   showed that finding F4 had not actually been fixed: the campaign was still reaching zero
