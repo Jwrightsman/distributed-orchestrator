@@ -35,7 +35,7 @@ and `pip install -r requirements.txt` alone still starts a coordinator.
 | `stateful_step_count` | 60 | 80 |
 | `derandomize` | yes | no |
 | Example database | disabled | disabled |
-| Measured wall clock | ~125 s | see below, plus up to 5 min of shrinking per failure |
+| Measured wall clock | see below | 6 m 18 s, plus up to 5 min of shrinking per failure |
 
 Few examples, many steps. An example costs about two seconds to set up (an
 isolated coordinator, its stores, its lifespan) and about fifty milliseconds per
@@ -350,7 +350,12 @@ exactly 1 - if a future change drops it to 0, that is the guard working, and the
 failure message names the class and prints everything the run *did* reach.
 
 No class was deferred to the extended profile. All eight are reached by the
-default CI profile.
+default CI profile. Because that profile is derandomized with no example
+database, these counts are a property of the code and the Hypothesis version,
+not of the machine — they reproduce identically on CI. A Hypothesis upgrade can
+change generation and drop a thin class to zero; that surfaces as this test
+failing and naming the class, which is the correct outcome, and is why the
+dependency is pinned below 7.
 
 This is the standing guard against F4 recurring.
 `test_campaign_reads_the_tables_it_asserts_on` covers the other half of the same
@@ -442,8 +447,13 @@ helper.
 With staleness no longer following it, the generated campaign's clock cap rose
 from ±80 s to ±3000 s — bounded now by `_RESULT_TTL` (3600 s), the one remaining
 wall-clock consumer in the sweep, which prunes a compatibility mirror the model
-does not track. The campaign therefore now generates offsets well past
-`_NODE_TIMEOUT`, which it previously could not.
+does not track.
+
+What that actually reaches, measured over a CI-profile run (724 clock readings):
+offsets from **−179 s to +296 s**, with **29 %** of readings past `_NODE_TIMEOUT`.
+The cap is not the binding constraint — `rewind_clock` pulls the offset back, so
+it random-walks rather than climbing — but the region past 90 s, which the old
+±80 s cap made unreachable by construction, is now routine.
 
 ### Nothing deferred under protocol case 4
 
@@ -522,31 +532,30 @@ from the thing it stands in for.
 Measured on this branch: Windows 11, Python 3.14.3, 8 GB, CPU-only. **CI runs
 Linux on a GitHub-hosted runner, so the numbers there will differ.**
 
-Isolated, back-to-back, with nothing else running:
+Every observation taken on this branch, not a selected one:
 
-| Module | Tests | Wall clock |
-| --- | --- | --- |
-| `tests/test_protocol_state_machine.py` | 5 | 125 s (two runs: 128.6 s, 124.9 s) |
-| `tests/test_adversarial_scenarios.py` | 67 | 63 s |
-| **New work added to `pytest -q`** | **72** | **~190 s** |
+| Command | Observations |
+| --- | --- |
+| `pytest -q tests/test_protocol_state_machine.py` | 51.1 s, 124.9 s, 128.6 s |
+| `pytest -q tests/test_adversarial_scenarios.py` | 43.5 s, 62.8 s |
+| both modules in one invocation | 90.8 s, 91.4 s |
+| `pytest -q` (whole suite, with both) | 466.4 s |
+| extended profile (not in `pytest -q`) | 378.3 s |
 
-The campaign module went from ~35 s to ~125 s in Theme 1.5. That is the price of
-the coverage floor: at the old 15x14 budget the campaign reached no accepted
-settlements at all, so the cheaper number was buying an assertion that everything
-held about a run in which almost nothing happened. Steps are the cheap axis - an
-example costs ~2 s to set up and ~50 ms per step - so the budget went into steps
-rather than examples.
+The same command varies by 2.5x on this machine, and the two combined runs were
+*faster* than the sum of the modules run alone. So the honest statement is a
+range — **the campaign adds roughly 90–190 s to `pytest -q` here** — and not a
+point estimate. Re-measure on the runner that matters before quoting a figure.
 
-Whole-suite single runs vary on this machine by more than the size of anything
-being measured here: in Theme 1.4, a contended run of the larger suite finished
-*faster* than an uncontended one, and a repeat of the baseline ran more than 65 %
-slower than its first attempt. So the isolated per-module numbers above are the
-ones to use, and no whole-suite percentage is quoted.
+What is not in doubt is the direction and the reason. The campaign module got
+slower in Theme 1.5, because the coverage floor showed that at the previous
+15x14 budget it reached no accepted settlements at all: the cheaper number was
+buying an assertion that every invariant held about a run in which almost nothing
+happened. Steps are the cheap axis — an example costs ~2 s to set up and ~50 ms
+per step — so the budget went into steps rather than examples.
 
 Most of the scenario module is still the two parametrized fault sweeps (26
 injected disk failures across the submission path, 9 commit-time failures at the
 settlement boundary), each building an isolated coordinator per index. They are
 also the two highest-value tests here, so they were not trimmed to make this
 table look better.
-
-The extended profile is not part of `pytest -q`.
