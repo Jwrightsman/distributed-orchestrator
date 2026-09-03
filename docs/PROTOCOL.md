@@ -606,8 +606,12 @@ attempt_id    = one leased execution authority
 actions. Bootstrap requires `X-Node-Secret` plus a high-entropy worker-proposed
 `enrollment_credential`. Returning registration requires the node label and
 that per-node credential but not the shared secret. The coordinator stores only
-a domain-separated credential digest. A matching bootstrap retry returns the
-same enrollment; a label or credential collision returns a stable conflict and
+a domain-separated credential digest. Bootstrap resolves the node label first: a
+label held by a revoked enrollment is rejected as revoked even when the exact
+original credential is presented, because otherwise revocation would be undoable
+by the party it was used against. Only then does a matching bootstrap retry
+return the same enrollment, and only a label nobody holds falls through to the
+credential check. A label or credential collision returns a stable conflict and
 never overwrites the existing row.
 
 Only after durable enrollment succeeds does registration issue a non-secret
@@ -746,7 +750,9 @@ Registration strings and capabilities are bounded, and the server normalizes
 node IDs to at most 64 ASCII characters. `max_output_bytes` is an execution
 contract limit from 1 KiB through 10 MiB and is copied into each issued
 attempt. Worker result output must fit that attempt-specific UTF-8 byte cap;
-worker error text is capped at 2 KiB. A token-stream batch is bounded, the
+worker error text is bounded twice, at 2048 characters by the request model and
+again at 2048 UTF-8 bytes before settlement, so multi-byte text cannot use the
+character limit to exceed the byte limit. A token-stream batch is bounded, the
 cumulative streamed bytes cannot exceed the same attempt cap, an attempt can
 emit at most 250,000 batches, and the rate is capped at 120 batches per second.
 Crossing the byte/batch or rate boundary closes the stream and returns a

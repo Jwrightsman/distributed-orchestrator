@@ -140,6 +140,20 @@ nodes: dict[str, dict] = {}          # node_id -> info
 # defense. Those stronger identity mechanisms remain deferred.
 ATTEMPT_LEASE_SECONDS = 900
 
+
+def coordinator_now() -> float:
+    """The one clock reading that decides worker-lease issue and expiry.
+
+    Lease authority is coordinator time only. The worker protocol carries no
+    client timestamp at all — ``elapsed_seconds`` is bounded reporting — so a
+    worker whose own clock runs fast or slow cannot lengthen or shorten the
+    lease it was issued. Routing every lease decision through one function keeps
+    that property checkable: the adversarial clock-skew tests move this reading
+    instead of patching ``time.time`` for the whole process, which would also
+    move SQLite, logging, and asyncio.
+    """
+    return time.time()
+
 # Deprecated in-memory compatibility mirror. Durable exact replay is handled by
 # AttemptStore.response_json/result_hash and does not consult this dictionary.
 settled_attempts: dict[str, dict] = {}
@@ -2581,7 +2595,7 @@ def _cleanup_pass():
     Never raises: this runs unattended behind a background task, and a failure
     here must not take the orchestrator down mid-demo.
     """
-    now = time.time()
+    now = coordinator_now()
 
     # 1. Expired worker leases. Close the old attempt before either dropping or
     # re-queuing its process-local task, so late output cannot win a race.
