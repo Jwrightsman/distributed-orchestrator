@@ -16,7 +16,7 @@ MYCELIUM_CAMPAIGN_PROFILE=extended python -m pytest -q tests/test_protocol_state
 | File | What it is |
 | --- | --- |
 | `tests/protocol_model.py` | The reference model. No production imports, no SQLite, no HTTP. |
-| `tests/protocol_harness.py` | The driving surface: real routes, real stores, plus the three seams. |
+| `tests/protocol_harness.py` | The driving surface: real routes, real stores, the seams, and the coverage counters. |
 | `tests/test_protocol_state_machine.py` | The Hypothesis `RuleBasedStateMachine` and the invariants. |
 | `tests/test_adversarial_scenarios.py` | The named ROADMAP §5 scenarios, deterministically. |
 
@@ -31,15 +31,22 @@ and `pip install -r requirements.txt` alone still starts a coordinator.
 | | CI (default) | Extended |
 | --- | --- | --- |
 | Selected by | nothing | `MYCELIUM_CAMPAIGN_PROFILE=extended` |
-| `max_examples` | 15 | 250 |
-| `stateful_step_count` | 14 | 40 |
+| `max_examples` | 15 | 120 |
+| `stateful_step_count` | 60 | 80 |
 | `derandomize` | yes | no |
 | Example database | disabled | disabled |
-| Measured wall clock | 35.6 s | 12 m 41 s, plus up to 5 min of shrinking per failure |
+| Measured wall clock | ~125 s | see below, plus up to 5 min of shrinking per failure |
+
+Few examples, many steps. An example costs about two seconds to set up (an
+isolated coordinator, its stores, its lifespan) and about fifty milliseconds per
+step, so steps are where a budget buys coverage — and coverage here means
+dependent chains completing: poll, settle, retry, expire, sweep. The original
+15x14 profile bought almost none of that; see F4.
 
 The CI profile is derandomized with no example database, so a red build is
 reproducible from the source tree alone — there is no `.hypothesis` directory
-whose absence changes the answer. The extended profile is for local hunting; it
+whose absence changes the answer, and the coverage floor below is deterministic
+rather than probabilistic for a given Hypothesis version. The extended profile is for local hunting; it
 is where two of the findings below came from.
 
 Counterexample output is content-free. Every value the generator can choose is
@@ -82,11 +89,14 @@ On top of that, in any order, including invalid ones:
 | `revoke_enrollment` / `rotate_credential` | the durable store plus reclaim, exactly as the operator CLI path does |
 | `drain_node` | `POST /nodes/{id}/drain` |
 | `enqueue_unit` / `poll_for_work` | queue a canonical unit; long-poll and take a server-issued attempt |
-| `submit_result` | ten mutations: correct, replay, wrong nonce, wrong attempt id, wrong node label, wrong session, wrong execution id, missing contract version, oversized output, oversized error |
+| `submit_correct_result` | the honest worker; its own rule, because everything downstream needs an acceptance |
+| `submit_replayed_result` | the honest retry after a lost response; also its own rule |
+| `submit_result` | nine mutations: wrong nonce, wrong attempt id, wrong node label, wrong session, wrong execution id, missing contract version, oversized output, error over the character cap, error over the byte cap |
 | `stream_tokens` | attempt-bound token batches against the cumulative budget |
 | `supersede_attempt` | a durable active→superseded transition |
-| `advance_clock` / `rewind_clock` | coordinator time forward and backward, capped at ±80 s |
+| `advance_clock` / `rewind_clock` | coordinator time forward and backward, capped at ±3000 s |
 | `run_janitor` | one real `server_state._cleanup_pass()` sweep |
+| `time_passes_and_the_janitor_wakes` | the background sweep after time has passed, as the 30-second task does |
 | `submit_execution` | `POST /v1/executions`, keyed and unkeyed, two requester scopes, two canonical requests |
 | `cancel_execution` / `read_execution` | cancel (idempotent) and durable read |
 | `arm_persistence_fault` | arm a SQLite failure at operation index *n*, in `io`, `commit`, or `busy` mode |
@@ -98,9 +108,10 @@ nothing — no session survives long enough to reach settlement. Both get direct
 coverage in `tests/test_adversarial_scenarios.py` instead.
 
 Session *abandonment* — a laptop closing mid-task, the most ordinary failure on
-a volunteer network — is not a generated rule, because it needs a clock movement
-past `_NODE_TIMEOUT` that the generated campaign caps (see F7). It has a direct
-test instead:
+a volunteer network — is not a generated rule, because since F7's fix it is no
+longer expressible as a clock movement at all: silence is elapsed time on the
+monotonic source, which the campaign does not move. It has a direct test
+instead:
 `test_an_abandoned_session_has_its_lease_reclaimed_and_its_work_requeued`
 asserts that the janitor reclaims the lease, requeues the unit, refuses the
 abandoned worker if it later wakes up holding the original handout, and lets a
@@ -205,8 +216,9 @@ classified — ROADMAP §2 requires verifying a negative result by running the
 artifact, and this campaign is exactly the kind of artifact that would otherwise
 produce a confident wrong answer.
 
-**No invariant was weakened, relaxed, or deleted to make a test pass. No
-production behaviour was redesigned.**
+**No invariant was weakened, relaxed, or deleted to make a test pass.** One
+production defect was fixed: F7, in Theme 1.5, and the fix is deliberately narrow
+- see its entry. Nothing else in the coordinator was redesigned.
 
 ### F1 — a first keyed submission reported `Idempotency-Replayed: true`
 
@@ -285,6 +297,66 @@ This is the finding worth reading twice. A property-based campaign that reports
 green while never reaching the code it claims to cover is worse than no campaign,
 because it is quoted as evidence.
 
+**And it was not fully fixed.** Theme 1.5 added the standing guard below, and the
+guard's first run showed the campaign was *still* reaching zero accepted
+settlements. `open_the_network` had removed the setup half of the problem, but
+the poll-then-settle chain still needed more steps than the 14-step CI profile
+gave it, and Hypothesis's early examples are small. Three things changed:
+
+* **Shape.** The honest submission and the honest retry became their own rules
+  instead of two of ten adversarial mutations - every other property depends on
+  an acceptance, so the normal case must not be a 1-in-N draw against the
+  attacks. `initialize` now takes one handout of each lease length, so the
+  settlement path is live from step 0. And a rule models the background janitor
+  waking after time has passed: without it, every lease reached a terminal state
+  through a submission before a sweep ever saw one, and the janitor's reclaim
+  path was never exercised.
+* **Budget.** 15 examples x 60 steps, not x14. Measured: ~125 s for the module,
+  up from ~35 s. The old 35 s was largely buying nothing.
+* **Correctness.** Reaching settlement immediately exposed that the campaign's
+  oversized-error mutation expected 413 where the request model returns 422 -
+  F6's two bounds, which this document already described and the campaign had
+  never executed. Both are now generated.
+
+### The coverage floor
+
+`tests/test_protocol_state_machine.py::test_the_campaign_holds_and_reaches_the_code_it_asserts_on`
+runs the state machine itself and then fails - not warns - if a whole run did not
+reach each class below. It runs in the default CI profile. Counters live on
+`CoordinatorHarness` and record outcome classes and counts only: no identifiers,
+no payloads, no timings, so a failure is safe to paste into a CI log.
+
+The assertion is at run level, not per example: a single generated sequence need
+not hit everything. And the test runs the machine itself rather than relying on
+Hypothesis's generated `TestCase`, so it cannot depend on another test having run
+first in the same session - and the campaign still executes exactly once per CI
+run.
+
+| Class | Floor | Observed at the CI profile |
+| --- | --- | --- |
+| `settlement_accepted` | 1 | 4 |
+| `settlement_rejected_stale_or_misbound` | 1 | 119 |
+| `settlement_replayed` | 1 | 16 |
+| `idempotency_replayed` | 1 | 3 |
+| `idempotency_conflict` | 1 | **1** |
+| `persistence_fault_fired_in_submission` | 1 | 3 |
+| `restart_with_outstanding_handout` | 1 | 16 |
+| `lease_reclaimed_by_janitor` | 1 | 7 |
+
+Every floor is 1 deliberately. A floor tuned up to the edge of what a profile
+reliably produces becomes flaky, and a flaky guard gets deleted by the next
+person, which is how the guard dies. `idempotency_conflict` is the thin one at
+exactly 1 - if a future change drops it to 0, that is the guard working, and the
+failure message names the class and prints everything the run *did* reach.
+
+No class was deferred to the extended profile. All eight are reached by the
+default CI profile.
+
+This is the standing guard against F4 recurring.
+`test_campaign_reads_the_tables_it_asserts_on` covers the other half of the same
+failure mode: an invariant querying a mistyped table name would pass vacuously
+forever.
+
 ### F5 — a revoked label was expected to re-bootstrap idempotently
 
 *Classification: documented behaviour; the model was wrong.*
@@ -327,22 +399,51 @@ credit. Had only the character cap existed, `error` would silently have been a
 
 ### F7 — a forward clock jump past 90 s also reclaims every node
 
-*Classification: correct behaviour. Recorded because it is not obvious.*
+*Classification: real defect, fixed in Theme 1.5.*
 
 `server_state._cleanup_pass` decides worker-lease expiry **and** node staleness
 (`_NODE_TIMEOUT`, 90 s) from the same coordinator clock reading. A forward jump
 larger than 90 s — an NTP correction, a resumed laptop — therefore reclaims every
 node's in-flight work as stale, not only the leases that actually expired.
 
-Nothing unsafe follows: reclaimed work is requeued, no attempt settles twice, and
-no credit is created. It predates this branch; `coordinator_now()` did not change
-it, because that function returns `time.time()` in production exactly as before.
+Nothing unsafe followed — reclaimed work is requeued, no attempt settles twice,
+no credit is created — but it is wrong, and on a home server an NTP step or a
+resumed suspended host is not exotic.
 
-*Resolution:* recorded, not changed — a design change to node staleness is out of
-scope for a test PR. The generated campaign caps its clock offset at ±80 s so the
-model stays simple, and the behaviour is covered explicitly in
-`test_a_backward_coordinator_clock_cannot_revive_a_durably_expired_lease`, which
-re-registers after the sweep and then asserts the lease-based refusal.
+*Resolution (Theme 1.5):* the two decisions were separated. A lease deadline is
+an absolute point in time, issued at handout and durable across a restart, so it
+stays on `coordinator_now()`. Heartbeat recency is an elapsed *duration* held in
+process-local session state that does not survive a restart anyway, so it moved
+to `server_state.coordinator_monotonic()`, which a wall-clock correction cannot
+move. `last_seen` remains a wall-clock timestamp in node and session views,
+because that is what operators read; the monotonic reading sits beside it and is
+what staleness is actually decided with.
+
+Deliberately unchanged: lease issue, lease-expiry evaluation, `_NODE_TIMEOUT`'s
+value, reclaim policy, the durable deadline representation, and the
+attempt-authority model. A node record carrying no monotonic reading falls back
+to the previous wall-clock behaviour exactly. A backward jump still cannot revive
+a durably expired lease —
+`test_a_backward_coordinator_clock_cannot_revive_a_durably_expired_lease`
+asserts it, unchanged.
+
+Covered by `test_a_forward_clock_jump_expires_only_leases_that_actually_ran_out`,
+`test_a_forward_clock_jump_does_not_reclaim_a_healthy_nodes_work`, and
+`test_a_node_that_stops_heartbeating_still_goes_stale_with_no_clock_jump` — the
+last one because a fix that quietly turned staleness detection off would pass the
+first two.
+
+One consequence for the tests: several existing tests simulated a silent node by
+backdating `last_seen` on the wall clock. What they assert is unchanged, but how
+they express "this node stopped talking" had to change, because that is no longer
+a wall-clock fact. They now use one shared `age_node_record` / `age_node_session`
+helper.
+
+With staleness no longer following it, the generated campaign's clock cap rose
+from ±80 s to ±3000 s — bounded now by `_RESULT_TTL` (3600 s), the one remaining
+wall-clock consumer in the sweep, which prunes a compatibility mirror the model
+does not track. The campaign therefore now generates offsets well past
+`_NODE_TIMEOUT`, which it previously could not.
 
 ### Nothing deferred under protocol case 4
 
@@ -353,7 +454,7 @@ reproducers in this PR.
 
 ## Seams introduced
 
-Three, each the narrowest thing that makes one scenario reachable.
+Four, each the narrowest thing that makes one scenario reachable.
 
 **`server_state.coordinator_now()`** — one function returning `time.time()`,
 used at the two places that decide lease authority: lease issue in
@@ -371,6 +472,12 @@ plugin point. (The subclass reimplements its parent's methods against
 `sqlite3.Connection` under the same `retry_busy` policy rather than calling
 `super()`: `RetryConnection` resolves `super(RetryConnection, self)` through the
 module global that the swap replaces, so delegating upward recurses.)
+
+**`server_state.coordinator_monotonic()`** — one function returning
+`time.monotonic()`, used for heartbeat recency and node staleness and nothing
+else. This one is a production fix rather than a test seam (F7): reading a
+duration from the wall clock was the bug. Like `coordinator_now`, it is a plain
+function - no injectable clock object, no interface, no configuration.
 
 **`CoordinatorHarness.restart()`** — no production change at all. It calls
 `server_state._init_db()`, the same epoch boundary the FastAPI lifespan calls,
@@ -402,9 +509,9 @@ from the thing it stands in for.
   share durable storage and identity here, and units carry real execution
   bindings, but `Dispatcher._distributed`'s await-a-receipt path is not driven by
   the generator. `tests/test_attempt_dispatch.py` covers it directly.
-* **Clock offsets beyond ±80 s in generation.** Larger jumps are covered
-  deterministically in the scenarios module; see F7 for why they are not
-  generated.
+* **Clock offsets beyond ±3000 s in generation.** The cap is now set by
+  `_RESULT_TTL`, not by node staleness; see F7. Larger jumps, and the monotonic
+  isolation itself, are covered deterministically in the scenarios module.
 * **WebSocket event delivery and the dashboard.** The event *stream* is asserted
   against durable state; its transport is not exercised.
 
@@ -419,34 +526,27 @@ Isolated, back-to-back, with nothing else running:
 
 | Module | Tests | Wall clock |
 | --- | --- | --- |
-| `tests/test_protocol_state_machine.py` | 5 | 35.6 s |
-| `tests/test_adversarial_scenarios.py` | 64 | 67.6 s |
-| **New work added to `pytest -q`** | **69** | **≈103 s** |
+| `tests/test_protocol_state_machine.py` | 5 | 125 s (two runs: 128.6 s, 124.9 s) |
+| `tests/test_adversarial_scenarios.py` | 67 | 63 s |
+| **New work added to `pytest -q`** | **72** | **~190 s** |
 
-Whole-suite runs, same machine, same day:
+The campaign module went from ~35 s to ~125 s in Theme 1.5. That is the price of
+the coverage floor: at the old 15x14 budget the campaign reached no accepted
+settlements at all, so the cheaper number was buying an assertion that everything
+held about a run in which almost nothing happened. Steps are the cheap axis - an
+example costs ~2 s to set up and ~50 ms per step - so the budget went into steps
+rather than examples.
 
-| Run | Result | Wall clock |
-| --- | --- | --- |
-| `pytest -q` with both modules ignored | 1449 passed, 11 skipped | 362.8 s |
-| `pytest -q` | 1518 passed, 11 skipped | 542.6 s |
-| `pytest -q` (earlier, sharing the machine with an extended campaign run) | 1518 passed, 11 skipped | 515.1 s |
-| `pytest -q` with both modules ignored, repeat | killed at 73 % | > 600 s |
+Whole-suite single runs vary on this machine by more than the size of anything
+being measured here: in Theme 1.4, a contended run of the larger suite finished
+*faster* than an uncontended one, and a repeat of the baseline ran more than 65 %
+slower than its first attempt. So the isolated per-module numbers above are the
+ones to use, and no whole-suite percentage is quoted.
 
-Those last two rows are why the whole-suite delta is not quoted as a number.
-The contended run of the *larger* suite finished faster than the uncontended
-one, and a repeat of the *baseline* ran more than 65 % slower than its first
-attempt. Single-run whole-suite timings on this laptop vary by more than the
-size of the thing being measured, so **≈103 s of new test work** — measured
-directly, in isolation, and reproducible — is the number to use. Anyone quoting
-"the suite got 50 % slower" from the 362.8 → 542.6 pair would be quoting
-variance as if it were signal.
+Most of the scenario module is still the two parametrized fault sweeps (26
+injected disk failures across the submission path, 9 commit-time failures at the
+settlement boundary), each building an isolated coordinator per index. They are
+also the two highest-value tests here, so they were not trimmed to make this
+table look better.
 
-Most of that 103 s is the two parametrized fault sweeps (26 injected disk
-failures across the submission path, 9 commit-time failures at the settlement
-boundary), each building an isolated coordinator per index. They are also the
-two highest-value tests here, so they were not trimmed to make this table look
-better.
-
-The extended profile is not part of `pytest -q`. Its own measured run —
-250 examples, 40 steps, no failures — took 12 m 41 s while sharing the machine
-with the full suite.
+The extended profile is not part of `pytest -q`.
