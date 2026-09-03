@@ -53,6 +53,10 @@ from execution.contracts import (
     VerificationPolicyV1,
 )
 from verification import VerificationPool
+from verification_evidence import (
+    VerificationEvidenceProcessCounters,
+    VerificationEvidenceStore,
+)
 from sqlite_store import connection, migration_lock
 from node_enrollments import (
     ENROLLMENT_CREDENTIAL_MAX_LENGTH,
@@ -440,6 +444,11 @@ attempt_store = AttemptStore(_DB_PATH)
 enrollment_store = NodeEnrollmentStore(_DB_PATH)
 capability_snapshot_store = NodeCapabilitySnapshotStore(_DB_PATH)
 capability_evidence_store = CapabilityEvidenceStore(_DB_PATH)
+# Post-hoc verification evidence. Append-only, scoped, and deliberately unable to
+# reach terminal state: it references executions and receipts, it never mutates
+# them. Nothing here is reputation and nothing here is a score. See ADR 0014.
+verification_evidence_store = VerificationEvidenceStore(_DB_PATH)
+verification_evidence_counters = VerificationEvidenceProcessCounters()
 # Optional shadow decisions and operational health are deliberately isolated
 # from authoritative attempt persistence. Their best-effort writers can never
 # hold events.db's SQLite writer lock or make issuance/settlement wait behind
@@ -1977,6 +1986,7 @@ def _init_db() -> None:
     capability_snapshot_store.migrate()
     attempt_store.migrate()
     capability_evidence_store.migrate()
+    verification_evidence_store.migrate()
     _migrate_capability_shadow_decision_store()
     _migrate_capability_shadow_operational_store()
     # Redact legacy free-form contribution metadata and regenerate the JSON

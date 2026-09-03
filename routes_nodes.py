@@ -1022,6 +1022,128 @@ async def list_capability_evidence(request: Request):
     }
 
 
+@router.get("/v1/operator/verification-evidence")
+async def list_verification_evidence(request: Request):
+    """Protected, bounded post-hoc verification evidence.
+
+    This is evidence, not reputation and not correctness. There is no score, no
+    ranking, and no comparison across operators. Agreement counts describe output
+    *shape* between two runs and are scoped separately from deterministic-check
+    outcomes, so nothing here aggregates agreement into a pass rate. Nothing on
+    this surface has ever influenced routing, eligibility, settlement, or
+    contribution points. See ADR 0014.
+    """
+
+    require_viewer(request)
+    try:
+        limit = int(request.query_params.get("limit", "100"))
+        cfg = state.get_config()
+        minimum_samples = int(cfg.get("capability_evidence_min_samples", 5))
+        summaries = state.verification_evidence_store.list_scope_summaries(
+            subject_enrollment_id=request.query_params.get("enrollment_id"),
+            descriptor_hash=request.query_params.get("descriptor_hash"),
+            task_class=request.query_params.get("task_class"),
+            verifier_kind=request.query_params.get("verifier_kind"),
+            limit=limit,
+            minimum_samples=minimum_samples,
+        )
+        legacy_row_count = state.verification_evidence_store.legacy_count()
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "invalid_verification_evidence_query",
+                "message": "the verification-evidence query is invalid",
+            },
+        ) from exc
+    except Exception as exc:
+        state.verification_evidence_counters.increment("read_failed")
+        state.logger.warning(
+            "verification evidence report unavailable error_type=%s",
+            type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "verification_evidence_unavailable",
+                "message": "durable verification evidence could not be read",
+            },
+        ) from exc
+
+    scopes = []
+    for summary in summaries:
+        scope = summary.scope
+        observed = summary.observed
+        scopes.append(
+            {
+                "subject": {
+                    "enrollment_id": scope.subject_enrollment_id,
+                    "node_id": summary.subject_node_id,
+                    "identity_class": scope.identity_class,
+                },
+                "descriptor": {
+                    "version": scope.descriptor_version,
+                    "hash": scope.descriptor_hash,
+                },
+                "executor": {
+                    "kind": scope.executor_kind,
+                    "version": scope.executor_version,
+                    "worker_protocol_version": scope.worker_protocol_version,
+                },
+                "model": {
+                    "provider": scope.model_provider,
+                    "name": scope.model_name,
+                    "digest": scope.model_digest,
+                    "variant": scope.model_variant,
+                },
+                "task_class": scope.task_class,
+                "verifier": {
+                    "kind": scope.verifier_kind,
+                    "name": scope.verifier_name,
+                    "version": scope.verifier_version,
+                },
+                "counts_by_outcome": summary.outcome_counts.as_dict(),
+                "counts_by_attribution": dict(summary.attribution_counts),
+                # Named for what it measures. For a comparison verifier this is
+                # the share of comparisons whose output shape matched, which is
+                # not a statement about whether either output was right.
+                "observed_affirmative": {
+                    "sample_count": observed.sample_count,
+                    "positive_count": observed.positive_count,
+                    "negative_count": observed.negative_count,
+                    "rate": observed.rate,
+                    "wilson_interval": {
+                        "low": observed.wilson_low,
+                        "high": observed.wilson_high,
+                    },
+                },
+                "minimum_samples": summary.minimum_samples,
+                "insufficient_evidence": summary.insufficient_evidence,
+                "last_observed_at": summary.last_observed_at,
+            }
+        )
+
+    return {
+        "scopes": scopes,
+        "count": len(scopes),
+        "legacy_row_count": legacy_row_count,
+        "process_local_counters": state.verification_evidence_counters.snapshot(),
+        "semantics": {
+            "is_reputation": False,
+            "is_correctness": False,
+            "is_assurance": False,
+            "influences_routing": False,
+            "influences_settlement": False,
+            "influences_contribution_points": False,
+            "agreement_describes": "output shape between two runs, not correctness",
+            "note": (
+                "Post-hoc verification evidence. Append-only and never "
+                "authoritative over terminal execution state."
+            ),
+        },
+    }
+
+
 @router.post("/nodes/{node_id}/heartbeat")
 async def heartbeat_node(node_id: str, request: Request):
     """Refresh one registered worker session without polling for work."""
