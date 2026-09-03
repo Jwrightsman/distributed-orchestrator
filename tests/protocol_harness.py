@@ -359,6 +359,16 @@ class CoordinatorHarness:
             self.root / "capability-shadow-health.db",
         )
         self._patch(state, "_LONG_POLL_TIMEOUT", 0.01)
+        # Node staleness is measured as elapsed *real* time on the monotonic
+        # source (Theme 1.5), so a generated example that takes longer than
+        # `_NODE_TIMEOUT` to run would have its nodes reclaimed for being slow -
+        # making the campaign's result depend on how loaded the machine is. That
+        # is exactly what a deterministic campaign must not do; it surfaced as a
+        # spurious "exact replay was not honoured: 401" once the step budget rose.
+        # Real staleness detection is covered deterministically in
+        # tests/test_adversarial_scenarios.py, which backdates the reading
+        # instead of waiting.
+        self._patch(state, "_NODE_TIMEOUT", 24 * 60 * 60)
         self._patch(state, "coordinator_now", self.clock.now)
         self._patch(state, "get_config", lambda: self.settings)
         self._patch(access_control, "get_config", lambda: self.settings)
