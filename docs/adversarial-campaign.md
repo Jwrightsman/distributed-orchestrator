@@ -626,8 +626,9 @@ Every observation taken on this branch, not a selected one:
 
 | Command | Observations |
 | --- | --- |
-| `pytest -q tests/test_protocol_state_machine.py` | 51.1 s, 55.0 s, 61.9 s, 104.5 s, 111.9 s, 124.9 s, 128.6 s |
-| `pytest -q tests/test_adversarial_scenarios.py` | 36.6 s, 40.2 s, 43.5 s, 49.7 s, 55.4 s, 56.9 s, 62.8 s |
+| `pytest -q tests/test_protocol_state_machine.py` (at 60 steps) | 51.1 s, 55.0 s, 61.9 s, 104.5 s, 111.9 s, 124.9 s, 128.6 s |
+| `pytest -q tests/test_protocol_state_machine.py` (at 75 steps, Theme 3C) | 268.9 s, 317.8 s |
+| `pytest -q tests/test_adversarial_scenarios.py` | 36.6 s, 40.2 s, 43.5 s, 49.7 s, 55.4 s, 56.9 s, 62.8 s, 146.0 s, 160.2 s |
 | both modules in one invocation | 90.8 s, 91.4 s |
 | `pytest -q` (whole suite, with both) | 466.4 s |
 | extended profile (not in `pytest -q`) | 378.3 s |
@@ -642,6 +643,15 @@ rather than carrying the old figures forward. The range did not move — which,
 given how wide it is, is weak evidence that the additions were cheap rather than
 proof of it. Theme 4A changed nothing in the campaign and re-measured anyway; the
 observations landed inside the existing range.
+
+**Theme 3C moved it, and not because of measurement noise.** Raising the step
+budget from 60 to 75 - to restore the coverage headroom the ledger chain's extra
+`SELECT` consumed - took the campaign module from a 51-129 s range to 269-318 s,
+and the scenarios module to 146-160 s. That is a real increase of roughly three
+minutes on `pytest -q`, paid to keep the coverage floor honest rather than to
+lower it. Whether that stays affordable is a fair question for the next person
+who touches this; the alternative on the table was a guard that no longer
+guarded.
 
 What is not in doubt is the direction and the reason. The campaign module got
 slower in Theme 1.5, because the coverage floor showed that at the previous
