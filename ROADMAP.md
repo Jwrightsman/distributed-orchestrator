@@ -527,7 +527,10 @@ memory or storage growth.
   runs in which almost nothing happened. And finding F7 is fixed rather than merely recorded
   — node staleness now reads an elapsed duration from a monotonic source, so correcting the
   coordinator's wall clock no longer mass-reclaims healthy nodes' in-flight work. Lease
-  deadlines stay absolute and stay on the wall clock. Details in
+  deadlines stay absolute and stay on the wall clock. CI then caught a third thing the
+  local runs had not: the campaign's own secret-leak probe was short enough to match by
+  coincidence and was failing builds at random — a measurement asserting a finding that was
+  not there, which is §2's rule running backwards. Details in
   `docs/adversarial-campaign.md`.
 - **2026-09-02** — Theme 1.4 closed the §5 adversarial-tests item. All twelve scenarios now
   have coverage: a property-based state-machine campaign over the attempt, settlement,
