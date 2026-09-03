@@ -278,6 +278,15 @@ storage failures are diagnosed and retried). Active workers normally detect
 sooner through stream, heartbeat, poll, or result traffic. Rejection invalidates
 the session and safely reclaims active attempts.
 
+A node is also dropped after `_NODE_TIMEOUT` (90 seconds) without contact, and
+its in-flight work is reclaimed and requeued. That idle time is measured on a
+monotonic reading, not on the wall clock, so correcting the coordinator's clock
+— an NTP step, a resumed suspended host — does not mass-reclaim healthy nodes.
+Worker lease deadlines are unaffected by this and remain absolute wall-clock
+points: a correction past a lease deadline still expires that lease, which is
+the intended behaviour. `last_seen` in node and session views stays a wall-clock
+timestamp and is for operator display.
+
 Coordinator restart clears sessions and active scheduler state, but the same
 enrollment credential obtains a new session with the same enrollment ID.
 `node_enrollment_mode=required` is mandatory in trusted alpha. Explicit local

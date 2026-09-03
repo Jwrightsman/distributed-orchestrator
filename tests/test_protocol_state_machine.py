@@ -39,11 +39,14 @@ from hypothesis.stateful import (
     invariant,
     precondition,
     rule,
+    run_state_machine_as_test,
 )
 
 import server_state as state
 from tests.protocol_harness import (
+    CAMPAIGN_OUTCOMES,
     CREDENTIALS,
+    SYNTHETIC_SECRETS,
     IDEMPOTENCY_KEYS,
     NODE_LABELS,
     REQUESTER_HOSTS,
@@ -65,19 +68,30 @@ from tests.protocol_model import (
 
 CAMPAIGN_PROFILE = os.environ.get("MYCELIUM_CAMPAIGN_PROFILE", "ci")
 
-# Leases are short so a bounded clock advance can expire one. The advance is in
-# turn capped below `_NODE_TIMEOUT`, because past that the janitor also reclaims
-# every node as stale — a real behaviour, covered explicitly and deterministically
-# in tests/test_adversarial_scenarios.py rather than folded into the model.
-UNIT_LEASE_SECONDS = 20
+# Leases are short so a bounded clock advance can expire one. The cap used to sit
+# below `_NODE_TIMEOUT` (90 s), because past that the same reading also aged every
+# node out — finding F7. Since node staleness moved to `coordinator_monotonic`,
+# this reading only decides lease deadlines, so the cap is now set by the one
+# other wall-clock consumer in the sweep: `_RESULT_TTL` (3600 s) prunes the
+# `task_results` compatibility mirror, which the model does not track.
+#
+# Units come in two lease lengths on purpose. With only short leases, every
+# generated clock advance expired every outstanding lease, and the campaign
+# stopped reaching settlement at all — which is exactly the shape of finding F4,
+# and is how the coverage floor below earned its keep on its first run.
+UNIT_SHORT_LEASE_SECONDS = 20
+UNIT_LONG_LEASE_SECONDS = 1200
 UNIT_OUTPUT_CAP = 4096
-MAX_CLOCK_OFFSET = 80.0
+MAX_CLOCK_OFFSET = 3000.0
 
 LIFECYCLE_ORDER = {"queued": 0, "running": 1}
 
+# The honest submission and the honest retry have their own rules below rather
+# than being two of these. Every other property in the campaign — replay, credit,
+# receipt binding — is reachable only after an acceptance, and a worker retrying
+# because its response was lost is the normal case on a home connection, not one
+# attack among nine.
 SUBMISSION_MUTATIONS = (
-    "correct",
-    "replay",
     "wrong_nonce",
     "wrong_attempt_id",
     "wrong_label",
@@ -85,7 +99,8 @@ SUBMISSION_MUTATIONS = (
     "wrong_execution_id",
     "missing_contract_version",
     "oversized_output",
-    "oversized_error",
+    "oversized_error_characters",
+    "oversized_error_bytes",
 )
 
 
@@ -143,8 +158,16 @@ class ProtocolCampaign(RuleBasedStateMachine):
         execution_id = response.json()["execution_id"]
         self.model.apply_submission(REQUESTER_HOSTS[0], None, TASK_TEXTS[0], execution_id)
         self.executions.append(execution_id)
-        for _ in range(2):
-            self._queue_one_unit(execution_id)
+        self._queue_one_unit(execution_id, UNIT_LONG_LEASE_SECONDS)
+        self._queue_one_unit(execution_id, UNIT_SHORT_LEASE_SECONDS)
+        # Take both here, one per node, so a long-leased handout is available to
+        # settle and a short-leased one is available to expire. Otherwise
+        # `submit_result`, `stream_tokens` and `supersede_attempt` are all gated
+        # behind a poll that a short generated sequence rarely reaches, and the
+        # settlement half of the campaign goes unexercised — finding F4 again,
+        # one layer further in.
+        for label in NODE_LABELS[:2]:
+            self._learn_handout(label, self.harness.poll(label))
 
     def teardown(self) -> None:
         try:
@@ -383,7 +406,7 @@ class ProtocolCampaign(RuleBasedStateMachine):
 
     # ── work ─────────────────────────────────────────────────────────
 
-    def _queue_one_unit(self, execution_id: str) -> None:
+    def _queue_one_unit(self, execution_id: str, lease_seconds: int) -> None:
         task_id = f"u{self.next_unit}"
         self.next_unit += 1
         self.harness.enqueue_unit(
@@ -391,13 +414,18 @@ class ProtocolCampaign(RuleBasedStateMachine):
             execution_id=execution_id,
             unit_id=f"candidate-{task_id}",
             max_output_bytes=UNIT_OUTPUT_CAP,
-            lease_seconds=UNIT_LEASE_SECONDS,
+            lease_seconds=lease_seconds,
         )
 
     @precondition(lambda self: bool(self.executions))
-    @rule(execution_index=st.integers(0, 7))
-    def enqueue_unit(self, execution_index: int) -> None:
-        self._queue_one_unit(self.executions[execution_index % len(self.executions)])
+    @rule(
+        execution_index=st.integers(0, 7),
+        lease_seconds=st.sampled_from((UNIT_SHORT_LEASE_SECONDS, UNIT_LONG_LEASE_SECONDS)),
+    )
+    def enqueue_unit(self, execution_index: int, lease_seconds: int) -> None:
+        self._queue_one_unit(
+            self.executions[execution_index % len(self.executions)], lease_seconds
+        )
 
     @rule(label_index=st.integers(0, len(NODE_LABELS) - 1))
     def poll_for_work(self, label_index: int) -> None:
@@ -405,6 +433,9 @@ class ProtocolCampaign(RuleBasedStateMachine):
         if label not in self.harness.session_tokens:
             return
         handout, _fired = self._with_pending_fault(lambda: self.harness.poll(label))
+        self._learn_handout(label, handout)
+
+    def _learn_handout(self, label: str, handout) -> None:
         if handout is None:
             return
         session_id = self.harness.session_ids[label]
@@ -422,7 +453,7 @@ class ProtocolCampaign(RuleBasedStateMachine):
                 enrollment_id=enrollment.enrollment_id if enrollment else None,
                 credential_version=enrollment.credential_version if enrollment else None,
                 nonce=handout.nonce,
-                lease_expires_at=self.harness.clock.now() + UNIT_LEASE_SECONDS,
+                lease_expires_at=handout.lease_expires_at,
                 max_output_bytes=handout.max_output_bytes,
             )
         )
@@ -434,12 +465,33 @@ class ProtocolCampaign(RuleBasedStateMachine):
     @precondition(lambda self: bool(self.handouts))
     @rule(
         unit_index=st.integers(0, 15),
+        output_index=st.integers(0, len(WORKER_OUTPUTS) - 1),
+    )
+    def submit_correct_result(self, unit_index: int, output_index: int) -> None:
+        """The honest worker. Everything downstream depends on this happening."""
+        self._submit(unit_index, "correct", output_index)
+
+    @precondition(lambda self: bool(self.accepted_bodies))
+    @rule(unit_index=st.integers(0, 15))
+    def submit_replayed_result(self, unit_index: int) -> None:
+        """The honest retry: a worker whose accepted response never arrived."""
+        task_ids = sorted(self.accepted_bodies)
+        self._submit_task(task_ids[unit_index % len(task_ids)], "replay", 0)
+
+    @precondition(lambda self: bool(self.handouts))
+    @rule(
+        unit_index=st.integers(0, 15),
         mutation=st.sampled_from(SUBMISSION_MUTATIONS),
         output_index=st.integers(0, len(WORKER_OUTPUTS) - 1),
     )
     def submit_result(self, unit_index: int, mutation: str, output_index: int) -> None:
+        self._submit(unit_index, mutation, output_index)
+
+    def _submit(self, unit_index: int, mutation: str, output_index: int) -> None:
         task_ids = sorted(self.handouts)
-        task_id = task_ids[unit_index % len(task_ids)]
+        self._submit_task(task_ids[unit_index % len(task_ids)], mutation, output_index)
+
+    def _submit_task(self, task_id: str, mutation: str, output_index: int) -> None:
         handout = self.handouts[task_id]
 
         claimed_label = handout.label
@@ -473,8 +525,13 @@ class ProtocolCampaign(RuleBasedStateMachine):
             body["contract_version"] = None
         elif mutation == "oversized_output":
             body["output"] = "x" * (UNIT_OUTPUT_CAP + 64)
-        elif mutation == "oversized_error":
+        elif mutation == "oversized_error_characters":
+            # Refused by the request model, before settlement sees it.
             body["error"] = "e" * 4096
+        elif mutation == "oversized_error_bytes":
+            # Within the character cap, over the byte cap: the case that would
+            # silently make `error` an 8 KiB field if only characters were checked.
+            body["error"] = "é" * 1500
 
         session_id = self._session_id_for_token(token) if token else None
         expected = self.model.expect_settlement(
@@ -490,6 +547,7 @@ class ProtocolCampaign(RuleBasedStateMachine):
             payload_digest=payload_digest(body),
             output_bytes=len((body.get("output") or "").encode("utf-8")),
             error_bytes=len((body.get("error") or "").encode("utf-8")),
+            error_characters=len(body.get("error") or ""),
             now=self.harness.clock.now(),
         )
 
@@ -590,13 +648,13 @@ class ProtocolCampaign(RuleBasedStateMachine):
 
     # ── time and the janitor ─────────────────────────────────────────
 
-    @rule(seconds=st.integers(5, 40))
+    @rule(seconds=st.integers(5, 60))
     def advance_clock(self, seconds: int) -> None:
         self.harness.clock.offset = min(
             MAX_CLOCK_OFFSET, self.harness.clock.offset + seconds
         )
 
-    @rule(seconds=st.integers(5, 40))
+    @rule(seconds=st.integers(5, 60))
     def rewind_clock(self, seconds: int) -> None:
         self.harness.clock.offset = max(
             -MAX_CLOCK_OFFSET, self.harness.clock.offset - seconds
@@ -604,6 +662,24 @@ class ProtocolCampaign(RuleBasedStateMachine):
 
     @rule()
     def run_janitor(self) -> None:
+        self.harness.janitor()
+        self.model.expire_leases(self.harness.clock.now())
+
+    @rule(seconds=st.integers(25, 60))
+    def time_passes_and_the_janitor_wakes(self, seconds: int) -> None:
+        """The background sweep, which in production runs every 30 s.
+
+        `advance_clock` and `run_janitor` stay separate rules, because the window
+        between two sweeps — time having passed with nobody having noticed yet —
+        is a real state worth generating. This is the other half of it: the
+        janitor actually waking up to find what expired while it slept. Without
+        it, every lease in the campaign was reaching a terminal state through a
+        submission before a sweep ever saw it, and the janitor's reclaim path
+        went unexercised.
+        """
+        self.harness.clock.offset = min(
+            MAX_CLOCK_OFFSET, self.harness.clock.offset + seconds
+        )
         self.harness.janitor()
         self.model.expire_leases(self.harness.clock.now())
 
@@ -893,18 +969,87 @@ _COMMON = {
     ],
 }
 
+# Few examples, many steps. A generated example costs about two seconds to set
+# up (an isolated coordinator, its stores, its lifespan) and about fifty
+# milliseconds per step, so steps are where the budget buys coverage — and
+# coverage here means dependent chains completing: poll, settle, retry, expire,
+# sweep. At 15x14 the campaign reached none of that; the floor below says so.
 _CI_SETTINGS = settings(
-    max_examples=15, stateful_step_count=14, derandomize=True, **_COMMON
+    max_examples=15, stateful_step_count=60, derandomize=True, **_COMMON
 )
 _EXTENDED_SETTINGS = settings(
-    max_examples=250, stateful_step_count=40, derandomize=False, **_COMMON
+    max_examples=120, stateful_step_count=80, derandomize=False, **_COMMON
 )
 
-ProtocolCampaign.TestCase.settings = (
+_ACTIVE_SETTINGS = (
     _EXTENDED_SETTINGS if CAMPAIGN_PROFILE == "extended" else _CI_SETTINGS
 )
+ProtocolCampaign.TestCase.settings = _ACTIVE_SETTINGS
 
-TestProtocolCampaign = ProtocolCampaign.TestCase
+
+# The standing guard against finding F4. For several iterations this campaign
+# reported green while reaching zero result submissions: every settlement,
+# credit and replay invariant was passing vacuously, and nothing in the output
+# said so. The structural fix (`open_the_network`, bounded restarts) works today;
+# nothing stopped a future rule addition or bound change from quietly undoing it.
+#
+# So a whole run must demonstrate that it reached each of these. Floors are set
+# at 1 deliberately: a floor tuned up to the edge of what a profile reliably
+# produces becomes flaky, and a flaky guard gets deleted by the next person,
+# which is how the guard dies. Observed counts at the CI profile are recorded in
+# docs/adversarial-campaign.md.
+COVERAGE_FLOOR = {
+    "settlement_accepted": 1,
+    "settlement_rejected_stale_or_misbound": 1,
+    "settlement_replayed": 1,
+    "idempotency_replayed": 1,
+    "idempotency_conflict": 1,
+    "persistence_fault_fired_in_submission": 1,
+    "restart_with_outstanding_handout": 1,
+    "lease_reclaimed_by_janitor": 1,
+}
+
+
+def test_the_campaign_holds_and_reaches_the_code_it_asserts_on():
+    """Run the campaign, then prove it was not passing vacuously.
+
+    This runs the state machine itself rather than relying on Hypothesis's
+    generated `TestCase`, so the floor cannot depend on another test having run
+    first in the same session — and so the campaign still executes exactly once
+    per CI run.
+    """
+    CAMPAIGN_OUTCOMES.clear()
+    try:
+        run_state_machine_as_test(ProtocolCampaign, settings=_ACTIVE_SETTINGS)
+    finally:
+        observed = dict(CAMPAIGN_OUTCOMES)
+
+    short = {
+        name: (observed.get(name, 0), floor)
+        for name, floor in COVERAGE_FLOOR.items()
+        if observed.get(name, 0) < floor
+    }
+    assert not short, (
+        "the campaign passed without reaching outcomes it claims to cover "
+        f"(observed, required): {short}. Everything it did reach: {observed}"
+    )
+
+
+def test_every_secret_probe_is_long_enough_to_mean_something():
+    """A short needle reports leaks it has not found.
+
+    `CoordinatorHarness.scan_for_secrets` asserts that no secret-class value is
+    readable in a few megabytes of SQLite. A two-character probe cannot support
+    that claim: it collides by coincidence often enough to fail CI at random,
+    which is ROADMAP §2's warning running backwards — a measurement asserting a
+    finding that is not there. Every probe must be long enough that a match is
+    evidence rather than arithmetic.
+    """
+    for value in SYNTHETIC_SECRETS:
+        assert len(value) >= 32, (
+            f"a {len(value)}-character secret probe cannot distinguish a leak "
+            "from a coincidence"
+        )
 
 
 @pytest.mark.parametrize(

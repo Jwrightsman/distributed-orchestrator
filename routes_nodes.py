@@ -458,6 +458,7 @@ async def register_node(reg: NodeRegistration, request: Request):
             "registered_at", datetime.now(timezone.utc).isoformat()
         ),
         "last_seen": time.time(),
+        "last_seen_monotonic": state.coordinator_monotonic(),
         "session_id": grant.record.session_id,
         "session_started_at": session_metadata["session_started_at"],
         "session_expires_at": session_metadata["session_expires_at"],

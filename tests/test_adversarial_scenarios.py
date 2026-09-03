@@ -35,6 +35,7 @@ from node_enrollments import (
     EnrollmentRevoked,
     NodeEnrollmentStore,
 )
+from tests._node_session_helpers import age_node_record
 from tests.protocol_harness import (
     ADMISSION_SECRET,
     CREDENTIALS,
@@ -216,16 +217,20 @@ def test_a_real_lifespan_restart_agrees_with_the_campaign_restart(tmp_path):
 def test_an_abandoned_session_has_its_lease_reclaimed_and_its_work_requeued(harness):
     """A laptop closing mid-task is the single most ordinary failure here.
 
-    The worker simply stops talking. After `_NODE_TIMEOUT` the janitor reclaims
-    the node, closes its durable attempt, and puts the unit back on the queue —
-    and the abandoned worker can never settle it afterwards, even if it wakes up
-    holding the original handout.
+    The worker simply stops talking. After `_NODE_TIMEOUT` of silence the janitor
+    reclaims the node, closes its durable attempt, and puts the unit back on the
+    queue — and the abandoned worker can never settle it afterwards, even if it
+    wakes up holding the original handout.
+
+    Silence is backdated on the node record rather than simulated by moving the
+    coordinator's clock. Since Theme 1.5 those are different things: a clock
+    correction is not evidence that anybody stopped talking (finding F7).
     """
     execution_id = _open_network(harness, labels=("n0", "n1"))
     handout = _lease(harness, execution_id, "u0", label="n0")
     abandoned_token = harness.session_tokens["n0"]
 
-    harness.clock.advance(state._NODE_TIMEOUT + 30)
+    age_node_record(state.nodes["n0"], state._NODE_TIMEOUT + 30)
     harness.janitor()
 
     assert "n0" not in state.nodes, "an abandoned node stayed in the registry"
@@ -242,9 +247,9 @@ def test_an_abandoned_session_has_its_lease_reclaimed_and_its_work_requeued(harn
     assert harness.durable_credits() == {}
 
     # The requeued unit is still workable by somebody else, on a new attempt.
-    # The same sweep aged out every node, n1 included, so it reconnects first —
-    # which is exactly what the stock worker does after a poll returns 401.
-    assert harness.register("n1", CREDENTIALS[1], "returning").status_code == 200
+    # n1 never went quiet, so it is untouched by the sweep and does not have to
+    # reconnect first — which is the behaviour F7's fix is about.
+    assert state.nodes.get("n1") is not None
     second = harness.poll("n1")
     assert second is not None and second.attempt_id != handout.attempt_id
     assert harness.submit("u0", harness.result_body(second), label="n1").status_code == 200
@@ -319,6 +324,65 @@ def test_a_backward_coordinator_clock_does_not_shorten_a_valid_lease(harness):
 
     assert response.status_code == 200, response.text
     _credit_and_receipt_agree(harness)
+
+
+def test_a_forward_clock_jump_expires_only_leases_that_actually_ran_out(harness):
+    """Finding F7. A wall-clock correction is not evidence that workers went silent.
+
+    Lease deadlines are absolute points in time and stay on the wall clock, so a
+    jump past one expires it. Node staleness is elapsed time since a heartbeat
+    and is measured on the monotonic source, so the same jump says nothing about
+    who is still connected.
+    """
+    execution_id = _open_network(harness, labels=("n0", "n1"))
+    healthy = _lease(harness, execution_id, "u0", label="n0", lease_seconds=3600)
+    short = _lease(harness, execution_id, "u1", label="n1", lease_seconds=30)
+
+    harness.clock.advance(600)  # ten minutes, e.g. an NTP correction
+    harness.janitor()
+
+    attempts = harness.durable_attempts()
+    assert attempts[short.attempt_id]["state"] == "expired", (
+        "a lease whose durable deadline passed was not expired"
+    )
+    assert attempts[healthy.attempt_id]["state"] == "active", (
+        "a lease with an hour left was expired by a wall-clock jump"
+    )
+    assert set(state.nodes) == {"n0", "n1"}, (
+        "a wall-clock jump marked heartbeating nodes stale"
+    )
+
+
+def test_a_forward_clock_jump_does_not_reclaim_a_healthy_nodes_work(harness):
+    execution_id = _open_network(harness, labels=("n0",))
+    handout = _lease(harness, execution_id, "u0", lease_seconds=3600)
+
+    harness.clock.advance(600)
+    harness.janitor()
+
+    assert "u0" in state.task_inflight, "in-flight work was reclaimed by a clock jump"
+    assert state.task_inflight["u0"]["attempt_id"] == handout.attempt_id
+    assert state.task_queue == [], "work was requeued behind a still-valid lease"
+    assert state.node_sessions.current("n0") is not None
+
+    # And the original holder can still settle it, on the original attempt.
+    assert harness.submit("u0", harness.result_body(handout), label="n0").status_code == 200
+    _credit_and_receipt_agree(harness)
+
+
+def test_a_node_that_stops_heartbeating_still_goes_stale_with_no_clock_jump(harness):
+    """The other half: the fix must not turn staleness detection off."""
+    execution_id = _open_network(harness, labels=("n0",))
+    handout = _lease(harness, execution_id, "u0", lease_seconds=3600)
+
+    # No clock movement at all — the node simply stops being heard from.
+    age_node_record(state.nodes["n0"], state._NODE_TIMEOUT + 10)
+    harness.janitor()
+
+    assert "n0" not in state.nodes, "a silent node was not reclaimed"
+    assert harness.durable_attempts()[handout.attempt_id]["state"] == "reclaimed"
+    assert [task["task_id"] for task in state.task_queue] == ["u0"]
+    assert harness.durable_receipts() == {}
 
 
 # ── 3. Duplicate identity registration ───────────────────────────────

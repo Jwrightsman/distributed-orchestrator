@@ -37,3 +37,25 @@ def enable_auto_node_sessions(client):
     client.request = request
     client.node_session_tokens = tokens
     return client
+
+
+def age_node_session(record, seconds: float) -> None:
+    """Backdate a live session so it reads as idle.
+
+    Heartbeat recency is measured on ``time.monotonic()``, so a test that moved
+    only ``last_seen`` would be backdating the operator display and nothing the
+    coordinator actually decides with.
+    """
+
+    record.last_seen -= seconds
+    if record.last_seen_monotonic is not None:
+        record.last_seen_monotonic -= seconds
+
+
+def age_node_record(node: dict, seconds: float) -> None:
+    """Backdate a process-local node registry entry the same way."""
+
+    if "last_seen" in node:
+        node["last_seen"] = float(node["last_seen"]) - seconds
+    if node.get("last_seen_monotonic") is not None:
+        node["last_seen_monotonic"] = float(node["last_seen_monotonic"]) - seconds

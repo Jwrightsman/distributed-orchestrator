@@ -76,6 +76,24 @@ def normalize_node_id(value: str) -> str:
     return normalized
 
 
+def idle_seconds(
+    record: "NodeSessionRecord",
+    *,
+    wall_now: float,
+    monotonic_now: float,
+) -> float:
+    """How long since this session was last heard from.
+
+    Staleness is a duration, not a deadline. Reading it from the monotonic
+    source means a coordinator whose wall clock jumps forward does not conclude
+    that every connected worker went silent while it was not looking.
+    """
+
+    if record.last_seen_monotonic is None:
+        return wall_now - record.last_seen
+    return monotonic_now - record.last_seen_monotonic
+
+
 def token_digest(token: str) -> str:
     """One-way digest for a random session bearer token."""
 
@@ -94,6 +112,11 @@ class NodeSessionRecord:
     session_started_at: float
     last_seen: float
     expires_at: float
+    # Heartbeat recency is an elapsed duration, so it is measured on a source a
+    # wall-clock correction cannot move. ``last_seen`` above stays on the wall
+    # clock because it is what operators are shown. ``None`` means a record
+    # predating this field, which falls back to the wall clock exactly as before.
+    last_seen_monotonic: float | None = None
     enrollment_id: str | None = None
     credential_version: int | None = None
     capability_descriptor_version: str | None = None
@@ -161,6 +184,7 @@ class NodeSessionRegistry:
         presented_token: str | None = None,
         before_grant: Callable[[], None] | None = None,
         now: float | None = None,
+        monotonic_now: float | None = None,
     ) -> NodeSessionGrant:
         """Create, reclaim, or idempotently refresh one normalized claim.
 
@@ -227,6 +251,9 @@ class NodeSessionRegistry:
             normalized_descriptor_version = None
             normalized_descriptor_hash = None
         current_time = time.time() if now is None else float(now)
+        monotonic_time = (
+            time.monotonic() if monotonic_now is None else float(monotonic_now)
+        )
         with self._lock:
             existing = self._sessions.get(normalized)
             authority_binding_matches = bool(
@@ -258,6 +285,7 @@ class NodeSessionRegistry:
                 if before_grant is not None:
                     before_grant()
                 existing.last_seen = current_time
+                existing.last_seen_monotonic = monotonic_time
                 return NodeSessionGrant(
                     record=existing,
                     session_token=str(presented_token),
@@ -266,8 +294,15 @@ class NodeSessionRegistry:
 
             claim_is_active = bool(
                 existing is not None
+                # The absolute session expiry stays on the wall clock; only the
+                # heartbeat-recency half of this decision is a duration.
                 and current_time < existing.expires_at
-                and current_time - existing.last_seen <= self.stale_after_seconds
+                and idle_seconds(
+                    existing,
+                    wall_now=current_time,
+                    monotonic_now=monotonic_time,
+                )
+                <= self.stale_after_seconds
             )
             authorized_durable_replacement = bool(
                 existing is not None
@@ -289,6 +324,7 @@ class NodeSessionRegistry:
                 token_digest=token_digest(plaintext),
                 session_started_at=current_time,
                 last_seen=current_time,
+                last_seen_monotonic=monotonic_time,
                 expires_at=current_time + self.session_ttl_seconds,
                 enrollment_id=normalized_enrollment,
                 credential_version=normalized_version,
@@ -309,6 +345,7 @@ class NodeSessionRegistry:
         token: str | None,
         *,
         now: float | None = None,
+        monotonic_now: float | None = None,
         touch: bool = True,
     ) -> NodeSessionRecord:
         """Validate one bearer token and return its current session binding."""
@@ -327,6 +364,9 @@ class NodeSessionRegistry:
                 raise InvalidNodeSession("node session expired; register again")
             if touch:
                 record.last_seen = current_time
+                record.last_seen_monotonic = (
+                    time.monotonic() if monotonic_now is None else float(monotonic_now)
+                )
             return record
 
     def invalidate_node(

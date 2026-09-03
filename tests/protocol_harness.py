@@ -24,6 +24,7 @@ import json
 import logging
 import sqlite3
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -58,7 +59,19 @@ ADMISSION_SECRET = "campaign-bootstrap-admission-secret-0000"
 
 NODE_LABELS = ("n0", "n1", "n2", "n3")
 CREDENTIALS = tuple(f"campaign-credential-{index:02d}-{'0' * 24}" for index in range(8))
-IDEMPOTENCY_KEYS = ("k0", "k1", "k2")
+# Two keys, not more. The property under test is "same scope and key, differing
+# canonical request conflicts"; a wider key space just makes the collision
+# rarer without testing anything additional, and the coverage floor in
+# tests/test_protocol_state_machine.py has to be able to reach it.
+#
+# They are long for one reason: `scan_for_secrets` asserts that no idempotency
+# key is readable in storage, and a two-character key cannot support that claim.
+# `"k0"` occurs in a few megabytes of SQLite by coincidence often enough to fail
+# CI at random, which is a probe that reports leaks it has not found — the
+# mirror image of the failure ROADMAP §2 warns about.
+IDEMPOTENCY_KEYS = tuple(
+    f"campaign-idempotency-key-{index:02d}-{'0' * 16}" for index in range(2)
+)
 REQUESTER_HOSTS = ("10.0.0.1", "10.0.0.2")
 TASK_TEXTS = ("synthetic-task-alpha", "synthetic-task-beta")
 WORKER_OUTPUTS = ("synthetic-output-alpha", "synthetic-output-beta")
@@ -66,6 +79,13 @@ WORKER_OUTPUTS = ("synthetic-output-alpha", "synthetic-output-beta")
 # Everything the campaign asserts must never reach storage, logs, events, the
 # ledger projection, or an error body.
 SYNTHETIC_SECRETS = (ADMISSION_SECRET,) + CREDENTIALS + IDEMPOTENCY_KEYS
+
+# What the coordinator actually did, across every harness a run builds. Outcome
+# classes and counts only — no identifiers, no payloads, no timings — so this is
+# safe to print in a CI failure. It exists so finding F4 (a campaign reporting
+# green while never reaching settlement) fails the build instead of going
+# unnoticed; tests/test_protocol_state_machine.py asserts the floor.
+CAMPAIGN_OUTCOMES: Counter[str] = Counter()
 
 
 class CampaignStrategy:
@@ -225,6 +245,7 @@ class Handout:
     contract_version: str | None
     label: str
     max_output_bytes: int
+    lease_expires_at: float
     raw: dict[str, Any] = field(default_factory=dict)
 
 
@@ -268,6 +289,7 @@ class CoordinatorHarness:
         self.credential_versions: dict[str, int] = {}
         # Server-minted values that must never surface anywhere durable.
         self.minted_secrets: set[str] = set()
+        self.outcomes: Counter[str] = Counter()
 
         self.settings = dict(config_module.DEFAULTS)
         self.settings.update(
@@ -326,6 +348,20 @@ class CoordinatorHarness:
             host: TestClient(self._execution_app, client=(host, 50000))
             for host in REQUESTER_HOSTS
         }
+
+    # ── what the coordinator actually did ────────────────────────────
+
+    def _record_outcome(self, outcome: str) -> None:
+        self.outcomes[outcome] += 1
+        CAMPAIGN_OUTCOMES[outcome] += 1
+
+    def _receipt_count(self) -> int:
+        rows = self.rows("SELECT COUNT(*) AS n FROM accepted_result_receipts")
+        return int(rows[0]["n"]) if rows else 0
+
+    def _active_attempt_count(self) -> int:
+        rows = self.rows("SELECT COUNT(*) AS n FROM attempts WHERE state = 'active'")
+        return int(rows[0]["n"]) if rows else 0
 
     # ── wiring ───────────────────────────────────────────────────────
 
@@ -414,6 +450,8 @@ class CoordinatorHarness:
         every live attempt so a late result fails closed; canonical
         reconciliation moves non-terminal executions to `interrupted`.
         """
+        if self._active_attempt_count():
+            self._record_outcome("restart_with_outstanding_handout")
         self._clear_process_local()
         self._install_stores()
         self.service.reconcile_after_restart(f"campaign-restart-{time.time_ns():x}")
@@ -524,6 +562,9 @@ class CoordinatorHarness:
             contract_version=task.get("contract_version"),
             label=label,
             max_output_bytes=int(task.get("max_output_bytes") or 1_048_576),
+            # The server's own deadline, not a recomputation of it. Anything the
+            # campaign derives independently can drift from the real lease.
+            lease_expires_at=float(task["lease_expires_at"]),
             raw=task,
         )
 
@@ -545,11 +586,25 @@ class CoordinatorHarness:
         return body
 
     def submit(self, task_id: str, body: dict[str, Any], *, label: str, token: str | None = None):
-        return self.client.post(
+        receipts_before = self._receipt_count()
+        fault_fired_before = self.faults.fired
+        response = self.client.post(
             f"/tasks/{task_id}/result",
             json=body,
             headers=self.headers(label, token=token),
         )
+        if self.faults.fired and not fault_fired_before:
+            self._record_outcome("persistence_fault_fired_in_submission")
+        settled = self._receipt_count() > receipts_before
+        if response.status_code == 200:
+            self._record_outcome(
+                "settlement_accepted" if settled else "settlement_replayed"
+            )
+        elif response.status_code in (401, 403):
+            self._record_outcome("settlement_rejected_stale_or_misbound")
+        elif response.status_code == 413:
+            self._record_outcome("settlement_payload_bounded")
+        return response
 
     def stream(self, task_id: str, handout: Handout, tokens: str, *, label: str | None = None):
         return self.client.post(
@@ -585,7 +640,10 @@ class CoordinatorHarness:
 
     def janitor(self) -> None:
         """One sweep of the real background janitor."""
+        active_before = self._active_attempt_count()
         state._cleanup_pass()
+        if self._active_attempt_count() < active_before:
+            self._record_outcome("lease_reclaimed_by_janitor")
 
     def supersede(self, attempt_id: str) -> bool:
         return bool(
@@ -609,7 +667,8 @@ class CoordinatorHarness:
         timeout_seconds: int = 1800,
     ):
         headers = {"Idempotency-Key": idempotency_key} if idempotency_key else {}
-        return self.requesters[host].post(
+        fault_fired_before = self.faults.fired
+        response = self.requesters[host].post(
             "/v1/executions",
             json={
                 "task": task,
@@ -618,6 +677,13 @@ class CoordinatorHarness:
             },
             headers=headers,
         )
+        if self.faults.fired and not fault_fired_before:
+            self._record_outcome("persistence_fault_fired_in_submission")
+        if response.status_code == 409:
+            self._record_outcome("idempotency_conflict")
+        elif response.headers.get("Idempotency-Replayed") == "true":
+            self._record_outcome("idempotency_replayed")
+        return response
 
     def get_execution(self, execution_id: str, *, host: str = REQUESTER_HOSTS[0]):
         return self.requesters[host].get(f"/v1/executions/{execution_id}")
@@ -681,10 +747,28 @@ class CoordinatorHarness:
         prompt or output may reach the event stream, the logs, or the ledger.
         """
         findings: list[str] = []
-        needles = tuple(SYNTHETIC_SECRETS) + tuple(self.minted_secrets) + tuple(extra)
+        # Classified, so a failure says which *kind* of value became readable.
+        # The value itself is never reported: naming the class is enough to act
+        # on, and a CI log is a public place.
+        classified: list[tuple[str, str]] = [(ADMISSION_SECRET, "the admission secret")]
+        classified += [(value, "an enrollment credential") for value in CREDENTIALS]
+        classified += [(value, "an idempotency key") for value in IDEMPOTENCY_KEYS]
+        classified += [
+            (value, "a server-minted session token or attempt nonce")
+            for value in self.minted_secrets
+        ]
+        classified += [(value, "a caller-supplied probe value") for value in extra]
 
         blobs: list[tuple[str, str]] = []
-        for database in (self.database, self.root / "capability-shadow-health.db"):
+        databases = (
+            self.database,
+            # A write that has not been checkpointed yet lives here, not in the
+            # main file. Reading only the main file would let a real leak hide
+            # behind WAL timing.
+            self.database.with_name(self.database.name + "-wal"),
+            self.root / "capability-shadow-health.db",
+        )
+        for database in databases:
             if database.exists():
                 blobs.append((f"sqlite:{database.name}", database.read_bytes().decode("latin-1")))
         projection = self.root / "ledger.json"
@@ -693,16 +777,20 @@ class CoordinatorHarness:
         blobs.append(("events", json.dumps(list(state.pipeline_events), default=str)))
         blobs.append(("logs", "\n".join(self._log_handler.lines)))
 
-        for needle in needles:
+        for needle, kind in classified:
             if not needle:
                 continue
             for where, blob in blobs:
                 if needle in blob:
-                    findings.append(f"{where} contains identity material")
+                    findings.append(f"{where} contains {kind} ({len(needle)} chars)")
         # Prompts and outputs are legitimate durable result content, but never
         # telemetry. Only the non-durable surfaces are checked for them.
         for where, blob in blobs:
-            if where == "sqlite:events.db":
+            # The canonical store legitimately holds request text and accepted
+            # output — that is what a durable result is — and so does its WAL,
+            # which is the same content before a checkpoint. Every other surface
+            # is telemetry and must not carry either.
+            if where.startswith("sqlite:events.db"):
                 continue
             for content in TASK_TEXTS + WORKER_OUTPUTS:
                 if content in blob:

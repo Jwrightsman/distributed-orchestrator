@@ -51,7 +51,11 @@ TERMINAL_ATTEMPT_STATES = frozenset(
 )
 
 # The protocol's own limits, restated so a silent production change fails here.
+# Worker error text is bounded twice: the request model caps characters, and
+# settlement caps UTF-8 bytes. Which one binds depends on the encoding, and a
+# submission refused by the first never reaches the second.
 MAX_ERROR_BYTES = 2048
+MAX_ERROR_CHARACTERS = 2048
 
 
 # ── Modelled entities ────────────────────────────────────────────────
@@ -291,6 +295,7 @@ class ProtocolModel:
         payload_digest: str,
         output_bytes: int,
         error_bytes: int,
+        error_characters: int,
         now: float,
     ) -> Settlement:
         """Decide what a submission does, in the order the protocol states.
@@ -301,6 +306,10 @@ class ProtocolModel:
         coordinator currently holds open for this task, and only if every bound
         field it echoes matches.
         """
+        if error_characters > MAX_ERROR_CHARACTERS:
+            # Refused by the request model before any attempt is consulted.
+            return Settlement.REJECT
+
         # The presented session must itself be live and must own the label the
         # submission claims. That is the coordinator's front door; nothing
         # below it can be reached by a caller holding someone else's token.

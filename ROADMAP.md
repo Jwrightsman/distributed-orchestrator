@@ -243,11 +243,13 @@ between verification and settlement. Property-based state-machine tests are the 
 > agreement is off by default, describes output shape, and moves no eligibility, ordering,
 > settlement, or credit decision.
 >
-> The campaign found five defects, all in the tests or the model, none in the coordinator —
-> including one that mattered: for several iterations it reported green while never reaching
-> settlement at all. The full findings, the invariant list, the three seams introduced, what
-> the campaign does not cover, and its measured CI cost are in
-> [`docs/adversarial-campaign.md`](docs/adversarial-campaign.md).
+> The campaign's findings, the invariant list, the seams introduced, what it does not cover,
+> and its measured CI cost are in
+> [`docs/adversarial-campaign.md`](docs/adversarial-campaign.md). Theme 1.5 added a standing
+> coverage floor: a run that does not reach settlement, replay, idempotency conflict, an
+> injected fault, a restart with an outstanding handout, and a janitor reclaim now fails CI
+> rather than reporting green. Its first run showed the campaign had still been reaching zero
+> accepted settlements, which is written up there in full.
 
 ---
 
@@ -518,6 +520,18 @@ memory or storage growth.
 
 ## Changelog
 
+- **2026-09-02** — Theme 1.5 closed the two loose ends Theme 1.4 left. The adversarial
+  campaign now asserts a non-vacuous coverage floor over a whole run, which immediately
+  showed that finding F4 had not actually been fixed: the campaign was still reaching zero
+  accepted settlements, so its settlement, credit, and replay invariants were passing about
+  runs in which almost nothing happened. And finding F7 is fixed rather than merely recorded
+  — node staleness now reads an elapsed duration from a monotonic source, so correcting the
+  coordinator's wall clock no longer mass-reclaims healthy nodes' in-flight work. Lease
+  deadlines stay absolute and stay on the wall clock. CI then caught a third thing the
+  local runs had not: the campaign's own secret-leak probe was short enough to match by
+  coincidence and was failing builds at random — a measurement asserting a finding that was
+  not there, which is §2's rule running backwards. Details in
+  `docs/adversarial-campaign.md`.
 - **2026-09-02** — Theme 1.4 closed the §5 adversarial-tests item. All twelve scenarios now
   have coverage: a property-based state-machine campaign over the attempt, settlement,
   enrollment, and execution-lifecycle machines, plus deterministic tests for the eight that

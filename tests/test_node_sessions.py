@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 import access_control
 import server_state as state
 from server import app
+from tests._node_session_helpers import age_node_session
 
 
 @pytest.fixture
@@ -146,7 +147,7 @@ def test_duplicate_active_id_conflicts_but_same_session_is_idempotent(client):
 def test_stale_id_can_be_reclaimed_and_old_token_stops_working(client):
     first = _register(client)
     old_record = state.node_sessions.current("worker")
-    old_record.last_seen = time.time() - state._NODE_TIMEOUT - 1
+    age_node_session(old_record, state._NODE_TIMEOUT + 1)
 
     replacement = _register(client)
 
@@ -189,7 +190,7 @@ def test_replacement_session_cannot_stream_or_settle_old_attempt(client):
     task = client.get(
         "/tasks/next", params={"node_id": "worker"}, headers=_headers(original)
     ).json()
-    state.node_sessions.current("worker").last_seen = time.time() - state._NODE_TIMEOUT - 1
+    age_node_session(state.node_sessions.current("worker"), state._NODE_TIMEOUT + 1)
     replacement = _register(client)
     assert replacement.status_code == 200
 
@@ -227,7 +228,7 @@ def test_unenrolled_statistics_do_not_cross_session_identity(client):
     assert node["lifetime_tasks_completed"] == 1
     assert node["lifetime_contribution_points"] == 5
 
-    state.node_sessions.current("worker").last_seen = time.time() - state._NODE_TIMEOUT - 1
+    age_node_session(state.node_sessions.current("worker"), state._NODE_TIMEOUT + 1)
     second = _register(client)
     assert second.status_code == 200
     node = state.nodes["worker"]
