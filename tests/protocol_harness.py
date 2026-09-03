@@ -46,6 +46,10 @@ from execution.registry import StrategyOutcome, StrategyRegistry
 from execution.service import ExecutionService
 from node_capabilities import NodeCapabilitySnapshotStore
 from node_enrollments import NodeEnrollmentStore
+from verification_evidence import (
+    VerificationEvidenceProcessCounters,
+    VerificationEvidenceStore,
+)
 from server import app as worker_app
 
 
@@ -89,7 +93,15 @@ CAMPAIGN_OUTCOMES: Counter[str] = Counter()
 
 
 class CampaignStrategy:
-    """A deterministic strategy. It never calls a model and never sleeps."""
+    """A deterministic strategy. It never calls a model and never sleeps.
+
+    It cannot be made to stay `running` for a later request to cancel: a
+    background execution task does not outlive the `TestClient` request that
+    created it, so anything still awaiting when the request returns is cancelled
+    and lands as `interrupted`, not `cancelled`. That is why
+    `execution_cancelled_while_running` is not in the campaign's coverage floor -
+    see docs/adversarial-campaign.md.
+    """
 
     identifier = "dag"
     version = "adversarial-campaign"
@@ -249,6 +261,14 @@ class Handout:
     raw: dict[str, Any] = field(default_factory=dict)
 
 
+def _none_or_blank(value: object) -> str | None:
+    """Treat SQLite NULL and empty text alike: absent, never guessed at."""
+    if value is None:
+        return None
+    text = str(value)
+    return text or None
+
+
 def payload_digest(body: dict[str, Any]) -> str:
     """A stable digest of the fields settlement binds, for replay comparison."""
     material = json.dumps(
@@ -363,6 +383,31 @@ class CoordinatorHarness:
         rows = self.rows("SELECT COUNT(*) AS n FROM attempts WHERE state = 'active'")
         return int(rows[0]["n"]) if rows else 0
 
+    def _capability_observation_count(self) -> int:
+        rows = self.rows("SELECT COUNT(*) AS n FROM node_capability_observations")
+        return int(rows[0]["n"]) if rows else 0
+
+    def verification_evidence_count(self) -> int:
+        rows = self.rows("SELECT COUNT(*) AS n FROM verification_evidence")
+        return int(rows[0]["n"]) if rows else 0
+
+    def _attempt_enrollment_for_task(self, task_id: str) -> str | None:
+        rows = self.rows(
+            "SELECT assigned_enrollment_id FROM attempts WHERE task_id = ? "
+            "ORDER BY issued_at DESC LIMIT 1",
+            (task_id,),
+        )
+        return None if not rows else _none_or_blank(rows[0]["assigned_enrollment_id"])
+
+    def _presented_enrollment(self, label: str, token: str | None) -> str | None:
+        """Which enrollment the session actually presented, not which was claimed."""
+        for held_label, held_token in self.session_tokens.items():
+            if token is not None and held_token == token:
+                label = held_label
+                break
+        record = state.node_sessions.current(label)
+        return None if record is None else record.enrollment_id
+
     # ── wiring ───────────────────────────────────────────────────────
 
     def _patch(self, target: Any, name: str, value: Any) -> None:
@@ -385,6 +430,16 @@ class CoordinatorHarness:
             state,
             "capability_evidence_store",
             CapabilityEvidenceStore(self.database),
+        )
+        self._patch(
+            state,
+            "verification_evidence_store",
+            VerificationEvidenceStore(self.database),
+        )
+        self._patch(
+            state,
+            "verification_evidence_counters",
+            VerificationEvidenceProcessCounters(),
         )
         self._patch(
             state,
@@ -587,7 +642,9 @@ class CoordinatorHarness:
 
     def submit(self, task_id: str, body: dict[str, Any], *, label: str, token: str | None = None):
         receipts_before = self._receipt_count()
+        observations_before = self._capability_observation_count()
         fault_fired_before = self.faults.fired
+        assigned_enrollment = self._attempt_enrollment_for_task(task_id)
         response = self.client.post(
             f"/tasks/{task_id}/result",
             json=body,
@@ -596,12 +653,25 @@ class CoordinatorHarness:
         if self.faults.fired and not fault_fired_before:
             self._record_outcome("persistence_fault_fired_in_submission")
         settled = self._receipt_count() > receipts_before
+        if self._capability_observation_count() > observations_before:
+            self._record_outcome("capability_observation_recorded")
         if response.status_code == 200:
             self._record_outcome(
                 "settlement_accepted" if settled else "settlement_replayed"
             )
         elif response.status_code in (401, 403):
             self._record_outcome("settlement_rejected_stale_or_misbound")
+            # Distinguish "this submission was refused" from "this submission was
+            # refused because it came from a different contributor's identity".
+            # The second is the finding tests/test_result_binding.py exists for,
+            # and it deserves its own coverage floor.
+            presented = self._presented_enrollment(label, token)
+            if (
+                assigned_enrollment is not None
+                and presented is not None
+                and presented != assigned_enrollment
+            ):
+                self._record_outcome("cross_enrollment_submission_rejected")
         elif response.status_code == 413:
             self._record_outcome("settlement_payload_bounded")
         return response
@@ -689,7 +759,65 @@ class CoordinatorHarness:
         return self.requesters[host].get(f"/v1/executions/{execution_id}")
 
     def cancel_execution(self, execution_id: str, *, host: str = REQUESTER_HOSTS[0]):
-        return self.requesters[host].post(f"/v1/executions/{execution_id}/cancel")
+        row = self.durable_execution(execution_id)
+        was_running = row is not None and row["lifecycle_status"] in ("queued", "running")
+        response = self.requesters[host].post(f"/v1/executions/{execution_id}/cancel")
+        if (
+            was_running
+            and response.status_code == 200
+            and response.json().get("lifecycle_status") == "cancelled"
+        ):
+            self._record_outcome("execution_cancelled_while_running")
+        return response
+
+    def record_verification_evidence(
+        self,
+        *,
+        execution_id: str,
+        attempt_id: str,
+        outcome: str,
+        verifier_version: str,
+    ):
+        """Append one post-hoc verification observation for a settled attempt.
+
+        This is the API a task-class assurance ladder would call in Theme 3B-2.
+        The campaign drives it so that replay safety, restart survival, and
+        containment are exercised by generated sequences rather than only by the
+        focused tests.
+        """
+        rows = self.rows(
+            "SELECT * FROM attempts WHERE attempt_id = ?", (attempt_id,)
+        )
+        if not rows:
+            return None
+        attempt = rows[0]
+        before = self.verification_evidence_count()
+        result = state.verification_evidence_store.best_effort(
+            state.verification_evidence_store.record,
+            execution_id=execution_id,
+            unit_id=_none_or_blank(attempt["execution_unit_id"]),
+            attempt_id=attempt_id,
+            receipt_id=attempt_id,
+            task_class=str(attempt["execution_unit_kind"] or "candidate"),
+            verifier_kind="deterministic_check",
+            verifier_name="code_parse",
+            verifier_version=verifier_version,
+            outcome=outcome,
+            fault_attribution="subject_output",
+            subject_node_id=_none_or_blank(attempt["assigned_node_id"]),
+            subject_enrollment_id=_none_or_blank(attempt["assigned_enrollment_id"]),
+            descriptor_version=_none_or_blank(attempt["assigned_descriptor_version"]),
+            descriptor_hash=_none_or_blank(attempt["assigned_descriptor_hash"]),
+            model_provider=_none_or_blank(attempt["assigned_model_provider"]),
+            model_name=_none_or_blank(attempt["assigned_model_name"]),
+            model_digest=_none_or_blank(attempt["assigned_model_digest"]),
+        )
+        if not result.succeeded:
+            state.verification_evidence_counters.increment("record_failed")
+            return None
+        if self.verification_evidence_count() > before:
+            self._record_outcome("verification_evidence_recorded")
+        return result.value
 
     # ── durable reads used by the invariants ─────────────────────────
 
@@ -729,6 +857,9 @@ class CoordinatorHarness:
 
     def capability_observations(self) -> list[sqlite3.Row]:
         return self.rows("SELECT * FROM node_capability_observations")
+
+    def verification_evidence(self) -> list[sqlite3.Row]:
+        return self.rows("SELECT * FROM verification_evidence")
 
     def quarantine_rows(self) -> list[sqlite3.Row]:
         return self.rows("SELECT * FROM result_quarantine")
