@@ -46,6 +46,7 @@ import server_state as state
 from tests.protocol_harness import (
     CAMPAIGN_OUTCOMES,
     CREDENTIALS,
+    SYNTHETIC_SECRETS,
     IDEMPOTENCY_KEYS,
     NODE_LABELS,
     REQUESTER_HOSTS,
@@ -1032,6 +1033,23 @@ def test_the_campaign_holds_and_reaches_the_code_it_asserts_on():
         "the campaign passed without reaching outcomes it claims to cover "
         f"(observed, required): {short}. Everything it did reach: {observed}"
     )
+
+
+def test_every_secret_probe_is_long_enough_to_mean_something():
+    """A short needle reports leaks it has not found.
+
+    `CoordinatorHarness.scan_for_secrets` asserts that no secret-class value is
+    readable in a few megabytes of SQLite. A two-character probe cannot support
+    that claim: it collides by coincidence often enough to fail CI at random,
+    which is ROADMAP §2's warning running backwards — a measurement asserting a
+    finding that is not there. Every probe must be long enough that a match is
+    evidence rather than arithmetic.
+    """
+    for value in SYNTHETIC_SECRETS:
+        assert len(value) >= 32, (
+            f"a {len(value)}-character secret probe cannot distinguish a leak "
+            "from a coincidence"
+        )
 
 
 @pytest.mark.parametrize(

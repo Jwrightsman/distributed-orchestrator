@@ -63,7 +63,15 @@ CREDENTIALS = tuple(f"campaign-credential-{index:02d}-{'0' * 24}" for index in r
 # canonical request conflicts"; a wider key space just makes the collision
 # rarer without testing anything additional, and the coverage floor in
 # tests/test_protocol_state_machine.py has to be able to reach it.
-IDEMPOTENCY_KEYS = ("k0", "k1")
+#
+# They are long for one reason: `scan_for_secrets` asserts that no idempotency
+# key is readable in storage, and a two-character key cannot support that claim.
+# `"k0"` occurs in a few megabytes of SQLite by coincidence often enough to fail
+# CI at random, which is a probe that reports leaks it has not found — the
+# mirror image of the failure ROADMAP §2 warns about.
+IDEMPOTENCY_KEYS = tuple(
+    f"campaign-idempotency-key-{index:02d}-{'0' * 16}" for index in range(2)
+)
 REQUESTER_HOSTS = ("10.0.0.1", "10.0.0.2")
 TASK_TEXTS = ("synthetic-task-alpha", "synthetic-task-beta")
 WORKER_OUTPUTS = ("synthetic-output-alpha", "synthetic-output-beta")
@@ -739,10 +747,28 @@ class CoordinatorHarness:
         prompt or output may reach the event stream, the logs, or the ledger.
         """
         findings: list[str] = []
-        needles = tuple(SYNTHETIC_SECRETS) + tuple(self.minted_secrets) + tuple(extra)
+        # Classified, so a failure says which *kind* of value became readable.
+        # The value itself is never reported: naming the class is enough to act
+        # on, and a CI log is a public place.
+        classified: list[tuple[str, str]] = [(ADMISSION_SECRET, "the admission secret")]
+        classified += [(value, "an enrollment credential") for value in CREDENTIALS]
+        classified += [(value, "an idempotency key") for value in IDEMPOTENCY_KEYS]
+        classified += [
+            (value, "a server-minted session token or attempt nonce")
+            for value in self.minted_secrets
+        ]
+        classified += [(value, "a caller-supplied probe value") for value in extra]
 
         blobs: list[tuple[str, str]] = []
-        for database in (self.database, self.root / "capability-shadow-health.db"):
+        databases = (
+            self.database,
+            # A write that has not been checkpointed yet lives here, not in the
+            # main file. Reading only the main file would let a real leak hide
+            # behind WAL timing.
+            self.database.with_name(self.database.name + "-wal"),
+            self.root / "capability-shadow-health.db",
+        )
+        for database in databases:
             if database.exists():
                 blobs.append((f"sqlite:{database.name}", database.read_bytes().decode("latin-1")))
         projection = self.root / "ledger.json"
@@ -751,16 +777,20 @@ class CoordinatorHarness:
         blobs.append(("events", json.dumps(list(state.pipeline_events), default=str)))
         blobs.append(("logs", "\n".join(self._log_handler.lines)))
 
-        for needle in needles:
+        for needle, kind in classified:
             if not needle:
                 continue
             for where, blob in blobs:
                 if needle in blob:
-                    findings.append(f"{where} contains identity material")
+                    findings.append(f"{where} contains {kind} ({len(needle)} chars)")
         # Prompts and outputs are legitimate durable result content, but never
         # telemetry. Only the non-durable surfaces are checked for them.
         for where, blob in blobs:
-            if where == "sqlite:events.db":
+            # The canonical store legitimately holds request text and accepted
+            # output — that is what a durable result is — and so does its WAL,
+            # which is the same content before a checkpoint. Every other surface
+            # is telemetry and must not carry either.
+            if where.startswith("sqlite:events.db"):
                 continue
             for content in TASK_TEXTS + WORKER_OUTPUTS:
                 if content in blob:
