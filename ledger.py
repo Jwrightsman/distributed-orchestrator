@@ -17,6 +17,7 @@ import tempfile
 import threading
 import time
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -67,6 +68,191 @@ def _safe_task_label(contribution_type: str, requested: str = "") -> str:
 # candidate was selected, and not a claim that the output is correct.
 COMPUTE_CONTRIBUTION_POINTS = 5
 
+# ── Tamper-evident chain ─────────────────────────────────────────────
+#
+# Each entry carries the digest of the one before it, so an edit to any entry
+# breaks every link after it and verification reports where.
+#
+# This makes the ledger **tamper-evident, not tamper-proof.** An operator with
+# database access can rewrite every entry *and* every link, and this mechanism
+# will report a clean chain. There is no consensus here, no external anchor, and
+# no third party attesting to anything. What it detects is accidental
+# corruption, a partial edit, and casual modification - which is worth having,
+# and is not the same thing as verifiable compute. See ADR 0017.
+#
+# A linear chain rather than a Merkle tree: a tree buys efficient inclusion
+# proofs, which matter only when proving membership to a third party without
+# handing over the whole log. Nobody needs that yet.
+LEDGER_CHAIN_VERSION = "1"
+_CHAIN_DOMAIN = "mycelium.ledger-chain.v1"
+
+# The chain's fixed starting point. Entries written before the chain existed have
+# no link and are not retrofitted with one; see `genesis_unchained_entries`.
+LEDGER_CHAIN_GENESIS_DIGEST = hashlib.sha256(
+    f"{_CHAIN_DOMAIN}:genesis".encode("ascii")
+).hexdigest()
+
+# The columns the digest covers. Anything not listed here can change without
+# breaking the chain, which is why the list is explicit rather than "every
+# column": a future additive column must be a deliberate decision, not a silent
+# invalidation of every existing link.
+_CHAINED_FIELDS = (
+    "contribution_id",
+    "contributor",
+    "contribution_type",
+    "points",
+    "task",
+    "details",
+    "basis",
+    "points_are_monetary",
+    "attempt_id",
+    "enrollment_id",
+    "node_id",
+    "session_id",
+    "created_at",
+)
+
+
+def chain_entry_digest(
+    *, entry_index: int, previous_digest: str, content: dict[str, Any]
+) -> str:
+    """The digest of one ledger entry, bound to its position and predecessor."""
+
+    material = json.dumps(
+        {
+            "content": {key: content.get(key) for key in _CHAINED_FIELDS},
+            "entry_index": int(entry_index),
+            "previous_digest": previous_digest,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
+    return hashlib.sha256(
+        _CHAIN_DOMAIN.encode("ascii") + b"\0" + material.encode("utf-8")
+    ).hexdigest()
+
+
+@dataclass(frozen=True)
+class LedgerChainVerification:
+    """What a chain walk found. Content-free by construction."""
+
+    ok: bool
+    chained_entries: int
+    genesis_unchained_entries: int
+    break_at_index: int | None = None
+    break_entry_id: str | None = None
+    expected_digest: str | None = None
+    observed_digest: str | None = None
+    reason: str | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "ok": self.ok,
+            "chained_entries": self.chained_entries,
+            "genesis_unchained_entries": self.genesis_unchained_entries,
+            "break_at_index": self.break_at_index,
+            "break_entry_id": self.break_entry_id,
+            "expected_digest": self.expected_digest,
+            "observed_digest": self.observed_digest,
+            "reason": self.reason,
+            "establishes": (
+                "that no entry was changed without also recomputing every link "
+                "after it. It is tamper evidence, not tamper proofing, and it is "
+                "not proof that any recorded work happened or was correct."
+            ),
+        }
+
+
+def _chain_head(con: sqlite3.Connection) -> tuple[int, str]:
+    """The current chain tip, or the genesis boundary if there is none."""
+
+    row = con.execute(
+        "SELECT entry_index, entry_digest FROM contributions "
+        "WHERE entry_index IS NOT NULL ORDER BY entry_index DESC LIMIT 1"
+    ).fetchone()
+    if row is None or row[0] is None:
+        return -1, LEDGER_CHAIN_GENESIS_DIGEST
+    return int(row[0]), str(row[1])
+
+
+def verify_ledger_chain(db_path: str | Path | None = None) -> LedgerChainVerification:
+    """Walk the chain and report the first break, with enough to act on.
+
+    Reports an index, an entry ID, and two digests. No secrets, prompts, outputs,
+    or artifact contents can appear here, because none of them are in the chained
+    columns.
+    """
+
+    path = LEDGER_DB_FILE if db_path is None else Path(db_path)
+    with sqlite_connect(path, row_factory=sqlite3.Row) as con:
+        ensure_contribution_schema(con)
+        unchained = int(
+            con.execute(
+                "SELECT COUNT(*) AS n FROM contributions WHERE entry_index IS NULL"
+            ).fetchone()["n"]
+        )
+        rows = con.execute(
+            "SELECT * FROM contributions WHERE entry_index IS NOT NULL "
+            "ORDER BY entry_index"
+        ).fetchall()
+
+    previous = LEDGER_CHAIN_GENESIS_DIGEST
+    for position, row in enumerate(rows):
+        entry_index = int(row["entry_index"])
+        entry_id = str(row["contribution_id"])
+        if entry_index != position:
+            return LedgerChainVerification(
+                ok=False,
+                chained_entries=len(rows),
+                genesis_unchained_entries=unchained,
+                break_at_index=position,
+                break_entry_id=entry_id,
+                expected_digest=None,
+                observed_digest=None,
+                reason=(
+                    f"entry index is {entry_index} where {position} was expected; "
+                    "the chain has a gap or a duplicate"
+                ),
+            )
+        stored_previous = str(row["previous_digest"] or "")
+        if stored_previous != previous:
+            return LedgerChainVerification(
+                ok=False,
+                chained_entries=len(rows),
+                genesis_unchained_entries=unchained,
+                break_at_index=entry_index,
+                break_entry_id=entry_id,
+                expected_digest=previous,
+                observed_digest=stored_previous or None,
+                reason="entry does not link to the previous entry's digest",
+            )
+        recomputed = chain_entry_digest(
+            entry_index=entry_index,
+            previous_digest=previous,
+            content={key: row[key] for key in _CHAINED_FIELDS},
+        )
+        stored_digest = str(row["entry_digest"] or "")
+        if recomputed != stored_digest:
+            return LedgerChainVerification(
+                ok=False,
+                chained_entries=len(rows),
+                genesis_unchained_entries=unchained,
+                break_at_index=entry_index,
+                break_entry_id=entry_id,
+                expected_digest=recomputed,
+                observed_digest=stored_digest or None,
+                reason="entry content does not match its recorded digest",
+            )
+        previous = stored_digest
+    return LedgerChainVerification(
+        ok=True,
+        chained_entries=len(rows),
+        genesis_unchained_entries=unchained,
+    )
+
+
 
 def compute_contribution_points(*, output: str | None, error: str | None) -> int:
     """Points for one accepted compute contribution.
@@ -105,6 +291,19 @@ def ensure_contribution_schema(con: sqlite3.Connection) -> None:
     for name in ("enrollment_id", "node_id", "session_id"):
         if name not in existing:
             con.execute(f"ALTER TABLE contributions ADD COLUMN {name} TEXT")
+    # Chain columns are additive and nullable. Rows written before the chain
+    # existed keep NULL and are the genesis boundary; history is never rewritten
+    # to fabricate links it did not have.
+    if "entry_index" not in existing:
+        con.execute("ALTER TABLE contributions ADD COLUMN entry_index INTEGER")
+    if "previous_digest" not in existing:
+        con.execute("ALTER TABLE contributions ADD COLUMN previous_digest TEXT")
+    if "entry_digest" not in existing:
+        con.execute("ALTER TABLE contributions ADD COLUMN entry_digest TEXT")
+    con.execute(
+        "CREATE INDEX IF NOT EXISTS idx_contributions_entry_index "
+        "ON contributions(entry_index) WHERE entry_index IS NOT NULL"
+    )
     con.execute(
         "CREATE INDEX IF NOT EXISTS idx_contributions_contributor_created "
         "ON contributions(contributor, created_at)"
@@ -144,13 +343,39 @@ def insert_contribution_in_transaction(
     """
     ensure_contribution_schema(con)
     safe_task = _safe_task_label(contribution_type, task)
+    moment = created_at if created_at is not None else time.time()
+    content = {
+        "contribution_id": contribution_id,
+        "contributor": contributor,
+        "contribution_type": contribution_type,
+        "points": float(points),
+        "task": safe_task,
+        "details": "",
+        "basis": basis,
+        "points_are_monetary": 0,
+        "attempt_id": attempt_id,
+        "enrollment_id": enrollment_id,
+        "node_id": node_id,
+        "session_id": session_id,
+        "created_at": moment,
+    }
+    # The link is computed and written inside the caller's transaction, which for
+    # a settlement is the same BEGIN IMMEDIATE that writes the receipt. Nothing
+    # about settlement atomicity is relaxed to fit the chain in: the chain rides
+    # the transaction that already exists.
+    head_index, head_digest = _chain_head(con)
+    entry_index = head_index + 1
+    entry_digest = chain_entry_digest(
+        entry_index=entry_index, previous_digest=head_digest, content=content
+    )
     cursor = con.execute(
         """
         INSERT OR IGNORE INTO contributions (
             contribution_id, contributor, contribution_type, points, task,
             details, basis, points_are_monetary, attempt_id, enrollment_id,
-            node_id, session_id, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
+            node_id, session_id, created_at, entry_index, previous_digest,
+            entry_digest
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             contribution_id,
@@ -164,9 +389,15 @@ def insert_contribution_in_transaction(
             enrollment_id,
             node_id,
             session_id,
-            created_at if created_at is not None else time.time(),
+            moment,
+            entry_index,
+            head_digest,
+            entry_digest,
         ),
     )
+    # An ignored insert consumed no index: a replayed settlement or an ambiguous
+    # commit that retries resolves to the one existing entry, never a second one
+    # and never a gap.
     return cursor.rowcount == 1
 
 
