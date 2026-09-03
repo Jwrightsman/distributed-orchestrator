@@ -291,7 +291,15 @@ success by workload/node/model/prompt-version, verifier rejection reasons, laten
 memory growth, churn, credits per verified result, compute-minutes per accepted result.
 OpenTelemetry plus Prometheus-compatible metrics; every job traceable end to end.
 
-**Protocol versioning.** `/v1` routes, advertised `node_protocol_min/max`, server version,
+**Protocol versioning.** **Done, Theme 4A** for the worker half: `/v1/worker-protocol`
+advertises `node_protocol_min`/`node_protocol_max` and the server version without a
+credential, an out-of-window worker is refused before any enrollment or session exists with
+distinct too-old/too-new codes, checking happens at registration and session establishment
+rather than per request, and `docs/PROTOCOL.md` carries the breaking-change definition and
+deprecation policy. Nothing was bumped: the window holds exactly version 1. Contract and
+execution versions below remain as described. See
+[ADR 0015](docs/adr/0015-worker-protocol-compatibility-window.md). Original item:
+`/v1` routes, advertised `node_protocol_min/max`, server version,
 contract versions. A distributed node population can't be upgraded at once, so compatibility and
 deprecation rules must exist *before* external operators depend on them.
 
@@ -523,6 +531,17 @@ memory or storage growth.
 
 ## Changelog
 
+- **2026-09-03** — Theme 4A gave the worker protocol a compatibility window, a distinguishable
+  refusal, and a written deprecation policy, without bumping anything: the window holds
+  exactly version 1 and this defines the mechanism rather than exercising it. It also wrote
+  down six extension seams as boundaries with contract tests rather than building a plugin
+  framework to host one implementation each — no registry, no dynamic import, no
+  backend-selection config, no new indirection. Three boundary violations were found: SQLite
+  specifics in routes (fixed), accounting policy inlined in the settlement transaction (partly
+  fixed, the rest deferred with a strict xfail reproducer), and a worker-supplied hostname on
+  the legacy registration (deferred to the next breaking version). A2A is recorded as an edge
+  adapter mapping only, implemented nowhere; the durable ensemble-candidate queue is deferred
+  with a measurement trigger. See ADR 0015 and ADR 0016.
 - **2026-09-03** — Theme 3B-1 made post-hoc verification evidence durable. It is a separate
   append-only table that references an execution, attempt, and receipt and cannot write back
   to any of them, because ADR 0009 makes terminal state monotonic and verification happens
