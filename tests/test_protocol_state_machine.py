@@ -169,8 +169,34 @@ class ProtocolCampaign(RuleBasedStateMachine):
         for label in NODE_LABELS[:2]:
             self._learn_handout(label, self.harness.poll(label))
 
+    def _check_durable_integrity(self) -> None:
+        """Whole-sequence checks that are too expensive to run per step.
+
+        A full chain walk after every step tripled the campaign's runtime and
+        perturbed its coverage; once per generated sequence still catches any
+        ordering, fault, or restart that breaks the chain, which is what the
+        property is about. Same granularity the secret scan already uses.
+        """
+        from ledger import verify_ledger_chain
+
+        # The walk goes through the shared SQLite factory, so an armed injector
+        # would fire inside the check rather than inside the sequence it is
+        # meant to be checking.
+        self.harness.faults.disarm()
+        result = verify_ledger_chain(self.harness.database)
+        assert result.ok, (
+            f"the ledger chain broke at index {result.break_at_index} "
+            f"({result.reason})"
+        )
+        duplicated = self.harness.rows(
+            "SELECT execution_id, COUNT(*) AS n FROM provenance_envelopes "
+            "GROUP BY execution_id HAVING n > 1"
+        )
+        assert duplicated == [], "an execution accumulated more than one envelope"
+
     def teardown(self) -> None:
         try:
+            self._check_durable_integrity()
             leaks = self.harness.scan_for_secrets()
         finally:
             self.harness.close()
@@ -1033,8 +1059,15 @@ _COMMON = {
 # milliseconds per step, so steps are where the budget buys coverage — and
 # coverage here means dependent chains completing: poll, settle, retry, expire,
 # sweep. At 15x14 the campaign reached none of that; the floor below says so.
+#
+# Raised from 60 to 75 steps in Theme 3C. The ledger chain adds a SELECT inside
+# the settlement transaction, which shifts the operation indices the fault
+# injector counts, which reshuffles which thin classes a run reaches — measured,
+# not guessed: at 15x60 `idempotency_replayed` and `verification_evidence_recorded`
+# both fell to zero. The budget was raised rather than the floor lowered, and the
+# cost is reported in docs/adversarial-campaign.md.
 _CI_SETTINGS = settings(
-    max_examples=15, stateful_step_count=60, derandomize=True, **_COMMON
+    max_examples=15, stateful_step_count=75, derandomize=True, **_COMMON
 )
 _EXTENDED_SETTINGS = settings(
     max_examples=120, stateful_step_count=80, derandomize=False, **_COMMON
@@ -1070,6 +1103,18 @@ COVERAGE_FLOOR = {
     "capability_observation_recorded": 1,
     "verification_evidence_recorded": 1,
     "cross_enrollment_submission_rejected": 1,
+    # Added in Theme 3C, which touches exactly this subsystem.
+    "ledger_entry_chained": 1,
+    # `provenance_envelope_created` is counted by the harness but deliberately
+    # not floored. An envelope is created when an artifact manifest seals, and
+    # the seal path contains an `await` that a background execution task does not
+    # survive under TestClient - so an artifact-producing execution lands
+    # `interrupted`, never reaching envelope creation. Making the campaign
+    # strategy produce artifacts was tried and measured: it turned every
+    # execution interrupted and cost the campaign more than the class was worth.
+    # Envelope creation at seal time is covered directly in
+    # tests/test_provenance_envelope.py. Same precedent as
+    # `execution_cancelled_while_running`; see docs/adversarial-campaign.md.
     # `execution_cancelled_while_running` is counted by the harness but is
     # deliberately *not* floored here. It is unreachable through this surface for
     # a structural reason rather than a budget one: a background execution task
