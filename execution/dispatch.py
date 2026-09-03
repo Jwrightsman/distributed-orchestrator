@@ -147,6 +147,67 @@ EventEmitter = Callable[[str, dict[str, Any]], None]
 _verification_tasks: set[asyncio.Task] = set()
 
 
+def _agreement_subject_key(primary_attempt_id: str, sampled_attempt_id: str) -> str:
+    """A stable key for one comparison, identical from either side of it."""
+
+    return ":".join(sorted((primary_attempt_id, sampled_attempt_id)))
+
+
+def _record_agreement_evidence(
+    *,
+    execution_id: str,
+    unit_id: str,
+    agreed: bool,
+    subjects: tuple[Any, ...],
+) -> None:
+    """Append durable agreement evidence for each subject of one comparison.
+
+    Best-effort in the strict sense the evidence model requires: a failure here
+    increments a process-local counter and changes nothing about settlement,
+    eligibility, routing, or the deliverable. There is no recursive attempt to
+    record the failure of failure-recording.
+    """
+
+    attempt_ids = [str(getattr(attempt, "attempt_id", "")) for attempt in subjects]
+    if not all(attempt_ids):
+        return
+    subject_key = _agreement_subject_key(attempt_ids[0], attempt_ids[1])
+    outcome = "agreed" if agreed else "disagreed"
+    for attempt in subjects:
+        resolution = state.capability_evidence_store.resolve_scope(attempt)
+        scope = resolution.context.scope if resolution.usable else None
+        result = state.verification_evidence_store.best_effort(
+            state.verification_evidence_store.record,
+            execution_id=execution_id,
+            unit_id=unit_id,
+            attempt_id=str(attempt.attempt_id),
+            receipt_id=str(attempt.attempt_id),
+            task_class=str(attempt.execution_unit_kind),
+            verifier_kind="sampled_reexecution",
+            verifier_name="output_shape",
+            verifier_version=SAMPLED_AGREEMENT_METHOD_VERSION,
+            outcome=outcome,
+            fault_attribution="subject_output",
+            subject_node_id=str(attempt.assigned_node_id),
+            subject_enrollment_id=attempt.assigned_enrollment_id,
+            descriptor_version=attempt.assigned_descriptor_version,
+            descriptor_hash=attempt.assigned_descriptor_hash,
+            executor_kind=scope.executor_kind if scope else None,
+            executor_version=scope.executor_version if scope else None,
+            worker_protocol_version=(
+                scope.worker_protocol_version if scope else None
+            ),
+            model_provider=attempt.assigned_model_provider,
+            model_name=attempt.assigned_model_name,
+            model_digest=attempt.assigned_model_digest,
+            model_variant=scope.model_variant if scope else None,
+            subject_key=subject_key,
+            metadata={"method_version": SAMPLED_AGREEMENT_METHOD_VERSION},
+        )
+        if not result.succeeded:
+            state.verification_evidence_counters.increment("record_failed")
+
+
 class Dispatcher:
     """Execute strategy units without embedding strategy reduction logic."""
 
@@ -328,6 +389,19 @@ class Dispatcher:
                         sampled_attempt,
                         agreed=bool(verdict["agreed"]),
                         method_version=SAMPLED_AGREEMENT_METHOD_VERSION,
+                    )
+                    # The same comparison, recorded durably as post-hoc
+                    # verification evidence. Before this it lived only in a
+                    # process-local dictionary and was lost with the process,
+                    # which is the ROADMAP §6 item this closes. It is written for
+                    # each subject separately, under that subject's own
+                    # enrollment scope, and it is agreement about output *shape*
+                    # -- never a pass rate and never correctness.
+                    _record_agreement_evidence(
+                        execution_id=execution_id,
+                        unit_id=unit.unit_id,
+                        agreed=bool(verdict["agreed"]),
+                        subjects=(primary_attempt, sampled_attempt),
                     )
             self.emit(
                 "verification",
