@@ -25,7 +25,11 @@ from capability_evidence import (
     DEADLINE_COMPLETION_SUBJECT,
     CapabilityEvidenceStore,
 )
-from ledger import ensure_contribution_schema, insert_contribution_in_transaction
+from ledger import (
+    compute_contribution_points,
+    ensure_contribution_schema,
+    insert_contribution_in_transaction,
+)
 from node_capabilities import (
     NodeCapabilityDescriptorV1,
     canonical_descriptor_json,
@@ -1222,7 +1226,9 @@ class AttemptStore:
                         field, limit=limit, observed=observed
                     )
 
-                points = 5 if output and not error else 0
+                # Accounting policy lives in ledger.py; settlement applies it
+                # rather than defining it.
+                points = compute_contribution_points(output=output, error=error)
                 terminal_cause = (
                     "settled_worker_error"
                     if error
