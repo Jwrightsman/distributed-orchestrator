@@ -19,11 +19,13 @@ reachable at all. Each is the smallest thing that makes one scenario testable:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
 import sqlite3
 import time
+import uuid
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -96,32 +98,53 @@ CAMPAIGN_OUTCOMES: Counter[str] = Counter()
 class CampaignStrategy:
     """A deterministic strategy. It never calls a model and never sleeps.
 
-    It deliberately produces no artifacts. Making it write one - so the terminal
-    path would seal a manifest and create a provenance envelope - was tried and
-    reverted: the seal path contains an `await`, and a background execution task
-    does not survive the TestClient request that created it, so every
-    artifact-producing execution landed `interrupted` instead of `completed`.
-    That degraded the whole campaign to exercising interrupted executions in
-    order to reach one coverage class. `provenance_envelope_created` is
-    therefore counted but not floored; see docs/adversarial-campaign.md.
+    Two things it can be told to do, both driven by the campaign rather than by
+    timing:
 
-    It cannot be made to stay `running` for a later request to cancel: a
-    background execution task does not outlive the `TestClient` request that
-    created it, so anything still awaiting when the request returns is cancelled
-    and lands as `interrupted`, not `cancelled`. That is why
-    `execution_cancelled_while_running` is not in the campaign's coverage floor -
-    see docs/adversarial-campaign.md.
+    * ``hold`` parks the strategy inside its own execution, so the coordinator's
+      durable lifecycle sits at ``running`` until the campaign releases it. That
+      is how ``execution_cancelled_while_running`` is reached without racing the
+      event loop: the execution is running because a flag says so, not because
+      the machine happened to be slow enough.
+    * ``produce_artifacts`` writes one small file and hands the service a
+      ``project_dir``, so the terminal path seals a manifest and records a
+      provenance envelope.
+
+    Both were previously unreachable, for one shared reason that turned out not
+    to be a property of TestClient at all. The requester clients were never
+    entered as context managers, so every request spun up its own blocking
+    portal and tore it down on the way out - taking the background execution
+    task with it. Entering them, exactly as the worker client already did, keeps
+    one event loop alive across requests. See docs/adversarial-campaign.md.
     """
 
     identifier = "dag"
     version = "adversarial-campaign"
 
+    def __init__(self) -> None:
+        self.hold = False
+        self.produce_artifacts = False
+        self.artifact_root: Path | None = None
+
     async def execute(self, request, options, context) -> StrategyOutcome:
+        # A condition wait, not a timed one: however slow or fast the machine
+        # is, the execution stays running until the campaign says otherwise.
+        while self.hold:
+            await asyncio.sleep(0.005)
+        legacy: dict[str, Any] = {}
+        if self.produce_artifacts and self.artifact_root is not None:
+            project_dir = self.artifact_root / f"run-{uuid.uuid4().hex}"
+            project_dir.mkdir(parents=True, exist_ok=True)
+            (project_dir / "index.html").write_text(
+                "<!doctype html><title>synthetic</title>", encoding="utf-8"
+            )
+            legacy["project_dir"] = str(project_dir)
         return StrategyOutcome(
             status="completed",
             validation_outcome="passed",
             assurance_level="structural",
             output_preview="synthetic deliverable",
+            legacy_payload=legacy,
         )
 
 
@@ -388,6 +411,16 @@ class CoordinatorHarness:
             host: TestClient(self._execution_app, client=(host, 50000))
             for host in REQUESTER_HOSTS
         }
+        # Entered, not merely constructed. An un-entered TestClient starts a
+        # fresh blocking portal per request and closes it on the way out, and
+        # closing a portal cancels its task group - which is the background
+        # execution task. That is why every execution the campaign submitted
+        # landed `interrupted`, and why cancelling a *running* execution and
+        # sealing an artifact manifest were both unreachable through this
+        # surface. Entering keeps one event loop for the harness's lifetime,
+        # exactly as the worker client above already did.
+        for requester in self.requesters.values():
+            requester.__enter__()
 
     # ── what the coordinator actually did ────────────────────────────
 
@@ -483,7 +516,15 @@ class CoordinatorHarness:
         )
 
         registry = StrategyRegistry()
-        registry.register(CampaignStrategy())
+        # One strategy instance for the harness's lifetime, so a restart does
+        # not silently release an execution the campaign is deliberately
+        # holding at `running`.
+        strategy = getattr(self, "strategy", None)
+        if strategy is None:
+            strategy = CampaignStrategy()
+            strategy.artifact_root = self.root / "artifacts"
+            self.strategy = strategy
+        registry.register(strategy)
         self.service = ExecutionService(
             store=ExecutionStore(self.database),
             registry=registry,
@@ -499,9 +540,17 @@ class CoordinatorHarness:
     def close(self) -> None:
         global _ACTIVE_INJECTOR
 
+        # Nothing may still be writing to this database while the patched
+        # globals are being restored under it.
+        self.release_executions()
+        self.quiesce()
         self.faults.disarm()
         _ACTIVE_INJECTOR = None
         for requester in self.requesters.values():
+            try:
+                requester.__exit__(None, None, None)
+            except Exception:  # pragma: no cover - teardown must not mask a finding
+                pass
             requester.close()
         try:
             self.client.__exit__(None, None, None)
@@ -542,6 +591,12 @@ class CoordinatorHarness:
         """
         if self._active_attempt_count():
             self._record_outcome("restart_with_outstanding_handout")
+        # A real restart is a new process: the old epoch's in-flight work is
+        # gone, not still writing. `_install_stores` builds a fresh
+        # ExecutionService, so a surviving background task from the previous
+        # service would be an orphan the real system never has.
+        self.release_executions()
+        self.quiesce()
         self._clear_process_local()
         self._install_stores()
         self.service.reconcile_after_restart(f"campaign-restart-{time.time_ns():x}")
@@ -798,6 +853,80 @@ class CoordinatorHarness:
         elif response.headers.get("Idempotency-Replayed") == "true":
             self._record_outcome("idempotency_replayed")
         return response
+
+    # ── deterministic waits ──────────────────────────────────────────
+    #
+    # A background execution task now outlives the request that started it, so
+    # the campaign has to say *when* it cares rather than assume the work has
+    # already happened. These wait on a durable condition, never on a duration:
+    # a slower machine takes longer to get there and reaches the same state.
+    # The timeout is a deadlock guard, not a schedule, and hitting it is a loud
+    # failure rather than a quietly missed coverage class.
+
+    WAIT_TIMEOUT_SECONDS = 60.0
+
+    def _await_lifecycle(
+        self, execution_id: str, wanted: frozenset[str], what: str
+    ) -> str:
+        deadline = time.monotonic() + self.WAIT_TIMEOUT_SECONDS
+        observed: str | None = None
+        while time.monotonic() < deadline:
+            row = self.durable_execution(execution_id)
+            observed = None if row is None else str(row["lifecycle_status"])
+            if observed in wanted:
+                return observed
+            time.sleep(0.005)
+        raise AssertionError(
+            f"execution never became {what}; durable lifecycle stayed {observed!r}"
+        )
+
+    def await_execution_running(self, execution_id: str) -> str:
+        """Block until the coordinator has durably committed `running`."""
+        return self._await_lifecycle(execution_id, frozenset({"running"}), "running")
+
+    def await_execution_terminal(self, execution_id: str) -> str:
+        """Block until the execution has reached a terminal lifecycle."""
+        return self._await_lifecycle(
+            execution_id,
+            frozenset({"completed", "failed", "cancelled", "interrupted"}),
+            "terminal",
+        )
+
+    def quiesce(self) -> None:
+        """Wait until no background execution task is still in flight.
+
+        The persistence fault injector counts SQLite operations process-wide,
+        so work left over from an earlier step could consume the armed index
+        and land the failure somewhere the campaign did not choose. Before
+        background tasks outlived their request this was impossible; now it has
+        to be excluded deliberately.
+
+        Bounded and non-asserting on purpose: a held execution is *supposed* to
+        stay in flight, and an execution whose write faulted may never finish.
+        """
+        if self.strategy.hold:
+            return
+        deadline = time.monotonic() + self.WAIT_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            if not self.service._background:
+                return
+            time.sleep(0.002)
+
+    def hold_executions(self) -> None:
+        """Park every subsequent strategy run inside `running`."""
+        self.strategy.hold = True
+
+    def release_executions(self) -> None:
+        self.strategy.hold = False
+
+    def produce_artifacts(self, enabled: bool) -> None:
+        """Whether a strategy run writes a file, so a manifest seals."""
+        self.strategy.produce_artifacts = enabled
+
+    def note_envelopes(self, before: int) -> None:
+        """Record envelope creation, given the count observed beforehand."""
+        if self.provenance_envelope_count() > before:
+            self._record_outcome("provenance_envelope_created")
 
     def get_execution(self, execution_id: str, *, host: str = REQUESTER_HOSTS[0]):
         return self.requesters[host].get(f"/v1/executions/{execution_id}")
