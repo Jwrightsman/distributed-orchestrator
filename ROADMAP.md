@@ -191,6 +191,20 @@ Merkle structure over entries so anyone can verify the complete history hasn't b
 with no consensus mechanism and no chain. Tamper-evidence is the property that actually matters;
 decentralized consensus is a much more expensive thing that is usually mistaken for it.
 
+> **Hash-chaining shipped, Theme 3C.** A linear chain rather than a Merkle tree: a tree buys
+> efficient inclusion proofs, which matter only when proving membership to a third party without
+> handing over the whole log, and nobody needs that yet — the upgrade path and its trigger are in
+> [ADR 0017](docs/adr/0017-provenance-is-a-binding-of-identity-not-a-claim-of-correctness.md).
+> Links are written inside the settlement transaction, so settlement atomicity is unchanged;
+> pre-chain entries are the genesis boundary and are not retrofitted;
+> `python scripts/ledger_chain_admin.py verify` reports the first break with its index. It is
+> tamper **evidence**, not tamper proofing: an operator with database access can rewrite every
+> entry and every link and it verifies clean, which is asserted by a test rather than hoped for.
+> The rest of the item — requester/verifier/evidence fields, provisional/verified/disputed/
+> reversed/spent states, issuance only after accepted verification — remains open. Artifacts
+> also now carry a provenance envelope binding them to the identity that produced them, which
+> establishes no correctness and is not signed.
+
 **Real sandboxing.** Generated code is not sandboxed today, and the docs say so. Before anything
 executes code from untrusted nodes: disposable containers, microVMs or WASM, no network by
 default, read-only base, ephemeral workspace, CPU/memory/time/output limits, no inherited
@@ -531,6 +545,15 @@ memory or storage growth.
 
 ## Changelog
 
+- **2026-09-03** — Theme 3C bound artifacts to a durable provenance envelope and made the
+  contribution ledger tamper-evident. The envelope is created when a manifest seals, binds
+  identity facts that already existed separately, is canonically hashed so replay resolves to
+  the identical record, records absent facts as unknown rather than inferring them, reserves an
+  unpopulated signature slot, and ships in audit bundles so a recipient can check the artifact
+  hashes offline. The ledger chain rides the settlement transaction rather than weakening it.
+  Neither establishes correctness and neither is tamper-proof — an operator with database access
+  can rewrite the whole ledger, and a test asserts that this is undetectable rather than
+  pretending otherwise. Nothing is signed. See ADR 0017.
 - **2026-09-03** — Theme 4A gave the worker protocol a compatibility window, a distinguishable
   refusal, and a written deprecation policy, without bumping anything: the window holds
   exactly version 1 and this defines the mechanism rather than exercising it. It also wrote

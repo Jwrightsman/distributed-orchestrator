@@ -32,7 +32,7 @@ and `pip install -r requirements.txt` alone still starts a coordinator.
 | --- | --- | --- |
 | Selected by | nothing | `MYCELIUM_CAMPAIGN_PROFILE=extended` |
 | `max_examples` | 15 | 120 |
-| `stateful_step_count` | 60 | 80 |
+| `stateful_step_count` | 75 | 80 |
 | `derandomize` | yes | no |
 | Example database | disabled | disabled |
 | Measured wall clock | see below | 6 m 18 s, plus up to 5 min of shrinking per failure |
@@ -336,30 +336,48 @@ run.
 
 | Class | Floor | Observed at the CI profile |
 | --- | --- | --- |
-| `settlement_accepted` | 1 | 9 |
-| `settlement_rejected_stale_or_misbound` | 1 | 125 |
-| `settlement_replayed` | 1 | 21 |
-| `idempotency_replayed` | 1 | 2 |
-| `idempotency_conflict` | 1 | 3 |
+| `settlement_accepted` | 1 | 2 |
+| `settlement_rejected_stale_or_misbound` | 1 | 24 |
+| `settlement_replayed` | 1 | 2 |
+| `idempotency_replayed` | 1 | 4 |
+| `idempotency_conflict` | 1 | 6 |
 | `persistence_fault_fired_in_submission` | 1 | 2 |
-| `restart_with_outstanding_handout` | 1 | 4 |
+| `restart_with_outstanding_handout` | 1 | 6 |
 | `lease_reclaimed_by_janitor` | 1 | 2 |
-| `capability_observation_recorded` | 1 | 7 |
-| `verification_evidence_recorded` | 1 | 12 |
-| `cross_enrollment_submission_rejected` | 1 | 15 |
+| `capability_observation_recorded` | 1 | **1** |
+| `verification_evidence_recorded` | 1 | 2 |
+| `cross_enrollment_submission_rejected` | 1 | **1** |
+| `ledger_entry_chained` | 1 | 2 |
 
 Every floor is 1 deliberately. A floor tuned up to the edge of what a profile
 reliably produces becomes flaky, and a flaky guard gets deleted by the next
-person, which is how the guard dies. `idempotency_replayed` and
-`persistence_fault_fired_in_submission` are the thin ones at 2 - if a future
-change drops one to 0, that is the guard working, and the failure message names
-the class and prints everything the run *did* reach.
+person, which is how the guard dies. `capability_observation_recorded` and
+`cross_enrollment_submission_rejected` are the thin ones at exactly 1 - if a
+future change drops one to 0, that is the guard working, and the failure message
+names the class and prints everything the run *did* reach.
 
-Counts change whenever a rule is added or removed, because that changes what the
-generator draws. The four rows above the line were re-measured in Theme 3B-1 for
-that reason rather than carried over.
+Counts change whenever a rule is added or removed, **and whenever the coordinator
+changes how much SQLite work a settlement does**, because the fault injector
+counts operations and its armed index then lands somewhere else. Theme 3C is the
+clearest example: adding one `SELECT` to the settlement transaction for the
+ledger chain dropped `idempotency_replayed` and `verification_evidence_recorded`
+to zero at the then-current budget. The budget was raised from 60 to 75 steps
+rather than the floor lowered, and every count here was re-measured rather than
+carried over. Raising a budget to keep a guard honest is the trade the guard is
+for; lowering the floor to keep a build green would not have been.
 
-**One class is counted but deliberately not floored.**
+**Two classes are counted but deliberately not floored.**
+
+`provenance_envelope_created` (Theme 3C) is unreachable for the same structural
+reason as the one below. An envelope is created when an artifact manifest seals,
+and the seal path contains an `await` that a background execution task does not
+survive under `TestClient` - so an artifact-producing execution lands
+`interrupted` and never reaches envelope creation. Making the campaign's strategy
+write a deliverable was tried and measured: every execution turned `interrupted`,
+which degraded the whole campaign to exercising interrupted executions in order
+to reach one class, so it was reverted. Envelope creation at seal time is covered
+directly in `tests/test_provenance_envelope.py`.
+
 `execution_cancelled_while_running` is unreachable through this surface for a
 structural reason, not a budget one: a background execution task does not outlive
 the `TestClient` request that created it, so anything still awaiting when the
@@ -608,8 +626,9 @@ Every observation taken on this branch, not a selected one:
 
 | Command | Observations |
 | --- | --- |
-| `pytest -q tests/test_protocol_state_machine.py` | 51.1 s, 55.0 s, 61.9 s, 104.5 s, 111.9 s, 124.9 s, 128.6 s |
-| `pytest -q tests/test_adversarial_scenarios.py` | 36.6 s, 40.2 s, 43.5 s, 49.7 s, 55.4 s, 56.9 s, 62.8 s |
+| `pytest -q tests/test_protocol_state_machine.py` (at 60 steps) | 51.1 s, 55.0 s, 61.9 s, 104.5 s, 111.9 s, 124.9 s, 128.6 s |
+| `pytest -q tests/test_protocol_state_machine.py` (at 75 steps, Theme 3C) | 268.9 s, 317.8 s |
+| `pytest -q tests/test_adversarial_scenarios.py` | 36.6 s, 40.2 s, 43.5 s, 49.7 s, 55.4 s, 56.9 s, 62.8 s, 146.0 s, 160.2 s |
 | both modules in one invocation | 90.8 s, 91.4 s |
 | `pytest -q` (whole suite, with both) | 466.4 s |
 | extended profile (not in `pytest -q`) | 378.3 s |
@@ -624,6 +643,15 @@ rather than carrying the old figures forward. The range did not move — which,
 given how wide it is, is weak evidence that the additions were cheap rather than
 proof of it. Theme 4A changed nothing in the campaign and re-measured anyway; the
 observations landed inside the existing range.
+
+**Theme 3C moved it, and not because of measurement noise.** Raising the step
+budget from 60 to 75 - to restore the coverage headroom the ledger chain's extra
+`SELECT` consumed - took the campaign module from a 51-129 s range to 269-318 s,
+and the scenarios module to 146-160 s. That is a real increase of roughly three
+minutes on `pytest -q`, paid to keep the coverage floor honest rather than to
+lower it. Whether that stays affordable is a fair question for the next person
+who touches this; the alternative on the table was a guard that no longer
+guarded.
 
 What is not in doubt is the direction and the reason. The campaign module got
 slower in Theme 1.5, because the coverage floor showed that at the previous

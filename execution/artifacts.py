@@ -40,6 +40,11 @@ ArtifactRoleV1 = Literal[
 ArtifactIntegrityModeV1 = Literal["active", "sealed", "legacy_live", "invalid"]
 
 
+# The bundle's provenance file. Additive: a reader that does not know about it
+# still extracts the same artifacts it always did.
+PROVENANCE_BUNDLE_FILENAME = "mycelium-provenance.json"
+
+
 class ArtifactModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -875,6 +880,7 @@ class ArtifactStore:
                     "aggregate_size_bytes": sum(entry.size_bytes for entry in selected),
                 }
             )
+        envelope_json = self._provenance_envelope_json(execution_id)
         descriptor, temp_name = tempfile.mkstemp(prefix="mycelium-artifacts-", suffix=".zip")
         os.close(descriptor)
         archive_path = Path(temp_name)
@@ -891,6 +897,12 @@ class ArtifactStore:
                         raise ArtifactIntegrityError(
                             "artifact differs from its recorded integrity baseline"
                         )
+                if envelope_json is not None:
+                    # Additive. A recipient who ignores this file gets exactly
+                    # the bundle they got before; one who reads it can check the
+                    # artifact hashes offline, with no coordinator and no
+                    # credential. That offline check is the point.
+                    archive.writestr(PROVENANCE_BUNDLE_FILENAME, envelope_json)
         except Exception:
             archive_path.unlink(missing_ok=True)
             raise
@@ -898,6 +910,26 @@ class ArtifactStore:
             path=archive_path,
             download_name=f"execution_{execution_id}_artifacts.zip",
             size_bytes=archive_path.stat().st_size,
+        )
+
+    def _provenance_envelope_json(self, execution_id: str) -> str | None:
+        """The envelope for this execution, or None if it has none.
+
+        Read best-effort: a bundle is still a valid bundle without provenance,
+        and an execution that predates envelopes simply has none. Absence is a
+        recognisable state for the offline checker, not an error.
+        """
+
+        try:
+            from provenance import ProvenanceEnvelopeStore
+
+            record = ProvenanceEnvelopeStore(self.db_path).get(execution_id)
+        except Exception:
+            return None
+        if record is None:
+            return None
+        return json.dumps(
+            record.as_export(), sort_keys=True, separators=(",", ":"), ensure_ascii=False
         )
 
     def prune(

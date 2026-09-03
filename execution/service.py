@@ -99,6 +99,35 @@ class ExecutionControl:
     activation_snapshot: ExecutionResultV1 | None = None
 
 
+def _record_provenance_envelope(execution_id, manifest, result) -> None:
+    """Bind one sealed artifact set to the identity that produced it.
+
+    Wrapped so a provenance failure can never reach the terminal path. An
+    execution whose envelope could not be written is still terminal, still
+    published, and still settled; the envelope is simply absent, which is a
+    state the offline checker can recognise.
+    """
+
+    try:
+        validators = [
+            {
+                "name": item.validator_name,
+                "version": item.validator_version,
+                "outcome": item.status,
+            }
+            for item in getattr(result, "validation_evidence", ()) or ()
+        ]
+        server_state.provenance_envelope_store.record(
+            execution_id, manifest=manifest, validators=validators
+        )
+    except Exception as exc:  # pragma: no cover - containment, exercised by tests
+        logging.getLogger("mycelium.execution").warning(
+            "provenance envelope not recorded execution=%s error_type=%s",
+            execution_id,
+            type(exc).__name__,
+        )
+
+
 class ExecutionService:
     def __init__(
         self,
@@ -965,6 +994,17 @@ class ExecutionService:
                 result.sealed_manifest_hash = terminal_manifest.manifest_hash
                 result.artifact_integrity_mode = terminal_manifest.integrity_mode
                 result.output_reference = f"/v1/executions/{execution_id}/artifacts"
+                # The envelope is created at the moment the manifest seals, from
+                # the identity chain already durable elsewhere. Best-effort by
+                # construction: it references terminal state and must never be
+                # able to delay, block, or reclassify it.
+                #
+                # Called synchronously, deliberately. An `await` here is one more
+                # point at which this task can be cancelled between sealing and
+                # recording, and a cancellation there turned a completed
+                # execution into an interrupted one - which is the terminal path
+                # being changed by provenance, exactly what must not happen.
+                _record_provenance_envelope(execution_id, terminal_manifest, result)
             except asyncio.CancelledError:
                 if control.terminal_committed:
                     result = control.result.model_copy(deep=True)

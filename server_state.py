@@ -52,6 +52,7 @@ from execution.contracts import (
     StrategyOptionsV1,
     VerificationPolicyV1,
 )
+from provenance import ProvenanceEnvelopeStore
 from verification import VerificationPool
 from verification_evidence import (
     VerificationEvidenceProcessCounters,
@@ -448,6 +449,10 @@ capability_evidence_store = CapabilityEvidenceStore(_DB_PATH)
 # reach terminal state: it references executions and receipts, it never mutates
 # them. Nothing here is reputation and nothing here is a score. See ADR 0014.
 verification_evidence_store = VerificationEvidenceStore(_DB_PATH)
+# One provenance envelope per execution, created when its artifact manifest
+# seals. It binds identity to artifacts; it establishes nothing about
+# correctness. See ADR 0017.
+provenance_envelope_store = ProvenanceEnvelopeStore(_DB_PATH)
 verification_evidence_counters = VerificationEvidenceProcessCounters()
 # Optional shadow decisions and operational health are deliberately isolated
 # from authoritative attempt persistence. Their best-effort writers can never
@@ -1987,6 +1992,7 @@ def _init_db() -> None:
     attempt_store.migrate()
     capability_evidence_store.migrate()
     verification_evidence_store.migrate()
+    provenance_envelope_store.migrate()
     _migrate_capability_shadow_decision_store()
     _migrate_capability_shadow_operational_store()
     # Redact legacy free-form contribution metadata and regenerate the JSON

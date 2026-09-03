@@ -419,6 +419,26 @@ This is a **Phase 0 private trusted-alpha system**. Here's exactly what's durabl
 
 `scripts/trusted_alpha_harness.py`, `scripts/restart_recovery.py`, and `scripts/soak_test.py` are reproducible operational checks, but do not copy an old pass count into a current claim: rerun them against the commit being deployed. The bounded trusted-alpha harness uses fake executors/workers and no live model. Canonical startup reconciliation truthfully interrupts non-resumable queued/running state rather than leaving it active indefinitely.
 
+**Artifacts carry a provenance envelope, and the ledger is tamper-evident.**
+Every execution that seals an artifact manifest gets one durable envelope binding
+those files to the identity chain that produced them: enrolling worker and node
+label, capability descriptor version and hash, executor and worker protocol,
+selected model, the validators that ran and what they returned, and the sealed
+per-file hashes. Absent facts are recorded as unknown, never inferred. Artifact
+bundles carry it, so a recipient can recompute the digest and every file hash
+offline with no coordinator and no credential. Each ledger entry carries the
+digest of the one before it, written inside the same transaction as the
+settlement it records; `python scripts/ledger_chain_admin.py verify` walks it.
+
+**Neither establishes correctness, and neither is tamper-proof.** An envelope says
+how bytes were produced and by whom - an admitted worker returning plausible
+garbage produces an accurate envelope about a bad output. The chain detects
+corruption, a partial restore, and casual edits; an operator with database access
+can rewrite every entry *and* every link and it will report clean. There is no
+consensus, no external anchor, no third party, and no signature - only a reserved
+slot. This is not verifiable compute. See
+[ADR 0017](docs/adr/0017-provenance-is-a-binding-of-identity-not-a-claim-of-correctness.md).
+
 **The worker protocol has a compatibility window and a deprecation policy.**
 `GET /v1/worker-protocol` advertises `node_protocol_min`, `node_protocol_max`, and
 the server version without a credential, so a worker can find out whether it will

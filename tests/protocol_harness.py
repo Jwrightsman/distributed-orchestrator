@@ -46,6 +46,7 @@ from execution.registry import StrategyOutcome, StrategyRegistry
 from execution.service import ExecutionService
 from node_capabilities import NodeCapabilitySnapshotStore
 from node_enrollments import NodeEnrollmentStore
+from provenance import ProvenanceEnvelopeStore
 from verification_evidence import (
     VerificationEvidenceProcessCounters,
     VerificationEvidenceStore,
@@ -94,6 +95,15 @@ CAMPAIGN_OUTCOMES: Counter[str] = Counter()
 
 class CampaignStrategy:
     """A deterministic strategy. It never calls a model and never sleeps.
+
+    It deliberately produces no artifacts. Making it write one - so the terminal
+    path would seal a manifest and create a provenance envelope - was tried and
+    reverted: the seal path contains an `await`, and a background execution task
+    does not survive the TestClient request that created it, so every
+    artifact-producing execution landed `interrupted` instead of `completed`.
+    That degraded the whole campaign to exercising interrupted executions in
+    order to reach one coverage class. `provenance_envelope_created` is
+    therefore counted but not floored; see docs/adversarial-campaign.md.
 
     It cannot be made to stay `running` for a later request to cancel: a
     background execution task does not outlive the `TestClient` request that
@@ -349,6 +359,16 @@ class CoordinatorHarness:
             self.root / "capability-shadow-health.db",
         )
         self._patch(state, "_LONG_POLL_TIMEOUT", 0.01)
+        # Node staleness is measured as elapsed *real* time on the monotonic
+        # source (Theme 1.5), so a generated example that takes longer than
+        # `_NODE_TIMEOUT` to run would have its nodes reclaimed for being slow -
+        # making the campaign's result depend on how loaded the machine is. That
+        # is exactly what a deterministic campaign must not do; it surfaced as a
+        # spurious "exact replay was not honoured: 401" once the step budget rose.
+        # Real staleness detection is covered deterministically in
+        # tests/test_adversarial_scenarios.py, which backdates the reading
+        # instead of waiting.
+        self._patch(state, "_NODE_TIMEOUT", 24 * 60 * 60)
         self._patch(state, "coordinator_now", self.clock.now)
         self._patch(state, "get_config", lambda: self.settings)
         self._patch(access_control, "get_config", lambda: self.settings)
@@ -389,6 +409,16 @@ class CoordinatorHarness:
 
     def verification_evidence_count(self) -> int:
         rows = self.rows("SELECT COUNT(*) AS n FROM verification_evidence")
+        return int(rows[0]["n"]) if rows else 0
+
+    def provenance_envelope_count(self) -> int:
+        rows = self.rows("SELECT COUNT(*) AS n FROM provenance_envelopes")
+        return int(rows[0]["n"]) if rows else 0
+
+    def chained_ledger_entry_count(self) -> int:
+        rows = self.rows(
+            "SELECT COUNT(*) AS n FROM contributions WHERE entry_index IS NOT NULL"
+        )
         return int(rows[0]["n"]) if rows else 0
 
     def _attempt_enrollment_for_task(self, task_id: str) -> str | None:
@@ -440,6 +470,11 @@ class CoordinatorHarness:
             state,
             "verification_evidence_counters",
             VerificationEvidenceProcessCounters(),
+        )
+        self._patch(
+            state,
+            "provenance_envelope_store",
+            ProvenanceEnvelopeStore(self.database),
         )
         self._patch(
             state,
@@ -659,6 +694,15 @@ class CoordinatorHarness:
             self._record_outcome(
                 "settlement_accepted" if settled else "settlement_replayed"
             )
+        if settled:
+            # Only asked when a receipt actually appeared. A settlement writes
+            # its contribution in the same transaction, so this is the one moment
+            # a chained entry can have been created - and querying only here
+            # keeps the campaign's per-step cost unchanged, which matters because
+            # extra work in the hot path visibly reshuffles which thin coverage
+            # classes a run reaches.
+            if self.chained_ledger_entry_count() > 0:
+                self._record_outcome("ledger_entry_chained")
         elif response.status_code in (401, 403):
             self._record_outcome("settlement_rejected_stale_or_misbound")
             # Distinguish "this submission was refused" from "this submission was

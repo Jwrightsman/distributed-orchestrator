@@ -672,6 +672,51 @@ URLs can leak through browser history, referrers, screenshots, or proxy logs;
 responses use no-store/no-referrer/nosniff headers, and proxies must redact the
 token path too.
 
+## Provenance and ledger integrity
+
+Every execution that seals an artifact manifest gets one provenance envelope,
+binding the artifacts to the identity chain that produced them: enrollment and
+node label, capability descriptor version and hash, executor and worker protocol,
+selected model, validators and their outcomes, and the sealed per-file hashes.
+Absent facts are recorded as unknown and listed in `unknown_facts`, never
+inferred from a node label.
+
+Artifact bundles carry `mycelium-provenance.json`. A recipient can recompute the
+envelope digest and every file hash offline with no coordinator and no credential,
+which is the point of it. A `signature` field is reserved and always `null`;
+nothing is signed.
+
+An envelope establishes how something was produced and by whom. It does not
+establish that the output is correct, and it should never be quoted as if it did.
+
+### Verify the ledger chain
+
+```bash
+python scripts/ledger_chain_admin.py verify
+python scripts/ledger_chain_admin.py --state-dir /srv/mycelium verify --json
+```
+
+A clean run prints the chained entry count, the pre-chain entry count, and
+`chain: intact`. A break prints the first failing index, its entry ID, the reason,
+and the expected and observed digests, and exits non-zero. Output carries an
+index, an ID, and two digests - no credentials, prompts, outputs, or artifact
+contents can appear, because none of them are in the chained columns.
+
+**What a clean result means:** no entry was changed without also recomputing every
+link after it. That catches disk corruption, a partial restore, a truncated file,
+and a casual edit.
+
+**What it does not mean:** that the recorded work happened, that it was correct,
+that anyone is owed anything, or that this coordinator's own operator has not
+rewritten the ledger. Someone with write access who edits an entry *and*
+recomputes every downstream link produces a chain that verifies clean, and this
+mechanism cannot tell. It is tamper evidence, not tamper proofing, and it is not
+consensus.
+
+**On a break:** stop trusting standings computed from this ledger until you know
+why. Check for a partial restore or disk trouble first; `pre-chain entries` tells
+you how much of the ledger the chain covers at all.
+
 ## Contributions are not payments
 
 The authoritative contribution basis is `compute_contribution`: one accepted,

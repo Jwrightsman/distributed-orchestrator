@@ -508,6 +508,37 @@ routing, so today the practical consequence is nil; it becomes a real question
 only if a future assurance ladder acts on it, which is why ADR 0014 defers that
 decision with an explicit list of what would have to be true first.
 
+## 11a. What provenance and the ledger chain do not defend against
+
+Two mechanisms landed in Theme 3C, and both are narrower than their names invite
+people to assume.
+
+**A provenance envelope binds identity to artifacts. It does not establish
+correctness.** It says which enrolled worker produced these bytes, under which
+descriptor, executor, and model, with which validators run and what they returned.
+An admitted worker that returns plausible-looking garbage produces an envelope
+that is entirely accurate about a bad output. §6's limitation is unchanged, and
+provenance does not narrow it.
+
+**The ledger chain is tamper-evident, not tamper-proof.** It detects accidental
+corruption, a partial restore, and a casual edit - a single changed entry surfaces
+at a known index. It does *not* defend against the party this threat model has
+always identified as holding the most power: whoever runs the coordinator. An
+operator with write access can edit an entry and recompute every downstream link,
+and verification will report a clean chain. That is asserted by a test rather than
+hoped for, so nobody later mistakes silence for protection.
+
+Neither mechanism involves consensus, an external anchor, a transparency log, or a
+third party attesting to anything, and no signature is implemented - only a
+reserved slot. Nothing here makes this a verifiable-compute system, and the
+temptation to describe it that way is the reason both statements appear in the
+code, the operator command's own output, and every document that mentions them.
+
+What they do buy: a recipient of an audit bundle can check offline that the bytes
+they hold are the bytes that were sealed and see under whose identity they were
+produced, and an operator can detect ledger corruption with one command. Both are
+worth having. Neither is proof.
+
 ## 12. Scoped capability evidence is not reputation
 
 The evidence subsystem records coordinator-observed operational outcomes. Its
