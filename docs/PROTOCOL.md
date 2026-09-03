@@ -590,6 +590,82 @@ below. Canonical submission idempotency does not run or authorize duplicate
 verification. A UI MUST NOT render disabled, failed, or shape-agreement state as
 evidence that a result passed or failed its original validators.
 
+## Worker protocol compatibility window
+
+`GET /v1/worker-protocol` is unauthenticated and returns versions only:
+
+```json
+{
+  "node_protocol_min": "1",
+  "node_protocol_max": "1",
+  "supported_worker_protocol_versions": ["1"],
+  "server_version": "0.3.0"
+}
+```
+
+It carries no build fingerprint, host, deployment mode, or counts. A worker must
+be able to read it before it has a credential to present, and an operator
+debugging a refusal must be able to read it without an invite.
+
+A worker declares its version in
+`capability_descriptor.executor.worker_protocol_version`. The coordinator checks
+that declaration twice per registration -- on entry, before any enrollment,
+session, or capability snapshot exists, and again immediately before the session
+grant -- and never on a per-request path.
+
+| condition | status | `detail.code` | `detail.action` |
+| --- | --- | --- | --- |
+| inside the window | 200 | — | — |
+| below the window | 426 | `worker_protocol_version_too_old` | `upgrade_worker` |
+| above the window | 426 | `worker_protocol_version_too_new` | `upgrade_coordinator` |
+| not a version token | 422 | `invalid_worker_protocol_version` | — |
+
+Too-old and too-new are distinct because the advice differs: one operator must
+upgrade their worker, the other must upgrade their coordinator. Every refusal
+names the window in the body and in `X-Node-Protocol-Min` / `X-Node-Protocol-Max`.
+A malformed declaration is never echoed back to its sender. A descriptor that
+omits the field falls back to version `1`, so a worker that never sent it has not
+become incompatible.
+
+**A session established under a supported version stays valid for its lifetime.**
+Version negotiation is an admission decision, not an authorization one. A
+coordinator that re-checked on every poll would drop its whole connected fleet's
+in-flight work the moment it moved its own window.
+
+A descriptorless legacy-compatibility registration declares no version, is
+already gated by `node_enrollment_mode`, and keeps its existing behaviour.
+
+### What is a breaking change
+
+Breaking, and requires the window to move: removing or renaming a field a worker
+sends or reads; changing the meaning, units, or type of an existing field; adding
+a field the coordinator requires a worker to send; changing when a worker may or
+must call something or what a status code means; changing attempt binding,
+settlement admissibility, or the streaming budget.
+
+Not breaking, and does not move the window: adding an optional field with a
+compatible default, adding an endpoint, widening an accepted range, improving an
+error message.
+
+### Deprecation policy
+
+This is policy the project intends to honour, not an aspiration.
+
+1. Once a second version exists, **the window holds at least two versions**. An
+   operator one version behind is never refused.
+2. A version is **deprecated** by being announced here and in the changelog, with
+   the release that will drop it named. Deprecated is not refused.
+3. While deprecated, registration succeeds and the response carries a deprecation
+   notice naming the version and the release that drops it, so an operator who
+   never reads a changelog still learns it from the thing they run.
+4. A version is **dropped** only in a release that says it does, by raising
+   `node_protocol_min`. From then it is refused with
+   `worker_protocol_version_too_old`.
+5. **A version is never dropped in the same release that deprecates it.**
+
+Current state: `node_protocol_min` and `node_protocol_max` are both `1`. Nothing
+is deprecated. See [ADR 0015](adr/0015-worker-protocol-compatibility-window.md).
+
 ## Node registration sessions and bounded worker I/O
 
 The protocol separates durable enrollment, a human label, a live incarnation,

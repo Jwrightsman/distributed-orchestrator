@@ -233,6 +233,36 @@ The stock worker ignores ambient HTTP(S) proxy variables to keep these bearers
 out of inherited proxies; provide direct private-overlay or reviewed TLS
 reachability.
 
+### When a worker is refused for its protocol version
+
+Check the window first. It needs no credential:
+
+```bash
+curl -s "$BASE_URL/v1/worker-protocol"
+```
+
+```json
+{"node_protocol_min": "1", "node_protocol_max": "1",
+ "supported_worker_protocol_versions": ["1"], "server_version": "0.3.0"}
+```
+
+A refused registration returns `426` and says which side is stale. Read
+`detail.action`, not just the status:
+
+| `detail.code` | what it means | what to do |
+| --- | --- | --- |
+| `worker_protocol_version_too_old` | the worker is behind the window | update the worker and rejoin; `detail.action` is `upgrade_worker` |
+| `worker_protocol_version_too_new` | the worker is ahead of this coordinator | update the coordinator, or run a worker at a supported version; `detail.action` is `upgrade_coordinator` |
+| `invalid_worker_protocol_version` (`422`) | the declared version is not a version token | a hand-edited descriptor; remove the override and let the worker declare its own |
+
+Nothing durable is created by a refusal: no enrollment, no session, no capability
+snapshot. Retrying changes nothing until one side moves, and repeated attempts
+accumulate no partial state.
+
+Workers already connected are unaffected by a window change. A session
+established under a supported version stays valid for its lifetime, so moving the
+window does not drop in-flight work.
+
 ## 6. Drain or stop a worker
 
 Programmatic workers that retain their node session can stop new assignment

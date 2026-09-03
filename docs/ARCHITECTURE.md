@@ -616,6 +616,28 @@ deadline, a 64 KiB output cap, per-source active/rate limits, and a global
 active-job cap. It cannot dispatch to contributor nodes or mutate project
 memory.
 
+## Extension seams
+
+Six boundaries are written down and asserted by contract tests. There is no
+plugin framework, no registry, and no configuration key that selects an
+implementation: building one to host a single implementation would add
+indirection today for flexibility nobody has asked for. A second implementation
+would have to satisfy the same assertions, and that is what "extension point"
+means here.
+
+| seam | crosses | never crosses | status |
+| --- | --- | --- | --- |
+| Scheduler backend | typed request, node registry, capability match | evidence, reputation, storage handles | honoured |
+| Enrollment / identity | admission secret, worker credential, display label | plaintext credentials; a label as a trust key | honoured |
+| Discovery / transport | inbound worker-initiated HTTP with a session bearer | a coordinator-initiated connection; a worker address used for transport | honoured, one noted coupling |
+| Validator executor | bounded control metadata and parent-clamped limits | coordinator config, credentials, paths, callables | honoured |
+| Artifact provenance | a sealed manifest hash committed with terminal state | publication without the committed seal | honoured, no signer exists |
+| Accounting / payment policy | one accepted receipt's output, error, and attribution | evidence or history into what work is worth; monetary meaning | partially honoured |
+
+Contract tests: `tests/test_seam_contracts.py`. Boundaries, findings, the A2A
+edge-adapter mapping, and the durable ensemble-queue deferral:
+[ADR 0016](adr/0016-extension-seams-are-boundaries-not-a-plugin-framework.md).
+
 ## Trust boundary
 
 Initial node admission uses one shared `node_secret`; each enrolled contributor

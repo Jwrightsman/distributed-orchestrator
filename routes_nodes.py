@@ -40,6 +40,7 @@ from node_enrollments import (
 )
 from node_sessions import DuplicateNodeSession, NodeSessionDescriptorConflict
 import server_state as state
+import worker_protocol
 from server_state import (
     NodeRegistration,
     TaskResult,
@@ -178,6 +179,38 @@ def _reclaim_replaced_session(node_id: str, replaced_session_id: str) -> None:
             })
 
 
+def _check_worker_protocol(descriptor) -> None:
+    """Refuse an unsupported worker before anything durable exists.
+
+    Called twice per registration - once on entry, before any enrolment, and
+    once immediately before the session grant - and never on a per-request path.
+    A session established under a supported version stays valid for its lifetime;
+    re-checking every poll would buy nothing and cost something on every call.
+
+    A descriptorless legacy-compatibility registration declares no version and is
+    left alone: it is already gated by `node_enrollment_mode` and its behaviour is
+    documented. Refusing it here would break a documented path in the name of a
+    version it never claimed.
+    """
+
+    if descriptor is None:
+        return
+    declared = descriptor.executor.worker_protocol_version
+    verdict = worker_protocol.classify(declared)
+    if verdict == "supported":
+        return
+    detail = worker_protocol.refusal_detail(verdict, declared)
+    status_code = 422 if verdict == "malformed" else 426
+    raise HTTPException(
+        status_code=status_code,
+        detail=detail,
+        headers={
+            "X-Node-Protocol-Min": detail["node_protocol_min"],
+            "X-Node-Protocol-Max": detail["node_protocol_max"],
+        },
+    )
+
+
 def _verification_key(node_id: str) -> str | None:
     """Return the legacy sampled-agreement key for this live identity."""
 
@@ -247,6 +280,9 @@ def _should_defer(_node_id: str, _waiting_since: float) -> bool:
 @router.post("/nodes/register")
 async def register_node(reg: NodeRegistration, request: Request):
     descriptor = reg.capability_descriptor
+    # First of two checkpoints. Nothing durable exists yet: no enrolment row, no
+    # session, no capability snapshot.
+    _check_worker_protocol(descriptor)
     if descriptor is not None and not any(
         model.provider == "ollama" and model.name == reg.model
         for model in descriptor.models
@@ -382,6 +418,10 @@ async def register_node(reg: NodeRegistration, request: Request):
         descriptor_version = snapshot.descriptor_version
         descriptor_hash = snapshot.descriptor_hash
 
+    # Second checkpoint, at session establishment. Enrolment may have just been
+    # created or authenticated; a session is still not issued to an unsupported
+    # peer.
+    _check_worker_protocol(descriptor)
     try:
         grant = state.node_sessions.register(
             reg.node_id,

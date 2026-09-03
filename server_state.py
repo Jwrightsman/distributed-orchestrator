@@ -2090,6 +2090,41 @@ def _db_load_jobs() -> None:
         )
 
 
+def read_persisted_events(*, since: int = 0, limit: int = 100) -> list[dict]:
+    """Return decoded persisted events.
+
+    The storage engine is this module's business. Routes asked SQLite directly
+    for these rows, which meant the event surface could not be backed by anything
+    else without editing HTTP handlers - the boundary described for the scheduler
+    and persistence seams, violated in the one place it was easiest to violate.
+    """
+
+    if isinstance(since, bool) or not isinstance(since, int) or since < 0:
+        raise ValueError("since must be a non-negative integer")
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:
+        raise ValueError("limit must be between 1 and 1000")
+    with _db_lock, connection(_DB_PATH, row_factory=sqlite3.Row) as con:
+        if since == 0:
+            rows = list(
+                reversed(
+                    con.execute(
+                        "SELECT id, type, time, data FROM events "
+                        "ORDER BY id DESC LIMIT ?",
+                        (limit,),
+                    ).fetchall()
+                )
+            )
+        else:
+            rows = con.execute(
+                "SELECT id, type, time, data FROM events WHERE id > ? ORDER BY id",
+                (since,),
+            ).fetchall()
+    return [
+        _decode_persisted_event(row["id"], row["type"], row["time"], row["data"])
+        for row in rows
+    ]
+
+
 def _db_write_event(event_type: str, event_time: str, data: dict) -> int:
     blob = _sanitize_event_payload(event_type, data)
     with _db_lock, connection(_DB_PATH) as con:

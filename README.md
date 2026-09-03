@@ -380,6 +380,7 @@ See **[docs/DEPLOY.md](docs/DEPLOY.md)** for local, private-overlay, and reverse
 | `/nodes` | GET | Private connected-worker details |
 | `/v1/operator/node-enrollments` | GET | Private secret-free durable enrollment status and accounting |
 | `/v1/operator/verification-evidence` | GET | Private bounded post-hoc verification evidence; not reputation, not correctness |
+| `/v1/worker-protocol` | GET | Public worker-protocol compatibility window and server version; versions only |
 | `/v1/operator/capability-evidence` | GET | Private scoped operational aggregates and shadow-policy counts |
 | `/nodes/register` | POST | Worker node registration |
 | `/nodes/{id}/heartbeat`, `/drain` | POST | Session-bound worker liveness and drain control |
@@ -417,6 +418,18 @@ This is a **Phase 0 private trusted-alpha system**. Here's exactly what's durabl
 **Observed capability evidence is experimental and shadow-only.** Coordinator-recorded deadline outcomes, bounded latency/throughput, candidate-local contract-floor results, and sampled output agreement are kept in separate exact scopes: enrollment, descriptor, executor/model, task class, and evidence role. A changed descriptor or model starts cold; unrelated history is not inherited. `capability_evidence_mode` is `off` by default and accepts only `off` or `shadow`. Shadow mode evaluates a hypothetical preference after the actual handout is durable and cannot change hard eligibility, queue order, or assignment. Fewer than `capability_evidence_min_samples` deadline samples remains insufficient evidence; every rate includes its sample count and Wilson interval. Agreement is not correctness, contract-floor validation is task-specific assurance, contribution points are not reputation, and no global score or active evidence routing exists. See [ADR 0012](docs/adr/0012-observed-capability-evidence-shadow-only.md) and the [experiment report](docs/experiments/capability-evidence-shadow.md).
 
 `scripts/trusted_alpha_harness.py`, `scripts/restart_recovery.py`, and `scripts/soak_test.py` are reproducible operational checks, but do not copy an old pass count into a current claim: rerun them against the commit being deployed. The bounded trusted-alpha harness uses fake executors/workers and no live model. Canonical startup reconciliation truthfully interrupts non-resumable queued/running state rather than leaving it active indefinitely.
+
+**The worker protocol has a compatibility window and a deprecation policy.**
+`GET /v1/worker-protocol` advertises `node_protocol_min`, `node_protocol_max`, and
+the server version without a credential, so a worker can find out whether it will
+be admitted before it presents one. A worker outside the window is refused before
+any enrollment or session exists, with distinct codes for too-old and too-new
+because the operator's next step differs. Checking happens at registration and
+again at session establishment, never per request: a session established under a
+supported version stays valid for its lifetime, so moving the window does not drop
+connected workers' in-flight work. The window currently holds exactly version 1
+and nothing is deprecated -- this defines the mechanism rather than exercising it.
+See [ADR 0015](docs/adr/0015-worker-protocol-compatibility-window.md).
 
 **Post-hoc verification evidence is durable, scoped, and consumed by nothing yet.**
 Verification happens after an execution is terminal, and ADR 0009 makes terminal

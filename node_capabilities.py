@@ -21,6 +21,7 @@ from pydantic_core import PydanticCustomError
 
 from node_enrollments import ensure_node_enrollment_schema
 from sqlite_store import connection, migration_lock
+from worker_protocol import DEFAULT_WORKER_PROTOCOL_VERSION as WORKER_PROTOCOL_DEFAULT
 
 
 DESCRIPTOR_VERSION_V1 = "1"
@@ -107,7 +108,14 @@ def normalize_model_digest(value: str) -> str:
 class ExecutorDescriptorV1(CapabilityProtocolModel):
     kind: ExecutorKindV1
     version: str | None = Field(default=None, max_length=64)
-    worker_protocol_version: Literal["1"] = "1"
+    # Bounded text rather than a pinned literal, so an unsupported version
+    # reaches the registration route and is refused with a code that says
+    # whether the worker is behind or ahead. A literal here would collapse both
+    # into one generic 422 and tell the operator nothing actionable. The window
+    # itself lives in worker_protocol.py and is checked there.
+    worker_protocol_version: str = Field(
+        default=WORKER_PROTOCOL_DEFAULT, min_length=1, max_length=8
+    )
 
     @field_validator("version")
     @classmethod

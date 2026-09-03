@@ -4,11 +4,10 @@ standings, metrics, and the raw contribution ledger.
 """
 
 import platform
-import sqlite3
 import time
 
 import httpx
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 
 from access_control import authorize_viewer_websocket, viewer_health_fields
 from ledger import get_history, get_standings
@@ -16,7 +15,6 @@ from ollama_client import OLLAMA_URL
 import server_state as state
 from build_info import BUILD
 from server_state import (
-    _db_lock,
     jobs,
     node_blacklist,
     nodes,
@@ -25,7 +23,7 @@ from server_state import (
     task_results,
     ws_manager,
 )
-from sqlite_store import connection
+import worker_protocol
 
 router = APIRouter()
 
@@ -53,30 +51,30 @@ async def health():
     }
 
 
+@router.get("/v1/worker-protocol")
+async def worker_protocol_window():
+    """The compatibility window, readable before a worker enrols.
+
+    Unauthenticated on purpose: a worker has to know whether this coordinator
+    will admit it *before* it presents a credential, and an operator debugging a
+    refusal should not need an invite to see the window they fell outside.
+
+    Versions only. No build fingerprint, no host, no deployment mode, no node or
+    queue counts - nothing that says anything about this particular deployment.
+    """
+
+    return worker_protocol.window()
+
+
 @router.get("/events")
 async def get_events(since: int = 0):
     """Get pipeline events. since=0 returns last 100; since=N returns events with id > N."""
-    with _db_lock:
-        with connection(state._DB_PATH, row_factory=sqlite3.Row) as con:
-            if since == 0:
-                rows = con.execute(
-                    "SELECT id, type, time, data FROM events ORDER BY id DESC LIMIT 100"
-                ).fetchall()
-                rows = list(reversed(rows))
-            else:
-                rows = con.execute(
-                    "SELECT id, type, time, data FROM events WHERE id > ? ORDER BY id",
-                    (since,),
-                ).fetchall()
-
-    events = []
-    for row in rows:
-        events.append(
-            state._decode_persisted_event(
-                row["id"], row["type"], row["time"], row["data"]
-            )
+    if since < 0:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "invalid_event_cursor", "message": "since must be >= 0"},
         )
-    return {"events": events}
+    return {"events": state.read_persisted_events(since=since, limit=100)}
 
 
 @router.websocket("/ws/events")
@@ -85,19 +83,11 @@ async def ws_events(websocket: WebSocket):
     if not await authorize_viewer_websocket(websocket):
         return
     await ws_manager.connect(websocket)
-    # Replay last 20 persisted events from SQLite so new clients aren't blind
+    # Replay the last 20 persisted events so new clients aren't blind. Which
+    # store they come from is server_state's business, not this route's.
     try:
-        with _db_lock:
-            with connection(state._DB_PATH, row_factory=sqlite3.Row) as con:
-                rows = con.execute(
-                    "SELECT id, type, time, data FROM events ORDER BY id DESC LIMIT 20"
-                ).fetchall()
-        for row in reversed(rows):
-            await websocket.send_json(
-                state._decode_persisted_event(
-                    row["id"], row["type"], row["time"], row["data"]
-                )
-            )
+        for event in state.read_persisted_events(since=0, limit=20):
+            await websocket.send_json(event)
     except Exception:
         pass
     try:

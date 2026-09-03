@@ -47,6 +47,7 @@ from execution.artifacts import get_artifact_store
 from execution.service import get_execution_service
 from execution.sharing import get_share_store
 from scripts.preflight import run_preflight
+from worker_protocol import SERVER_VERSION
 from server_state import (
     _cleanup_stale_nodes,
     _db_load_jobs,
@@ -172,7 +173,7 @@ async def _lifespan(app: FastAPI):
         coordinator_lock.release()
 
 
-app = FastAPI(title="Mycelium", version="0.3.0", lifespan=_lifespan)
+app = FastAPI(title="Mycelium", version=SERVER_VERSION, lifespan=_lifespan)
 app.add_middleware(ViewerAccessMiddleware)
 
 

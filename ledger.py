@@ -56,6 +56,28 @@ def _safe_task_label(contribution_type: str, requested: str = "") -> str:
     return "contribution_record"
 
 
+# The accounting policy, named and owned by the module that owns accounting.
+# It used to be a bare literal inside the settlement transaction, which put a
+# policy decision inside an integrity boundary and made "what is a point worth"
+# a question you answered by reading AttemptStore.settle.
+#
+# The policy itself is unchanged and deliberately dull: an accepted, attempt-bound
+# worker result with non-empty output and no worker error is worth
+# COMPUTE_CONTRIBUTION_POINTS. It is not money, not a token, not a claim that the
+# candidate was selected, and not a claim that the output is correct.
+COMPUTE_CONTRIBUTION_POINTS = 5
+
+
+def compute_contribution_points(*, output: str | None, error: str | None) -> int:
+    """Points for one accepted compute contribution.
+
+    A pure function of the settled result. It reads no evidence, no history, and
+    no reputation, because none of those may influence what work is worth.
+    """
+
+    return COMPUTE_CONTRIBUTION_POINTS if output and not error else 0
+
+
 def ensure_contribution_schema(con: sqlite3.Connection) -> None:
     """Create the additive contribution schema on an existing connection."""
     con.execute(
