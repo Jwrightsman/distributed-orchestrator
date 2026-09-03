@@ -15,7 +15,6 @@ with signed receipts, revocation and rotation are the answer to that, and are
 deferred to ROADMAP §5.
 """
 
-import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -23,7 +22,7 @@ from fastapi.testclient import TestClient
 import server_state as state
 from server import app
 from execution.dispatch import Dispatcher
-from tests._node_session_helpers import enable_auto_node_sessions
+from tests._node_session_helpers import age_node_record, enable_auto_node_sessions
 
 
 @pytest.fixture
@@ -269,7 +268,9 @@ def test_queued_but_unleased_result_is_quarantined(client):
 def test_late_result_after_reclamation_is_rejected(client):
     _register(client, "worker")
     task = _claim_v1(client, "worker")
-    state.nodes["worker"]["last_seen"] = time.time() - state._NODE_TIMEOUT - 1
+    # Silence is an elapsed duration on the monotonic source, not a wall-clock
+    # timestamp; backdating only the display field would age nothing.
+    age_node_record(state.nodes["worker"], state._NODE_TIMEOUT + 1)
     state._cleanup_pass()
 
     response = client.post("/tasks/t-v1/result", json=_v1_body(task))

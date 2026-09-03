@@ -19,7 +19,7 @@ import routes_events
 import routes_pitch
 import server
 import server_state
-from tests._node_session_helpers import enable_auto_node_sessions
+from tests._node_session_helpers import age_node_record, enable_auto_node_sessions
 
 
 def _creds(task: dict) -> dict:
@@ -103,7 +103,7 @@ def test_task_is_reclaimed_when_node_goes_silent(client):
     assert not server.task_queue
 
     # The node stops sending heartbeats and ages past the staleness cutoff.
-    server.nodes["ghost"]["last_seen"] = time.time() - (server_state._NODE_TIMEOUT + 10)
+    age_node_record(server.nodes["ghost"], server_state._NODE_TIMEOUT + 10)
     server_state._cleanup_pass()
 
     assert "ghost" not in server.nodes
@@ -119,7 +119,7 @@ def test_reclaimed_task_can_be_picked_up_by_another_node(client):
     queue_task("t-move")
 
     client.get("/tasks/next", params={"node_id": "dead"})
-    server.nodes["dead"]["last_seen"] = time.time() - (server_state._NODE_TIMEOUT + 10)
+    age_node_record(server.nodes["dead"], server_state._NODE_TIMEOUT + 10)
     server_state._cleanup_pass()
 
     task = client.get("/tasks/next", params={"node_id": "alive"}).json()
@@ -154,7 +154,7 @@ def test_a_node_streaming_tokens_is_not_evicted_mid_build(client):
 
     # A build that outlives the cutoff: age the node past it, exactly as a
     # slow subtask does when nothing else refreshes last_seen.
-    server.nodes["builder"]["last_seen"] = time.time() - (server_state._NODE_TIMEOUT + 10)
+    age_node_record(server.nodes["builder"], server_state._NODE_TIMEOUT + 10)
 
     # …but the node is plainly alive: it is streaming tokens for that task.
     resp = client.post("/tasks/t-long/stream",
@@ -171,7 +171,7 @@ def test_a_node_streaming_tokens_is_not_evicted_mid_build(client):
 def test_streaming_for_an_unknown_task_does_not_refresh_a_node(client):
     """Only the holder of an active lease may refresh via task streaming."""
     register(client, "chatty")
-    server.nodes["chatty"]["last_seen"] = time.time() - (server_state._NODE_TIMEOUT + 10)
+    age_node_record(server.nodes["chatty"], server_state._NODE_TIMEOUT + 10)
 
     client.post("/tasks/does-not-exist/stream",
                 json={"node_id": "chatty", "tokens": "x"})
@@ -480,7 +480,7 @@ def test_many_nodes_churning_does_not_lose_queued_work(client):
     assert len(server.task_inflight) == 20
 
     for i in range(0, 20, 2):
-        server.nodes[f"churn-{i}"]["last_seen"] = time.time() - (server_state._NODE_TIMEOUT + 10)
+        age_node_record(server.nodes[f"churn-{i}"], server_state._NODE_TIMEOUT + 10)
     server_state._cleanup_pass()
 
     # Nothing lost: every task is either still in flight or back in the queue.

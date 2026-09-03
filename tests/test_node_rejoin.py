@@ -14,14 +14,13 @@ Closing a laptop lid is the single most likely thing to happen to a volunteer
 node, and on camera it shows as an empty swarm while work is running.
 """
 
-import time
 
 import pytest
 from fastapi.testclient import TestClient
 
 import server_state as state
 from server import app
-from tests._node_session_helpers import enable_auto_node_sessions
+from tests._node_session_helpers import age_node_record, enable_auto_node_sessions
 
 
 @pytest.fixture
@@ -46,7 +45,7 @@ def _register(client, node_id="laptop"):
 
 def _sleep_the_laptop(node_id="laptop"):
     """Simulate a lid closed for longer than the staleness threshold."""
-    state.nodes[node_id]["last_seen"] = time.time() - (state._NODE_TIMEOUT + 30)
+    age_node_record(state.nodes[node_id], state._NODE_TIMEOUT + 30)
     state._cleanup_pass()
 
 

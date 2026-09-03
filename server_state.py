@@ -154,6 +154,22 @@ def coordinator_now() -> float:
     """
     return time.time()
 
+
+def coordinator_monotonic() -> float:
+    """The elapsed-time reading used for heartbeat recency and node staleness.
+
+    Deliberately a different clock from ``coordinator_now``. A lease deadline is
+    an absolute point in time, issued at handout and durable across restart, so
+    it belongs on the wall clock. Node staleness is a *duration* since the last
+    heartbeat, held in process-local state that does not survive a restart
+    anyway — and reading it from the wall clock meant a forward correction
+    larger than ``_NODE_TIMEOUT`` made every connected worker look silent at
+    once, so a single NTP step reclaimed the whole network's in-flight work.
+    See finding F7 in docs/adversarial-campaign.md.
+    """
+    return time.monotonic()
+
+
 # Deprecated in-memory compatibility mirror. Durable exact replay is handled by
 # AttemptStore.response_json/result_hash and does not consult this dictionary.
 settled_attempts: dict[str, dict] = {}
@@ -377,7 +393,10 @@ def touch_node(node_id: str) -> bool:
     """
     node = nodes.get(node_id)
     if node is not None:
+        # Two readings with two jobs: the wall-clock one is what operators are
+        # shown, the monotonic one is what staleness is measured against.
         node["last_seen"] = time.time()
+        node["last_seen_monotonic"] = coordinator_monotonic()
         return True
     return False
 
@@ -2692,9 +2711,21 @@ def _cleanup_pass():
                 },
             )
 
-    # 3. Dead nodes
-    cutoff = now - _NODE_TIMEOUT
-    stale = [nid for nid, n in nodes.items() if n.get("last_seen", 0) < cutoff]
+    # 3. Dead nodes. Idle time is a duration, so it is read from the monotonic
+    # source: a coordinator whose wall clock is corrected forward must not
+    # conclude that every worker went silent while it was not looking. A record
+    # carrying no monotonic reading predates the field and keeps its previous
+    # wall-clock behaviour exactly.
+    elapsed_now = coordinator_monotonic()
+    stale = [
+        nid
+        for nid, n in nodes.items()
+        if (
+            elapsed_now - float(n["last_seen_monotonic"]) > _NODE_TIMEOUT
+            if n.get("last_seen_monotonic") is not None
+            else float(n.get("last_seen", 0)) < now - _NODE_TIMEOUT
+        )
+    ]
     for nid in stale:
         stale_node = nodes.get(nid)
         # Invalidate first so the old bearer cannot race the reclaim and submit
