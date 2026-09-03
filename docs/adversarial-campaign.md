@@ -35,7 +35,7 @@ and `pip install -r requirements.txt` alone still starts a coordinator.
 | `stateful_step_count` | 14 | 40 |
 | `derandomize` | yes | no |
 | Example database | disabled | disabled |
-| Measured wall clock | ~32 s | ~8–9 min, plus up to 5 min of shrinking on a failure |
+| Measured wall clock | 35.6 s | 12 m 41 s, plus up to 5 min of shrinking per failure |
 
 The CI profile is derandomized with no example database, so a red build is
 reproducible from the source tree alone — there is no `.hypothesis` directory
@@ -412,15 +412,41 @@ from the thing it stands in for.
 
 ## CI runtime cost
 
-Measured on this branch, Windows, Python 3.14.3, 8 GB, CPU-only:
+Measured on this branch: Windows 11, Python 3.14.3, 8 GB, CPU-only. **CI runs
+Linux on a GitHub-hosted runner, so the numbers there will differ.**
+
+Isolated, back-to-back, with nothing else running:
 
 | Module | Tests | Wall clock |
 | --- | --- | --- |
-| `tests/test_protocol_state_machine.py` | 5 | ~32 s |
-| `tests/test_adversarial_scenarios.py` | 63 | ~73 s |
-| **Added to `pytest -q`** | **68** | **~105 s** |
+| `tests/test_protocol_state_machine.py` | 5 | 35.6 s |
+| `tests/test_adversarial_scenarios.py` | 64 | 67.6 s |
+| **New work added to `pytest -q`** | **69** | **≈103 s** |
 
-The bulk of the scenario cost is the two parametrized fault sweeps (26 + 9
-indices), each of which builds an isolated coordinator, and each of which is the
-highest-value test in the set. The campaign profile is tuned so the generated
-half stays under the deterministic half.
+Whole-suite runs, same machine, same day:
+
+| Run | Result | Wall clock |
+| --- | --- | --- |
+| `pytest -q` with both modules ignored | 1449 passed, 11 skipped | 362.8 s |
+| `pytest -q` | 1518 passed, 11 skipped | 542.6 s |
+| `pytest -q` (earlier, sharing the machine with an extended campaign run) | 1518 passed, 11 skipped | 515.1 s |
+| `pytest -q` with both modules ignored, repeat | killed at 73 % | > 600 s |
+
+Those last two rows are why the whole-suite delta is not quoted as a number.
+The contended run of the *larger* suite finished faster than the uncontended
+one, and a repeat of the *baseline* ran more than 65 % slower than its first
+attempt. Single-run whole-suite timings on this laptop vary by more than the
+size of the thing being measured, so **≈103 s of new test work** — measured
+directly, in isolation, and reproducible — is the number to use. Anyone quoting
+"the suite got 50 % slower" from the 362.8 → 542.6 pair would be quoting
+variance as if it were signal.
+
+Most of that 103 s is the two parametrized fault sweeps (26 injected disk
+failures across the submission path, 9 commit-time failures at the settlement
+boundary), each building an isolated coordinator per index. They are also the
+two highest-value tests here, so they were not trimmed to make this table look
+better.
+
+The extended profile is not part of `pytest -q`. Its own measured run —
+250 examples, 40 steps, no failures — took 12 m 41 s while sharing the machine
+with the full suite.
