@@ -23,6 +23,7 @@ from server_state import (
     task_results,
     ws_manager,
 )
+import worker_protocol
 
 router = APIRouter()
 
@@ -48,6 +49,21 @@ async def health():
         "node_enrollment_required": state.node_enrollment_required(),
         **viewer_health_fields(),
     }
+
+
+@router.get("/v1/worker-protocol")
+async def worker_protocol_window():
+    """The compatibility window, readable before a worker enrols.
+
+    Unauthenticated on purpose: a worker has to know whether this coordinator
+    will admit it *before* it presents a credential, and an operator debugging a
+    refusal should not need an invite to see the window they fell outside.
+
+    Versions only. No build fingerprint, no host, no deployment mode, no node or
+    queue counts - nothing that says anything about this particular deployment.
+    """
+
+    return worker_protocol.window()
 
 
 @router.get("/events")

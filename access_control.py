@@ -41,6 +41,9 @@ _PUBLIC_EXACT: set[tuple[str, str]] = {
     ("GET", "/try"),
     ("GET", "/health"),
     ("GET", "/status.json"),
+    # A worker must be able to read the compatibility window before it has
+    # any credential to present. It exposes versions and nothing else.
+    ("GET", "/v1/worker-protocol"),
     ("POST", "/public/pitch"),
     ("POST", "/v1/viewer/session"),
     ("DELETE", "/v1/viewer/session"),
