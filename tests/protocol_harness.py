@@ -24,6 +24,7 @@ import json
 import logging
 import sqlite3
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -58,7 +59,11 @@ ADMISSION_SECRET = "campaign-bootstrap-admission-secret-0000"
 
 NODE_LABELS = ("n0", "n1", "n2", "n3")
 CREDENTIALS = tuple(f"campaign-credential-{index:02d}-{'0' * 24}" for index in range(8))
-IDEMPOTENCY_KEYS = ("k0", "k1", "k2")
+# Two keys, not more. The property under test is "same scope and key, differing
+# canonical request conflicts"; a wider key space just makes the collision
+# rarer without testing anything additional, and the coverage floor in
+# tests/test_protocol_state_machine.py has to be able to reach it.
+IDEMPOTENCY_KEYS = ("k0", "k1")
 REQUESTER_HOSTS = ("10.0.0.1", "10.0.0.2")
 TASK_TEXTS = ("synthetic-task-alpha", "synthetic-task-beta")
 WORKER_OUTPUTS = ("synthetic-output-alpha", "synthetic-output-beta")
@@ -66,6 +71,13 @@ WORKER_OUTPUTS = ("synthetic-output-alpha", "synthetic-output-beta")
 # Everything the campaign asserts must never reach storage, logs, events, the
 # ledger projection, or an error body.
 SYNTHETIC_SECRETS = (ADMISSION_SECRET,) + CREDENTIALS + IDEMPOTENCY_KEYS
+
+# What the coordinator actually did, across every harness a run builds. Outcome
+# classes and counts only — no identifiers, no payloads, no timings — so this is
+# safe to print in a CI failure. It exists so finding F4 (a campaign reporting
+# green while never reaching settlement) fails the build instead of going
+# unnoticed; tests/test_protocol_state_machine.py asserts the floor.
+CAMPAIGN_OUTCOMES: Counter[str] = Counter()
 
 
 class CampaignStrategy:
@@ -225,6 +237,7 @@ class Handout:
     contract_version: str | None
     label: str
     max_output_bytes: int
+    lease_expires_at: float
     raw: dict[str, Any] = field(default_factory=dict)
 
 
@@ -268,6 +281,7 @@ class CoordinatorHarness:
         self.credential_versions: dict[str, int] = {}
         # Server-minted values that must never surface anywhere durable.
         self.minted_secrets: set[str] = set()
+        self.outcomes: Counter[str] = Counter()
 
         self.settings = dict(config_module.DEFAULTS)
         self.settings.update(
@@ -326,6 +340,20 @@ class CoordinatorHarness:
             host: TestClient(self._execution_app, client=(host, 50000))
             for host in REQUESTER_HOSTS
         }
+
+    # ── what the coordinator actually did ────────────────────────────
+
+    def _record_outcome(self, outcome: str) -> None:
+        self.outcomes[outcome] += 1
+        CAMPAIGN_OUTCOMES[outcome] += 1
+
+    def _receipt_count(self) -> int:
+        rows = self.rows("SELECT COUNT(*) AS n FROM accepted_result_receipts")
+        return int(rows[0]["n"]) if rows else 0
+
+    def _active_attempt_count(self) -> int:
+        rows = self.rows("SELECT COUNT(*) AS n FROM attempts WHERE state = 'active'")
+        return int(rows[0]["n"]) if rows else 0
 
     # ── wiring ───────────────────────────────────────────────────────
 
@@ -414,6 +442,8 @@ class CoordinatorHarness:
         every live attempt so a late result fails closed; canonical
         reconciliation moves non-terminal executions to `interrupted`.
         """
+        if self._active_attempt_count():
+            self._record_outcome("restart_with_outstanding_handout")
         self._clear_process_local()
         self._install_stores()
         self.service.reconcile_after_restart(f"campaign-restart-{time.time_ns():x}")
@@ -524,6 +554,9 @@ class CoordinatorHarness:
             contract_version=task.get("contract_version"),
             label=label,
             max_output_bytes=int(task.get("max_output_bytes") or 1_048_576),
+            # The server's own deadline, not a recomputation of it. Anything the
+            # campaign derives independently can drift from the real lease.
+            lease_expires_at=float(task["lease_expires_at"]),
             raw=task,
         )
 
@@ -545,11 +578,25 @@ class CoordinatorHarness:
         return body
 
     def submit(self, task_id: str, body: dict[str, Any], *, label: str, token: str | None = None):
-        return self.client.post(
+        receipts_before = self._receipt_count()
+        fault_fired_before = self.faults.fired
+        response = self.client.post(
             f"/tasks/{task_id}/result",
             json=body,
             headers=self.headers(label, token=token),
         )
+        if self.faults.fired and not fault_fired_before:
+            self._record_outcome("persistence_fault_fired_in_submission")
+        settled = self._receipt_count() > receipts_before
+        if response.status_code == 200:
+            self._record_outcome(
+                "settlement_accepted" if settled else "settlement_replayed"
+            )
+        elif response.status_code in (401, 403):
+            self._record_outcome("settlement_rejected_stale_or_misbound")
+        elif response.status_code == 413:
+            self._record_outcome("settlement_payload_bounded")
+        return response
 
     def stream(self, task_id: str, handout: Handout, tokens: str, *, label: str | None = None):
         return self.client.post(
@@ -585,7 +632,10 @@ class CoordinatorHarness:
 
     def janitor(self) -> None:
         """One sweep of the real background janitor."""
+        active_before = self._active_attempt_count()
         state._cleanup_pass()
+        if self._active_attempt_count() < active_before:
+            self._record_outcome("lease_reclaimed_by_janitor")
 
     def supersede(self, attempt_id: str) -> bool:
         return bool(
@@ -609,7 +659,8 @@ class CoordinatorHarness:
         timeout_seconds: int = 1800,
     ):
         headers = {"Idempotency-Key": idempotency_key} if idempotency_key else {}
-        return self.requesters[host].post(
+        fault_fired_before = self.faults.fired
+        response = self.requesters[host].post(
             "/v1/executions",
             json={
                 "task": task,
@@ -618,6 +669,13 @@ class CoordinatorHarness:
             },
             headers=headers,
         )
+        if self.faults.fired and not fault_fired_before:
+            self._record_outcome("persistence_fault_fired_in_submission")
+        if response.status_code == 409:
+            self._record_outcome("idempotency_conflict")
+        elif response.headers.get("Idempotency-Replayed") == "true":
+            self._record_outcome("idempotency_replayed")
+        return response
 
     def get_execution(self, execution_id: str, *, host: str = REQUESTER_HOSTS[0]):
         return self.requesters[host].get(f"/v1/executions/{execution_id}")
