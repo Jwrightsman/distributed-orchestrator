@@ -46,18 +46,22 @@ costs more than the run in flight.
 
 ## Budget the time before you start
 
-This is the thing to plan around: **a full local run on CPU is on the order of
-15–25 hours** (28 prompts, each a planner call, 3–5 builder calls and a
-reviewer call that re-emits the whole deliverable). That is fine once for a
-baseline, but §1.2 wants a re-run after *every* prompt change, and that does
-not fit in a sprint if each iteration costs a day.
+This is the thing to plan around: at the measured **29.3 minutes per item**
+(mean over the 140 recorded item-runs; median 20.0), **a full local run of the
+100-item corpus is about 49 hours** — each item a planner call, 3–5 builder
+calls and a reviewer call that re-emits the whole deliverable. A *comparison*
+is two of those. The original 28-item set was 14 hours; growing the corpus
+bought resolving power and cost proportionally.
 
 Three ways to make the loop usable, in order of what to reach for:
 
-1. **Iterate on a slice, confirm on the full set.** `--only web_app` is six
-   prompts (~3-5 hours) and covers the category the demo depends on.
+1. **Iterate on a slice, confirm on the full set.** `--split development`
+   keeps the confirmatory 36 unspent. `--only web_app` is now 14 items,
+   `--taxonomy interactive_artifact` is the same family more precisely, and
+   `--band discriminating` is the slice where a paired test actually has power.
    `--id a --id b --id c` is faster still. Keep the change if the slice moves,
-   then pay for a full run before believing it.
+   then pay for a full run before believing it — and remember a slice this size
+   cannot reach significance on its own.
 2. **Run it somewhere else.** `--orchestrator http://host:8000 --pitch-key KEY`
    pitches to a running orchestrator instead of the local pipeline, so a
    24/7 server or a spare desktop does the work while your laptop stays free.
