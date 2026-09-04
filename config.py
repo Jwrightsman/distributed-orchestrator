@@ -224,6 +224,20 @@ DEFAULTS = {
     # A scoped aggregate remains insufficient until it has this many samples.
     "capability_evidence_min_samples": 5,
 
+    # ---- Distributed tracing (optional, off) ------------------------
+    # W3C trace context across the coordinator/worker boundary, so one
+    # cross-machine incident can be read as one thing. Off means off: no header
+    # is read or written and no span is built.
+    "tracing_enabled": False,
+    # Whether finished spans additionally leave this machine for a collector.
+    # Separate from the switch above and off by default, because a worker runs
+    # on a machine somebody else owns: accepting a trace ID costs a contributor
+    # nothing, exporting their machine's spans is telemetry. Requires the
+    # optional `opentelemetry` extra; without it this stays a no-op.
+    "tracing_export": False,
+    # OTLP collector endpoint, used only when tracing_export is true.
+    "tracing_endpoint": "",
+
     # Parser-heavy built-in validators run out of process in the recommended
     # automatic mode. "subprocess" sends every compatible built-in through
     # the runner; "inline" is a weaker local-development compatibility mode.
@@ -391,6 +405,21 @@ def load(
         overrides["capability_evidence_min_samples"] = DEFAULTS[
             "capability_evidence_min_samples"
         ]
+
+    for flag_name in ("tracing_enabled", "tracing_export"):
+        configured_flag = overrides.get(flag_name, DEFAULTS[flag_name])
+        if type(configured_flag) is not bool:
+            if effective_strict:
+                raise ConfigError(f"{flag_name} must be true or false")
+            _LOG.warning("Invalid %s; tracing stays off", flag_name)
+            overrides[flag_name] = DEFAULTS[flag_name]
+
+    configured_endpoint = overrides.get("tracing_endpoint", DEFAULTS["tracing_endpoint"])
+    if not isinstance(configured_endpoint, str) or len(configured_endpoint) > 512:
+        if effective_strict:
+            raise ConfigError("tracing_endpoint must be a string of at most 512 characters")
+        _LOG.warning("Invalid tracing_endpoint; no collector is configured")
+        overrides["tracing_endpoint"] = DEFAULTS["tracing_endpoint"]
 
     configured_validator_mode = overrides.get(
         "validator_execution_mode", DEFAULTS["validator_execution_mode"]

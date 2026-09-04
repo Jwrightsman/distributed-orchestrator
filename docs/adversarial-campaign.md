@@ -334,20 +334,30 @@ Hypothesis's generated `TestCase`, so it cannot depend on another test having ru
 first in the same session - and the campaign still executes exactly once per CI
 run.
 
-| Class | Floor | Observed at the CI profile |
-| --- | --- | --- |
-| `settlement_accepted` | 1 | 2 |
-| `settlement_rejected_stale_or_misbound` | 1 | 24 |
-| `settlement_replayed` | 1 | 2 |
-| `idempotency_replayed` | 1 | 4 |
-| `idempotency_conflict` | 1 | 6 |
-| `persistence_fault_fired_in_submission` | 1 | 2 |
-| `restart_with_outstanding_handout` | 1 | 6 |
-| `lease_reclaimed_by_janitor` | 1 | 2 |
-| `capability_observation_recorded` | 1 | **1** |
-| `verification_evidence_recorded` | 1 | 2 |
-| `cross_enrollment_submission_rejected` | 1 | **1** |
-| `ledger_entry_chained` | 1 | 2 |
+| Class | Floor | Theme 3C | Theme 4B (re-measured) |
+| --- | --- | --- | --- |
+| `settlement_accepted` | 1 | 2 | **30** |
+| `settlement_rejected_stale_or_misbound` | 1 | 24 | 36 |
+| `settlement_replayed` | 1 | 2 | 17 |
+| `idempotency_replayed` | 1 | 4 | 4 |
+| `idempotency_conflict` | 1 | 6 | 7 |
+| `persistence_fault_fired_in_submission` | 1 | 2 | **1** |
+| `restart_with_outstanding_handout` | 1 | 6 | 5 |
+| `lease_reclaimed_by_janitor` | 1 | 2 | 6 |
+| `capability_observation_recorded` | 1 | **1** | 23 |
+| `verification_evidence_recorded` | 1 | 2 | 9 |
+| `cross_enrollment_submission_rejected` | 1 | **1** | 5 |
+| `ledger_entry_chained` | 1 | 2 | 30 |
+| `execution_cancelled_while_running` | 1 | *unreachable* | 4 |
+| `provenance_envelope_created` | 1 | *unreachable* | 4 |
+
+Both previously-unfloored classes are now floored. `persistence_fault_fired_in_submission`
+is the thin one at exactly 1, where `capability_observation_recorded` and
+`cross_enrollment_submission_rejected` used to be.
+
+`MYCELIUM_CAMPAIGN_COUNTS=<path>` writes the observed counts to a JSON file, so
+this table is re-measured rather than transcribed from a CI log. Two consecutive
+runs whose wall times differed by 19 seconds produced byte-identical counts.
 
 Every floor is 1 deliberately. A floor tuned up to the edge of what a profile
 reliably produces becomes flaky, and a flaky guard gets deleted by the next
@@ -366,29 +376,69 @@ rather than the floor lowered, and every count here was re-measured rather than
 carried over. Raising a budget to keep a guard honest is the trade the guard is
 for; lowering the floor to keep a build green would not have been.
 
-**Two classes are counted but deliberately not floored.**
+### The two "structurally unreachable" classes were not structural
 
-`provenance_envelope_created` (Theme 3C) is unreachable for the same structural
-reason as the one below. An envelope is created when an artifact manifest seals,
-and the seal path contains an `await` that a background execution task does not
-survive under `TestClient` - so an artifact-producing execution lands
-`interrupted` and never reaches envelope creation. Making the campaign's strategy
-write a deliverable was tried and measured: every execution turned `interrupted`,
-which degraded the whole campaign to exercising interrupted executions in order
-to reach one class, so it was reverted. Envelope creation at seal time is covered
-directly in `tests/test_provenance_envelope.py`.
+Theme 3B-1 and Theme 3C each recorded a class as impossible to reach here, and
+each blamed `TestClient` for cancelling background work. Both explanations were
+wrong in the same way, and Theme 4B found out by testing the premise instead of
+the conclusion.
 
-`execution_cancelled_while_running` is unreachable through this surface for a
-structural reason, not a budget one: a background execution task does not outlive
-the `TestClient` request that created it, so anything still awaiting when the
-request returns is cancelled and lands as `interrupted`, never `cancelled`. That
-was measured, not assumed - the campaign's strategy was made to park so a later
-step could cancel it, and the result was `interrupted` every time, which
-demonstrates the constraint rather than working around it. The parking was
-reverted. Cancelling a genuinely running execution is covered deterministically
-by `tests/test_execution_lifecycle.py`, and its interaction with the verification
-evidence model by
-`tests/test_verification_evidence.py::test_cancelling_a_running_execution_is_never_the_subjects_fault`.
+The harness constructed its two *requester* clients without entering them as
+context managers. An un-entered `TestClient` starts a fresh `anyio` blocking
+portal per request and closes it on the way out, and closing a portal cancels
+its task group - which is the background execution task. The worker client had
+been entered all along; the requester clients had not. Measured before anything
+was changed: an execution whose strategy awaits lands `interrupted` with the
+clients unentered and `completed` with them entered.
+
+So `execution_cancelled_while_running` and `provenance_envelope_created` are
+both floored now, at 4 and 4. The earlier measurements were real - making the
+strategy park *did* produce `interrupted` every time - but they measured the
+harness, and the conclusion drawn from them was about the framework.
+
+A background task that outlives its request has to be waited for deliberately.
+The harness gained condition waits rather than timed ones
+(`await_execution_running`, `await_execution_terminal`, `quiesce`): they block
+until a durable fact is true, so a slower machine takes longer to arrive and
+observes the same thing. `quiesce` also runs before a persistence fault is
+armed, because the injector counts SQLite operations process-wide and leftover
+background work would otherwise consume the armed index - a machine-speed
+dependency in disguise, of exactly the kind Theme 1.5 removed from node
+staleness.
+
+### What the two new rules cost, and what was done about it
+
+Adding two rules regenerates every sequence, and the thin classes reshuffled
+just as Theme 3C's one extra `SELECT` reshuffled them. `lease_reclaimed_by_janitor`
+went to zero. Three responses were measured before one was chosen:
+
+| attempt | result |
+| --- | --- |
+| leave spare units queued for a later poll | janitor class restored, `settlement_accepted` starved to 1 |
+| balance the two lease lengths of those spares | still 1 |
+| raise the budget to 24 examples (292 s) | still 1 |
+
+Which pointed at something worth finding. Finding F4's fix made the settlement
+chain *available* at the start of a sequence and never again: once the initial
+handouts have been settled, expired, superseded, or reclaimed, an honest
+submission needs a generated enqueue and a generated poll to line up before
+anything else destroys the result. `settlement_accepted` had been swinging
+between 1 and 6 across whole runs on nothing but a change to `max_examples`, so
+every property downstream of an acceptance - replay, credit, the ledger chain,
+the capability observation, verification evidence - was riding on the draw.
+Instrumenting the janitor said the same thing from the other end: across a run
+it swept 128 times, found an active attempt in 4 of those, and found nothing in
+flight at all in 111.
+
+So the honest-worker rule and the janitor-wake rule now take a unit when the
+sequence is holding none, the same way `open_the_network` establishes the
+sequence's prerequisites. What is generated stays generated: whether the rule
+runs, against which handout, with which output, and in what order relative to
+every adversarial rule. What stops being generated is only whether the worker
+had a lease to be honest with.
+
+**Neither the budget was raised nor a floor lowered.** `max_examples` is still
+15 and `stateful_step_count` is still 75.
 
 No class was deferred to the extended profile. All eight are reached by the
 default CI profile. Because that profile is derandomized with no example
@@ -628,6 +678,7 @@ Every observation taken on this branch, not a selected one:
 | --- | --- |
 | `pytest -q tests/test_protocol_state_machine.py` (at 60 steps) | 51.1 s, 55.0 s, 61.9 s, 104.5 s, 111.9 s, 124.9 s, 128.6 s |
 | `pytest -q tests/test_protocol_state_machine.py` (at 75 steps, Theme 3C) | 268.9 s, 317.8 s |
+| `pytest -q tests/test_protocol_state_machine.py` (at 75 steps, Theme 4B) | 286.7 s, 305.6 s, 326.7 s, 349.4 s |
 | `pytest -q tests/test_adversarial_scenarios.py` | 36.6 s, 40.2 s, 43.5 s, 49.7 s, 55.4 s, 56.9 s, 62.8 s, 146.0 s, 160.2 s |
 | both modules in one invocation | 90.8 s, 91.4 s |
 | `pytest -q` (whole suite, with both) | 466.4 s |
@@ -652,6 +703,26 @@ minutes on `pytest -q`, paid to keep the coverage floor honest rather than to
 lower it. Whether that stays affordable is a fair question for the next person
 who touches this; the alternative on the table was a guard that no longer
 guarded.
+
+**Theme 4B moved it a little, and the honest version is "probably".** Executions
+now run to completion instead of being cancelled by a collapsing event loop,
+which is more work per submission, and two rules were added. Four observations:
+286.7 s, 305.6 s, 326.7 s, 349.4 s. Three sit inside Theme 3C's 268.9-317.8 s
+range and the fourth is above all of it. On a machine where the same command
+varies by 2.5x, four points cannot separate a real 30-second increase from the
+noise, and claiming either way would be claiming more than was measured.
+
+What can be said: the step budget did not change, and the cancellation this
+replaced was not free either - the portal teardown that killed each background
+task ran inside the request that started it, so that cost was already being
+paid, as a cancellation rather than as a result. Nothing here is close to Theme
+3C's roughly three-minute step-budget increase.
+
+Two of those runs are also the determinism evidence: 305.6 s and 286.7 s, 19
+seconds apart in wall time, produced byte-identical coverage counts. So did
+349.4 s, measured after the whole of Theme 4B's tracing work landed - which is
+the evidence that tracing, off by default, changes nothing the campaign
+generates.
 
 What is not in doubt is the direction and the reason. The campaign module got
 slower in Theme 1.5, because the coverage floor showed that at the previous

@@ -717,6 +717,62 @@ consensus.
 why. Check for a partial restore or disk trouble first; `pre-chain entries` tells
 you how much of the ledger the chain covers at all.
 
+## Distributed tracing
+
+W3C trace context across the coordinator/worker boundary, so one cross-machine
+incident reads as one thing rather than as two event streams on two clocks.
+
+**Off by default.** Three states, and the difference matters:
+
+| state | condition | behaviour |
+| --- | --- | --- |
+| `off` | `tracing_enabled` false (default) | no header read or written, no span built |
+| `propagating` | `tracing_enabled` true, no SDK | context accepted, validated, minted, propagated; spans in-process only |
+| `exporting` | `tracing_enabled` and `tracing_export` true, SDK installed | spans also reach the operator's collector |
+
+In `config.json`:
+
+```json
+{
+  "tracing_enabled": true,
+  "tracing_export": true,
+  "tracing_endpoint": "http://collector.internal:4318"
+}
+```
+
+`exporting` additionally needs the optional extra:
+
+```bash
+pip install opentelemetry-sdk
+```
+
+The **SDK**, not `opentelemetry-api` alone. The API by itself hands back a
+tracer that records nothing, so an API-only install would report that it was
+exporting while sending nothing anywhere. `tracing_export` reports false in that
+case rather than pretending.
+
+No collector, backend, or dashboard is shipped or configured. Choosing one and
+pointing `tracing_endpoint` at it is your decision; a default endpoint would be
+a network destination picked on your behalf.
+
+**Two switches, not one.** `tracing_enabled` lets the coordinator accept and
+mint trace IDs, which costs a contributor nothing. `tracing_export` sends spans
+somewhere. On a worker, the second is that contributor's decision and is never a
+condition of joining - see
+[ADR 0018](adr/0018-trace-context-is-propagated-export-is-the-contributors-choice.md).
+
+**What a span may carry** is an allowlist of identifiers, bounded enums, and
+versions - no prompts, outputs, artifact contents, schemas, credentials, session
+tokens, attempt nonces, idempotency keys, worker error text, or node-supplied
+hostnames. High-cardinality identifiers (execution, unit, attempt, receipt,
+enrollment) are span attributes and appear in no `/metrics` key or value, where
+they would become unbounded label sets.
+
+**No diagnosis-time improvement is claimed.** The mechanism exists and five
+induced failures are demonstrated to correlate under one trace ID; whether that
+makes a human faster has not been measured. The protocol for measuring it is in
+[docs/experiments/trace-diagnosis-time.md](experiments/trace-diagnosis-time.md).
+
 ## Contributions are not payments
 
 The authoritative contribution basis is `compute_contribution`: one accepted,

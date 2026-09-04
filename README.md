@@ -289,6 +289,17 @@ python node.py --server http://ORCHESTRATOR_IP:8000 \
   --capabilities code,large-context
 ```
 
+**Tracing, if the coordinator has it on.** The coordinator may send a
+`traceparent` header with a task; your worker echoes it back on that task's later
+requests. That value was minted by the coordinator and describes nothing about
+your machine - not its hostname, hardware, model, load, or errors. It exists so
+the operator can read one cross-machine incident as one thing.
+
+Sending your worker's *own* spans anywhere is a different setting,
+`tracing_export`, off by default, and it is never a condition of joining. Leave
+it off and you take work, settle, and earn credit exactly as before. See
+[ADR 0018](docs/adr/0018-trace-context-is-propagated-export-is-the-contributors-choice.md).
+
 Workers started through `join.py` read `model` and `worker_capability_overrides` from
 `config.json`. The override object accepts `hardware`, `features`,
 `executor_version`, `model_context_tokens`, `model_variant`, and
@@ -396,6 +407,7 @@ This is a **Phase 0 private trusted-alpha system**. Here's exactly what's durabl
 |---|---|---|
 | Pipeline output | Yes | Saved to `output/{timestamp}/` on disk after every run |
 | Event history | Yes | SQLite (`events.db`) — allowlisted structural telemetry only; survives restarts |
+| Distributed traces | No | Off by default. When on, spans are in-process and bounded unless an operator installs the optional OpenTelemetry SDK and points `tracing_endpoint` at their own collector; a restart forgets them |
 | Job status | Yes | SQLite (`events.db`) — `/jobs/{id}` works after restart |
 | Normalized execution metadata | Yes | SQLite `executions` table — strategy, placement, candidates, validation, errors |
 | Keyed canonical submission mappings | Yes | Digest-only SQLite rows retained during trusted alpha; matching retries return one execution ID |

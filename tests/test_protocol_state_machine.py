@@ -24,6 +24,7 @@ in `docs/adversarial-campaign.md`.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sqlite3
@@ -131,6 +132,11 @@ class ProtocolCampaign(RuleBasedStateMachine):
         # scenarios in tests/test_adversarial_scenarios.py cover them directly.
         self.restarts = 0
         self.drains = 0
+        # Both bounded to one per sequence. Each drives a full asynchronous
+        # execution lifecycle to a durable condition, which costs more than a
+        # single request; one per sequence is enough for a run-level floor.
+        self.cancellations_of_running_work = 0
+        self.artifact_producing_runs = 0
 
     @initialize()
     def open_the_network(self) -> None:
@@ -211,6 +217,12 @@ class ProtocolCampaign(RuleBasedStateMachine):
             return call(), False
         target_index, mode = self.pending_fault
         self.pending_fault = None
+        # A background execution task now outlives the request that started it,
+        # and the injector counts SQLite operations process-wide. Leftover work
+        # would consume the armed index and move the failure somewhere the
+        # campaign did not choose, which is a machine-speed dependency in
+        # disguise.
+        self.harness.quiesce()
         self.harness.faults.arm(target_index=target_index, mode=mode)
         try:
             response = call()
@@ -495,7 +507,47 @@ class ProtocolCampaign(RuleBasedStateMachine):
     )
     def submit_correct_result(self, unit_index: int, output_index: int) -> None:
         """The honest worker. Everything downstream depends on this happening."""
-        self._submit(unit_index, "correct", output_index)
+        self._take_fresh_work_if_none_is_live(UNIT_LONG_LEASE_SECONDS)
+        task_ids = self._live_handout_task_ids() or sorted(self.handouts)
+        self._submit_task(task_ids[unit_index % len(task_ids)], "correct", output_index)
+
+    def _live_handout_task_ids(self) -> list[str]:
+        """Handouts whose attempt the coordinator still considers active."""
+        durable = self.harness.durable_attempts()
+        live = []
+        for task_id, handout in self.handouts.items():
+            row = durable.get(handout.attempt_id)
+            if row is not None and row["state"] == "active":
+                live.append(task_id)
+        return sorted(live)
+
+    def _take_fresh_work_if_none_is_live(self, lease_seconds: int) -> None:
+        """Queue and take one unit when the sequence is holding no lease.
+
+        Finding F4's fix made the settlement chain *available* at the start of
+        every sequence. It did not make it reachable later: once the initial
+        handouts have been settled, expired, superseded, or reclaimed, an honest
+        submission needs a generated enqueue and a generated poll to line up
+        before anything else destroys the result, and measurement says that is a
+        coin flip. `settlement_accepted` swung between 1 and 6 across whole runs
+        on nothing but a change to `max_examples`, which means every property
+        downstream of an acceptance - replay, credit, the ledger chain, the
+        capability observation, verification evidence - was riding on the draw.
+
+        So the rule establishes its own prerequisite, exactly as
+        `open_the_network` does for the sequence. What is generated is still
+        generated: whether this rule runs at all, against which handout, with
+        which output, and in what order relative to every adversarial rule.
+        What stops being generated is only whether the worker had a lease to be
+        honest with.
+        """
+        if self._live_handout_task_ids():
+            return
+        labels = self._live_labels()
+        if not labels or not self.executions:
+            return
+        self._queue_one_unit(self.executions[0], lease_seconds)
+        self._learn_handout(labels[0], self.harness.poll(labels[0]))
 
     @precondition(lambda self: bool(self.accepted_bodies))
     @rule(unit_index=st.integers(0, 15))
@@ -730,7 +782,15 @@ class ProtocolCampaign(RuleBasedStateMachine):
         it, every lease in the campaign was reaching a terminal state through a
         submission before a sweep ever saw it, and the janitor's reclaim path
         went unexercised.
+
+        It takes a short-leased unit first when the sequence is holding nothing,
+        for the reason recorded on `_take_fresh_work_if_none_is_live`. The
+        janitor was instrumented before this was added: across a whole run it
+        swept 128 times, found an active attempt in 4 of those, and found
+        nothing in flight at all in 111. A sweep over an empty table asserts
+        nothing about reclamation.
         """
+        self._take_fresh_work_if_none_is_live(UNIT_SHORT_LEASE_SECONDS)
         self.harness.clock.offset = min(
             MAX_CLOCK_OFFSET, self.harness.clock.offset + seconds
         )
@@ -804,6 +864,11 @@ class ProtocolCampaign(RuleBasedStateMachine):
             self.model.submissions[(host, key)] = ModelSubmissionMapping(task, execution_id)
         if key is not None:
             self.ambiguous_keys.discard((host, key))
+        # Let the background task finish before the next step observes anything.
+        # Without this the campaign would be asserting against an execution that
+        # is still moving, which is precisely the machine-speed dependency
+        # Theme 1.5 removed from node staleness.
+        self.harness.quiesce()
         self._sync_execution(execution_id)
 
     @precondition(lambda self: bool(self.executions))
@@ -819,6 +884,78 @@ class ProtocolCampaign(RuleBasedStateMachine):
             assert response.status_code in (200, 503), response.text
         if response.status_code == 200:
             self._record_observation(execution_id, response.json()["lifecycle_status"])
+        self._sync_execution(execution_id)
+
+    @precondition(lambda self: self.cancellations_of_running_work < 1)
+    @rule()
+    def cancel_an_execution_that_is_still_running(self) -> None:
+        """Cancel work the coordinator is genuinely still doing.
+
+        Reachable only since the harness stopped tearing down the event loop at
+        the end of each request. `running` here is a durable fact the campaign
+        waits for, not a window it hopes to hit, so a slower machine takes
+        longer to arrive and observes the same thing.
+        """
+        self.cancellations_of_running_work += 1
+        self.pending_fault = None
+        self.harness.faults.disarm()
+        self.harness.hold_executions()
+        try:
+            response = self.harness.submit_execution(
+                host=REQUESTER_HOSTS[0], task=TASK_TEXTS[0], idempotency_key=None
+            )
+            if response.status_code != 202:
+                return
+            execution_id = response.json()["execution_id"]
+            self.model.apply_submission(
+                REQUESTER_HOSTS[0], None, TASK_TEXTS[0], execution_id
+            )
+            self.executions.append(execution_id)
+            self.harness.await_execution_running(execution_id)
+            self._record_observation(execution_id, "running")
+            cancel = self.harness.cancel_execution(execution_id)
+            assert cancel.status_code in (200, 503), cancel.text
+            if cancel.status_code == 200:
+                self._record_observation(
+                    execution_id, cancel.json()["lifecycle_status"]
+                )
+        finally:
+            self.harness.release_executions()
+        self.harness.quiesce()
+        self._sync_execution(execution_id)
+
+    @precondition(lambda self: self.artifact_producing_runs < 1)
+    @rule()
+    def submit_an_execution_that_produces_artifacts(self) -> None:
+        """Run one execution all the way through sealing a manifest.
+
+        Sealing is what creates a provenance envelope, and sealing is an
+        `await` in the terminal path - so before background tasks outlived
+        their request, every artifact-producing execution landed `interrupted`
+        instead. Theme 3C measured that and left the class unfloored; this is
+        the change that makes it reachable.
+        """
+        self.artifact_producing_runs += 1
+        self.pending_fault = None
+        self.harness.faults.disarm()
+        envelopes_before = self.harness.provenance_envelope_count()
+        self.harness.produce_artifacts(True)
+        try:
+            response = self.harness.submit_execution(
+                host=REQUESTER_HOSTS[0], task=TASK_TEXTS[0], idempotency_key=None
+            )
+            if response.status_code != 202:
+                return
+            execution_id = response.json()["execution_id"]
+            self.model.apply_submission(
+                REQUESTER_HOSTS[0], None, TASK_TEXTS[0], execution_id
+            )
+            self.executions.append(execution_id)
+            self.harness.await_execution_terminal(execution_id)
+        finally:
+            self.harness.produce_artifacts(False)
+        self.harness.note_envelopes(envelopes_before)
+        self.harness.quiesce()
         self._sync_execution(execution_id)
 
     @precondition(lambda self: bool(self.executions))
@@ -1066,6 +1203,15 @@ _COMMON = {
 # not guessed: at 15x60 `idempotency_replayed` and `verification_evidence_recorded`
 # both fell to zero. The budget was raised rather than the floor lowered, and the
 # cost is reported in docs/adversarial-campaign.md.
+# Unchanged in Theme 4B, and that is the result rather than the starting point.
+# Adding two rules regenerates every sequence, and the thin classes reshuffled
+# exactly as Theme 3C's `SELECT` reshuffled them. Buying budget was tried first
+# and measured: 24 examples cost 292 s and left `settlement_accepted` at 1,
+# because more sequences do not help when what each sequence needs is a live
+# lease it was never given. Fixing the two rules' prerequisites did, at 15
+# examples - see `_take_fresh_work_if_none_is_live`. Neither the budget was
+# raised nor a floor lowered; the numbers in docs/adversarial-campaign.md are
+# re-measured on this branch.
 _CI_SETTINGS = settings(
     max_examples=15, stateful_step_count=75, derandomize=True, **_COMMON
 )
@@ -1105,24 +1251,15 @@ COVERAGE_FLOOR = {
     "cross_enrollment_submission_rejected": 1,
     # Added in Theme 3C, which touches exactly this subsystem.
     "ledger_entry_chained": 1,
-    # `provenance_envelope_created` is counted by the harness but deliberately
-    # not floored. An envelope is created when an artifact manifest seals, and
-    # the seal path contains an `await` that a background execution task does not
-    # survive under TestClient - so an artifact-producing execution lands
-    # `interrupted`, never reaching envelope creation. Making the campaign
-    # strategy produce artifacts was tried and measured: it turned every
-    # execution interrupted and cost the campaign more than the class was worth.
-    # Envelope creation at seal time is covered directly in
-    # tests/test_provenance_envelope.py. Same precedent as
-    # `execution_cancelled_while_running`; see docs/adversarial-campaign.md.
-    # `execution_cancelled_while_running` is counted by the harness but is
-    # deliberately *not* floored here. It is unreachable through this surface for
-    # a structural reason rather than a budget one: a background execution task
-    # does not outlive the TestClient request that created it, so no generated
-    # sequence can observe an execution still running and cancel it. Cancelling a
-    # running execution is covered deterministically in
-    # tests/test_execution_lifecycle.py and tests/test_verification_evidence.py.
-    # See docs/adversarial-campaign.md.
+    # Restored in Theme 4B. Both were previously recorded here as structurally
+    # unreachable, and both explanations were wrong in the same way: they blamed
+    # TestClient for cancelling background work, when what cancelled it was this
+    # harness constructing its requester clients without entering them, so every
+    # request built and tore down its own event loop. Entering them - which the
+    # worker client already did - makes an execution that is still running, and
+    # an execution that seals an artifact manifest, both reachable.
+    "execution_cancelled_while_running": 1,
+    "provenance_envelope_created": 1,
 }
 
 
@@ -1139,6 +1276,16 @@ def test_the_campaign_holds_and_reaches_the_code_it_asserts_on():
         run_state_machine_as_test(ProtocolCampaign, settings=_ACTIVE_SETTINGS)
     finally:
         observed = dict(CAMPAIGN_OUTCOMES)
+
+    # Documenting the floor means re-measuring it, and re-measuring it by
+    # reading a CI log is how carried-over numbers get published. Outcome
+    # classes and counts only, so the file is as safe to paste as the failure
+    # message is.
+    counts_path = os.environ.get("MYCELIUM_CAMPAIGN_COUNTS")
+    if counts_path:
+        Path(counts_path).write_text(
+            json.dumps(dict(sorted(observed.items())), indent=2), encoding="utf-8"
+        )
 
     short = {
         name: (observed.get(name, 0), floor)

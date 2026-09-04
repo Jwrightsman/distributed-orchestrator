@@ -28,6 +28,7 @@ from rich.table import Table
 from rich import box
 
 from config import get as get_config
+import tracing
 from node_capabilities import (
     CapabilityProtocolModel,
     ExecutorDescriptorV1,
@@ -852,6 +853,10 @@ async def poll_and_execute(
 
         resp.raise_for_status()
         task = resp.json()
+        # Whatever trace this handout belongs to, this worker's later requests
+        # belong to the same one. Two headers, echoed back after revalidation;
+        # nothing about this machine is sent, and nothing is enabled locally.
+        trace_headers = tracing.worker_echo_headers(getattr(resp, "headers", None))
 
         task_id = task["task_id"]
         title = task.get("title", "unnamed")
@@ -904,7 +909,10 @@ async def poll_and_execute(
                             "execution_unit_id": task.get("execution_unit_id"),
                             "execution_unit_kind": task.get("execution_unit_kind"),
                         },
-                        headers=_auth_headers(legacy_secret, session_token),
+                        headers={
+                            **_auth_headers(legacy_secret, session_token),
+                            **trace_headers,
+                        },
                     )
                     if _session_rejected(stream_response):
                         raise NodeSessionRejected(
@@ -977,7 +985,10 @@ async def poll_and_execute(
                     "execution_unit_id": task.get("execution_unit_id"),
                     "execution_unit_kind": task.get("execution_unit_kind"),
                 },
-                headers=_auth_headers(legacy_secret, session_token),
+                headers={
+                    **_auth_headers(legacy_secret, session_token),
+                    **trace_headers,
+                },
             )
             if _session_rejected(submit_resp):
                 raise NodeSessionRejected(

@@ -1241,6 +1241,35 @@ write access to the database, who can rewrite every entry and every link and
 produce a chain that verifies clean. There is no consensus, no external anchor,
 and no third party attesting to anything.
 
+## Trace context headers
+
+Two optional headers, W3C trace context, on the worker boundary only:
+`/nodes/register`, `/tasks/next`, `/tasks/{id}/result`, `/tasks/{id}/stream`,
+`/tasks/{id}/tokens`, `/nodes/{id}/heartbeat`, `/nodes/{id}/drain`.
+
+| header | direction | meaning |
+| --- | --- | --- |
+| `traceparent` | request and response | `00-<32 hex trace id>-<16 hex span id>-<2 hex flags>` |
+| `tracestate` | request and response | vendor list, at most 32 members and 512 bytes |
+
+The coordinator sends `traceparent` on a handout response when tracing is
+enabled. A worker that wants to be followable echoes it on that task's later
+requests; a worker that ignores it is unaffected, keeps its work, and is still
+traced from the coordinator's side under a minted context.
+
+**Both are untrusted input.** `traceparent` is bounded at 256 bytes and rejected
+for a malformed grammar, an all-zero trace or span ID, version `ff`, or version
+`00` with extra fields. An invalid `tracestate` is discarded while a valid
+`traceparent` is still honoured. A rejected value is **never echoed back** in any
+response or error body, and a request carrying an invalid one is treated exactly
+like one carrying none: same admission, same routing, same settlement, same
+credit, same terminal state.
+
+Trace context is diagnostic. It is not authentication, not authorization, not
+idempotency, and not part of attempt binding. Nothing about a request's outcome
+depends on it. Both headers are absent entirely unless `tracing_enabled` is on,
+which it is not by default.
+
 ## Viewer access and explicit shares
 
 Viewer authorization is independent of node and pitch admission. A configured

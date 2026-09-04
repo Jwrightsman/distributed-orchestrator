@@ -539,6 +539,39 @@ they hold are the bytes that were sealed and see under whose identity they were
 produced, and an operator can detect ledger corruption with one command. Both are
 worth having. Neither is proof.
 
+## 11b. What a contributor is and is not sending when tracing is on
+
+Two separate things, and conflating them would be the kind of quiet expansion
+ROADMAP section 2 exists to prevent.
+
+**Propagation.** The coordinator sends a `traceparent` with a handout; a worker
+echoes it on that task's later requests. The value was minted by the
+coordinator. It describes nothing about the contributor's machine - not its
+hostname, its hardware, its model, its load, or its errors - and it is the
+coordinator reading its own incident. This is on whenever the *operator* enables
+tracing, and a worker that never echoes anything is not penalised and loses no
+work.
+
+**Export.** A worker sending its own spans to the operator's collector is
+telemetry leaving a machine somebody else owns. It is a separate setting,
+`tracing_export`, off by default, and it is **never a condition of joining**. A
+contributor who leaves it off takes work, settles, and earns credit exactly as
+one who turns it on.
+
+**What a span can carry at all** is an allowlist of identifiers, bounded enums,
+and version strings, enforced by a keyword-only signature rather than by
+scanning for forbidden text. There is no field for a prompt, a model output,
+artifact contents, a schema, a credential, a session token, an attempt nonce, an
+idempotency key, worker error text, or a node-supplied hostname - the last
+because a worker-supplied hostname is finding F2 from Theme 4A.
+
+**What this does not defend against.** An operator who enables export is
+collecting data about the workers that opted in, and nothing here stops them
+correlating it. The protection is that the contributor decides, not that the
+operator is constrained afterwards. And tracing tells an operator *where* a job
+failed, never *whether the output is right* - it is a diagnostic, and section 6's
+limitation on worker honesty is unchanged by it.
+
 ## 12. Scoped capability evidence is not reputation
 
 The evidence subsystem records coordinator-observed operational outcomes. Its

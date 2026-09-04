@@ -301,6 +301,32 @@ error text, free-form reasons, credentials, nonces, and session secrets. The
 rows still live in `events.db` and are included in backups. Contribution points
 remain separate accepted-compute records and are never capability evidence.
 
+## Optional distributed tracing
+
+Off by default, and two switches rather than one.
+
+```json
+{
+  "tracing_enabled": true,
+  "tracing_export": false,
+  "tracing_endpoint": ""
+}
+```
+
+`tracing_enabled` lets the coordinator accept a `traceparent` from a worker,
+mint one when none arrives, and hand it back - so one cross-machine incident
+reads as one thing. Nothing leaves the machine at this setting.
+
+`tracing_export` sends finished spans to `tracing_endpoint` and needs the
+optional extra (`pip install opentelemetry-sdk` - the SDK, not
+`opentelemetry-api`, which on its own records nothing and is reported as export
+being off). **No collector is shipped or configured.** Pointing this at a
+collector is a network destination you choose; there is no default.
+
+On a worker, export is that contributor's decision and never a condition of
+joining. Turning it on for the coordinator does not turn it on for anyone's
+node.
+
 ## Public pitch is an explicit exception
 
 `public_pitch` lets unauthenticated visitors spend compute through the bounded
