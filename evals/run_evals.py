@@ -415,7 +415,8 @@ async def main() -> int:
     if args.fake:
         install_fake_backend()
 
-    prompts = select_prompts(load_prompts(), args)
+    all_items = load_prompts()
+    prompts = select_prompts(all_items, args)
     if not prompts:
         print("No prompts matched the selection.")
         return 1
@@ -440,8 +441,11 @@ async def main() -> int:
     done_ids = {r["id"] for r in records}
     todo = [p for p in prompts if p.id not in done_ids]
 
-    items = prompts
-    lock_problems = corpus_mod.check_split_lock(corpus_mod.load_corpus(PROMPTS_FILE))
+    # The digest identifies the corpus, not the selection: a --only web_app run
+    # and a full run are measuring items from the same corpus, and recording
+    # different digests for them would make two comparable runs look otherwise.
+    # Which items a run covered is already in its records.
+    lock_problems = corpus_mod.check_split_lock(all_items)
     if lock_problems:
         # Not fatal for a development run, fatal for anything that will be
         # reported - which is why it is printed loudly rather than logged.
@@ -471,7 +475,7 @@ async def main() -> int:
         "concurrency": args.concurrency,
         "prompt_set": orchestrator.active_prompt_set().name,
         "corpus_version": corpus_mod.corpus_version(PROMPTS_FILE),
-        "corpus_digest": corpus_mod.corpus_digest(items),
+        "corpus_digest": corpus_mod.corpus_digest(all_items),
         "grader_version": grading.GRADER_VERSION,
         "split_lock_holds": not lock_problems,
         "study_id": args.study,

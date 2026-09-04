@@ -63,7 +63,10 @@ difference has to be before the instrument would reliably notice it, and it is
 the question that decides corpus size. Computed at 80% power, n=28 detects
 **38.4 points ≈ 10.8 prompts**, not six.
 
-The rule of thumb was in the right direction and about half the size.
+The rule of thumb was in the right direction and about half the size. Put
+another way: six of 28 is 21 percentage points, and **21 points is what the
+instrument reaches at n=100, not at n=28.** The roadmap was describing the
+corpus this change builds, while believing it described the one it had.
 
 ### 1.3 The discordant rate is estimable, and it is 0.643
 
