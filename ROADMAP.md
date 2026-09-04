@@ -599,6 +599,33 @@ memory or storage growth.
 
 ## Changelog
 
+- **2026-09-04** — The generator is pinnable, and the power curve is a function of the
+  noise floor rather than a table computed at one value of it. `config.json` gained
+  `temperature` and `seed`; both ship unset, so the request carries neither key and
+  nothing about a normal run changed. What a seed establishes is recorded carefully:
+  Ollama accepting the field is verified from its API docs and asserted against the
+  outbound request body, the runner *honouring* it on this model and hardware is not,
+  and a seeded run therefore reports `sampling_pinned: false` until somebody measures
+  it. `scripts/eval_power.py` now prints detectable effect across the corpus-size grid
+  crossed with ψ ∈ {0.643, 0.5, 0.4, 0.32, 0.25}, defaulting to the measured 0.643 with
+  every other cell starred as a projection — because δ ∝ √(ψ/n) means **halving ψ is
+  worth exactly what doubling the corpus is worth**, and at ψ = 0.32 the 100 items that
+  already exist would detect the 15-point target that needs 187 at the measured floor.
+  Two measurements are pre-registered and **neither was run**:
+  `docs/experiments/noise-floor-under-pinned-sampling.md` (two identical-configuration
+  pairs, pinned against unpinned, 37 items computed from the interval separation
+  required, ≈17 h at the direct arm) and
+  `docs/experiments/replicate-endpoint-design.md`. The second corrects a claim this
+  project published: replicates are **not** more efficient per unit of inference — at
+  matched cost, k runs on n items and one run on k×n items have the same power. Their
+  real value is that item count, not inference, is the binding constraint: the
+  confirmatory 36 are frozen by a digest, one run each gives power 0.29, and k=5 gives
+  0.88 on the same items. Which design to choose is decided by the noise-floor
+  measurement, and that is written down rather than argued later. Finally, the six
+  banded `web_app` items now carry `known_suspect: true` in their own records — the
+  §1.1 grading defect recorded on the items it reaches — and the two published `web_app`
+  figures that lacked the qualification (README's `web` column, `docs/showcase-ceiling.md`)
+  now carry it.
 - **2026-09-03** — The eval instrument was given controls, mechanical grading, a banded and
   split corpus, and a computed power analysis. Three things it found are worth more than the
   new corpus. First, **the "about six prompts" figure in §4 was a rule of thumb and optimistic
