@@ -359,8 +359,10 @@ two simultaneous model calls on 8 GB with no GPU thrash rather than
 parallelise. An overnight batch and most of a second one.
 
 The same design over the decomposition arm at 29.3 minutes would be about
-82 hours. That is the price of the answer for the arm the study will actually
-use, and it is not proposed here.
+82 hours all in, or 72 for the four measurement runs without the seed check.
+That is the price of the answer for the arm a study would actually use, and it
+is not proposed here — see the transfer argument above for why it might
+eventually have to be.
 
 ---
 
