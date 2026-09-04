@@ -37,6 +37,7 @@ contributes nothing to the test. That is why banding the corpus (see
 from __future__ import annotations
 
 import math
+import random
 from dataclasses import dataclass
 from functools import lru_cache
 from math import comb
@@ -49,6 +50,7 @@ __all__ = [
     "PairedResult",
     "PsiCell",
     "UnpairedResult",
+    "WilcoxonResult",
     "clopper_pearson",
     "discordance",
     "fisher_exact_greater",
@@ -63,8 +65,11 @@ __all__ = [
     "render_paired",
     "render_psi_grid",
     "render_unpaired",
+    "render_wilcoxon",
+    "replicate_power",
     "required_n",
     "unpaired_test",
+    "wilcoxon_signed_rank",
     "wilson",
 ]
 
@@ -748,3 +753,292 @@ def render_psi_grid(
             f"    {label:>12}: detecting {delta:.0%} at {power:.0%} power needs {needed}"
         )
     return "\n".join(lines)
+
+
+# -- a continuous endpoint for replicated items ------------------------------
+#
+# The alternative to more items is more runs per item, scoring each item by the
+# fraction of its k runs that passed rather than by one Bernoulli draw. That is
+# a continuous paired endpoint and it needs a different test.
+#
+# **Wilcoxon signed-rank rather than a paired t**, argued from the distribution
+# rather than from habit: with k runs an item's rate lives on {0, 1/k, ..., 1},
+# so at k=5 there are six possible values, the corpus is banded to put items at
+# the floor and the ceiling deliberately, and a large share of paired
+# differences are exactly zero. That distribution is discrete, bounded, heavily
+# tied and visibly non-normal, and a t-test on 36 such differences is leaning
+# on a central limit theorem that the shape does not earn. Wilcoxon assumes
+# only symmetry of the differences under the null, which the paired design
+# supplies by construction.
+#
+# The null distribution is computed exactly, by counting subsets of the
+# observed ranks, so ties and small n are handled rather than approximated.
+# scipy is not a dependency and is not becoming one.
+
+
+@dataclass(frozen=True)
+class WilcoxonResult:
+    """A signed-rank result carrying the counts that produced it.
+
+    Same rule as `PairedResult`: `zeros` and `n_nonzero` say whether the
+    comparison had anything to work with. A test over 36 items where 34
+    differences were exactly zero produced no evidence, whatever the p-value on
+    the two that moved.
+    """
+
+    n: int
+    n_nonzero: int
+    zeros: int
+    w_plus: float
+    w_minus: float
+    p_one_sided: float
+    p_two_sided: float
+    exact: bool
+    alpha: float = 0.05
+
+    @property
+    def significant_one_sided(self) -> bool:
+        return self.p_one_sided <= self.alpha
+
+
+# Above this many non-zero differences the exact subset count is replaced by the
+# tie-corrected normal approximation, unless a caller asks for exact anyway.
+# The exact null is a subset-sum count costing O(m^3) big-integer additions,
+# cheap at the sizes a study here produces and expensive at the sizes a power
+# simulation reaches.
+#
+# **The approximation does not converge, and that is worth knowing rather than
+# assuming.** `tests/test_eval_stats.py::test_signed_rank_approximation_agrees_
+# with_exact` measures the largest disagreement over randomly drawn heavily-tied
+# difference vectors: about 0.018 at m = 20, 0.009 at m = 30, and 0.008 at
+# m = 60 and m = 100 — it plateaus. The cause is the lattice: with few distinct
+# magnitudes the statistic moves in steps much larger than the half-unit
+# continuity correction assumes.
+#
+# So: a study on the 36-item confirmatory set produces about 30 non-zero
+# differences and is computed exactly. A larger one reports `exact = False`,
+# `render_wilcoxon` says the p-value carries about +/-0.01, and a result within
+# that of alpha should be recomputed with `exact=True` rather than believed.
+MAX_EXACT_SIGNED_RANK = 60
+
+
+def _average_ranks(values: Sequence[float]) -> list[float]:
+    """Ranks of `values`, averaging over ties. 1-based."""
+    order = sorted(range(len(values)), key=lambda i: values[i])
+    ranks = [0.0] * len(values)
+    position = 0
+    while position < len(order):
+        end = position
+        while end + 1 < len(order) and values[order[end + 1]] == values[order[position]]:
+            end += 1
+        shared = (position + end) / 2 + 1
+        for index in range(position, end + 1):
+            ranks[order[index]] = shared
+        position = end + 1
+    return ranks
+
+
+@lru_cache(maxsize=4096)
+def _signed_rank_counts(doubled_ranks: tuple[int, ...]) -> tuple[int, ...]:
+    """Subset-sum counts over the doubled ranks — the exact null distribution.
+
+    Under the null each difference is equally likely to carry a plus or a
+    minus, so W+ is the sum of a uniformly random subset of the observed ranks.
+    Ranks are doubled so averaged ties stay integers and the count is exact.
+    """
+    total = sum(doubled_ranks)
+    counts = [0] * (total + 1)
+    counts[0] = 1
+    for rank in doubled_ranks:
+        for value in range(total, rank - 1, -1):
+            if counts[value - rank]:
+                counts[value] += counts[value - rank]
+    return tuple(counts)
+
+
+def wilcoxon_signed_rank(
+    differences: Sequence[float], alpha: float = 0.05, exact: bool | None = None
+) -> WilcoxonResult:
+    """Exact one- and two-sided Wilcoxon signed-rank on paired differences.
+
+    Zero differences are dropped, Wilcoxon's original treatment, and counted in
+    the result so the reader can see how much of the corpus said nothing. The
+    one-sided hypothesis is that the differences are positive — the same
+    directional question `mcnemar_exact_p` asks, for the same reason: a
+    candidate is only ever promoted on evidence of improvement.
+
+    `exact=None` chooses by `MAX_EXACT_SIGNED_RANK`; True forces the exact null
+    whatever it costs, False forces the approximation. The result always says
+    which one ran, so a p-value is never quietly approximate.
+    """
+    values = [float(d) for d in differences]
+    if not values:
+        raise ValueError("no paired differences — nothing to test")
+    nonzero = [d for d in values if d != 0.0]
+    zeros = len(values) - len(nonzero)
+    if not nonzero:
+        return WilcoxonResult(
+            n=len(values),
+            n_nonzero=0,
+            zeros=zeros,
+            w_plus=0.0,
+            w_minus=0.0,
+            p_one_sided=1.0,
+            p_two_sided=1.0,
+            exact=True,
+            alpha=alpha,
+        )
+
+    ranks = _average_ranks([abs(d) for d in nonzero])
+    w_plus = float(sum(r for d, r in zip(nonzero, ranks) if d > 0))
+    w_minus = float(sum(r for d, r in zip(nonzero, ranks) if d < 0))
+    m = len(nonzero)
+
+    # One distinct magnitude means every rank is the same averaged value, so
+    # W+ is that rank times the number of positive differences and the
+    # signed-rank test *is* the sign test. Computed as one, exactly, at any m.
+    #
+    # This case is not academic: it is what a binary endpoint produces, so the
+    # single-run design a replicate study is compared against lands here every
+    # time. It is also where the normal approximation is worst — the statistic
+    # moves in steps of (m+1)/2, not 1, so the usual half-unit continuity
+    # correction is far too small and the approximation comes out
+    # anti-conservative by about 0.04 at m = 60 and does not improve with m.
+    if len(set(ranks)) == 1:
+        positives = sum(1 for d in nonzero if d > 0)
+        return WilcoxonResult(
+            n=len(values),
+            n_nonzero=m,
+            zeros=zeros,
+            w_plus=w_plus,
+            w_minus=w_minus,
+            p_one_sided=mcnemar_exact_p(m - positives, positives, one_sided=True),
+            p_two_sided=mcnemar_exact_p(m - positives, positives),
+            exact=True,
+            alpha=alpha,
+        )
+
+    if exact is True or (exact is None and m <= MAX_EXACT_SIGNED_RANK):
+        doubled = tuple(sorted(int(round(r * 2)) for r in ranks))
+        counts = _signed_rank_counts(doubled)
+        target = int(round(w_plus * 2))
+        at_least = sum(counts[target:])
+        at_most = sum(counts[: target + 1])
+        p_one = min(1.0, _over_two_pow(at_least, m))
+        p_two = min(1.0, 2 * _over_two_pow(min(at_least, at_most), m))
+        return WilcoxonResult(
+            n=len(values),
+            n_nonzero=m,
+            zeros=zeros,
+            w_plus=w_plus,
+            w_minus=w_minus,
+            p_one_sided=p_one,
+            p_two_sided=p_two,
+            exact=True,
+            alpha=alpha,
+        )
+
+    mean = m * (m + 1) / 4
+    tie_correction = 0.0
+    seen: dict[float, int] = {}
+    for r in ranks:
+        seen[r] = seen.get(r, 0) + 1
+    for size in seen.values():
+        if size > 1:
+            tie_correction += size**3 - size
+    variance = m * (m + 1) * (2 * m + 1) / 24 - tie_correction / 48
+    if variance <= 0:
+        p_one = 1.0
+    else:
+        z = (w_plus - mean - 0.5) / math.sqrt(variance)
+        p_one = 0.5 * math.erfc(z / math.sqrt(2))
+    return WilcoxonResult(
+        n=len(values),
+        n_nonzero=m,
+        zeros=zeros,
+        w_plus=w_plus,
+        w_minus=w_minus,
+        p_one_sided=min(1.0, p_one),
+        p_two_sided=min(1.0, 2 * min(p_one, 1 - p_one)),
+        exact=False,
+        alpha=alpha,
+    )
+
+
+def render_wilcoxon(
+    result: WilcoxonResult, label_a: str = "A", label_b: str = "B"
+) -> str:
+    """The only sanctioned way to print a signed-rank result.
+
+    Counts first, then the statistic, then p — the same order and the same
+    reason as `render_paired`.
+    """
+    lines = [
+        f"n = {result.n} paired items   ({label_a} vs {label_b}, per-item rate difference)",
+        f"  differences  : {result.n_nonzero} non-zero, {result.zeros} exactly zero (dropped)",
+        f"  signed ranks : W+ = {result.w_plus:g}   W- = {result.w_minus:g}",
+        f"  Wilcoxon {'exact' if result.exact else 'normal approx'}  "
+        f"one-sided p = {result.p_one_sided:.4f}   "
+        f"two-sided p = {result.p_two_sided:.4f}",
+    ]
+    if not result.exact:
+        lines.append(
+            "  accuracy     : normal approximation — heavily tied differences put "
+            "this within about 0.01 of the exact p, and it does not improve with n. "
+            "Recompute with exact=True before deciding anything this close to alpha."
+        )
+    if result.n_nonzero == 0:
+        lines.append(
+            "  power        : every paired difference was exactly zero — this "
+            "comparison produced no evidence, not a null result"
+        )
+    return "\n".join(lines)
+
+
+def replicate_power(
+    n: int,
+    k: int,
+    delta: float,
+    baseline_rates: Sequence[float],
+    trials: int = 1000,
+    seed: int = 20260904,
+    alpha: float = 0.05,
+) -> float:
+    """Simulated power of the replicate design. A projection, not a measurement.
+
+    There is no closed form for Wilcoxon's power, so this is Monte Carlo over a
+    **stated** generative model, seeded so it reproduces exactly:
+
+      * each of `n` items draws a baseline pass probability from
+        `baseline_rates`, which the caller supplies and must argue for;
+      * the candidate arm's probability for that item is the baseline plus
+        `delta`, clipped to 1 — a uniform additive effect, which is the
+        simplest assumption and the one that has to be written down rather
+        than absorbed;
+      * each arm runs the item `k` times, and the endpoint is the difference in
+        pass fractions;
+      * the differences go to `wilcoxon_signed_rank`, one-sided at `alpha`.
+
+    The number that comes out is only as good as `baseline_rates`. It is a
+    projection under an assumption, and every document quoting it says so.
+    """
+    if n <= 0 or k <= 0:
+        raise ValueError("replicate_power needs at least one item and one replicate")
+    if not baseline_rates:
+        raise ValueError("replicate_power needs a baseline rate distribution to draw from")
+    if trials <= 0:
+        raise ValueError("replicate_power needs at least one simulated trial")
+    rng = random.Random(seed)
+    rates = list(baseline_rates)
+    hits = 0
+    for _ in range(trials):
+        differences = []
+        for _ in range(n):
+            p = rng.choice(rates)
+            q = min(1.0, p + delta)
+            a = sum(1 for _ in range(k) if rng.random() < p) / k
+            b = sum(1 for _ in range(k) if rng.random() < q) / k
+            differences.append(b - a)
+        if wilcoxon_signed_rank(differences, alpha).significant_one_sided:
+            hits += 1
+    return hits / trials

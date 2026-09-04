@@ -17,6 +17,7 @@ implementation. Three things are pinned:
    always carry the contingency table and n.
 """
 
+import random
 import sys
 from pathlib import Path
 
@@ -388,3 +389,217 @@ def test_the_grid_refuses_to_render_nothing():
         stats.psi_grid([], [0.5], 0.15)
     with pytest.raises(ValueError):
         stats.psi_grid([28], [], 0.15)
+
+
+# -- Wilcoxon signed-rank, for a replicated continuous endpoint ---------------
+
+def _brute_force_signed_rank_p(differences):
+    """One-sided p by enumerating every sign assignment. Independent of stats.py.
+
+    Only usable for small vectors — which is the point: the worked examples are
+    checked against a definition, not against the implementation under test.
+    """
+    nonzero = [d for d in differences if d != 0.0]
+    ranks = stats._average_ranks([abs(d) for d in nonzero])
+    observed = sum(r for d, r in zip(nonzero, ranks) if d > 0)
+    m = len(nonzero)
+    hits = 0
+    for mask in range(2**m):
+        total = sum(ranks[i] for i in range(m) if mask >> i & 1)
+        if total >= observed - 1e-12:
+            hits += 1
+    return hits / 2**m
+
+
+def test_signed_rank_worked_by_hand_clean_sweep():
+    """Five positive differences, no ties: W+ = 15 and p = 1/32."""
+    result = stats.wilcoxon_signed_rank([1, 2, 3, 4, 5])
+    assert result.n_nonzero == 5 and result.zeros == 0
+    assert result.w_plus == 15 and result.w_minus == 0
+    assert result.p_one_sided == pytest.approx(1 / 32)
+    assert result.p_two_sided == pytest.approx(2 / 32)
+    assert result.exact is True
+
+
+def test_signed_rank_worked_by_hand_with_ties():
+    """|d| = .2 .2 .2 .4 .6 gives averaged ranks 2 2 2 4 5.
+
+    With one of the .2 differences negative, W+ = 13 and W- = 2. Four of the
+    32 sign assignments reach 13 or more — the whole set, and the three ways to
+    drop a single rank-2 — so p = 4/32 = 0.125.
+    """
+    diffs = [0.2, 0.2, -0.2, 0.4, 0.6]
+    result = stats.wilcoxon_signed_rank(diffs)
+    assert result.w_plus == 13 and result.w_minus == 2
+    assert result.p_one_sided == pytest.approx(4 / 32)
+    assert result.p_one_sided == pytest.approx(_brute_force_signed_rank_p(diffs))
+
+
+def test_signed_rank_drops_zero_differences_and_counts_them():
+    """Wilcoxon's own treatment, and the count is reported rather than hidden.
+
+    A replicate study over a banded corpus produces many exact zeros — items
+    both arms pass every time, and items both arms fail every time. How many
+    is the same information the McNemar table's concordant cells carry.
+    """
+    result = stats.wilcoxon_signed_rank([0.0, 1.0, 2.0, 3.0, 0.0])
+    assert result.n == 5 and result.n_nonzero == 3 and result.zeros == 2
+    assert result.w_plus == 6
+    assert result.p_one_sided == pytest.approx(1 / 8)
+
+
+def test_signed_rank_with_no_movement_at_all_is_not_a_null_result():
+    result = stats.wilcoxon_signed_rank([0.0, 0.0, 0.0])
+    assert result.n_nonzero == 0
+    assert result.p_one_sided == 1.0
+    assert "no evidence" in stats.render_wilcoxon(result)
+
+
+def test_signed_rank_at_the_smallest_possible_n():
+    """One non-zero difference can never clear alpha: p = 1/2 at best."""
+    result = stats.wilcoxon_signed_rank([0.4])
+    assert result.n_nonzero == 1
+    assert result.p_one_sided == pytest.approx(0.5)
+    assert result.significant_one_sided is False
+
+
+def test_signed_rank_matches_brute_force_across_small_vectors():
+    vectors = [
+        [1.0, -1.0, 2.0],
+        [0.2, 0.4, 0.4, -0.6, 0.8],
+        [-0.2, -0.2, 0.2, 0.2, 0.2, 0.6],
+        [0.0, 0.2, -0.2, 0.4],
+        [1, 1, 1, 1, 1, -1, -1],
+    ]
+    assert vectors, "no vectors to check — this test read nothing"
+    for vector in vectors:
+        assert stats.wilcoxon_signed_rank(vector).p_one_sided == pytest.approx(
+            _brute_force_signed_rank_p(vector)
+        ), vector
+
+
+def test_a_single_magnitude_makes_the_signed_rank_test_a_sign_test():
+    """The binary endpoint's shape, computed exactly rather than approximated.
+
+    Every |difference| equal means every rank is the same averaged value, so W+
+    is that rank times the number of positives. The normal approximation is bad
+    here — the statistic moves in steps of (m+1)/2, not 1 — so the exact sign
+    test is used at any size.
+    """
+    diffs = [1.0] * 18 + [-1.0] * 12
+    result = stats.wilcoxon_signed_rank(diffs)
+    assert result.exact is True
+    assert result.n_nonzero == 30
+    assert result.p_one_sided == pytest.approx(
+        stats.mcnemar_exact_p(12, 18, one_sided=True)
+    )
+
+
+def test_signed_rank_is_symmetric_under_negation():
+    positive = stats.wilcoxon_signed_rank([0.2, 0.4, -0.2, 0.6])
+    negative = stats.wilcoxon_signed_rank([-0.2, -0.4, 0.2, -0.6])
+    assert positive.w_plus == negative.w_minus
+    assert positive.p_two_sided == pytest.approx(negative.p_two_sided)
+
+
+def test_the_approximation_does_not_converge_and_the_code_says_so():
+    """Measures the approximation rather than assuming it gets better.
+
+    Randomly drawn heavily-tied difference vectors, exact against the
+    tie-corrected normal approximation. The disagreement falls from about 0.018
+    at m = 20 to about 0.009 at m = 30 and then **stops falling**: 0.008 at both
+    m = 60 and m = 100. With few distinct magnitudes the statistic moves in
+    steps far larger than the half-unit continuity correction assumes, and more
+    data does not fix that.
+
+    This is the justification for two decisions at once. The threshold sits at
+    60 so a study on the 36-item confirmatory set is exact. And a result that
+    used the approximation says so in its own rendering, with the residual
+    stated, because a plateau at 0.008 is not something to discover next to
+    alpha = 0.05.
+    """
+    rng = random.Random(20260904)
+    worst = {}
+    for m in (20, 30, 60, 100):
+        largest = 0.0
+        for _ in range(25):
+            vector = [rng.choice([-3, -2, -1, 1, 2, 3]) * 0.2 for _ in range(m)]
+            exact = stats.wilcoxon_signed_rank(vector, exact=True)
+            approximate = stats.wilcoxon_signed_rank(vector, exact=False)
+            assert exact.exact is True and approximate.exact is False
+            largest = max(largest, abs(exact.p_one_sided - approximate.p_one_sided))
+        worst[m] = largest
+    assert worst, "no vectors were compared — this test asserted nothing"
+    assert worst[20] > 0.012, "the approximation is fine at m=20 — lower the threshold"
+    assert worst[30] < 0.012
+    # The plateau. If this ever drops the comment above is wrong, not the test.
+    assert 0.004 < worst[60] < 0.012
+    assert 0.004 < worst[100] < 0.012
+    assert stats.MAX_EXACT_SIGNED_RANK == 60
+
+
+def test_an_approximate_result_says_it_is_approximate():
+    vector = [0.2 * (1 if i % 3 else -1) * (1 + i % 4) for i in range(80)]
+    approximate = stats.wilcoxon_signed_rank(vector)
+    assert approximate.exact is False
+    text = stats.render_wilcoxon(approximate)
+    assert "normal approximation" in text
+    assert "0.01" in text
+    # And exact is always available for a borderline result.
+    forced = stats.wilcoxon_signed_rank(vector, exact=True)
+    assert forced.exact is True
+
+
+def test_rendered_signed_rank_never_shows_a_bare_p_value():
+    result = stats.wilcoxon_signed_rank([0.2, 0.4, -0.2, 0.6, 0.0])
+    text = stats.render_wilcoxon(result, "decomposition", "ensemble")
+    assert "p = " in text
+    assert "n = 5 paired items" in text
+    assert "non-zero" in text and "exactly zero" in text
+    assert "W+" in text and "W-" in text
+
+
+def test_signed_rank_refuses_an_empty_input():
+    with pytest.raises(ValueError):
+        stats.wilcoxon_signed_rank([])
+
+
+# -- the replicate design's simulated power ----------------------------------
+
+def test_replicate_power_is_calibrated_at_no_effect():
+    """With no true difference the rejection rate is the test's own size.
+
+    The same calibration check as `mcnemar_power`, and for the same reason: an
+    uncalibrated power number produces a confident study design. Monte Carlo
+    slack is allowed for, since 600 trials at alpha = 0.05 has a standard error
+    of about 0.009.
+    """
+    rate = stats.replicate_power(30, 5, 0.0, [0.2, 0.4, 0.6, 0.8], trials=600)
+    assert rate <= 0.08
+
+
+def test_replicate_power_increases_with_effect_and_with_runs():
+    rates = [0.2, 0.4, 0.4, 0.6, 0.6, 0.8]
+    small = stats.replicate_power(30, 3, 0.10, rates, trials=400)
+    large = stats.replicate_power(30, 3, 0.30, rates, trials=400)
+    assert large > small
+    more_runs = stats.replicate_power(60, 3, 0.10, rates, trials=400)
+    assert more_runs > small
+
+
+def test_replicate_power_is_reproducible_at_a_fixed_seed():
+    rates = [0.2, 0.4, 0.6, 0.8]
+    first = stats.replicate_power(20, 5, 0.2, rates, trials=200, seed=7)
+    second = stats.replicate_power(20, 5, 0.2, rates, trials=200, seed=7)
+    assert first == second
+
+
+def test_replicate_power_refuses_a_design_it_cannot_simulate():
+    with pytest.raises(ValueError):
+        stats.replicate_power(0, 5, 0.15, [0.5])
+    with pytest.raises(ValueError):
+        stats.replicate_power(10, 0, 0.15, [0.5])
+    with pytest.raises(ValueError):
+        stats.replicate_power(10, 5, 0.15, [])
+    with pytest.raises(ValueError):
+        stats.replicate_power(10, 5, 0.15, [0.5], trials=0)
