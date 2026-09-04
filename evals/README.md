@@ -4,6 +4,20 @@ Measures whether the swarm actually produces **runnable, on-spec output** — th
 number SPRINT_PHASE2 §1 tunes the planner/builder/reviewer/reviser prompts
 against. Without it, prompt changes are guesswork.
 
+> **Read [`docs/eval-methodology.md`](../docs/eval-methodology.md) before
+> drawing a conclusion from anything here.** It carries the power analysis, the
+> controls, the difficulty bands and the held-out split, and it corrects two
+> figures this file used to imply. The short version: the corpus is 100 items,
+> the instrument detects a **20.6-point** difference at 80% power (not the
+> ~6 prompts §4 of the roadmap claimed at n=28, which was a rule of thumb and
+> optimistic by about a factor of two), and a 15-point change needs 187 items
+> and 182 hours per comparison — so it is still out of reach.
+>
+> Two things in this file describe the **legacy** endpoint. `success` still
+> includes the model-judge gate, kept so new runs stay comparable with the five
+> committed ones. The **primary** endpoint is `primary_pass`: mechanical checks
+> only, no model judgment, and a stricter HTML check. See "Two endpoints" below.
+
 ## Running it
 
 ```bash
@@ -57,6 +71,38 @@ Three ways to make the loop usable, in order of what to reach for:
 machine has no Ollama (a remote run scored from a laptop, for instance). It
 produces a **weaker, mechanical-only score**, and the summary says so. Never
 compare a `--no-judge` number against a judged one.
+
+## Two endpoints, and which one to quote
+
+| | `primary_pass` | `success` (legacy) |
+| --- | --- | --- |
+| Model judgment | none | requires judge >= 4 |
+| HTML "executes" | loaded, drew, changed, responded (per the item's declared behaviour) | loaded without throwing |
+| Used by | the pre-registered studies, `scripts/eval_study_summary.py` | `compare.py`, for continuity with the five committed runs |
+
+`judge_score` is still collected and recorded on both. It is labelled
+`exploratory` and gates nothing a study reports. Removing it from the gate was
+a validity decision, not a power one: recomputing the five committed runs
+without it moves the discordant rate from 0.521 to 0.514.
+
+**The HTML difference is not cosmetic.** Under the legacy check, `web-snake`
+passed 5 of the 5 committed runs. `scripts/showcase_reliability.py`, asking the
+same model for the same artifact, measured a playable Snake at 2 of 10. Both
+numbers are in this repository and they disagree because they are different
+checks.
+
+## Controls, bands and the held-out split
+
+```bash
+python scripts/eval_controls.py       # does the instrument detect anything? (no model needed)
+python scripts/eval_power.py          # what can it see, and what would seeing less cost
+python scripts/eval_band_corpus.py --from-results   # difficulty bands from the committed runs
+python scripts/eval_study_summary.py <study_dir> --paired <arm_a> <arm_b>
+```
+
+`evals/split.lock.json` freezes the 36-item confirmatory set with a digest, and
+`tests/test_eval_corpus.py` fails if it moves. **The confirmatory set is for
+pre-registered runs only.** Iterate on `--split development`.
 
 ## What gets scored
 
@@ -157,6 +203,13 @@ Consequences, and they are not subtle:
 To resolve anything smaller, the sample has to grow — more prompts, or the same
 prompts repeated and averaged. Another single 28-prompt run cannot answer a
 question this instrument has already been shown unable to see.
+
+**That noise floor is now doing more work than it looks.** ψ = 18/28 = 0.643 is
+the discordant pair rate, and for a paired binary design it is what McNemar's
+power depends on — not the item count directly. Every figure in
+`docs/eval-methodology.md` rests on it, and it comes from a single pair of runs
+(95% CI 0.46–0.79). A second identical-configuration pair is the cheapest way to
+tighten it, and worth more than most prompt experiments.
 
 ## Notes
 
