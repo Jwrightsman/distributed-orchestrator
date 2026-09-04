@@ -57,22 +57,32 @@ from scoring import (  # noqa: E402
     summarize,
 )
 
+import corpus as corpus_mod  # noqa: E402
+import grading  # noqa: E402
+import runrecord  # noqa: E402
+
 PROMPTS_FILE = EVALS_DIR / "prompts.json"
 RESULTS_DIR = EVALS_DIR / "results"
 
 
-def load_prompts() -> list[dict]:
-    data = json.loads(PROMPTS_FILE.read_text(encoding="utf-8"))
-    return data["prompts"]
+def load_prompts() -> list:
+    """The validated corpus. Refuses to run against an empty or malformed one."""
+    return corpus_mod.load_corpus(PROMPTS_FILE)
 
 
-def select_prompts(prompts: list[dict], args) -> list[dict]:
+def select_prompts(prompts: list, args) -> list:
     chosen = prompts
     if args.only:
-        chosen = [p for p in chosen if p.get("category") == args.only]
+        chosen = [p for p in chosen if p.category == args.only]
+    if args.taxonomy:
+        chosen = [p for p in chosen if p.taxonomy == args.taxonomy]
+    if args.split:
+        chosen = [p for p in chosen if p.split == args.split]
+    if args.band:
+        chosen = [p for p in chosen if p.band_label == args.band]
     if args.id:
         wanted = set(args.id)
-        chosen = [p for p in chosen if p["id"] in wanted]
+        chosen = [p for p in chosen if p.id in wanted]
     if args.limit:
         chosen = chosen[: args.limit]
     return chosen
@@ -151,13 +161,30 @@ def extract_remote_files(result: dict, run_dir: Path, prompt_id: str) -> list[st
     return [str(p) for p in extract_code_files(text, target)]
 
 
-async def run_one(prompt: dict, args, run_dir: Path) -> dict:
-    """Run a single pitch end-to-end and score it."""
-    expect = prompt.get("expect", {})
+async def run_one(item, args, run_dir: Path) -> dict:
+    """Run a single pitch end-to-end and score it.
+
+    Two endpoints come out of this, and they are not the same measure:
+
+      * `primary_pass` — every mechanical check in `evals/grading.py` ran and
+        passed. This is the endpoint the pre-registered studies use. No model
+        judgment is involved.
+      * `success` — the historical definition, which additionally requires a
+        reviewer-model score of 4 or better. Kept unchanged so `compare.py` can
+        still put a new run beside the five committed ones, and *only* for
+        that.
+
+    `judge_score` is recorded either way, labelled exploratory. It gates
+    nothing that a study reports.
+    """
+    expect = item.expect
     record: dict = {
-        "id": prompt["id"],
-        "category": prompt.get("category", "uncategorized"),
-        "task": prompt["task"],
+        "id": item.id,
+        "category": item.category,
+        "taxonomy": item.taxonomy,
+        "split": item.split,
+        "band": item.band_label,
+        "task": item.task,
         "expected_artifact": expect.get("artifact", "any"),
         "started_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
@@ -165,9 +192,9 @@ async def run_one(prompt: dict, args, run_dir: Path) -> dict:
     start = time.time()
     try:
         if args.orchestrator:
-            result = await run_remote(prompt["task"], args)
+            result = await run_remote(item.task, args)
         else:
-            result = await run_pipeline(prompt["task"])
+            result = await run_pipeline(item.task)
     except Exception as e:
         record.update(
             {
@@ -182,13 +209,22 @@ async def run_one(prompt: dict, args, run_dir: Path) -> dict:
                 "judge_score": None,
                 "code_files": [],
                 "success": False,
+                "primary_pass": False,
+                "graded": True,
+                "grading": {
+                    "grader_version": grading.GRADER_VERSION,
+                    "graded": True,
+                    "passed": False,
+                    "failed_checks": ["pipeline_error"],
+                    "ungraded_checks": [],
+                },
             }
         )
         return record
 
     seconds = round(time.time() - start, 1)
     if args.orchestrator:
-        code_files = extract_remote_files(result, run_dir, prompt["id"])
+        code_files = extract_remote_files(result, run_dir, item.id)
     else:
         code_files = [str(f) for f in result.get("code_files", [])]
 
@@ -206,8 +242,11 @@ async def run_one(prompt: dict, args, run_dir: Path) -> dict:
         exec_result = await asyncio.to_thread(execute_artifacts, code_files, args.exec_timeout)
 
     judge_score = None if args.no_judge else await judge(
-        prompt["task"], result.get("final_output") or result.get("review", "")
+        item.task, result.get("final_output") or result.get("review", "")
     )
+
+    # The primary endpoint. Runs in a thread because it executes the artifact.
+    grade_result = await asyncio.to_thread(grading.grade, item, code_files, args.exec_timeout)
 
     record.update(
         {
@@ -226,7 +265,11 @@ async def run_one(prompt: dict, args, run_dir: Path) -> dict:
             "exec_outcome": exec_result["outcome"],
             "exec_detail": exec_result["detail"],
             "judge_score": judge_score,
+            "judge_score_status": "exploratory — never a primary endpoint",
             "pipeline_code_problems": result.get("code_problems", []),
+            "primary_pass": grade_result.passed,
+            "graded": grade_result.graded,
+            "grading": grade_result.as_record(),
         }
     )
     record["success"] = is_success(record, require_judge=not args.no_judge)
@@ -322,8 +365,18 @@ def install_fake_backend() -> None:
 async def main() -> int:
     parser = argparse.ArgumentParser(description="Run the orchestrator eval set.")
     parser.add_argument("--only", help="restrict to one category")
+    parser.add_argument("--taxonomy", help="restrict to one taxonomy group")
+    parser.add_argument("--split", choices=("development", "confirmatory"),
+                        help="restrict to one half of the held-out split. The confirmatory "
+                             "set is for pre-registered runs only - see docs/eval-methodology.md")
+    parser.add_argument("--band", choices=("floor", "discriminating", "ceiling"),
+                        help="restrict to one difficulty band")
     parser.add_argument("--id", action="append", help="run specific prompt id(s)")
     parser.add_argument("--limit", type=int, help="cap the number of prompts")
+    parser.add_argument("--study", default="",
+                        help="study id recorded on every run record, for a pre-registered study")
+    parser.add_argument("--arm", default="default",
+                        help="arm name recorded on every run record")
     parser.add_argument("--resume", help="continue an existing run id")
     parser.add_argument("--retry-failed", action="store_true",
                         help="with --resume, also re-run prompts that errored")
@@ -362,7 +415,8 @@ async def main() -> int:
     if args.fake:
         install_fake_backend()
 
-    prompts = select_prompts(load_prompts(), args)
+    all_items = load_prompts()
+    prompts = select_prompts(all_items, args)
     if not prompts:
         print("No prompts matched the selection.")
         return 1
@@ -385,7 +439,22 @@ async def main() -> int:
             print(f"Retrying {len(retrying)} previously failed prompt(s): {', '.join(retrying)}")
 
     done_ids = {r["id"] for r in records}
-    todo = [p for p in prompts if p["id"] not in done_ids]
+    todo = [p for p in prompts if p.id not in done_ids]
+
+    # The digest identifies the corpus, not the selection: a --only web_app run
+    # and a full run are measuring items from the same corpus, and recording
+    # different digests for them would make two comparable runs look otherwise.
+    # Which items a run covered is already in its records.
+    lock_problems = corpus_mod.check_split_lock(all_items)
+    if lock_problems:
+        # Not fatal for a development run, fatal for anything that will be
+        # reported - which is why it is printed loudly rather than logged.
+        print("WARNING: the held-out split no longer matches evals/split.lock.json:")
+        for problem in lock_problems:
+            print(f"  - {problem}")
+        if args.split == "confirmatory":
+            print("Refusing to run the confirmatory set against a split that has drifted.")
+            return 1
 
     model = config.get().get("model", "?")
     if args.fake:
@@ -405,6 +474,12 @@ async def main() -> int:
         "judge_enabled": not args.no_judge,
         "concurrency": args.concurrency,
         "prompt_set": orchestrator.active_prompt_set().name,
+        "corpus_version": corpus_mod.corpus_version(PROMPTS_FILE),
+        "corpus_digest": corpus_mod.corpus_digest(all_items),
+        "grader_version": grading.GRADER_VERSION,
+        "split_lock_holds": not lock_problems,
+        "study_id": args.study,
+        "arm": args.arm,
         "started_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
 
@@ -421,14 +496,46 @@ async def main() -> int:
     limiter = asyncio.Semaphore(args.concurrency)
     done_count = 0
 
-    async def worker(index: int, prompt: dict) -> None:
+    model_identity = await runrecord.capture_model_identity()
+
+    async def worker(index: int, item) -> None:
         nonlocal done_count
         async with limiter:
-            record = await run_one(prompt, args, run_dir)
+            record = await run_one(item, args, run_dir)
         async with write_lock:
             records.append(record)
             with (run_dir / "results.jsonl").open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(record) + "\n")
+            # The durable, append-only record of the conditions this ran under.
+            # results.jsonl stays as it was so compare.py keeps working; this is
+            # the one a study is summarised from.
+            runrecord.append_run(
+                run_dir,
+                runrecord.RunRecord(
+                    study_id=args.study or run_id,
+                    run_id=run_id,
+                    item_id=item.id,
+                    arm=args.arm,
+                    strategy="dag",
+                    strategy_config={
+                        "prompt_set": orchestrator.active_prompt_set().name,
+                        "placement": "remote" if args.orchestrator else "local",
+                    },
+                    corpus_version=meta["corpus_version"],
+                    corpus_digest=meta["corpus_digest"],
+                    band=item.band_label,
+                    model=model_identity,
+                    descriptor_hash=None,
+                    wall_clock_seconds=record.get("seconds"),
+                    tokens=None,
+                    artifact_sha256=runrecord.artifact_digest(record.get("code_files", [])),
+                    artifact_paths=list(record.get("code_files", [])),
+                    grading=record.get("grading", {}),
+                    graded=bool(record.get("graded")),
+                    passed=bool(record.get("primary_pass")),
+                    judge_score=record.get("judge_score"),
+                ),
+            )
             summary = write_outputs(run_dir, records, meta)
             done_count += 1
             verdict = "PASS" if record["success"] else "fail"
@@ -443,8 +550,13 @@ async def main() -> int:
     await asyncio.gather(*(worker(i, p) for i, p in enumerate(todo, 1)))
 
     summary = write_outputs(run_dir, records, meta)
+    graded = [r for r in records if r.get("graded")]
+    primary = sum(1 for r in records if r.get("primary_pass"))
     print()
-    print(f"Success rate: {summary['success_rate']:.0%} ({summary['success']}/{summary['total']})")
+    print(f"PRIMARY (mechanical, no judge): {primary}/{len(records)} "
+          f"- {len(records) - len(graded)} item(s) could not be fully graded")
+    print(f"Legacy judged success rate: {summary['success_rate']:.0%} "
+          f"({summary['success']}/{summary['total']})")
     if args.no_judge:
         print("(mechanical checks only — --no-judge was set)")
     print(f"Summary: {run_dir / 'summary.md'}")

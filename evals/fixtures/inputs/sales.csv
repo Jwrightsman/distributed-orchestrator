@@ -1,0 +1,9 @@
+region,product,units,unit_price
+North,Widget,12,9.50
+North,Gadget,3,24.00
+South,Widget,7,9.50
+South,Sprocket,20,3.25
+East,Gadget,11,24.00
+East,Widget,2,9.50
+West,Sprocket,45,3.25
+West,Gadget,6,24.00

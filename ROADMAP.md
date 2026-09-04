@@ -102,6 +102,16 @@ version of this project. Consider making MCP the headline interface rather than 
 decomposition's 2/10, p = 0.073. Settling it needs ~19 runs per arm, almost all of the cost on the
 decomposition side. Not promoted. The original entry follows.
 
+**Ensemble vs decomposition — PRE-REGISTERED Sep 3, not run. See
+[docs/experiments/ensemble-vs-decomposition.md](docs/experiments/ensemble-vs-decomposition.md).**
+The pilot was unpaired against one artifact. The pre-registered design pairs three arms
+(decomposition, ensemble at the cost-matched five candidates, direct as baseline) over the 36-item
+locked confirmatory set, with **success at equal compute** as the primary endpoint and the compute
+ratio measured rather than assumed. Powered for the ~35-point gap the pilot suggests (p=0.82 at
+n=36) and nothing smaller. **~39 hours of inference**, plus ~18 hours to band the confirmatory
+items first. The no-difference criterion and the criterion for dropping decomposition as the
+default are both written down in advance.
+
 **Ensemble execution.** The sharpest finding from external review, and it comes from our own
 data: chart 10/10 vs Snake 2/10 isn't only model weakness. The architecture is good at
 independent, cheaply-checkable subtasks and bad at tightly coupled artifacts where blind agents
@@ -110,9 +120,31 @@ independently, then select by mechanical checks, instead of decomposing one arti
 three. May well beat decomposition on exactly the tasks that fail today. Measure with
 `compare.py`; remember nothing under ~6 prompts resolves at n=28.
 
-**Grow the eval set.** At n=28 the instrument can't see anything smaller than about six prompts.
-Prompt tuning is not measurable until this happens, so any future prompt work is blocked behind
-it.
+**Grow the eval set — DONE Sep 3, and the conclusion is not the one this entry expected.
+See [docs/eval-methodology.md](docs/eval-methodology.md).** The corpus is now **100 items**
+(64 development, 36 in a digest-locked confirmatory set), banded by difficulty, written from a
+documented task taxonomy rather than from a failure log, and graded mechanically with no
+model-judged primary endpoint.
+
+The **"about six prompts" figure was a rule of thumb and it was optimistic by roughly a factor of
+two.** It was a significance threshold at the observed churn, not a power calculation. Computed at
+80% power from the measured discordant rate (ψ = 0.643, from the one pair of identical-configuration
+runs): **n=28 detects 38.4 points ≈ 10.8 prompts; n=100 detects 20.6 points.**
+
+**Growing the corpus did not fully unblock prompt tuning, and no achievable corpus does.**
+Detecting a 15-point change — smaller than v1 → v3's 25 points, and about the size of an ordinary
+good change — needs **n = 187**, which is 91 hours per run and 182 hours per comparison on the
+reference machine. That is not proposed. What 100 items
+buys is the ability to resolve a *large* change (an architecture swap, a model change, a prompt
+rewrite that moves a fifth of the set) for about four days of CPU, instead of spending four days on
+a question the instrument could never answer. The remaining lever is replicates per item with a
+continuous endpoint, which changes the endpoint and should be pre-registered separately.
+
+The instrument now has controls: a deliberately degraded arm is detected (p = 0.0005), two runs of
+an identical configuration are not (0 false positives in 20 pairs), and an arm answering a
+*shuffled* prompt-to-task pairing is **invisible** to the parse-and-run checks the old harness
+relied on. That last one is measured, not argued: the old HTML check scored `web-snake` 5/5 while
+`showcase_reliability.py` measured the same artifact at 2/10.
 
 **Domain and HTTPS.** A raw IP with a port reads as sketchy in a launch post. ~$12/year plus
 Caddy for automatic certs. An afternoon, and it's the difference between "some guy's IP" and "a
@@ -567,6 +599,27 @@ memory or storage growth.
 
 ## Changelog
 
+- **2026-09-03** — The eval instrument was given controls, mechanical grading, a banded and
+  split corpus, and a computed power analysis. Three things it found are worth more than the
+  new corpus. First, **the "about six prompts" figure in §4 was a rule of thumb and optimistic
+  by about a factor of two**: it was a significance threshold at the observed churn, not power.
+  Computed at 80% power from ψ = 0.643, n=28 sees 38.4 points (10.8 prompts) and n=100 sees 20.6.
+  Second, **the HTML execution check was "loads without throwing"**, under which `web-snake`
+  passed 5 of 5 committed runs while `showcase_reliability.py` measured the same artifact at
+  2 of 10 — every published `web_app` number carries that weakness. Third, and the reason the
+  entry above does not claim prompt tuning is unblocked, **no corpus this project will run
+  resolves a 15-point change**: it needs 187 items and 182 hours per comparison, so the honest
+  report is that growing the corpus buys the ability to see a large change cheaply, not a fine
+  one at all. The controls detect a truncated arm (p=0.0005) and a shuffled-pairing arm
+  (p=0.0005), find no difference between identical configurations (0 significant in 20 pairs),
+  and — the useful measurement — show that the *shuffled* arm is completely invisible to
+  parse-and-run grading: 16 of 16 pass, zero discordant pairs. Dropping the model judge from the
+  primary endpoint was done on validity grounds and bought no power at all (mean discordant rate
+  0.521 → 0.514). The decomposition study is pre-registered, sized, costed at ~39 hours, and
+  **not run**; its no-difference criterion is written down before any data exists. Grading is
+  deterministic, ungraded is distinguished from failed, run records are append-only, and the
+  summariser refuses to compute a statistic over an incomplete study. See
+  `docs/eval-methodology.md` and `docs/experiments/ensemble-vs-decomposition.md`.
 - **2026-09-03** — Theme 4B propagated W3C trace context across the coordinator/worker
   boundary and into the validator subprocess, off by default, with the OpenTelemetry SDK
   as an optional extra that nothing imports at module scope. Propagation and export are

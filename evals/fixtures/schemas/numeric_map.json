@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "an object mapping keys to numbers",
+  "type": "object",
+  "minProperties": 1,
+  "additionalProperties": {
+    "type": "number"
+  }
+}

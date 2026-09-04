@@ -1,179 +1,2227 @@
 {
-  "version": 1,
-  "notes": "Eval set for the planner/builder/reviewer/reviser pipeline. Keep prompts phrased the way a real user would pitch them — vague ones included on purpose. `expect.artifact` drives which mechanical checks run; `expect.keywords` are case-insensitive substrings that must appear somewhere in the extracted code for the output to count as on-spec.",
+  "version": 2,
+  "notes": "Corpus v2. Every item declares a taxonomy (which category of work Mycelium claims to do), an origin (taxonomy, observed_failure, or legacy for the original 28), a split (development or confirmatory - the confirmatory assignment is frozen in evals/split.lock.json), and a band once it has been run. expect.artifact drives the artifact-kind check; expect.keywords are case-insensitive substrings and are a weak proxy, never an item's only check; expect.checks adds output-level grading. See docs/eval-methodology.md.",
   "prompts": [
     {
       "id": "web-snake",
       "category": "web_app",
+      "taxonomy": "interactive_artifact",
       "task": "Build a retro Snake game as a single self-contained HTML file with neon styling, a scoreboard, and keyboard controls",
-      "expect": {"artifact": "html", "keywords": ["canvas", "addeventlistener", "score"]}
+      "origin": "legacy",
+      "split": "development",
+      "band": {
+        "label": "ceiling",
+        "passes": 5,
+        "trials": 5,
+        "source": "provisional: recomputed from the five committed runs in evals/results/, which used four different prompt sets rather than one fixed arm"
+      },
+      "expect": {
+        "artifact": "html",
+        "keywords": [
+          "canvas",
+          "addeventlistener",
+          "score"
+        ]
+      }
     },
     {
       "id": "web-pomodoro",
       "category": "web_app",
+      "taxonomy": "interactive_artifact",
       "task": "Build a Pomodoro timer as one self-contained HTML file: 25 minute work timer, 5 minute break, start/pause/reset buttons, and a visible countdown",
-      "expect": {"artifact": "html", "keywords": ["setinterval", "addeventlistener"]}
+      "origin": "legacy",
+      "split": "development",
+      "band": {
+        "label": "ceiling",
+        "passes": 5,
+        "trials": 5,
+        "source": "provisional: recomputed from the five committed runs in evals/results/, which used four different prompt sets rather than one fixed arm"
+      },
+      "expect": {
+        "artifact": "html",
+        "keywords": [
+          "setinterval",
+          "addeventlistener"
+        ]
+      }
     },
     {
       "id": "web-todo",
       "category": "web_app",
+      "taxonomy": "interactive_artifact",
       "task": "Build a to-do list as a single self-contained HTML file. Add tasks, mark them done, delete them, and persist to localStorage",
-      "expect": {"artifact": "html", "keywords": ["localstorage", "addeventlistener"]}
+      "origin": "legacy",
+      "split": "development",
+      "band": {
+        "label": "discriminating",
+        "passes": 3,
+        "trials": 5,
+        "source": "provisional: recomputed from the five committed runs in evals/results/, which used four different prompt sets rather than one fixed arm"
+      },
+      "expect": {
+        "artifact": "html",
+        "keywords": [
+          "localstorage",
+          "addeventlistener"
+        ]
+      }
     },
     {
       "id": "web-calculator",
       "category": "web_app",
+      "taxonomy": "interactive_artifact",
       "task": "Build a working calculator as one self-contained HTML file with a keypad, the four basic operations, and a clear button",
-      "expect": {"artifact": "html", "keywords": ["addeventlistener"]}
+      "origin": "legacy",
+      "split": "development",
+      "band": {
+        "label": "floor",
+        "passes": 1,
+        "trials": 5,
+        "source": "provisional: recomputed from the five committed runs in evals/results/, which used four different prompt sets rather than one fixed arm"
+      },
+      "expect": {
+        "artifact": "html",
+        "keywords": [
+          "addeventlistener"
+        ]
+      }
     },
     {
       "id": "web-memory-game",
       "category": "web_app",
+      "taxonomy": "interactive_artifact",
       "task": "Build a card matching memory game as a single self-contained HTML file with a 4x4 grid, move counter, and a win message",
-      "expect": {"artifact": "html", "keywords": ["addeventlistener"]}
+      "origin": "legacy",
+      "split": "development",
+      "band": {
+        "label": "ceiling",
+        "passes": 4,
+        "trials": 5,
+        "source": "provisional: recomputed from the five committed runs in evals/results/, which used four different prompt sets rather than one fixed arm"
+      },
+      "expect": {
+        "artifact": "html",
+        "keywords": [
+          "addeventlistener"
+        ]
+      }
     },
     {
       "id": "web-markdown-preview",
       "category": "web_app",
+      "taxonomy": "interactive_artifact",
       "task": "Build a live markdown previewer as one self-contained HTML file: a textarea on the left, rendered HTML on the right, updating as you type. Do not use any external libraries",
-      "expect": {"artifact": "html", "keywords": ["addeventlistener", "innerhtml"]}
+      "origin": "legacy",
+      "split": "development",
+      "band": {
+        "label": "discriminating",
+        "passes": 2,
+        "trials": 5,
+        "source": "provisional: recomputed from the five committed runs in evals/results/, which used four different prompt sets rather than one fixed arm"
+      },
+      "expect": {
+        "artifact": "html",
+        "keywords": [
+          "addeventlistener",
+          "innerhtml"
+        ]
+      }
     },
-
     {
       "id": "cli-todo",
       "category": "cli_tool",
+      "taxonomy": "data_transformation",
       "task": "Build a command-line to-do manager in Python. Subcommands to add, list, complete and remove tasks, stored in a JSON file",
-      "expect": {"artifact": "python", "keywords": ["argparse", "json"]}
+      "origin": "legacy",
+      "split": "development",
+      "band": {
+        "label": "ceiling",
+        "passes": 4,
+        "trials": 5,
+        "source": "provisional: recomputed from the five committed runs in evals/results/, which used four different prompt sets rather than one fixed arm"
+      },
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "argparse",
+          "json"
+        ]
+      }
     },
     {
       "id": "cli-file-organizer",
       "category": "cli_tool",
+      "taxonomy": "data_transformation",
       "task": "Write a Python command-line tool that organizes files in a directory into subfolders by file extension, with a --dry-run flag",
-      "expect": {"artifact": "python", "keywords": ["argparse", "dry"]}
+      "origin": "legacy",
+      "split": "development",
+      "band": {
+        "label": "ceiling",
+        "passes": 4,
+        "trials": 5,
+        "source": "provisional: recomputed from the five committed runs in evals/results/, which used four different prompt sets rather than one fixed arm"
+      },
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "argparse",
+          "dry"
+        ]
+      }
     },
     {
       "id": "cli-password-gen",
       "category": "cli_tool",
+      "taxonomy": "synthetic_data",
       "task": "Write a Python command-line password generator with flags for length, and whether to include symbols and digits",
-      "expect": {"artifact": "python", "keywords": ["argparse", "random"]}
+      "origin": "legacy",
+      "split": "development",
+      "band": {
+        "label": "discriminating",
+        "passes": 3,
+        "trials": 5,
+        "source": "provisional: recomputed from the five committed runs in evals/results/, which used four different prompt sets rather than one fixed arm"
+      },
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "argparse",
+          "random"
+        ]
+      }
     },
     {
       "id": "cli-word-count",
       "category": "cli_tool",
+      "taxonomy": "data_transformation",
       "task": "Write a Python command-line tool that reads a text file and prints the top N most frequent words, skipping common stop words",
-      "expect": {"artifact": "python", "keywords": ["argparse"]}
+      "origin": "legacy",
+      "split": "development",
+      "band": {
+        "label": "floor",
+        "passes": 1,
+        "trials": 5,
+        "source": "provisional: recomputed from the five committed runs in evals/results/, which used four different prompt sets rather than one fixed arm"
+      },
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "argparse"
+        ]
+      }
     },
     {
       "id": "cli-unit-convert",
       "category": "cli_tool",
+      "taxonomy": "algorithmic_kernel",
       "task": "Write a Python command-line unit converter supporting length, weight and temperature, e.g. `convert 100 c f`",
-      "expect": {"artifact": "python", "keywords": ["argparse"]}
+      "origin": "legacy",
+      "split": "development",
+      "band": {
+        "label": "discriminating",
+        "passes": 3,
+        "trials": 5,
+        "source": "provisional: recomputed from the five committed runs in evals/results/, which used four different prompt sets rather than one fixed arm"
+      },
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "argparse"
+        ]
+      }
     },
-
     {
       "id": "data-sales-csv",
       "category": "data_processing",
+      "taxonomy": "data_transformation",
       "task": "Write a Python script that reads a CSV of sales data and prints total revenue, average order value, and the top 5 products by revenue. Use only the standard library",
-      "expect": {"artifact": "python", "keywords": ["csv"]}
+      "origin": "legacy",
+      "split": "development",
+      "band": {
+        "label": "discriminating",
+        "passes": 2,
+        "trials": 5,
+        "source": "provisional: recomputed from the five committed runs in evals/results/, which used four different prompt sets rather than one fixed arm"
+      },
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "csv"
+        ]
+      }
     },
     {
       "id": "data-log-parser",
       "category": "data_processing",
+      "taxonomy": "structured_extraction",
       "task": "Write a Python script that parses a web server access log and reports the number of requests per status code and the 10 busiest IP addresses",
-      "expect": {"artifact": "python", "keywords": ["open"]}
+      "origin": "legacy",
+      "split": "development",
+      "band": {
+        "label": "discriminating",
+        "passes": 2,
+        "trials": 5,
+        "source": "provisional: recomputed from the five committed runs in evals/results/, which used four different prompt sets rather than one fixed arm"
+      },
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "open"
+        ]
+      }
     },
     {
       "id": "data-json-to-csv",
       "category": "data_processing",
+      "taxonomy": "data_transformation",
       "task": "Write a Python script that converts a nested JSON file into a flat CSV, flattening nested keys with dots",
-      "expect": {"artifact": "python", "keywords": ["json", "csv"]}
+      "origin": "legacy",
+      "split": "development",
+      "band": {
+        "label": "discriminating",
+        "passes": 3,
+        "trials": 5,
+        "source": "provisional: recomputed from the five committed runs in evals/results/, which used four different prompt sets rather than one fixed arm"
+      },
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "json",
+          "csv"
+        ]
+      }
     },
     {
       "id": "data-dedupe",
       "category": "data_processing",
+      "taxonomy": "data_transformation",
       "task": "Write a Python script that finds duplicate rows in a CSV based on a chosen column and writes a cleaned file without them",
-      "expect": {"artifact": "python", "keywords": ["csv"]}
+      "origin": "legacy",
+      "split": "development",
+      "band": {
+        "label": "discriminating",
+        "passes": 2,
+        "trials": 5,
+        "source": "provisional: recomputed from the five committed runs in evals/results/, which used four different prompt sets rather than one fixed arm"
+      },
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "csv"
+        ]
+      }
     },
     {
       "id": "data-temperature-stats",
       "category": "data_processing",
+      "taxonomy": "data_transformation",
       "task": "Write a Python script that reads a CSV of daily temperatures and prints the monthly mean, min and max, plus the hottest and coldest day overall",
-      "expect": {"artifact": "python", "keywords": ["csv"]}
+      "origin": "legacy",
+      "split": "development",
+      "band": {
+        "label": "discriminating",
+        "passes": 3,
+        "trials": 5,
+        "source": "provisional: recomputed from the five committed runs in evals/results/, which used four different prompt sets rather than one fixed arm"
+      },
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "csv"
+        ]
+      }
     },
-
     {
       "id": "api-todo-fastapi",
       "category": "api",
+      "taxonomy": "service_endpoint",
       "task": "Build a small FastAPI service with CRUD endpoints for notes, stored in memory, with Pydantic models",
-      "expect": {"artifact": "python", "keywords": ["fastapi", "basemodel"]}
+      "origin": "legacy",
+      "split": "development",
+      "band": {
+        "label": "discriminating",
+        "passes": 3,
+        "trials": 5,
+        "source": "provisional: recomputed from the five committed runs in evals/results/, which used four different prompt sets rather than one fixed arm"
+      },
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "fastapi",
+          "basemodel"
+        ]
+      }
     },
     {
       "id": "api-url-shortener",
       "category": "api",
+      "taxonomy": "service_endpoint",
       "task": "Build a URL shortener API in FastAPI: POST a long URL and get a short code back, GET the code redirects. Store in a dict",
-      "expect": {"artifact": "python", "keywords": ["fastapi"]}
+      "origin": "legacy",
+      "split": "development",
+      "band": {
+        "label": "discriminating",
+        "passes": 2,
+        "trials": 5,
+        "source": "provisional: recomputed from the five committed runs in evals/results/, which used four different prompt sets rather than one fixed arm"
+      },
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "fastapi"
+        ]
+      }
     },
     {
       "id": "api-http-server",
       "category": "api",
+      "taxonomy": "service_endpoint",
       "task": "Write a Python HTTP server using only the standard library that serves a JSON API with /health and /time endpoints",
-      "expect": {"artifact": "python", "keywords": ["http.server", "json"]}
+      "origin": "legacy",
+      "split": "development",
+      "band": {
+        "label": "discriminating",
+        "passes": 3,
+        "trials": 5,
+        "source": "provisional: recomputed from the five committed runs in evals/results/, which used four different prompt sets rather than one fixed arm"
+      },
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "http.server",
+          "json"
+        ]
+      }
     },
     {
       "id": "api-weather-mock",
       "category": "api",
+      "taxonomy": "service_endpoint",
       "task": "Build a FastAPI service that returns mock weather data for a city name, with a /forecast endpoint taking a days query parameter",
-      "expect": {"artifact": "python", "keywords": ["fastapi"]}
+      "origin": "legacy",
+      "split": "development",
+      "band": {
+        "label": "discriminating",
+        "passes": 2,
+        "trials": 5,
+        "source": "provisional: recomputed from the five committed runs in evals/results/, which used four different prompt sets rather than one fixed arm"
+      },
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "fastapi"
+        ]
+      }
     },
-
     {
       "id": "algo-fizzbuzz-tests",
       "category": "algorithm",
+      "taxonomy": "test_generation",
       "task": "Write a Python implementation of FizzBuzz with unittest tests covering the edge cases",
-      "expect": {"artifact": "python", "keywords": ["unittest", "fizz"]}
+      "origin": "legacy",
+      "split": "development",
+      "band": {
+        "label": "floor",
+        "passes": 1,
+        "trials": 5,
+        "source": "provisional: recomputed from the five committed runs in evals/results/, which used four different prompt sets rather than one fixed arm"
+      },
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "unittest",
+          "fizz"
+        ]
+      }
     },
     {
       "id": "algo-binary-search",
       "category": "algorithm",
+      "taxonomy": "algorithmic_kernel",
       "task": "Write a Python binary search implementation with docstrings and a set of assertions demonstrating it works, including empty and single-element lists",
-      "expect": {"artifact": "python", "keywords": ["def"]}
+      "origin": "legacy",
+      "split": "development",
+      "band": {
+        "label": "discriminating",
+        "passes": 2,
+        "trials": 5,
+        "source": "provisional: recomputed from the five committed runs in evals/results/, which used four different prompt sets rather than one fixed arm"
+      },
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "def"
+        ]
+      }
     },
     {
       "id": "algo-matrix",
       "category": "algorithm",
+      "taxonomy": "algorithmic_kernel",
       "task": "Write a Python module with functions to transpose, add and multiply matrices using only nested lists, plus a demo in __main__",
-      "expect": {"artifact": "python", "keywords": ["def", "__main__"]}
+      "origin": "legacy",
+      "split": "development",
+      "band": {
+        "label": "discriminating",
+        "passes": 2,
+        "trials": 5,
+        "source": "provisional: recomputed from the five committed runs in evals/results/, which used four different prompt sets rather than one fixed arm"
+      },
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "def",
+          "__main__"
+        ]
+      }
     },
     {
       "id": "algo-roman",
       "category": "algorithm",
+      "taxonomy": "algorithmic_kernel",
       "task": "Write Python functions to convert integers to Roman numerals and back, with tests for tricky cases like 4, 9, 40 and 3999",
-      "expect": {"artifact": "python", "keywords": ["def"]}
+      "origin": "legacy",
+      "split": "development",
+      "band": {
+        "label": "discriminating",
+        "passes": 2,
+        "trials": 5,
+        "source": "provisional: recomputed from the five committed runs in evals/results/, which used four different prompt sets rather than one fixed arm"
+      },
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "def"
+        ]
+      }
     },
-
     {
       "id": "vague-something-useful",
       "category": "vague",
+      "taxonomy": "underspecified_request",
       "task": "Build me something useful for tracking my expenses",
-      "expect": {"artifact": "any", "keywords": []}
+      "origin": "legacy",
+      "split": "development",
+      "band": {
+        "label": "discriminating",
+        "passes": 3,
+        "trials": 5,
+        "source": "provisional: recomputed from the five committed runs in evals/results/, which used four different prompt sets rather than one fixed arm"
+      },
+      "expect": {
+        "artifact": "any",
+        "keywords": []
+      }
     },
     {
       "id": "vague-make-a-game",
       "category": "vague",
+      "taxonomy": "underspecified_request",
       "task": "Make a game",
-      "expect": {"artifact": "any", "keywords": []}
+      "origin": "legacy",
+      "split": "development",
+      "band": {
+        "label": "discriminating",
+        "passes": 3,
+        "trials": 5,
+        "source": "provisional: recomputed from the five committed runs in evals/results/, which used four different prompt sets rather than one fixed arm"
+      },
+      "expect": {
+        "artifact": "any",
+        "keywords": []
+      }
     },
     {
       "id": "vague-help-with-homework",
       "category": "vague",
+      "taxonomy": "underspecified_request",
       "task": "I need a tool to help me study for exams",
-      "expect": {"artifact": "any", "keywords": []}
+      "origin": "legacy",
+      "split": "development",
+      "band": {
+        "label": "discriminating",
+        "passes": 2,
+        "trials": 5,
+        "source": "provisional: recomputed from the five committed runs in evals/results/, which used four different prompt sets rather than one fixed arm"
+      },
+      "expect": {
+        "artifact": "any",
+        "keywords": []
+      }
     },
     {
       "id": "vague-organize-my-life",
       "category": "vague",
+      "taxonomy": "underspecified_request",
       "task": "Something to help me stay organized",
-      "expect": {"artifact": "any", "keywords": []}
+      "origin": "legacy",
+      "split": "development",
+      "band": {
+        "label": "discriminating",
+        "passes": 3,
+        "trials": 5,
+        "source": "provisional: recomputed from the five committed runs in evals/results/, which used four different prompt sets rather than one fixed arm"
+      },
+      "expect": {
+        "artifact": "any",
+        "keywords": []
+      }
+    },
+    {
+      "id": "extract-contacts-json",
+      "category": "data_processing",
+      "taxonomy": "structured_extraction",
+      "task": "I have a file contacts.txt with people's details written out in messy free text. Write a Python script that reads contacts.txt from the current directory and prints a JSON array to stdout, one object per person, each with the keys name, email and phone. Use null for anything you cannot find.",
+      "origin": "taxonomy",
+      "split": "confirmatory",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "json",
+          "open"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "record_array",
+            "inputs": [
+              "contacts.txt"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "extract-log-errors",
+      "category": "data_processing",
+      "taxonomy": "structured_extraction",
+      "task": "Write a Python script that reads access.log from the current directory, finds every request that returned a 5xx status, and prints a JSON array to stdout with one object per request containing the keys path, status and ip.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "json"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "record_array",
+            "inputs": [
+              "access.log"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "extract-invoice-fields",
+      "category": "data_processing",
+      "taxonomy": "structured_extraction",
+      "task": "invoice.txt is a plain-text invoice. Write a Python script that reads it from the current directory and prints a JSON object to stdout with the keys invoice_number, total and currency.",
+      "origin": "taxonomy",
+      "split": "confirmatory",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "json"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "flat_object",
+            "inputs": [
+              "invoice.txt"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "extract-markdown-headings",
+      "category": "data_processing",
+      "taxonomy": "structured_extraction",
+      "task": "Write a Python script that reads notes.md from the current directory and prints a JSON array of every Markdown heading, each entry an object with the keys level and text.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "json"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "record_array",
+            "inputs": [
+              "notes.md"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "extract-config-pairs",
+      "category": "data_processing",
+      "taxonomy": "structured_extraction",
+      "task": "settings.conf holds key = value lines with comments and blank lines mixed in. Write a Python script that reads it from the current directory and prints a flat JSON object of the key/value pairs to stdout, ignoring comments.",
+      "origin": "taxonomy",
+      "split": "confirmatory",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "json"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "flat_object",
+            "inputs": [
+              "settings.conf"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "extract-jsonl-fields",
+      "category": "data_processing",
+      "taxonomy": "structured_extraction",
+      "task": "orders.jsonl has one JSON object per line. Write a Python script that reads it from the current directory and prints a JSON array to stdout keeping only the id, customer and total fields from each line.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "json"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "record_array",
+            "inputs": [
+              "orders.jsonl"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "extract-dates-from-text",
+      "category": "data_processing",
+      "taxonomy": "structured_extraction",
+      "task": "Write a Python script that reads notes.md from the current directory, finds every date written as YYYY-MM-DD, and prints them as a JSON array of strings to stdout with no duplicates, in the order they first appear.",
+      "origin": "taxonomy",
+      "split": "confirmatory",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "json"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "string_array",
+            "inputs": [
+              "notes.md"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "extract-table-from-text",
+      "category": "data_processing",
+      "taxonomy": "structured_extraction",
+      "task": "inventory.csv is a CSV with the columns sku, name, quantity and location. Write a Python script that reads it from the current directory and prints a JSON array of objects with those same four keys to stdout.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "csv",
+          "json"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "record_array",
+            "inputs": [
+              "inventory.csv"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "transform-sales-by-region",
+      "category": "data_processing",
+      "taxonomy": "data_transformation",
+      "task": "sales.csv has the columns region, product, units and unit_price. Write a Python script that reads it from the current directory and prints a JSON object to stdout mapping each region to its total revenue, where revenue is units multiplied by unit_price.",
+      "origin": "taxonomy",
+      "split": "confirmatory",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "csv",
+          "json"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "numeric_map",
+            "inputs": [
+              "sales.csv"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "transform-csv-to-jsonl",
+      "category": "data_processing",
+      "taxonomy": "data_transformation",
+      "task": "Write a Python script that reads inventory.csv from the current directory and prints it to stdout as JSON Lines \u2014 one JSON object per row, using the header row as keys.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "csv",
+          "json"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_contains",
+            "substrings": [
+              "sku",
+              "quantity"
+            ],
+            "inputs": [
+              "inventory.csv"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "transform-readings-daily-mean",
+      "category": "data_processing",
+      "taxonomy": "data_transformation",
+      "task": "readings.csv has the columns timestamp, sensor and value, with ISO timestamps. Write a Python script that reads it from the current directory and prints a JSON object to stdout mapping each date (YYYY-MM-DD) to the mean value recorded that day.",
+      "origin": "taxonomy",
+      "split": "confirmatory",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "csv",
+          "json"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "numeric_map",
+            "inputs": [
+              "readings.csv"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "transform-dedupe-orders",
+      "category": "data_processing",
+      "taxonomy": "data_transformation",
+      "task": "orders.jsonl has one JSON object per line and some ids appear more than once. Write a Python script that reads it from the current directory and prints a JSON array to stdout keeping only the first occurrence of each id.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "json"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "record_array",
+            "inputs": [
+              "orders.jsonl"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "transform-normalise-phone",
+      "category": "data_processing",
+      "taxonomy": "data_transformation",
+      "task": "contacts.txt contains phone numbers written several different ways. Write a Python script that reads it from the current directory and prints a JSON array of strings to stdout, each a phone number reduced to digits only.",
+      "origin": "taxonomy",
+      "split": "confirmatory",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "json"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "string_array",
+            "inputs": [
+              "contacts.txt"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "transform-word-frequencies",
+      "category": "data_processing",
+      "taxonomy": "data_transformation",
+      "task": "Write a Python script that reads notes.md from the current directory and prints a JSON object to stdout mapping each of the ten most common words to how many times it appears, lowercased and ignoring punctuation.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "json"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "numeric_map",
+            "inputs": [
+              "notes.md"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "transform-pivot-inventory",
+      "category": "data_processing",
+      "taxonomy": "data_transformation",
+      "task": "inventory.csv has the columns sku, name, quantity and location. Write a Python script that reads it from the current directory and prints a JSON object to stdout mapping each location to the total quantity held there.",
+      "origin": "taxonomy",
+      "split": "confirmatory",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "csv",
+          "json"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "numeric_map",
+            "inputs": [
+              "inventory.csv"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "transform-merge-two-files",
+      "category": "data_processing",
+      "taxonomy": "data_transformation",
+      "task": "sales.csv has a product column and inventory.csv has a name column holding the same product names. Write a Python script that reads both from the current directory and prints a JSON array to stdout, one object per product, with the keys product, units_sold and quantity_on_hand.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "csv",
+          "json"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "record_array",
+            "inputs": [
+              "sales.csv",
+              "inventory.csv"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "tests-for-roman-numerals",
+      "category": "algorithm",
+      "taxonomy": "test_generation",
+      "task": "Write a Python file that defines a function to_roman(n) converting 1-3999 to Roman numerals, plus a set of unittest tests covering the boundaries and the subtractive cases. Running the file must run the tests.",
+      "origin": "taxonomy",
+      "split": "confirmatory",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "unittest",
+          "def to_roman"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_contains",
+            "substrings": [
+              "ok"
+            ],
+            "inputs": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "tests-for-email-validator",
+      "category": "algorithm",
+      "taxonomy": "test_generation",
+      "task": "Write a Python file that defines is_valid_email(address) and a unittest suite covering valid addresses, missing @, missing domain and leading dots. Running the file must run the tests.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "unittest",
+          "def is_valid_email"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_contains",
+            "substrings": [
+              "ok"
+            ],
+            "inputs": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "tests-for-bank-account",
+      "category": "algorithm",
+      "taxonomy": "test_generation",
+      "task": "Write a Python file with a BankAccount class supporting deposit, withdraw and balance, raising ValueError on overdraft, plus unittest tests for each behaviour including the overdraft. Running the file must run the tests.",
+      "origin": "taxonomy",
+      "split": "confirmatory",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "unittest",
+          "class BankAccount"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_contains",
+            "substrings": [
+              "ok"
+            ],
+            "inputs": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "tests-for-date-parser",
+      "category": "algorithm",
+      "taxonomy": "test_generation",
+      "task": "Write a Python file defining parse_date(text) that accepts YYYY-MM-DD and DD/MM/YYYY and returns a date, with unittest tests covering both formats and a rejection case. Running the file must run the tests.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "unittest",
+          "def parse_date"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_contains",
+            "substrings": [
+              "ok"
+            ],
+            "inputs": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "tests-for-shopping-cart",
+      "category": "algorithm",
+      "taxonomy": "test_generation",
+      "task": "Write a Python file with a Cart class supporting add, remove and total with a percentage discount, plus unittest tests including removing something that is not there. Running the file must run the tests.",
+      "origin": "taxonomy",
+      "split": "confirmatory",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "unittest",
+          "class Cart"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_contains",
+            "substrings": [
+              "ok"
+            ],
+            "inputs": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "tests-for-temperature-convert",
+      "category": "algorithm",
+      "taxonomy": "test_generation",
+      "task": "Write a Python file defining celsius_to_fahrenheit and fahrenheit_to_celsius, with unittest tests covering freezing, boiling, and a round trip. Running the file must run the tests.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "unittest",
+          "celsius"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_contains",
+            "substrings": [
+              "ok"
+            ],
+            "inputs": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "tests-for-stack",
+      "category": "algorithm",
+      "taxonomy": "test_generation",
+      "task": "Write a Python file implementing a Stack class with push, pop, peek and is_empty, raising IndexError when popping an empty stack, plus unittest tests for all four. Running the file must run the tests.",
+      "origin": "taxonomy",
+      "split": "confirmatory",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "unittest",
+          "class Stack"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_contains",
+            "substrings": [
+              "ok"
+            ],
+            "inputs": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "tests-for-slugify",
+      "category": "algorithm",
+      "taxonomy": "test_generation",
+      "task": "Write a Python file defining slugify(text) that lowercases, strips punctuation and joins words with hyphens, plus unittest tests covering accents, repeated spaces and an empty string. Running the file must run the tests.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "unittest",
+          "def slugify"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_contains",
+            "substrings": [
+              "ok"
+            ],
+            "inputs": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "analyse-python-functions",
+      "category": "cli_tool",
+      "taxonomy": "static_analysis",
+      "task": "Write a Python script that reads sample_module.py from the current directory and prints a JSON array to stdout, one object per function defined in it, with the keys name and line.",
+      "origin": "taxonomy",
+      "split": "confirmatory",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "ast",
+          "json"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "record_array",
+            "inputs": [
+              "sample_module.py"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "analyse-long-lines",
+      "category": "cli_tool",
+      "taxonomy": "static_analysis",
+      "task": "Write a Python script that reads sample_module.py from the current directory and prints a JSON array of every line number longer than 79 characters.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "json"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "number_array",
+            "inputs": [
+              "sample_module.py"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "analyse-todo-comments",
+      "category": "cli_tool",
+      "taxonomy": "static_analysis",
+      "task": "Write a Python script that reads sample_module.py from the current directory and prints a JSON array to stdout with one object per TODO comment, each with the keys line and text.",
+      "origin": "taxonomy",
+      "split": "confirmatory",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "json"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "record_array",
+            "inputs": [
+              "sample_module.py"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "analyse-imports",
+      "category": "cli_tool",
+      "taxonomy": "static_analysis",
+      "task": "Write a Python script that reads sample_module.py from the current directory and prints a JSON array of the module names it imports, sorted and without duplicates.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "json"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "string_array",
+            "inputs": [
+              "sample_module.py"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "analyse-docstring-coverage",
+      "category": "cli_tool",
+      "taxonomy": "static_analysis",
+      "task": "Write a Python script that reads sample_module.py from the current directory and prints a JSON object to stdout with the keys functions, documented and coverage, where coverage is the fraction with a docstring.",
+      "origin": "taxonomy",
+      "split": "confirmatory",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "ast",
+          "json"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "flat_object",
+            "inputs": [
+              "sample_module.py"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "analyse-csv-schema",
+      "category": "cli_tool",
+      "taxonomy": "static_analysis",
+      "task": "Write a Python script that reads inventory.csv from the current directory and prints a JSON object to stdout mapping each column name to the type its values look like \u2014 one of integer, number or string.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "csv",
+          "json"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "flat_object",
+            "inputs": [
+              "inventory.csv"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "analyse-duplicate-lines",
+      "category": "cli_tool",
+      "taxonomy": "static_analysis",
+      "task": "Write a Python script that reads access.log from the current directory and prints a JSON object to stdout mapping each line that appears more than once to how many times it appears.",
+      "origin": "taxonomy",
+      "split": "confirmatory",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "json"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "numeric_map",
+            "inputs": [
+              "access.log"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "analyse-file-sizes",
+      "category": "cli_tool",
+      "taxonomy": "static_analysis",
+      "task": "Write a Python script that walks the current directory and prints a JSON object to stdout mapping each file name it finds to that file's size in bytes.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "json"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "numeric_map",
+            "inputs": [
+              "inventory.csv"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "synth-people-records",
+      "category": "data_processing",
+      "taxonomy": "synthetic_data",
+      "task": "Write a Python script that prints a JSON array of 20 made-up people to stdout, each an object with the keys name, email and age, where age is a whole number between 18 and 80 and every email contains an @.",
+      "origin": "taxonomy",
+      "split": "confirmatory",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "json",
+          "random"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "record_array",
+            "inputs": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "synth-timeseries",
+      "category": "data_processing",
+      "taxonomy": "synthetic_data",
+      "task": "Write a Python script that prints a JSON object to stdout mapping 30 consecutive dates in YYYY-MM-DD form to a plausible daily temperature in Celsius as a number.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "json"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "numeric_map",
+            "inputs": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "synth-csv-orders",
+      "category": "data_processing",
+      "taxonomy": "synthetic_data",
+      "task": "Write a Python script that prints 25 rows of made-up order data to stdout as CSV, with the header row order_id,customer,total and totals between 5 and 500.",
+      "origin": "taxonomy",
+      "split": "confirmatory",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "csv"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_contains",
+            "substrings": [
+              "order_id",
+              "customer",
+              "total"
+            ],
+            "inputs": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "synth-passwords",
+      "category": "data_processing",
+      "taxonomy": "synthetic_data",
+      "task": "Write a Python script that prints a JSON array of 10 random passwords to stdout, each at least 16 characters and containing an upper case letter, a digit and a symbol.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "json",
+          "random"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "string_array",
+            "inputs": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "synth-uuid-batch",
+      "category": "data_processing",
+      "taxonomy": "synthetic_data",
+      "task": "Write a Python script that prints a JSON array of 50 unique identifiers to stdout, each a UUID4 string.",
+      "origin": "taxonomy",
+      "split": "confirmatory",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "uuid",
+          "json"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "string_array",
+            "inputs": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "synth-lorem-paragraphs",
+      "category": "data_processing",
+      "taxonomy": "synthetic_data",
+      "task": "Write a Python script that prints a JSON array of 5 paragraphs of placeholder prose to stdout, each at least 200 characters long.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "json"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "string_array",
+            "inputs": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "synth-graph-edges",
+      "category": "data_processing",
+      "taxonomy": "synthetic_data",
+      "task": "Write a Python script that prints a JSON array to stdout describing a random connected graph of 12 nodes, one object per edge with the keys source and target.",
+      "origin": "taxonomy",
+      "split": "confirmatory",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "json",
+          "random"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "record_array",
+            "inputs": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "synth-invoice-lines",
+      "category": "data_processing",
+      "taxonomy": "synthetic_data",
+      "task": "Write a Python script that prints a JSON object to stdout with the keys invoice_number, total and currency, where total is the sum of a made-up set of line items.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "json"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "flat_object",
+            "inputs": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "classify-log-severity",
+      "category": "data_processing",
+      "taxonomy": "batch_classification",
+      "task": "Write a Python script that reads access.log from the current directory and prints a JSON object to stdout mapping each of the labels ok, client_error and server_error to how many requests fall in it, based on the status code.",
+      "origin": "taxonomy",
+      "split": "confirmatory",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "json"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "numeric_map",
+            "inputs": [
+              "access.log"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "classify-orders-by-size",
+      "category": "data_processing",
+      "taxonomy": "batch_classification",
+      "task": "orders.jsonl has one JSON object per line with a total field. Write a Python script that reads it from the current directory and prints a JSON object to stdout counting orders as small (under 50), medium (50 to 200) or large (over 200).",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "json"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "numeric_map",
+            "inputs": [
+              "orders.jsonl"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "classify-file-types",
+      "category": "data_processing",
+      "taxonomy": "batch_classification",
+      "task": "Write a Python script that lists the files in the current directory and prints a JSON object to stdout mapping each file extension to how many files have it.",
+      "origin": "taxonomy",
+      "split": "confirmatory",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "json"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "numeric_map",
+            "inputs": [
+              "inventory.csv"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "classify-sentiment-keywords",
+      "category": "data_processing",
+      "taxonomy": "batch_classification",
+      "task": "Write a Python script that reads notes.md from the current directory and prints a JSON object to stdout counting how many lines contain a word from a positive list, a negative list, or neither, using the labels positive, negative and neutral.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "json"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "numeric_map",
+            "inputs": [
+              "notes.md"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "classify-stock-levels",
+      "category": "data_processing",
+      "taxonomy": "batch_classification",
+      "task": "inventory.csv has a quantity column. Write a Python script that reads it from the current directory and prints a JSON array to stdout with one object per row holding sku and a level of out, low (1-9) or ok (10 or more).",
+      "origin": "taxonomy",
+      "split": "confirmatory",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "csv",
+          "json"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "record_array",
+            "inputs": [
+              "inventory.csv"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "classify-readings-anomalies",
+      "category": "data_processing",
+      "taxonomy": "batch_classification",
+      "task": "readings.csv has a value column. Write a Python script that reads it from the current directory and prints a JSON array to stdout of the rows whose value is more than two standard deviations from the mean, each object holding timestamp and value.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "csv",
+          "json"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "record_array",
+            "inputs": [
+              "readings.csv"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "classify-contacts-complete",
+      "category": "data_processing",
+      "taxonomy": "batch_classification",
+      "task": "Write a Python script that reads contacts.txt from the current directory and prints a JSON object to stdout counting entries as complete or incomplete, where complete means a name, an email and a phone number were all found.",
+      "origin": "taxonomy",
+      "split": "confirmatory",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "json"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "numeric_map",
+            "inputs": [
+              "contacts.txt"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "classify-sales-performance",
+      "category": "data_processing",
+      "taxonomy": "batch_classification",
+      "task": "sales.csv has region, product, units and unit_price columns. Write a Python script that reads it from the current directory and prints a JSON object to stdout labelling each region as above_average or below_average by revenue.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "csv",
+          "json"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "flat_object",
+            "inputs": [
+              "sales.csv"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "page-bar-chart",
+      "category": "web_app",
+      "taxonomy": "interactive_artifact",
+      "task": "Build a single self-contained HTML file that draws a labelled bar chart of weekly sales for Mon to Sun on a canvas, with the day names and the values visible as text on the page.",
+      "origin": "taxonomy",
+      "split": "confirmatory",
+      "band": null,
+      "expect": {
+        "artifact": "html",
+        "keywords": [
+          "canvas",
+          "getcontext"
+        ],
+        "checks": [
+          {
+            "kind": "html_behaviour",
+            "canvas_drawn": true,
+            "text_present": [
+              "Mon",
+              "Sun"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "page-analog-clock",
+      "category": "web_app",
+      "taxonomy": "interactive_artifact",
+      "task": "Build a single self-contained HTML file showing an analog clock on a canvas with hour, minute and second hands that move.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "html",
+        "keywords": [
+          "canvas",
+          "getcontext"
+        ],
+        "checks": [
+          {
+            "kind": "html_behaviour",
+            "canvas_drawn": true,
+            "frame_changes": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "page-unit-converter",
+      "category": "web_app",
+      "taxonomy": "interactive_artifact",
+      "task": "Build a single self-contained HTML file that converts between Celsius and Fahrenheit as you type, showing both values on the page.",
+      "origin": "taxonomy",
+      "split": "confirmatory",
+      "band": null,
+      "expect": {
+        "artifact": "html",
+        "keywords": [
+          "addeventlistener"
+        ],
+        "checks": [
+          {
+            "kind": "html_behaviour",
+            "text_present": [
+              "celsius"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "page-colour-picker",
+      "category": "web_app",
+      "taxonomy": "interactive_artifact",
+      "task": "Build a single self-contained HTML file with three sliders for red, green and blue that update a colour swatch and show the hex code as text.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "html",
+        "keywords": [
+          "addeventlistener",
+          "input"
+        ],
+        "checks": [
+          {
+            "kind": "html_behaviour",
+            "text_present": [
+              "#"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "page-countdown",
+      "category": "web_app",
+      "taxonomy": "interactive_artifact",
+      "task": "Build a single self-contained HTML file with a five minute countdown that starts on load and shows the remaining time as text.",
+      "origin": "taxonomy",
+      "split": "confirmatory",
+      "band": null,
+      "expect": {
+        "artifact": "html",
+        "keywords": [
+          "setinterval"
+        ],
+        "checks": [
+          {
+            "kind": "html_behaviour",
+            "frame_changes": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "page-progress-dashboard",
+      "category": "web_app",
+      "taxonomy": "interactive_artifact",
+      "task": "Build a single self-contained HTML file showing four labelled progress bars with their percentages written next to them as text.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "html",
+        "keywords": [
+          "style"
+        ],
+        "checks": [
+          {
+            "kind": "html_behaviour",
+            "text_present": [
+              "%"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "page-sortable-table",
+      "category": "web_app",
+      "taxonomy": "interactive_artifact",
+      "task": "Build a single self-contained HTML file with a table of six rows that sorts by a column when its header is clicked.",
+      "origin": "taxonomy",
+      "split": "confirmatory",
+      "band": null,
+      "expect": {
+        "artifact": "html",
+        "keywords": [
+          "addeventlistener",
+          "sort"
+        ],
+        "checks": [
+          {
+            "kind": "html_behaviour",
+            "text_present": [
+              "<"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "page-particle-field",
+      "category": "web_app",
+      "taxonomy": "interactive_artifact",
+      "task": "Build a single self-contained HTML file that animates a field of drifting particles on a canvas.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "html",
+        "keywords": [
+          "canvas",
+          "requestanimationframe"
+        ],
+        "checks": [
+          {
+            "kind": "html_behaviour",
+            "canvas_drawn": true,
+            "frame_changes": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "service-health-json",
+      "category": "api",
+      "taxonomy": "service_endpoint",
+      "task": "Write a Python HTTP server using only the standard library that serves GET /health and returns the JSON body {\"status\": \"ok\"}. Running the file must start it.",
+      "origin": "taxonomy",
+      "split": "confirmatory",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "http.server",
+          "json"
+        ]
+      }
+    },
+    {
+      "id": "service-echo",
+      "category": "api",
+      "taxonomy": "service_endpoint",
+      "task": "Write a Python HTTP server using only the standard library that accepts POST /echo and returns the request body back as JSON. Running the file must start it.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "http.server",
+          "json"
+        ]
+      }
+    },
+    {
+      "id": "service-counter",
+      "category": "api",
+      "taxonomy": "service_endpoint",
+      "task": "Write a Python HTTP server using only the standard library with GET /count, which returns how many times it has been called as JSON and increments on each call. Running the file must start it.",
+      "origin": "taxonomy",
+      "split": "confirmatory",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "http.server",
+          "json"
+        ]
+      }
+    },
+    {
+      "id": "service-static-files",
+      "category": "api",
+      "taxonomy": "service_endpoint",
+      "task": "Write a Python HTTP server using only the standard library that serves files from the current directory and returns a 404 with a JSON body for anything missing. Running the file must start it.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "http.server"
+        ]
+      }
+    },
+    {
+      "id": "service-notes-crud",
+      "category": "api",
+      "taxonomy": "service_endpoint",
+      "task": "Write a Python HTTP server using only the standard library that keeps notes in memory and supports GET /notes, POST /notes and DELETE /notes/{id}, all speaking JSON. Running the file must start it.",
+      "origin": "taxonomy",
+      "split": "confirmatory",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "http.server",
+          "json"
+        ]
+      }
+    },
+    {
+      "id": "service-random-quote",
+      "category": "api",
+      "taxonomy": "service_endpoint",
+      "task": "Write a Python HTTP server using only the standard library serving GET /quote, which returns a random quote from a built-in list as JSON. Running the file must start it.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "http.server",
+          "random"
+        ]
+      }
+    },
+    {
+      "id": "service-uptime",
+      "category": "api",
+      "taxonomy": "service_endpoint",
+      "task": "Write a Python HTTP server using only the standard library serving GET /uptime, which returns how many seconds it has been running as JSON. Running the file must start it.",
+      "origin": "taxonomy",
+      "split": "confirmatory",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "http.server",
+          "time"
+        ]
+      }
+    },
+    {
+      "id": "service-form-post",
+      "category": "api",
+      "taxonomy": "service_endpoint",
+      "task": "Write a Python HTTP server using only the standard library that serves an HTML form at GET / and echoes the submitted fields as JSON at POST /submit. Running the file must start it.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "http.server"
+        ]
+      }
+    },
+    {
+      "id": "kernel-run-length",
+      "category": "algorithm",
+      "taxonomy": "algorithmic_kernel",
+      "task": "Write a Python script defining encode(text) and decode(text) for run-length encoding, and when run, print a JSON object to stdout with the keys encoded and decoded for the input 'aaabbbcccd'.",
+      "origin": "taxonomy",
+      "split": "confirmatory",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "def encode",
+          "def decode"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "flat_object",
+            "inputs": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "kernel-primes",
+      "category": "algorithm",
+      "taxonomy": "algorithmic_kernel",
+      "task": "Write a Python script that prints a JSON array of every prime below 200 to stdout.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "json"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "number_array",
+            "inputs": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "kernel-levenshtein",
+      "category": "algorithm",
+      "taxonomy": "algorithmic_kernel",
+      "task": "Write a Python script defining distance(a, b) for Levenshtein edit distance, and when run, print a JSON object to stdout mapping the pairs kitten/sitting and flaw/lawn to their distances.",
+      "origin": "taxonomy",
+      "split": "confirmatory",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "def distance",
+          "json"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "numeric_map",
+            "inputs": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "kernel-matrix-multiply",
+      "category": "algorithm",
+      "taxonomy": "algorithmic_kernel",
+      "task": "Write a Python script that multiplies two 3x3 matrices without any third-party library and prints the result to stdout as a JSON array of arrays.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "json"
+        ]
+      }
+    },
+    {
+      "id": "kernel-balanced-brackets",
+      "category": "algorithm",
+      "taxonomy": "algorithmic_kernel",
+      "task": "Write a Python script defining is_balanced(text) for round, square and curly brackets, and when run, print a JSON object to stdout mapping four example strings to true or false.",
+      "origin": "taxonomy",
+      "split": "confirmatory",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "def is_balanced",
+          "json"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "flat_object",
+            "inputs": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "kernel-binary-search",
+      "category": "algorithm",
+      "taxonomy": "algorithmic_kernel",
+      "task": "Write a Python script defining search(items, target) as an iterative binary search returning the index or -1, and when run, print a JSON array of the results for four example lookups.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "def search",
+          "json"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "number_array",
+            "inputs": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "kernel-roman-numerals",
+      "category": "algorithm",
+      "taxonomy": "algorithmic_kernel",
+      "task": "Write a Python script defining to_roman(n) and from_roman(text), and when run, print a JSON object to stdout mapping 4, 9, 40 and 1994 to their Roman numerals.",
+      "origin": "taxonomy",
+      "split": "confirmatory",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "def to_roman",
+          "json"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "flat_object",
+            "inputs": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "kernel-word-ladder",
+      "category": "algorithm",
+      "taxonomy": "algorithmic_kernel",
+      "task": "Write a Python script that finds the shortest chain from 'cold' to 'warm' changing one letter at a time through a built-in word list, and prints the chain as a JSON array of strings to stdout.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "json"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_json_schema",
+            "schema": "string_array",
+            "inputs": []
+          }
+        ]
+      }
     }
   ]
 }

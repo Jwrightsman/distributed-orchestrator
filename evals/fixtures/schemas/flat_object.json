@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "a non-empty object of scalar fields",
+  "type": "object",
+  "minProperties": 1,
+  "additionalProperties": {
+    "type": [
+      "string",
+      "number",
+      "boolean",
+      "null"
+    ]
+  }
+}

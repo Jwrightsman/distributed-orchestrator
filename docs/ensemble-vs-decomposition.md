@@ -2,6 +2,16 @@
 
 _August 15, 2026. `qwen3.5:4b`, CPU-only, prompt set v3, one machine._
 
+> **This is the pilot, and it came out inconclusive.** The study designed to
+> settle it is pre-registered at
+> [`experiments/ensemble-vs-decomposition.md`](experiments/ensemble-vs-decomposition.md)
+> and has **not been run**. It differs from this one in three ways: it is paired
+> over a 36-item locked corpus rather than unpaired over one artifact, its
+> primary endpoint is success at equal compute rather than per attempt, and the
+> compute ratio between the arms is measured rather than assumed. Read that
+> document before running anything; read this one for what was actually
+> observed.
+
 The August 2026 external review's sharpest observation came from this project's
 own data: a labelled bar chart comes out right **10 times in 10**, and a
 playable Snake game **2 times in 10** — same model, same prompts, same harness.

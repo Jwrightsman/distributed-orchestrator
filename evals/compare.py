@@ -29,8 +29,17 @@ is what every future comparison should be judged against.
 
 import argparse
 import json
-from math import comb
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+# The exact tests, the interval estimates and the power arithmetic all live in
+# evals/stats.py now. They were duplicated here and in
+# scripts/ensemble_experiment.py, which is how two callers end up disagreeing
+# about what a p-value meant. Re-exported under their old names because this
+# module's public surface is what tests/test_eval_compare.py pins.
+from stats import mcnemar_exact_p, min_detectable  # noqa: E402,F401
 
 RESULTS = Path(__file__).parent / "results"
 
@@ -55,52 +64,6 @@ def load_run(run_id: str) -> tuple[dict, dict]:
         blob = json.loads(summary.read_text(encoding="utf-8"))
         meta = blob.get("meta", blob)
     return meta, records
-
-
-def mcnemar_exact_p(b: int, c: int, one_sided: bool = False) -> float:
-    """Exact McNemar on discordant counts: b regressions, c improvements.
-
-    Under the null the b+c prompts that changed are coin flips, so this is a
-    sign test. Exact rather than chi-square because these counts are small —
-    chi-square is not trustworthy below about 25 discordant pairs, and this
-    eval set has never produced that many.
-
-    **One-sided is the right test for a promote/delete decision**, and getting
-    this wrong matters. A candidate prompt set is proposed because someone
-    believes it is better, and it is only ever promoted on evidence of
-    improvement — a regression and a wash lead to the same action (delete). That
-    is a directional hypothesis.
-
-    Concretely: v1 -> v3 improved 9 prompts and regressed 2. One-sided that is
-    p = 0.033; two-sided it is p = 0.065. A two-sided gate at 0.05 would have
-    rejected the single best change ever made to this project, which took it
-    from 36% to 61% and is the current default. Two-sided is still reported, for
-    anyone asking the different question "did these two sets differ at all".
-    """
-    n = b + c
-    if n == 0:
-        return 1.0
-    if one_sided:
-        # P(at least c improvements | fair coin)
-        tail = sum(comb(n, i) for i in range(c, n + 1)) / (2 ** n)
-        return min(1.0, tail)
-    k = min(b, c)
-    tail = sum(comb(n, i) for i in range(k + 1)) / (2 ** n)
-    return min(1.0, 2 * tail)
-
-
-def min_detectable(n_discordant: int, alpha: float = 0.05) -> int | None:
-    """How many of n discordant pairs must fall one way to clear alpha.
-
-    This is the power statement. At the sample sizes this project actually runs,
-    it is usually the most useful line of output: it says, before you argue
-    about a result, how big the result would have had to be to mean anything.
-    """
-    for k in range(n_discordant + 1):
-        p = sum(comb(n_discordant, i) for i in range(k, n_discordant + 1)) / (2 ** n_discordant)
-        if p <= alpha:
-            return k
-    return None
 
 
 def compare(a_records: dict, b_records: dict, ids: list[str] | None = None) -> dict:

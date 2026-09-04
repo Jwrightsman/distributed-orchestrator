@@ -21,10 +21,18 @@ import scoring  # noqa: E402
 # ── prompt set ──────────────────────────────────────────────────────────────
 
 def test_prompt_set_is_valid_and_broad():
+    """The corpus is larger than the original 28. The size is not arbitrary.
+
+    It was chosen from the power analysis in `docs/eval-methodology.md`: at the
+    measured discordant rate of 0.643, n=28 could only detect a 38-point
+    difference at 80% power, and n=100 brings that to 21 points. The schema
+    checks live in `tests/test_eval_corpus.py`; this one keeps the historical
+    guarantees the original 28 items were written under.
+    """
     data = json.loads((EVALS_DIR / "prompts.json").read_text(encoding="utf-8"))
     prompts = data["prompts"]
 
-    assert 25 <= len(prompts) <= 30, "sprint calls for 25-30 prompts"
+    assert len(prompts) >= 100, "the corpus was grown to 100 items — see the power analysis"
 
     ids = [p["id"] for p in prompts]
     assert len(ids) == len(set(ids)), "prompt ids must be unique"
