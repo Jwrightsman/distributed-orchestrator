@@ -40,6 +40,7 @@ import ledger as ledger_module
 import routes_executions
 import server_state as state
 import sqlite_store
+import tracing
 from capability_evidence import CapabilityEvidenceStore
 from execution.artifacts import ArtifactStore
 from execution.attempts import AcceptedResultBroker, AttemptStore
@@ -336,6 +337,10 @@ class CoordinatorHarness:
         self.database = self.root / "events.db"
         self.clock = CoordinatorClock()
         self.faults = PersistenceFaultInjector()
+        # What a worker echoes back after a handout, exactly as node.py does.
+        # Empty unless the coordinator sent trace context, which it only does
+        # when tracing is switched on.
+        self.worker_trace_headers: dict[str, dict[str, str]] = {}
         self.session_tokens: dict[str, str] = {}
         self.session_ids: dict[str, str] = {}
         self.enrollment_ids: dict[str, str] = {}
@@ -544,6 +549,7 @@ class CoordinatorHarness:
         # globals are being restored under it.
         self.release_executions()
         self.quiesce()
+        tracing.unit_traces.clear()
         self.faults.disarm()
         _ACTIVE_INJECTOR = None
         for requester in self.requesters.values():
@@ -658,7 +664,20 @@ class CoordinatorHarness:
 
     def headers(self, label: str, *, token: str | None = None) -> dict[str, str]:
         resolved = token if token is not None else self.session_tokens.get(label, "")
-        return {"X-Node-Session": resolved} if resolved else {}
+        session = {"X-Node-Session": resolved} if resolved else {}
+        return {**session, **self.worker_trace_headers.get(label, {})}
+
+    def enable_tracing(self, *, export: bool = False) -> None:
+        """Switch tracing on for this coordinator only, and start clean."""
+        self.settings["tracing_enabled"] = True
+        self.settings["tracing_export"] = export
+        self._patch(tracing, "get_config", lambda: self.settings)
+        tracing.recorder.clear()
+        # Process-local and shared, so one harness must not inherit another's.
+        tracing.unit_traces.clear()
+
+    def spans(self) -> list[tracing.SpanRecord]:
+        return tracing.recorder.recent()
 
     def drain(self, label: str):
         return self.client.post(f"/nodes/{label}/drain", headers=self.headers(label))
@@ -694,6 +713,11 @@ class CoordinatorHarness:
         if response.status_code != 200:
             return None
         task = response.json()
+        # The worker's half of propagation, through the same function node.py
+        # calls: revalidate what arrived, and carry it on the next request.
+        echoed = tracing.worker_echo_headers(response.headers)
+        if echoed:
+            self.worker_trace_headers[label] = echoed
         if not task.get("attempt_id"):
             return None
         self.minted_secrets.add(task["nonce"])

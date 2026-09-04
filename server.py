@@ -39,6 +39,7 @@ import routes_projects
 import routes_run
 import routes_status
 import routes_try
+from tracing_middleware import TraceContextMiddleware
 from dashboard import router as dashboard_router
 from access_control import ViewerAccessMiddleware, warn_if_viewer_auth_unconfigured
 from config import CONFIG_FILE, get as get_config
@@ -174,6 +175,12 @@ async def _lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Mycelium", version=SERVER_VERSION, lifespan=_lifespan)
+# Added first, so it sits *inside* the access check: Starlette makes the
+# last-registered middleware the outermost one. A request that fails viewer
+# authentication is refused before anything records a span for it. With
+# `tracing_enabled` false this middleware returns on its first line and costs
+# one boolean read.
+app.add_middleware(TraceContextMiddleware)
 app.add_middleware(ViewerAccessMiddleware)
 
 

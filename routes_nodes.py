@@ -40,6 +40,7 @@ from node_enrollments import (
 )
 from node_sessions import DuplicateNodeSession, NodeSessionDescriptorConflict
 import server_state as state
+import tracing
 import worker_protocol
 from server_state import (
     NodeRegistration,
@@ -1199,6 +1200,12 @@ async def heartbeat_node(node_id: str, request: Request):
             },
             headers={"X-Node-Session-Required": "true"},
         )
+    tracing.annotate_request(
+        request,
+        node_label=session_record.node_id,
+        session_id=session_record.session_id,
+        enrollment_id=session_record.enrollment_id,
+    )
     node = nodes[session_record.node_id]
     node.update(
         _lifetime_summary(
@@ -1239,6 +1246,12 @@ async def drain_node(node_id: str, request: Request):
             },
             headers={"X-Node-Session-Required": "true"},
         )
+    tracing.annotate_request(
+        request,
+        node_label=session_record.node_id,
+        session_id=session_record.session_id,
+        enrollment_id=session_record.enrollment_id,
+    )
     nodes[session_record.node_id]["draining"] = True
     state.waiting_nodes.pop(session_record.node_id, None)
     _emit("node_draining", {
@@ -1468,6 +1481,23 @@ async def next_task(node_id: str, request: Request):
                             "title", task["task_id"]
                         )
                     task_inflight[task["task_id"]] = task
+                    # A reassigned unit stays in the trace it started in. The
+                    # unit is only known now, which is after the span opened.
+                    tracing.continue_unit_trace(request, task["task_id"])
+                    tracing.annotate_request(
+                        request,
+                        task_id=task["task_id"],
+                        attempt_id=task["attempt_id"],
+                        execution_id=task.get("execution_id"),
+                        unit_id=task.get("execution_unit_id"),
+                        unit_kind=task.get("execution_unit_kind"),
+                        node_label=node_id,
+                        session_id=session_record.session_id,
+                        enrollment_id=session_record.enrollment_id,
+                        descriptor_version=session_record.capability_descriptor_version,
+                        descriptor_hash=session_record.capability_descriptor_hash,
+                        placement="distributed",
+                    )
                     _emit("node_busy", {
                         "node_id": node_id,
                         "enrollment_id": session_record.enrollment_id,
@@ -1575,6 +1605,23 @@ async def submit_result(task_id: str, result: TaskResult, request: Request):
             },
             headers={"X-Node-Session-Required": "true"},
         )
+    # Identifiers only, and only ones the coordinator already holds. This is
+    # what makes a trace worth following; none of it is read by settlement.
+    # The unit's own trace wins over whatever the worker echoed, so a worker
+    # that propagates nothing, or propagates some other trace, still leaves the
+    # coordinator one readable story per unit.
+    tracing.continue_unit_trace(request, task_id)
+    tracing.annotate_request(
+        request,
+        task_id=task_id,
+        node_label=session_record.node_id,
+        session_id=session_record.session_id,
+        enrollment_id=session_record.enrollment_id,
+        attempt_id=result.attempt_id,
+        execution_id=result.execution_id,
+        unit_id=result.execution_unit_id,
+        unit_kind=result.execution_unit_kind,
+    )
     pending = task_inflight.get(task_id)
     try:
         pending, outcome, _task, trace_id = _settle_and_publish(
@@ -1778,6 +1825,18 @@ async def stream_task_tokens(task_id: str, batch: TokenBatch, request: Request):
     signal there is.
     """
     session_record = _check_node_session(request, batch.node_id)
+    tracing.continue_unit_trace(request, task_id)
+    tracing.annotate_request(
+        request,
+        task_id=task_id,
+        node_label=session_record.node_id,
+        session_id=session_record.session_id,
+        enrollment_id=session_record.enrollment_id,
+        attempt_id=batch.attempt_id,
+        execution_id=batch.execution_id,
+        unit_id=batch.execution_unit_id,
+        unit_kind=batch.execution_unit_kind,
+    )
     if session_record.node_id not in nodes:
         raise HTTPException(
             status_code=401,

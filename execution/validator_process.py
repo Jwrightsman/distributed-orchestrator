@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Literal, Mapping, Protocol, Sequence
 
+import tracing
 from execution.artifacts import ArtifactEntryV1
 from execution.contracts import OutputContractV1
 from execution.validator_protocol import (
@@ -230,6 +231,13 @@ def _sanitized_environment(work_directory: Path) -> dict[str, str]:
         environment.update({"TEMP": temporary, "TMP": temporary})
     else:
         environment.update({"TMPDIR": temporary, "LANG": "C.UTF-8"})
+    # Trace context reaches the runner as environment, not payload. The control
+    # message is deliberately minimal (ADR 0013) and this adds nothing to it -
+    # a stricter reading of "nothing beyond the two headers' worth of context"
+    # than two more request fields would have been. Both values have already
+    # been validated by `tracing.parse_trace_context`; neither is worker-
+    # supplied text and neither is read by the validator's verdict.
+    environment.update(tracing.subprocess_environment())
     return environment
 
 
