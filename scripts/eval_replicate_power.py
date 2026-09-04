@@ -54,20 +54,36 @@ PROMPTS = REPO_ROOT / "evals" / "prompts.json"
 # cheapest arm, and the one a banding or noise-floor run uses.
 DIRECT_MINUTES = 6.1
 
-# (k, n) pairs. The three at 180 runs per arm are the matched-cost comparison:
-# the same inference budget split four ways.
+# The DAG arm, mean over the 140 recorded item-runs in evals/results/. The arm
+# a study of the shipping architecture would actually use, and the reason the
+# cheap arm is quoted first.
+DECOMPOSITION_MINUTES = 29.3
+
+# (k, n) pairs, matching the table in
+# docs/experiments/replicate-endpoint-design.md so the document can be checked
+# rather than believed. The two sizes that exist are n = 36 (the frozen
+# confirmatory set) and n = 100 (the whole corpus); n = 187 is on the list
+# because it is what a single-run design needs, and it is 87 prompts that
+# nobody has written.
 DEFAULT_DESIGNS = [
     (1, 36),
-    (1, 100),
-    (1, 187),
+    (2, 36),
     (3, 36),
-    (3, 60),
-    (5, 24),
     (5, 36),
-    (5, 50),
-    (10, 18),
     (10, 36),
+    (1, 100),
+    (2, 100),
+    (3, 100),
+    (1, 187),
 ]
+
+# The n a design can actually be run at today, and why. Printed with the row so
+# a table of powers cannot be read without the constraint that decides it.
+REACHABLE = {
+    36: "the frozen confirmatory set",
+    100: "the whole corpus, once",
+    187: "NOT REACHABLE - 87 prompts that do not exist",
+}
 
 
 def banded_rates(path: Path = PROMPTS) -> list[float]:
@@ -95,8 +111,8 @@ def main() -> int:
     ap.add_argument("--delta", type=float, default=0.15,
                     help="target effect in per-item pass rate (default 0.15)")
     ap.add_argument("--alpha", type=float, default=0.05)
-    ap.add_argument("--trials", type=int, default=2000,
-                    help="simulated studies per design (default 2000)")
+    ap.add_argument("--trials", type=int, default=3000,
+                    help="simulated studies per design (default 3000)")
     ap.add_argument("--seed", type=int, default=20260904)
     ap.add_argument("--minutes", type=float, default=DIRECT_MINUTES,
                     help=f"minutes per item-run (default {DIRECT_MINUTES}, the direct arm)")
@@ -120,8 +136,8 @@ def main() -> int:
 
     label = f"power@{args.delta:.0%}"
     header = (
-        f"{'k':>3}  {'n':>5}  {'runs/arm':>9}  {'both arms':>10}  "
-        f"{'replicate ' + label:>18}  {'k=1 same cost':>15}  {'better':>8}"
+        f"{'k':>3}  {'n':>5}  {'runs/arm':>9}  {'direct':>8}  {'decomp':>8}  "
+        f"{label:>9}  {'k=1 same cost':>14}  {'better':>7}  reachable today"
     )
     print(header)
     print("-" * len(header))
@@ -136,19 +152,25 @@ def main() -> int:
         matched = stats.replicate_power(
             runs, 1, args.delta, rates, trials=args.trials, seed=args.seed, alpha=args.alpha
         )
-        hours = 2 * runs * args.minutes / 60
         if k == 1:
             verdict = "-"
         elif abs(power - matched) < 0.02:
             verdict = "tie"
         else:
             verdict = "replicates" if power > matched else "items"
-        print(f"{k:>3}  {n:>5}  {runs:>9}  {hours:>8.0f} h  {power:>18.3f}  "
-              f"{matched:>15.3f}  {verdict:>8}")
+        print(f"{k:>3}  {n:>5}  {runs:>9}  {2 * runs * args.minutes / 60:>6.0f} h  "
+              f"{2 * runs * DECOMPOSITION_MINUTES / 60:>6.0f} h  {power:>9.3f}  "
+              f"{matched:>14.3f}  {verdict:>7}  {REACHABLE.get(n, '?')}")
     print()
     print("Each row spends the same inference two ways: k runs on n items, or one run")
-    print("on k*n items. That is the comparison. A replicate design that only beats a")
-    print("SMALLER single-run study has shown nothing about efficiency.")
+    print("on k*n items. That is the comparison, and it comes out a tie or within about")
+    print("two standard errors of one: power depends on n*k, the total run count, and")
+    print("barely on how it is split. Read the `better` column with the Monte Carlo")
+    print("error below in hand before calling any row a difference.")
+    print()
+    print("So replicates buy little or nothing per unit of inference. What they buy is")
+    print("resolution inside a corpus that cannot grow -- the confirmatory 36 are frozen")
+    print("by a digest, and k is the only lever a pre-registered study on that set has.")
     print()
     print("Monte Carlo error at these trial counts is about "
           f"{(0.25 / args.trials) ** 0.5:.3f} on a power near 0.5, so differences")
