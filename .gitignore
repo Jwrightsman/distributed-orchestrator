@@ -17,3 +17,8 @@ scripts/demo_results/
 # cheap price for a claim someone can audit.
 !scripts/showcase_results/
 !scripts/showcase_results/*.jsonl
+
+# Artifacts generated while banding corpus items. The bands themselves are
+# committed in evals/prompts.json; the thousands of generated files behind
+# them are not.
+evals/banding/
