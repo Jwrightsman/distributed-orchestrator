@@ -515,15 +515,23 @@ _CANVAS_DRAWN_JS = """
 _TEXT_VISIBLE_JS = """
 (needle) => {
   const wanted = String(needle).toLowerCase();
+  // Reading an element's own computed style is not enough: an <h2>GAME OVER</h2>
+  // inside a display:none overlay reports itself visible, which is one of the
+  // three defects that made the showcase checker score working games as broken.
+  // checkVisibility() answers the question about the whole ancestor chain;
+  // getClientRects() is the fallback, and unlike offsetParent it does not treat
+  // a position:fixed element as hidden.
+  const visible = (el) => {
+    if (!el) return false;
+    if (el.tagName === 'BODY') return true;
+    if (typeof el.checkVisibility === 'function') return el.checkVisibility();
+    return el.getClientRects().length > 0;
+  };
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
   while (walker.nextNode()) {
     const node = walker.currentNode;
-    const parent = node.parentElement;
-    if (!parent) continue;
-    // offsetParent is null for anything inside a display:none ancestor, which
-    // is what a computed-style read on the element itself gets wrong.
-    if (!parent.offsetParent && parent.tagName !== 'BODY') continue;
-    if ((node.textContent || '').toLowerCase().includes(wanted)) return true;
+    if (!(node.textContent || '').toLowerCase().includes(wanted)) continue;
+    if (visible(node.parentElement)) return true;
   }
   return false;
 }

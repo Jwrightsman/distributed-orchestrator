@@ -384,3 +384,55 @@ def test_the_behaviour_check_declares_itself_non_deterministic(tmp_path):
     behaviour = [c for c in result.checks if c.kind == "html_behaviour"][0]
     assert behaviour.deterministic is False
     assert result.deterministic is False
+
+
+@pytest.mark.skipif(not _has_playwright(), reason="playwright is not installed")
+def test_text_inside_a_hidden_overlay_does_not_count_as_visible(tmp_path):
+    """One of the three defects that made the showcase checker call games broken.
+
+    An `<h2>GAME OVER</h2>` inside a `display:none` overlay reports itself
+    visible if you read the element's own computed style. The whole ancestor
+    chain is what decides.
+    """
+    path = write(
+        tmp_path, "overlay.html",
+        "<!DOCTYPE html><html><body><p>playing</p>"
+        "<div style='display:none'><h2>GAME OVER</h2></div></body></html>",
+    )
+    item = make_item(expect={
+        "artifact": "html", "keywords": [],
+        "checks": [{"kind": "html_behaviour", "forbidden_text": ["GAME OVER"],
+                    "text_present": ["playing"]}],
+    })
+    result = grading.grade(item, [path])
+    assert result.graded and result.passed, result.checks
+
+
+@pytest.mark.skipif(not _has_playwright(), reason="playwright is not installed")
+def test_forbidden_text_that_is_actually_visible_fails(tmp_path):
+    path = write(
+        tmp_path, "dead.html",
+        "<!DOCTYPE html><html><body><h2>GAME OVER</h2></body></html>",
+    )
+    item = make_item(expect={
+        "artifact": "html", "keywords": [],
+        "checks": [{"kind": "html_behaviour", "forbidden_text": ["GAME OVER"]}],
+    })
+    result = grading.grade(item, [path])
+    assert result.graded and not result.passed
+
+
+@pytest.mark.skipif(not _has_playwright(), reason="playwright is not installed")
+def test_fixed_position_text_still_counts_as_visible(tmp_path):
+    """`offsetParent` is null for a position:fixed element, which is not hidden."""
+    path = write(
+        tmp_path, "fixed.html",
+        "<!DOCTYPE html><html><body>"
+        "<div style='position:fixed;top:0;left:0'>Mon</div></body></html>",
+    )
+    item = make_item(expect={
+        "artifact": "html", "keywords": [],
+        "checks": [{"kind": "html_behaviour", "text_present": ["Mon"]}],
+    })
+    result = grading.grade(item, [path])
+    assert result.graded and result.passed, result.checks

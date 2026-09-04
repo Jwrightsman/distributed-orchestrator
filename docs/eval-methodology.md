@@ -424,8 +424,13 @@ over 140 recorded item-runs.
 
 ### The target effect, stated so it can be argued with
 
-**15 percentage points** — a change that takes the suite from 57% to 72%. That
-is roughly the size of v1 → v3, the best prompt change this project has made.
+**15 percentage points** — a change that takes the suite from 57% to 72%.
+
+It is deliberately smaller than v1 → v3, which moved 10/28 to 17/28: seven
+prompts, **25 points**, and the best prompt change this project has ever made.
+A target set at the size of the best change ever made is a target that only
+catches lightning twice. Fifteen points is the size of an ordinary good change,
+which is the thing prompt tuning needs to be able to see.
 
 **Detecting it at 80% power needs n = 187, which is 91 hours for one run and
 182 hours for a comparison.** Seven and a half days of continuous CPU on the

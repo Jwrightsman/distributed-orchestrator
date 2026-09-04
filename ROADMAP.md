@@ -132,8 +132,9 @@ two.** It was a significance threshold at the observed churn, not a power calcul
 runs): **n=28 detects 38.4 points ≈ 10.8 prompts; n=100 detects 20.6 points.**
 
 **Growing the corpus did not fully unblock prompt tuning, and no achievable corpus does.**
-Detecting a 15-point change — about the size of v1 → v3 — needs **n = 187**, which is 91 hours per
-run and 182 hours per comparison on the reference machine. That is not proposed. What 100 items
+Detecting a 15-point change — smaller than v1 → v3's 25 points, and about the size of an ordinary
+good change — needs **n = 187**, which is 91 hours per run and 182 hours per comparison on the
+reference machine. That is not proposed. What 100 items
 buys is the ability to resolve a *large* change (an architecture swap, a model change, a prompt
 rewrite that moves a fifth of the set) for about four days of CPU, instead of spending four days on
 a question the instrument could never answer. The remaining lever is replicates per item with a
