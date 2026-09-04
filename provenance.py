@@ -8,8 +8,21 @@ in-toto draw exactly that line; this draws it too.
 What an envelope binds together, from facts that already existed separately:
 the execution and its accepted attempts and receipts, the producing enrollment
 and its node label at the time, the capability descriptor version and hash, the
-executor and worker protocol, the selected model, the validators that ran and
-their outcomes, and the sealed per-file artifact hashes.
+executor and worker protocol, the selected model and the sampling parameters it
+was asked for, the validators that ran and their outcomes, and the sealed
+per-file artifact hashes.
+
+The `sampling` block is scoped rather than asserted. It records the temperature
+and seed the *coordinator* was configured with when the envelope sealed, says
+so in its own `scope` field, and never speaks for a distributed producer: that
+machine reads its own configuration and the worker protocol does not carry it
+back, so `producer_sampling` goes in `unknown_facts` whenever a producer
+exists. A seed set but not shown to be honoured is `pinned: false` and adds
+`sampling_seed_honoured` — see `sampling.py` for what is verified and what is
+assumed. The block is **additive within envelope version 1**, on the same
+reasoning ADR 0017 already applies to the audit bundle: envelopes sealed before
+it keep their stored payload and their digest verifies unchanged, and a reader
+that does not know the key still reads every field it always did.
 
 Three constraints shape it:
 
@@ -64,6 +77,20 @@ UNKNOWN_WORKER_PROTOCOL_VERSION = "worker_protocol_version"
 UNKNOWN_MODEL_DIGEST = "model_digest"
 UNKNOWN_MODEL_VARIANT = "model_variant"
 UNKNOWN_VALIDATORS = "validators"
+UNKNOWN_SAMPLING = "sampling_parameters"
+UNKNOWN_SEED_HONOURED = "sampling_seed_honoured"
+UNKNOWN_PRODUCER_SAMPLING = "producer_sampling"
+
+# The scope of the envelope's sampling block, said in the envelope itself.
+# A distributed producer reads its own configuration and the worker protocol
+# does not carry it back, so the coordinator knows what *it* was configured
+# with and nothing more. Recording that as the producer's setting would be a
+# guess, which is the one thing this envelope does not do.
+SAMPLING_SCOPE = (
+    "the coordinator configuration in force when this envelope sealed. A "
+    "distributed producer applies its own configuration and does not report "
+    "it, so this pins the locally executed path only."
+)
 
 
 def canonical_json(payload: Any) -> str:
@@ -307,6 +334,42 @@ class ProvenanceEnvelopeStore:
 
     # ── building and recording ───────────────────────────────────────
 
+    @staticmethod
+    def _sampling(
+        sampling: Mapping[str, Any] | None, producers: Sequence[Mapping[str, Any]]
+    ) -> tuple[dict[str, Any], list[str]]:
+        """How the generator was configured, and how far that claim reaches.
+
+        Three separate absences, kept separate because they mean different
+        things. `sampling_parameters` means nothing was pinned at all — the
+        shipping default, where Ollama applies its own temperature and seed.
+        `sampling_seed_honoured` means a seed was set but has not been shown to
+        be honoured by the runner for this model, so the generator is not
+        actually fixed (`sampling.py`). `producer_sampling` means a distributed
+        attempt settled this execution, and what that machine sampled with is
+        not carried on its receipt — the same reason `model_variant` is
+        unknown whenever there is a producer.
+        """
+        record = dict(sampling or {})
+        temperature = record.get("temperature")
+        seed = record.get("seed")
+        honouring = record.get("seed_honouring")
+        payload = {
+            "temperature": None if temperature is None else float(temperature),
+            "seed": None if seed is None else int(seed),
+            "seed_honouring": honouring,
+            "pinned": bool(record.get("pinned", False)),
+            "scope": SAMPLING_SCOPE,
+        }
+        unknown: list[str] = []
+        if payload["temperature"] is None and payload["seed"] is None:
+            unknown.append(UNKNOWN_SAMPLING)
+        elif not payload["pinned"]:
+            unknown.append(UNKNOWN_SEED_HONOURED)
+        if producers:
+            unknown.append(UNKNOWN_PRODUCER_SAMPLING)
+        return payload, unknown
+
     def build_payload(
         self,
         con: sqlite3.Connection,
@@ -315,8 +378,11 @@ class ProvenanceEnvelopeStore:
         manifest: Any,
         validators: Sequence[Mapping[str, Any]] | None,
         created_at: float,
+        sampling: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         producers, unknown = self._producers(con, execution_id)
+        sampling_record, sampling_unknown = self._sampling(sampling, producers)
+        unknown.extend(sampling_unknown)
 
         validator_records: list[dict[str, Any]] = []
         for item in validators or ():
@@ -361,6 +427,7 @@ class ProvenanceEnvelopeStore:
                 "file_count": len(entries),
                 "entries": entries,
             },
+            "sampling": sampling_record,
             "created_at": created_at,
             "unknown_facts": sorted(set(unknown)),
             # Said in the record itself, not only in the docs, because an
@@ -379,6 +446,7 @@ class ProvenanceEnvelopeStore:
         manifest: Any,
         validators: Sequence[Mapping[str, Any]] | None = None,
         created_at: float | None = None,
+        sampling: Mapping[str, Any] | None = None,
     ) -> ProvenanceEnvelopeRecord:
         """Create the envelope for one execution, idempotently."""
 
@@ -401,6 +469,7 @@ class ProvenanceEnvelopeStore:
                     manifest=manifest,
                     validators=validators,
                     created_at=moment,
+                    sampling=sampling,
                 )
                 envelope_json = canonical_json(payload)
                 if len(envelope_json.encode("utf-8")) > MAX_ENVELOPE_JSON_BYTES:

@@ -99,10 +99,16 @@ checks.
 
 ```bash
 python scripts/eval_controls.py       # does the instrument detect anything? (no model needed)
-python scripts/eval_power.py          # what can it see, and what would seeing less cost
+python scripts/eval_power.py          # what can it see, and what a lower noise floor would buy
+python scripts/eval_replicate_power.py  # k runs on n items, against one run on k*n items
 python scripts/eval_band_corpus.py --from-results   # difficulty bands from the committed runs
 python scripts/eval_study_summary.py <study_dir> --paired <arm_a> <arm_b>
 ```
+
+None of those runs a model. The six banded `web_app` items carry
+`known_suspect: true`, because their evidence predates the HTML execution
+check being corrected — treat any `web_app` band as an upper bound until it is
+re-banded with `--live`.
 
 `evals/split.lock.json` freezes the 36-item confirmatory set with a digest, and
 `tests/test_eval_corpus.py` fails if it moves. **The confirmatory set is for
@@ -214,6 +220,14 @@ power depends on — not the item count directly. Every figure in
 `docs/eval-methodology.md` rests on it, and it comes from a single pair of runs
 (95% CI 0.46–0.79). A second identical-configuration pair is the cheapest way to
 tighten it, and worth more than most prompt experiments.
+
+**And lowering it is worth exactly what growing the corpus is worth**, since
+the detectable effect goes as √(ψ/n). `config.json` can now pin `temperature`
+and `seed` — both unset by default, so nothing about a normal run changes —
+and whether that lowers ψ is unmeasured.
+`docs/experiments/noise-floor-under-pinned-sampling.md` pre-registers the
+17-hour measurement; `python scripts/eval_power.py` prints what each possible
+answer would buy, with every unmeasured floor marked as a projection.
 
 ## Notes
 

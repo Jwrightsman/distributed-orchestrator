@@ -501,6 +501,8 @@ Numbers, not adjectives. Every one is reproducible with a command in this repo.
 
 It is also a warning about reading the category columns: `api` went 3/4 → 0/4 and `vague` went 2/4 → 4/4 with *nothing changed*. A category here has 4–6 prompts, and at that size no result reaches significance on its own.
 
+**The `web` column is weaker than the rest, and not only because it is small.** Every figure in it was produced under the pre-correction grader, where an HTML artifact counted as executing if it loaded without throwing. Under that check `web-snake` passed 5 of the 5 committed runs; `scripts/showcase_reliability.py`, asking the same model for the same artifact, measured a playable Snake at 2 of 10. The corpus records this on each affected item — the six banded `web_app` items carry `known_suspect: true` in [`evals/prompts.json`](evals/prompts.json) — and it will correct itself the first time they are re-banded under the current grader. Until then, treat 2/6 and 3/6 as upper bounds. See [`docs/eval-methodology.md`](docs/eval-methodology.md) §1.1.
+
 Reproduce: `python evals/run_evals.py` (~20 h on CPU, resumable), then `python evals/compare.py <run_a> <run_b>`, which does the arithmetic — churn, an exact one-sided McNemar test, and the power of the comparison. Raw results are committed under [`evals/results/`](evals/results/).
 
 **Distribution over the internet costs about 2%.** Measured from a laptop in Indiana to an orchestrator in Germany (`scripts/wan_bench.py`):

@@ -38,7 +38,10 @@ produced a confident wrong answer; running the artifact produced the right one.
 obvious next move and it got a full eval run (prompt set v5, Aug 10). The
 planner change worked mechanically — mean subtasks 3.68 → 2.46 — and the
 overall score did not move (16/28 vs v3's 17/28). Its apparent web_app gain,
-3/6 → 5/6, is four prompts flipping out of six, p ≈ 0.63. See `prompts/v3.py`:
+3/6 → 5/6, is four prompts flipping out of six, p ≈ 0.63. **Both of those
+web_app figures were computed under the pre-correction grader**, where an HTML
+artifact counted as executing if it loaded without throwing — so they are upper
+bounds as well as noise (`docs/eval-methodology.md` §1.1). See `prompts/v3.py`:
 between any two eval runs 11–18 of 28 prompts flip outcome, so that gain is
 noise. **v5 was deleted.** Reducing coupling *inside* the plan is not the fix.
 
@@ -52,7 +55,10 @@ left for a prompt to say.
 
 A one-shot, fully-working, interactive game is simply past what a 4B model does
 reliably. The eval set agrees: `web_app` is 3/6 even after tuning, and the games
-are the hardest thing in it.
+are the hardest thing in it — and that 3/6 is itself an **upper bound**, since
+it was scored before the HTML execution check was corrected. The behavioural
+checker that produced the 2/10 above is the stricter of the two, and it is the
+one this document's conclusion rests on.
 
 ## The fix: change the artifact, not the prompt
 

@@ -5,7 +5,19 @@ import re
 
 import httpx
 
+import sampling as sampling_mod
 from config import get as get_config
+
+
+def _sampling_options(cfg: dict) -> dict:
+    """Configured temperature and seed, as keys for Ollama's `options` object.
+
+    Empty when neither is configured, which is the shipping default: the
+    request then carries no temperature and no seed and Ollama applies its own
+    (0.8 and 0). Writing those defaults in would make an unset parameter
+    indistinguishable from a chosen one in every downstream record.
+    """
+    return sampling_mod.from_config(cfg).ollama_options()
 
 
 def _cfg():
@@ -128,7 +140,13 @@ async def _generate_provider(prompt: str, system: str, cfg: dict) -> str:
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-    payload = {"model": model, "messages": messages}
+    # An OpenAI-compatible API takes these at the top level rather than in an
+    # `options` object. Absent unless configured, same as the Ollama path.
+    payload = {
+        "model": model,
+        "messages": messages,
+        **sampling_mod.from_config(cfg).provider_fields(),
+    }
 
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(f"{base_url}/chat/completions", json=payload, headers=headers)
@@ -175,7 +193,10 @@ async def generate(
         "model": model,
         "prompt": prompt,
         "stream": False,
-        "options": {"num_ctx": cfg.get("context_tokens", 8192)},
+        "options": {
+            "num_ctx": cfg.get("context_tokens", 8192),
+            **_sampling_options(cfg),
+        },
     }
     if system:
         payload["system"] = system
@@ -245,7 +266,10 @@ async def generate_stream(prompt: str, system: str = "", model: str | None = Non
         "model": model,
         "prompt": prompt,
         "stream": True,
-        "options": {"num_ctx": cfg.get("context_tokens", 8192)},
+        "options": {
+            "num_ctx": cfg.get("context_tokens", 8192),
+            **_sampling_options(cfg),
+        },
     }
     if system:
         payload["system"] = system

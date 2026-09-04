@@ -17,6 +17,7 @@ implementation. Three things are pinned:
    always carry the contingency table and n.
 """
 
+import random
 import sys
 from pathlib import Path
 
@@ -268,3 +269,360 @@ def test_unpaired_test_refuses_an_empty_arm():
 def test_paired_test_refuses_runs_with_nothing_in_common():
     with pytest.raises(ValueError):
         stats.paired_test({"a": True}, {"b": False})
+
+
+# -- the power curve as a function of psi ------------------------------------
+
+# The table published in docs/eval-methodology.md section 7, at psi = 18/28.
+# Copied from the document, not from the implementation: the point of the
+# parameterisation is that it is a generalisation of what PR #71 published, and
+# a generalisation that moved the published numbers would be a rewrite.
+PUBLISHED_CURVE = [
+    # n,   detectable effect, = items, power at 15 points
+    (28, 0.384, 10.8, 0.19),
+    (40, 0.325, 13.0, 0.26),
+    (50, 0.290, 14.5, 0.32),
+    (60, 0.265, 15.9, 0.37),
+    (80, 0.230, 18.4, 0.46),
+    (100, 0.206, 20.6, 0.55),
+    (120, 0.188, 22.6, 0.62),
+    (160, 0.162, 26.0, 0.74),
+    (200, 0.145, 29.0, 0.82),
+    (300, 0.118, 35.4, 0.94),
+]
+
+
+def test_the_measured_rate_is_the_one_that_was_measured():
+    """18 of 28. Nothing here may quietly become a different measured floor."""
+    assert stats.MEASURED_DISCORDANT_RATE == 18 / 28
+    assert round(stats.MEASURED_DISCORDANT_RATE, 3) == 0.643
+
+
+def test_the_psi_grid_reproduces_the_published_table_at_the_measured_rate():
+    """Every published cell, to the precision it was published at."""
+    assert PUBLISHED_CURVE, "the published table is empty — this test read nothing"
+    cells = stats.psi_grid(
+        [row[0] for row in PUBLISHED_CURVE], [stats.MEASURED_DISCORDANT_RATE], 0.15
+    )
+    assert len(cells) == len(PUBLISHED_CURVE)
+    for cell, (n, mde, items, power) in zip(cells, PUBLISHED_CURVE):
+        assert cell.n == n
+        assert cell.projected is False
+        assert cell.mde == pytest.approx(mde, abs=5e-4)
+        assert cell.mde_items == pytest.approx(items, abs=0.05)
+        assert cell.power_at_delta == pytest.approx(power, abs=5e-3)
+
+
+def test_power_curve_and_psi_grid_agree_at_the_measured_rate():
+    """The grid is the old curve with one more axis, not a second implementation."""
+    sizes = [28, 100, 300]
+    old = stats.power_curve(sizes, stats.MEASURED_DISCORDANT_RATE, 0.15)
+    new = stats.psi_grid(sizes, [stats.MEASURED_DISCORDANT_RATE], 0.15)
+    assert old and new
+    for row, cell in zip(old, new):
+        assert row["n"] == cell.n
+        assert row["mde"] == pytest.approx(cell.mde)
+        assert row["power_at_delta"] == pytest.approx(cell.power_at_delta)
+
+
+def test_a_lower_floor_reaches_the_fifteen_point_target_the_measured_one_cannot():
+    """The whole reason the curve is parameterised.
+
+    At the measured floor a 15-point change needs 187 items. Halving psi is
+    worth what doubling n is worth, so at psi = 0.32 the corpus this project
+    already has becomes sufficient. That is a projection and the grid says so.
+    """
+    measured = stats.psi_grid([100], [stats.MEASURED_DISCORDANT_RATE], 0.15)[0]
+    halved = stats.psi_grid([100], [0.32], 0.15)[0]
+    assert measured.target_reachable is False
+    assert halved.target_reachable is True
+    assert measured.projected is False
+    assert halved.projected is True
+    assert measured.required_n == 187
+    assert halved.required_n == 95
+
+
+def test_required_n_scales_with_the_floor_as_the_published_model_says():
+    """delta proportional to sqrt(psi/n) means required n is linear in psi."""
+    base = stats.required_n(0.15, stats.MEASURED_DISCORDANT_RATE)
+    for rate in (0.5, 0.4, 0.32, 0.25):
+        predicted = base * rate / stats.MEASURED_DISCORDANT_RATE
+        actual = stats.required_n(0.15, rate)
+        assert actual == pytest.approx(predicted, rel=0.06), (rate, actual, predicted)
+
+
+def test_a_floor_below_the_target_never_reports_the_target_as_reachable():
+    """psi = 0.10 cannot resolve a 15-point effect at any n, ever.
+
+    A paired design cannot show a marginal difference larger than the fraction
+    of items that change outcome at all. The minimum detectable effect is
+    capped at psi, so a naive `mde <= delta` test would call every one of these
+    cells reachable — the answer that looks best and is impossible.
+    """
+    cells = stats.psi_grid([28, 100, 300], [0.10], 0.15)
+    assert cells, "no cells — this test asserted nothing"
+    assert all(cell.projected for cell in cells)
+    assert not any(cell.target_reachable for cell in cells)
+    assert all(cell.required_n is None for cell in cells)
+    # And the rendering says so rather than printing a number. Power at a delta
+    # the design cannot express is "n/a", not 1.00, and no cell is bracketed.
+    text = stats.render_psi_grid(cells, 0.15)
+    assert "n/a" in text
+    assert "larger than the floor itself" in text
+    rows = [ln for ln in text.splitlines() if ln.strip()[:3].strip().isdigit()]
+    assert rows, "no data rows were rendered — this test asserted nothing"
+    assert not any("[" in row for row in rows)
+
+
+def test_a_projected_cell_cannot_be_printed_without_its_marker():
+    with pytest.raises(ValueError, match="projection marker"):
+        stats.format_psi_cell("20.6%", projected=True, marked=False)
+    # A measured cell is unmarked, and may be printed either way.
+    assert stats.format_psi_cell("20.6%", projected=False) == "20.6%"
+    assert stats.format_psi_cell("20.6%", projected=True) == "20.6%*"
+
+
+def test_every_projected_cell_in_the_rendered_grid_carries_the_marker():
+    rates = [stats.MEASURED_DISCORDANT_RATE, 0.4, 0.25]
+    cells = stats.psi_grid([28, 100], rates, 0.15)
+    text = stats.render_psi_grid(cells, 0.15, per_item_minutes=29.3, corpus_n=100)
+    assert text.strip(), "nothing was rendered — this test asserted nothing"
+    assert "PROJECTION" in text
+    # Exactly the projected cells are starred: two projected rates over two
+    # sizes is four cells, plus their two column headers and two legend lines.
+    projected = [c for c in cells if c.projected]
+    assert len(projected) == 4
+    assert text.count(stats.PROJECTION_MARKER) == len(projected) + 2 * len(rates[1:]) + 1
+    assert "the corpus this project has" in text
+
+
+def test_the_rendered_grid_marks_where_the_target_becomes_reachable():
+    cells = stats.psi_grid([100], [stats.MEASURED_DISCORDANT_RATE, 0.25], 0.15)
+    text = stats.render_psi_grid(cells, 0.15)
+    # Brackets mark reachability, and only the projected column has any.
+    assert "[" in text
+    measured_line = [ln for ln in text.splitlines() if ln.strip().startswith("100")][0]
+    assert measured_line.index("[") > measured_line.index("20.6%")
+
+
+def test_the_grid_refuses_to_render_nothing():
+    with pytest.raises(ValueError):
+        stats.render_psi_grid([], 0.15)
+    with pytest.raises(ValueError):
+        stats.psi_grid([], [0.5], 0.15)
+    with pytest.raises(ValueError):
+        stats.psi_grid([28], [], 0.15)
+
+
+# -- Wilcoxon signed-rank, for a replicated continuous endpoint ---------------
+
+def _brute_force_signed_rank_p(differences):
+    """One-sided p by enumerating every sign assignment. Independent of stats.py.
+
+    Only usable for small vectors — which is the point: the worked examples are
+    checked against a definition, not against the implementation under test.
+    """
+    nonzero = [d for d in differences if d != 0.0]
+    ranks = stats._average_ranks([abs(d) for d in nonzero])
+    observed = sum(r for d, r in zip(nonzero, ranks) if d > 0)
+    m = len(nonzero)
+    hits = 0
+    for mask in range(2**m):
+        total = sum(ranks[i] for i in range(m) if mask >> i & 1)
+        if total >= observed - 1e-12:
+            hits += 1
+    return hits / 2**m
+
+
+def test_signed_rank_worked_by_hand_clean_sweep():
+    """Five positive differences, no ties: W+ = 15 and p = 1/32."""
+    result = stats.wilcoxon_signed_rank([1, 2, 3, 4, 5])
+    assert result.n_nonzero == 5 and result.zeros == 0
+    assert result.w_plus == 15 and result.w_minus == 0
+    assert result.p_one_sided == pytest.approx(1 / 32)
+    assert result.p_two_sided == pytest.approx(2 / 32)
+    assert result.exact is True
+
+
+def test_signed_rank_worked_by_hand_with_ties():
+    """|d| = .2 .2 .2 .4 .6 gives averaged ranks 2 2 2 4 5.
+
+    With one of the .2 differences negative, W+ = 13 and W- = 2. Four of the
+    32 sign assignments reach 13 or more — the whole set, and the three ways to
+    drop a single rank-2 — so p = 4/32 = 0.125.
+    """
+    diffs = [0.2, 0.2, -0.2, 0.4, 0.6]
+    result = stats.wilcoxon_signed_rank(diffs)
+    assert result.w_plus == 13 and result.w_minus == 2
+    assert result.p_one_sided == pytest.approx(4 / 32)
+    assert result.p_one_sided == pytest.approx(_brute_force_signed_rank_p(diffs))
+
+
+def test_signed_rank_drops_zero_differences_and_counts_them():
+    """Wilcoxon's own treatment, and the count is reported rather than hidden.
+
+    A replicate study over a banded corpus produces many exact zeros — items
+    both arms pass every time, and items both arms fail every time. How many
+    is the same information the McNemar table's concordant cells carry.
+    """
+    result = stats.wilcoxon_signed_rank([0.0, 1.0, 2.0, 3.0, 0.0])
+    assert result.n == 5 and result.n_nonzero == 3 and result.zeros == 2
+    assert result.w_plus == 6
+    assert result.p_one_sided == pytest.approx(1 / 8)
+
+
+def test_signed_rank_with_no_movement_at_all_is_not_a_null_result():
+    result = stats.wilcoxon_signed_rank([0.0, 0.0, 0.0])
+    assert result.n_nonzero == 0
+    assert result.p_one_sided == 1.0
+    assert "no evidence" in stats.render_wilcoxon(result)
+
+
+def test_signed_rank_at_the_smallest_possible_n():
+    """One non-zero difference can never clear alpha: p = 1/2 at best."""
+    result = stats.wilcoxon_signed_rank([0.4])
+    assert result.n_nonzero == 1
+    assert result.p_one_sided == pytest.approx(0.5)
+    assert result.significant_one_sided is False
+
+
+def test_signed_rank_matches_brute_force_across_small_vectors():
+    vectors = [
+        [1.0, -1.0, 2.0],
+        [0.2, 0.4, 0.4, -0.6, 0.8],
+        [-0.2, -0.2, 0.2, 0.2, 0.2, 0.6],
+        [0.0, 0.2, -0.2, 0.4],
+        [1, 1, 1, 1, 1, -1, -1],
+    ]
+    assert vectors, "no vectors to check — this test read nothing"
+    for vector in vectors:
+        assert stats.wilcoxon_signed_rank(vector).p_one_sided == pytest.approx(
+            _brute_force_signed_rank_p(vector)
+        ), vector
+
+
+def test_a_single_magnitude_makes_the_signed_rank_test_a_sign_test():
+    """The binary endpoint's shape, computed exactly rather than approximated.
+
+    Every |difference| equal means every rank is the same averaged value, so W+
+    is that rank times the number of positives. The normal approximation is bad
+    here — the statistic moves in steps of (m+1)/2, not 1 — so the exact sign
+    test is used at any size.
+    """
+    diffs = [1.0] * 18 + [-1.0] * 12
+    result = stats.wilcoxon_signed_rank(diffs)
+    assert result.exact is True
+    assert result.n_nonzero == 30
+    assert result.p_one_sided == pytest.approx(
+        stats.mcnemar_exact_p(12, 18, one_sided=True)
+    )
+
+
+def test_signed_rank_is_symmetric_under_negation():
+    positive = stats.wilcoxon_signed_rank([0.2, 0.4, -0.2, 0.6])
+    negative = stats.wilcoxon_signed_rank([-0.2, -0.4, 0.2, -0.6])
+    assert positive.w_plus == negative.w_minus
+    assert positive.p_two_sided == pytest.approx(negative.p_two_sided)
+
+
+def test_the_approximation_does_not_converge_and_the_code_says_so():
+    """Measures the approximation rather than assuming it gets better.
+
+    Randomly drawn heavily-tied difference vectors, exact against the
+    tie-corrected normal approximation. The disagreement falls from about 0.018
+    at m = 20 to about 0.009 at m = 30 and then **stops falling**: 0.008 at both
+    m = 60 and m = 100. With few distinct magnitudes the statistic moves in
+    steps far larger than the half-unit continuity correction assumes, and more
+    data does not fix that.
+
+    This is the justification for two decisions at once. The threshold sits at
+    60 so a study on the 36-item confirmatory set is exact. And a result that
+    used the approximation says so in its own rendering, with the residual
+    stated, because a plateau at 0.008 is not something to discover next to
+    alpha = 0.05.
+    """
+    rng = random.Random(20260904)
+    worst = {}
+    for m in (20, 30, 60, 100):
+        largest = 0.0
+        for _ in range(25):
+            vector = [rng.choice([-3, -2, -1, 1, 2, 3]) * 0.2 for _ in range(m)]
+            exact = stats.wilcoxon_signed_rank(vector, exact=True)
+            approximate = stats.wilcoxon_signed_rank(vector, exact=False)
+            assert exact.exact is True and approximate.exact is False
+            largest = max(largest, abs(exact.p_one_sided - approximate.p_one_sided))
+        worst[m] = largest
+    assert worst, "no vectors were compared — this test asserted nothing"
+    assert worst[20] > 0.012, "the approximation is fine at m=20 — lower the threshold"
+    assert worst[30] < 0.012
+    # The plateau. If this ever drops the comment above is wrong, not the test.
+    assert 0.004 < worst[60] < 0.012
+    assert 0.004 < worst[100] < 0.012
+    assert stats.MAX_EXACT_SIGNED_RANK == 60
+
+
+def test_an_approximate_result_says_it_is_approximate():
+    vector = [0.2 * (1 if i % 3 else -1) * (1 + i % 4) for i in range(80)]
+    approximate = stats.wilcoxon_signed_rank(vector)
+    assert approximate.exact is False
+    text = stats.render_wilcoxon(approximate)
+    assert "normal approximation" in text
+    assert "0.01" in text
+    # And exact is always available for a borderline result.
+    forced = stats.wilcoxon_signed_rank(vector, exact=True)
+    assert forced.exact is True
+
+
+def test_rendered_signed_rank_never_shows_a_bare_p_value():
+    result = stats.wilcoxon_signed_rank([0.2, 0.4, -0.2, 0.6, 0.0])
+    text = stats.render_wilcoxon(result, "decomposition", "ensemble")
+    assert "p = " in text
+    assert "n = 5 paired items" in text
+    assert "non-zero" in text and "exactly zero" in text
+    assert "W+" in text and "W-" in text
+
+
+def test_signed_rank_refuses_an_empty_input():
+    with pytest.raises(ValueError):
+        stats.wilcoxon_signed_rank([])
+
+
+# -- the replicate design's simulated power ----------------------------------
+
+def test_replicate_power_is_calibrated_at_no_effect():
+    """With no true difference the rejection rate is the test's own size.
+
+    The same calibration check as `mcnemar_power`, and for the same reason: an
+    uncalibrated power number produces a confident study design. Monte Carlo
+    slack is allowed for, since 600 trials at alpha = 0.05 has a standard error
+    of about 0.009.
+    """
+    rate = stats.replicate_power(30, 5, 0.0, [0.2, 0.4, 0.6, 0.8], trials=600)
+    assert rate <= 0.08
+
+
+def test_replicate_power_increases_with_effect_and_with_runs():
+    rates = [0.2, 0.4, 0.4, 0.6, 0.6, 0.8]
+    small = stats.replicate_power(30, 3, 0.10, rates, trials=400)
+    large = stats.replicate_power(30, 3, 0.30, rates, trials=400)
+    assert large > small
+    more_runs = stats.replicate_power(60, 3, 0.10, rates, trials=400)
+    assert more_runs > small
+
+
+def test_replicate_power_is_reproducible_at_a_fixed_seed():
+    rates = [0.2, 0.4, 0.6, 0.8]
+    first = stats.replicate_power(20, 5, 0.2, rates, trials=200, seed=7)
+    second = stats.replicate_power(20, 5, 0.2, rates, trials=200, seed=7)
+    assert first == second
+
+
+def test_replicate_power_refuses_a_design_it_cannot_simulate():
+    with pytest.raises(ValueError):
+        stats.replicate_power(0, 5, 0.15, [0.5])
+    with pytest.raises(ValueError):
+        stats.replicate_power(10, 0, 0.15, [0.5])
+    with pytest.raises(ValueError):
+        stats.replicate_power(10, 5, 0.15, [])
+    with pytest.raises(ValueError):
+        stats.replicate_power(10, 5, 0.15, [0.5], trials=0)

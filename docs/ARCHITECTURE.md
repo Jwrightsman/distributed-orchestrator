@@ -629,9 +629,9 @@ settlement transaction ----> contribution row + chain link (same BEGIN IMMEDIATE
 ```
 
 An envelope binds facts that already existed separately - enrollment and node
-label, descriptor version and hash, executor and worker protocol, selected model,
-validator identities and outcomes, sealed per-file hashes - into one durable,
-exportable record. It is created when the manifest seals, references terminal
+label, descriptor version and hash, executor and worker protocol, selected model
+and the sampling it was asked for, validator identities and outcomes, sealed
+per-file hashes - into one durable, exportable record. It is created when the manifest seals, references terminal
 state, and can never write to it. Canonical JSON hashed with SHA-256, so the same
 production facts always yield the same digest. Absent facts are recorded as
 unknown and listed, never inferred. A `signature` slot is reserved and never
