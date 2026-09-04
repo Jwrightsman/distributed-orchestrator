@@ -351,6 +351,29 @@ def test_required_n_scales_with_the_floor_as_the_published_model_says():
         assert actual == pytest.approx(predicted, rel=0.06), (rate, actual, predicted)
 
 
+def test_a_floor_below_the_target_never_reports_the_target_as_reachable():
+    """psi = 0.10 cannot resolve a 15-point effect at any n, ever.
+
+    A paired design cannot show a marginal difference larger than the fraction
+    of items that change outcome at all. The minimum detectable effect is
+    capped at psi, so a naive `mde <= delta` test would call every one of these
+    cells reachable — the answer that looks best and is impossible.
+    """
+    cells = stats.psi_grid([28, 100, 300], [0.10], 0.15)
+    assert cells, "no cells — this test asserted nothing"
+    assert all(cell.projected for cell in cells)
+    assert not any(cell.target_reachable for cell in cells)
+    assert all(cell.required_n is None for cell in cells)
+    # And the rendering says so rather than printing a number. Power at a delta
+    # the design cannot express is "n/a", not 1.00, and no cell is bracketed.
+    text = stats.render_psi_grid(cells, 0.15)
+    assert "n/a" in text
+    assert "larger than the floor itself" in text
+    rows = [ln for ln in text.splitlines() if ln.strip()[:3].strip().isdigit()]
+    assert rows, "no data rows were rendered — this test asserted nothing"
+    assert not any("[" in row for row in rows)
+
+
 def test_a_projected_cell_cannot_be_printed_without_its_marker():
     with pytest.raises(ValueError, match="projection marker"):
         stats.format_psi_cell("20.6%", projected=True, marked=False)

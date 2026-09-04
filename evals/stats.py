@@ -647,7 +647,14 @@ def psi_grid(
                     power_at_delta=(
                         mcnemar_power(n, rate, delta, alpha) if delta <= rate else float("nan")
                     ),
-                    target_reachable=mde is not None and mde <= delta + 1e-12,
+                    # A delta above psi is not a small effect, it is one a
+                    # paired design cannot express at all — `mcnemar_power`
+                    # raises on it. The minimum detectable effect is capped at
+                    # psi, so without this guard a floor of 0.10 would report
+                    # a 15-point target as reachable.
+                    target_reachable=(
+                        delta <= rate and mde is not None and mde <= delta + 1e-12
+                    ),
                     required_n=needed,
                 )
             )
@@ -745,13 +752,19 @@ def render_psi_grid(
     )
     for rate in rates:
         cell = index[(sizes[0], rate)]
-        needed = "not reachable at any size considered" if cell.required_n is None else (
-            f"n = {cell.required_n}"
-        )
         label = format_psi_cell(f"psi={rate:.3f}", cell.projected)
-        lines.append(
-            f"    {label:>12}: detecting {delta:.0%} at {power:.0%} power needs {needed}"
-        )
+        if cell.required_n is None:
+            reason = (
+                "is larger than the floor itself, so no paired design can express it"
+                if delta > rate
+                else "is not reachable at any corpus size this considers"
+            )
+            lines.append(f"    {label:>12}: {delta:.0%} {reason}")
+        else:
+            lines.append(
+                f"    {label:>12}: detecting {delta:.0%} at {power:.0%} power needs "
+                f"n = {cell.required_n}"
+            )
     return "\n".join(lines)
 
 
