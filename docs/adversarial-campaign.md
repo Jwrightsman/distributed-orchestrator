@@ -678,7 +678,7 @@ Every observation taken on this branch, not a selected one:
 | --- | --- |
 | `pytest -q tests/test_protocol_state_machine.py` (at 60 steps) | 51.1 s, 55.0 s, 61.9 s, 104.5 s, 111.9 s, 124.9 s, 128.6 s |
 | `pytest -q tests/test_protocol_state_machine.py` (at 75 steps, Theme 3C) | 268.9 s, 317.8 s |
-| `pytest -q tests/test_protocol_state_machine.py` (at 75 steps, Theme 4B) | 286.7 s, 305.6 s, 326.7 s |
+| `pytest -q tests/test_protocol_state_machine.py` (at 75 steps, Theme 4B) | 286.7 s, 305.6 s, 326.7 s, 349.4 s |
 | `pytest -q tests/test_adversarial_scenarios.py` | 36.6 s, 40.2 s, 43.5 s, 49.7 s, 55.4 s, 56.9 s, 62.8 s, 146.0 s, 160.2 s |
 | both modules in one invocation | 90.8 s, 91.4 s |
 | `pytest -q` (whole suite, with both) | 466.4 s |
@@ -704,17 +704,25 @@ lower it. Whether that stays affordable is a fair question for the next person
 who touches this; the alternative on the table was a guard that no longer
 guarded.
 
-**Theme 4B did not move it.** Executions now run to completion instead of being
-cancelled by a collapsing event loop, which is more work per submission, and two
-rules were added - and the module landed at 286.7 s, 305.6 s and 326.7 s, inside
-Theme 3C's range. The likeliest reason the extra work is invisible is that the
-cancellation it replaced was not free either: the portal teardown that killed
-each background task ran inside the request that started it, so the cost was
-already being paid, just as a cancellation rather than as a result. The step
-budget was unchanged, which is the other half of the answer.
+**Theme 4B moved it a little, and the honest version is "probably".** Executions
+now run to completion instead of being cancelled by a collapsing event loop,
+which is more work per submission, and two rules were added. Four observations:
+286.7 s, 305.6 s, 326.7 s, 349.4 s. Three sit inside Theme 3C's 268.9-317.8 s
+range and the fourth is above all of it. On a machine where the same command
+varies by 2.5x, four points cannot separate a real 30-second increase from the
+noise, and claiming either way would be claiming more than was measured.
 
-Two of those three runs are also the determinism evidence: 305.6 s and 286.7 s,
-19 seconds apart in wall time, produced byte-identical coverage counts.
+What can be said: the step budget did not change, and the cancellation this
+replaced was not free either - the portal teardown that killed each background
+task ran inside the request that started it, so that cost was already being
+paid, as a cancellation rather than as a result. Nothing here is close to Theme
+3C's roughly three-minute step-budget increase.
+
+Two of those runs are also the determinism evidence: 305.6 s and 286.7 s, 19
+seconds apart in wall time, produced byte-identical coverage counts. So did
+349.4 s, measured after the whole of Theme 4B's tracing work landed - which is
+the evidence that tracing, off by default, changes nothing the campaign
+generates.
 
 What is not in doubt is the direction and the reason. The campaign module got
 slower in Theme 1.5, because the coverage floor showed that at the previous
