@@ -111,12 +111,24 @@ def test_initial_identity_creation_uses_atomic_replace(tmp_path, monkeypatch):
     assert existed_before_replace is True
 
 
+# A deadlock guard, not a performance budget, and deliberately far too large
+# to double as one. Two first starts settle in ~3ms on an idle machine and
+# ~230ms at the 95th percentile under a heavy fsync storm, but each start
+# fsyncs both the identity file and its directory inside an exclusive flock,
+# and fsync latency is set by what the disk is doing rather than by how fast
+# the machine is. A budget tight enough to measure that is measuring the disk;
+# reaching this one means the two starts are not going to finish at all.
+CONCURRENT_START_DEADLOCK_GUARD_SECONDS = 120
+
+
 def test_concurrent_first_start_converges_on_one_durable_identity(tmp_path):
     target = tmp_path / "identity.json"
     barrier = threading.Barrier(2)
 
     def start(credential: str):
-        barrier.wait()
+        # Bounded so a worker that never runs surfaces as a broken barrier in
+        # the thread that did run, rather than parking the suite forever.
+        barrier.wait(timeout=CONCURRENT_START_DEADLOCK_GUARD_SECONDS)
         return identities.load_or_create_worker_identity(
             target,
             coordinator="https://example.com",
@@ -129,7 +141,27 @@ def test_concurrent_first_start_converges_on_one_durable_identity(tmp_path):
             pool.submit(start, "a" * 43),
             pool.submit(start, "b" * 43),
         ]
-        results = [future.result(timeout=10) for future in futures]
+        try:
+            # Twice the barrier's guard, so the barrier always gets to explain
+            # a stall first instead of the two racing to report it.
+            results = [
+                future.result(timeout=2 * CONCURRENT_START_DEADLOCK_GUARD_SECONDS)
+                for future in futures
+            ]
+        except threading.BrokenBarrierError:
+            pytest.fail(
+                "the two first starts never overlapped: one never reached the "
+                f"barrier within {CONCURRENT_START_DEADLOCK_GUARD_SECONDS}s, so "
+                "nothing here was a concurrent creation. This is a scheduling "
+                "failure, not a convergence failure."
+            )
+        except TimeoutError:
+            pytest.fail(
+                "a first start never returned within "
+                f"{2 * CONCURRENT_START_DEADLOCK_GUARD_SECONDS}s. The creation "
+                "lock deadlocked; the credentials below were never compared, "
+                "so this says nothing about whether they converge."
+            )
 
     stored = identities.load_worker_identity(target)
     assert results[0].enrollment_credential == results[1].enrollment_credential

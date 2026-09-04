@@ -59,12 +59,21 @@ def stub_model(monkeypatch):
 
 # ── The revision loop must terminate ────────────────────────────────────────
 
-def test_revision_loop_stops_at_the_cap(stub_model, tmp_path, monkeypatch):
-    """A reviewer that always says NEEDS_WORK must not spin forever."""
+def test_revision_loop_stops_at_the_cap(stub_model, tmp_path, monkeypatch, parse_validator):
+    """A reviewer that always says NEEDS_WORK must not spin forever.
+
+    The reviser count is only a statement about the loop if the parse precheck
+    reached a verdict. A precheck that times out reports the overrun as a code
+    defect, `extract_and_repair` spends its own revision trying to fix code
+    that was never found broken, and the extra call reads here as the loop
+    running away. `parse_validator` pins a budget that will not be missed, and
+    the audit below fails by name rather than blaming the loop if it is.
+    """
     monkeypatch.setattr(orchestrator, "OUTPUT_DIR", tmp_path / "output")
 
     result = asyncio.run(orchestrator.run_pipeline("build a thing"))
 
+    parse_validator.assert_reached_a_verdict()
     assert stub_model["revise"] <= orchestrator._MAX_REVISIONS
     assert result["rating"] in ("NEEDS_WORK", "FAIL", "PASS")
     assert result["project_dir"]
