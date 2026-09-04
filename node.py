@@ -856,7 +856,7 @@ async def poll_and_execute(
         # Whatever trace this handout belongs to, this worker's later requests
         # belong to the same one. Two headers, echoed back after revalidation;
         # nothing about this machine is sent, and nothing is enabled locally.
-        trace_headers = tracing.worker_echo_headers(resp.headers)
+        trace_headers = tracing.worker_echo_headers(getattr(resp, "headers", None))
 
         task_id = task["task_id"]
         title = task.get("title", "unnamed")

@@ -8,10 +8,15 @@ import node
 
 
 class _Response:
-    def __init__(self, status_code, payload=None, text=""):
+    def __init__(self, status_code, payload=None, text="", headers=None):
         self.status_code = status_code
         self._payload = payload or {}
         self.text = text
+        # Real `httpx.Response` always has these. Without them the worker's
+        # trace-context echo would be skipped here rather than exercised, and
+        # `test_enrolled_worker_sends_only_session_on_normal_operations` would
+        # be asserting about headers the double never produced.
+        self.headers = dict(headers or {})
 
     def json(self):
         return self._payload
@@ -22,10 +27,11 @@ class _Response:
 
 
 class _Client:
-    def __init__(self, task, *, reject_result=False, fail_result=False):
+    def __init__(self, task, *, reject_result=False, fail_result=False, handout_headers=None):
         self.task = task
         self.reject_result = reject_result
         self.fail_result = fail_result
+        self.handout_headers = dict(handout_headers or {})
         self.posts = []
 
     async def __aenter__(self):
@@ -35,7 +41,7 @@ class _Client:
         return None
 
     async def get(self, *args, **kwargs):
-        return _Response(200, self.task)
+        return _Response(200, self.task, headers=self.handout_headers)
 
     async def post(self, url, *args, **kwargs):
         self.posts.append((url, kwargs.get("json"), kwargs.get("headers")))
@@ -284,6 +290,76 @@ async def test_enrolled_worker_sends_only_session_on_normal_operations(monkeypat
     for _url, _payload, headers in client.posts:
         assert headers["X-Node-Session"] == "session-token"
         assert "X-Node-Secret" not in headers
+
+
+@pytest.mark.asyncio
+async def test_worker_echoes_the_trace_context_it_was_handed(monkeypatch):
+    """The worker's half of propagation: two headers back, nothing of its own."""
+    traceparent = "00-" + "a" * 32 + "-" + "b" * 16 + "-01"
+    client = _Client(
+        _task(),
+        handout_headers={"traceparent": traceparent, "tracestate": "vendor=1"},
+    )
+    monkeypatch.setattr(node.httpx, "AsyncClient", lambda **kwargs: client)
+
+    async def generated(*args, **kwargs):
+        yield "complete output"
+
+    monkeypatch.setattr(node, "generate_stream", generated)
+    session = {"tasks": 0, "credits": 0, "session_token": "session-token", "enrolled": True}
+
+    await node.poll_and_execute("http://server", "worker", session, secret="s")
+
+    assert client.posts, "the worker made no request to echo anything on"
+    for _url, _payload, headers in client.posts:
+        assert headers["traceparent"] == traceparent
+        assert headers["tracestate"] == "vendor=1"
+        assert headers["X-Node-Session"] == "session-token"
+
+
+@pytest.mark.asyncio
+async def test_a_worker_launders_nothing_it_cannot_revalidate(monkeypatch):
+    """A malformed handout header is dropped, not passed along.
+
+    The worker revalidates rather than copying, so a coordinator - or anything
+    between them - cannot use a worker to carry a broken value into the
+    coordinator's next request.
+    """
+    client = _Client(_task(), handout_headers={"traceparent": "00-nonsense-!!"})
+    monkeypatch.setattr(node.httpx, "AsyncClient", lambda **kwargs: client)
+
+    async def generated(*args, **kwargs):
+        yield "complete output"
+
+    monkeypatch.setattr(node, "generate_stream", generated)
+    session = {"tasks": 0, "credits": 0, "session_token": "session-token", "enrolled": True}
+
+    await node.poll_and_execute("http://server", "worker", session, secret="s")
+
+    assert client.posts
+    for _url, _payload, headers in client.posts:
+        assert "traceparent" not in headers
+        assert headers["X-Node-Session"] == "session-token"
+
+
+@pytest.mark.asyncio
+async def test_a_worker_adds_no_trace_header_when_it_was_handed_none(monkeypatch):
+    """A coordinator with tracing off gets nothing back it did not ask for."""
+    client = _Client(_task())
+    monkeypatch.setattr(node.httpx, "AsyncClient", lambda **kwargs: client)
+
+    async def generated(*args, **kwargs):
+        yield "complete output"
+
+    monkeypatch.setattr(node, "generate_stream", generated)
+    session = {"tasks": 0, "credits": 0, "session_token": "session-token", "enrolled": True}
+
+    await node.poll_and_execute("http://server", "worker", session, secret="s")
+
+    assert client.posts
+    for _url, _payload, headers in client.posts:
+        assert "traceparent" not in headers
+        assert "tracestate" not in headers
 
 
 @pytest.mark.asyncio
