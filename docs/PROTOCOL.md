@@ -1196,9 +1196,21 @@ One envelope per execution, created when its artifact manifest seals. It records
 the envelope version; execution, unit, attempt and receipt identifiers; each
 producing enrollment with its node label at settlement and its identity class;
 capability descriptor version and hash; executor kind and version; worker
-protocol version; model provider, name, digest and variant; the ordered
-validators that ran with their outcomes; the sealed manifest digest and per-file
-hashes; the settlement reference; and a creation timestamp.
+protocol version; model provider, name, digest and variant; the sampling
+parameters the coordinator was configured with; the ordered validators that ran
+with their outcomes; the sealed manifest digest and per-file hashes; the
+settlement reference; and a creation timestamp.
+
+The `sampling` block carries its own `scope`, because it does not reach as far
+as the other fields: it is the **coordinator's** temperature and seed when the
+envelope sealed. A distributed producer reads its own configuration and the
+worker protocol does not carry it back, so `producer_sampling` is named in
+`unknown_facts` whenever a producer exists - the same treatment `model_variant`
+gets, and for the same reason. A seed that was set but not shown to be honoured
+by the runner is `pinned: false` with `sampling_seed_honoured` unknown; set and
+honoured are different facts and only the first is established. The block is
+additive within envelope version 1: an envelope sealed before it keeps its
+stored payload and its digest verifies unchanged.
 
 The envelope is serialized as canonical JSON - sorted keys, compact separators,
 UTF-8 - and hashed with SHA-256 under a domain separator, so identical production
