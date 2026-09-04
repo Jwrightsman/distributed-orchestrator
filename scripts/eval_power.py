@@ -2,6 +2,7 @@
 
     python scripts/eval_power.py
     python scripts/eval_power.py --delta 0.15 --power 0.8
+    python scripts/eval_power.py --no-grid          # just the measured curve
 
 Estimates the discordant pair rate from the committed eval runs, then prints
 the power curve: the smallest true difference detectable at each corpus size,
@@ -16,6 +17,21 @@ arms pass and an item both arms fail contribute nothing. The best estimate this
 project has is the one pair of runs made with an identical configuration
 (prompt set v3, Aug 8 against Aug 11), which is also the noise floor already
 published in `evals/README.md`.
+
+**The curve is a function of that rate, so the script prints it as one.** After
+the measured curve comes a second table: detectable effect across the same
+corpus sizes crossed with a range of hypothetical noise floors, because
+delta is proportional to sqrt(psi / n) and halving psi is therefore worth
+exactly what doubling n is worth. Unpinned sampling is a plausible and
+removable contributor to psi that nobody has measured;
+`docs/experiments/noise-floor-under-pinned-sampling.md` is the design that
+would measure it, and this table is what its answer turns into.
+
+**Every cell in that second table computed at a rate other than the measured
+one is marked with a `*` and called a projection.** The default output stays
+pinned to psi = 0.643 so nothing here reads as though a better floor had been
+observed; `evals/stats.py::format_psi_cell` refuses to render a projected cell
+without its marker rather than trusting whoever writes the next renderer.
 """
 
 from __future__ import annotations
@@ -34,6 +50,20 @@ import stats  # noqa: E402
 
 RESULTS = REPO_ROOT / "evals" / "results"
 DEFAULT_SIZES = [28, 40, 50, 60, 80, 100, 120, 160, 200, 300]
+
+
+def corpus_size() -> int | None:
+    """How many items the corpus actually holds, so the grid can mark that row.
+
+    None when the corpus cannot be read. The grid then marks no row rather than
+    guessing at 100, which would be a number nobody checked.
+    """
+    try:
+        import corpus as corpus_mod
+
+        return len(corpus_mod.load_corpus())
+    except Exception:
+        return None
 
 
 def load_runs() -> dict[str, dict]:
@@ -95,6 +125,11 @@ def main() -> int:
     ap.add_argument("--sizes", type=int, nargs="*", default=DEFAULT_SIZES)
     ap.add_argument("--rate", type=float, default=None,
                     help="override the discordant rate instead of estimating it")
+    ap.add_argument("--psi", type=float, nargs="*", default=None,
+                    help="hypothetical noise floors for the projection grid "
+                         "(default: 0.5 0.4 0.32 0.25, alongside the measured rate)")
+    ap.add_argument("--no-grid", action="store_true",
+                    help="print only the measured curve, without the projection grid")
     args = ap.parse_args()
 
     runs = load_runs()
@@ -174,6 +209,24 @@ def main() -> int:
             line += f"  {hours:>7.0f} h  {2 * hours:>11.0f} h"
         print(line)
     print()
+
+    if not args.no_grid:
+        projected = tuple(args.psi) if args.psi else stats.PROJECTED_RATES
+        # The measured rate leads, and is the only unmarked column. Anything
+        # else is what the instrument would see at a floor nobody has observed.
+        grid_rates = [rate] + [p for p in projected if p != rate]
+        cells = stats.psi_grid(
+            args.sizes, grid_rates, args.delta, rate, args.alpha, args.power
+        )
+        print(stats.render_psi_grid(
+            cells,
+            args.delta,
+            measured_rate=rate,
+            per_item_minutes=per_item_minutes,
+            corpus_n=corpus_size(),
+            power=args.power,
+        ))
+        print()
 
     needed = stats.required_n(args.delta, rate, args.alpha, args.power)
     if needed is None:

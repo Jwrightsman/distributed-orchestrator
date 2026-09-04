@@ -40,25 +40,51 @@ import math
 from dataclasses import dataclass
 from functools import lru_cache
 from math import comb
+from typing import Sequence
 
 __all__ = [
+    "MEASURED_DISCORDANT_RATE",
+    "PROJECTED_RATES",
+    "PROJECTION_MARKER",
     "PairedResult",
+    "PsiCell",
     "UnpairedResult",
     "clopper_pearson",
     "discordance",
     "fisher_exact_greater",
+    "format_psi_cell",
     "mcnemar_exact_p",
     "mcnemar_power",
     "min_detectable",
     "min_detectable_effect",
     "paired_test",
     "power_curve",
+    "psi_grid",
     "render_paired",
+    "render_psi_grid",
     "render_unpaired",
     "required_n",
     "unpaired_test",
     "wilson",
 ]
+
+# The one measured value. 18 of 28 items changed outcome between prompt set v3
+# on Aug 8 and v3 on Aug 11 — the only pair of committed runs made under an
+# identical configuration, and the noise floor `evals/README.md` publishes.
+# Every other rate this module can be handed is a projection and is labelled as
+# one; nothing here may report a different *measured* rate.
+MEASURED_DISCORDANT_RATE = 18 / 28
+
+# The hypothetical floors the psi grid explores, in `docs/eval-methodology.md`
+# §7.1. 0.5 is not a round number: under independent runs an item discordant
+# with probability 2*p*(1-p) can never exceed 0.5, so it is the ceiling any
+# unpinned generator can produce and the measured 0.643 already sits above it.
+PROJECTED_RATES = (0.5, 0.4, 0.32, 0.25)
+
+# Printed on every cell computed at a rate that was not measured. A projection
+# that reads like a measurement is the specific mistake this project has
+# already published twice.
+PROJECTION_MARKER = "*"
 
 
 # -- exact tests -------------------------------------------------------------
@@ -546,3 +572,179 @@ def render_unpaired(result: UnpairedResult, label_a: str = "A", label_b: str = "
             f"  Fisher exact one-sided p = {result.p_one_sided:.4f}",
         ]
     )
+
+
+# -- the noise floor as a parameter ------------------------------------------
+#
+# Everything above takes psi as an argument already. What was missing is the
+# two-dimensional view: the published curve answers "what can n items see at
+# the measured floor", and the question this project actually faces is "what
+# would a lower floor be worth". The published model is delta proportional to
+# sqrt(psi / n), so halving psi buys exactly what doubling n buys — and pinning
+# the generator's temperature and seed is a plausible, removable and unmeasured
+# contributor to psi. `docs/experiments/noise-floor-under-pinned-sampling.md`
+# is the design that measures it; this is the arithmetic that turns the answer
+# into a corpus size without anyone re-deriving it.
+
+
+@dataclass(frozen=True)
+class PsiCell:
+    """One (n, psi) cell of the grid, carrying whether it was measured.
+
+    `projected` is not presentation metadata. A cell computed at a discordant
+    rate nobody has observed is a hypothesis about an instrument, and this
+    project has twice published a number that turned out to have been produced
+    under conditions its reader assumed were the measured ones.
+    """
+
+    n: int
+    discordant_rate: float
+    projected: bool
+    mde: float | None
+    mde_items: float | None
+    power_at_delta: float
+    target_reachable: bool
+    required_n: int | None
+
+
+def psi_grid(
+    sizes: Sequence[int],
+    rates: Sequence[float],
+    delta: float,
+    measured_rate: float = MEASURED_DISCORDANT_RATE,
+    alpha: float = 0.05,
+    power: float = 0.80,
+) -> list[PsiCell]:
+    """Detectable effect and power at `delta`, over corpus size crossed with psi.
+
+    A cell is `target_reachable` when the corpus detects `delta` at `power` —
+    equivalently when the minimum detectable effect has fallen to `delta` or
+    below. That is the line the pre-registered 15-point target has to cross,
+    and at the measured floor it never does at any size this project will run.
+    """
+    if not sizes:
+        raise ValueError("psi_grid needs at least one corpus size")
+    if not rates:
+        raise ValueError("psi_grid needs at least one discordant rate")
+    cells: list[PsiCell] = []
+    for rate in rates:
+        projected = not math.isclose(rate, measured_rate, rel_tol=1e-9, abs_tol=1e-9)
+        needed = required_n(delta, rate, alpha, power) if delta <= rate else None
+        for n in sizes:
+            mde = min_detectable_effect(n, rate, alpha, power)
+            cells.append(
+                PsiCell(
+                    n=n,
+                    discordant_rate=rate,
+                    projected=projected,
+                    mde=mde,
+                    mde_items=None if mde is None else mde * n,
+                    power_at_delta=(
+                        mcnemar_power(n, rate, delta, alpha) if delta <= rate else float("nan")
+                    ),
+                    target_reachable=mde is not None and mde <= delta + 1e-12,
+                    required_n=needed,
+                )
+            )
+    return cells
+
+
+def format_psi_cell(text: str, projected: bool, *, marked: bool = True) -> str:
+    """Render one cell, refusing to print a projection without its marker.
+
+    The refusal is the point. Marking projections is the kind of discipline
+    that survives exactly as long as nobody is in a hurry, so it is enforced
+    here rather than left to whoever writes the next renderer.
+    """
+    if projected and not marked:
+        raise ValueError(
+            "a cell computed at a projected discordant rate cannot be printed "
+            "without its projection marker: only psi = 18/28 has been measured, "
+            "and an unmarked cell reads as an observation"
+        )
+    return f"{text}{PROJECTION_MARKER}" if projected else text
+
+
+def render_psi_grid(
+    cells: Sequence[PsiCell],
+    delta: float,
+    measured_rate: float = MEASURED_DISCORDANT_RATE,
+    per_item_minutes: float | None = None,
+    corpus_n: int | None = None,
+    power: float = 0.80,
+) -> str:
+    """The grid, with every projected cell marked and the legend attached.
+
+    Reading order: the measured column first, then what a lower floor would
+    buy. `corpus_n` marks the row the corpus this project actually has lands
+    on, so "what would pinning be worth" has a visible answer rather than an
+    inferred one.
+    """
+    if not cells:
+        raise ValueError("nothing to render — psi_grid returned no cells")
+    rates: list[float] = []
+    for cell in cells:
+        if cell.discordant_rate not in rates:
+            rates.append(cell.discordant_rate)
+    sizes: list[int] = []
+    for cell in cells:
+        if cell.n not in sizes:
+            sizes.append(cell.n)
+    index = {(c.n, c.discordant_rate): c for c in cells}
+
+    width = 15
+    header = f"{'n':>5}  {'comparison':>11}  " + "  ".join(
+        format_psi_cell(
+            f"psi={rate:.3f}",
+            not math.isclose(rate, measured_rate, rel_tol=1e-9, abs_tol=1e-9),
+        ).rjust(width)
+        for rate in rates
+    )
+    lines = [
+        f"Minimum detectable effect at {power:.0%} power / power at "
+        f"{delta:.0%}, by corpus size and noise floor",
+        "",
+        header,
+        "-" * len(header),
+    ]
+    for n in sizes:
+        cost = "-" if per_item_minutes is None else f"{2 * n * per_item_minutes / 60:.0f} h"
+        row = f"{n:>5}  {cost:>11}  "
+        parts = []
+        for rate in rates:
+            cell = index[(n, rate)]
+            mde = "not reachable" if cell.mde is None else f"{cell.mde:.1%}"
+            power_text = (
+                "  n/a" if cell.power_at_delta != cell.power_at_delta
+                else f"{cell.power_at_delta:5.2f}"
+            )
+            text = f"{mde:>6}/{power_text}"
+            if cell.target_reachable:
+                text = "[" + text.strip() + "]"
+            parts.append(format_psi_cell(text.rjust(width - 1), cell.projected))
+        marker = "  <- the corpus this project has" if corpus_n == n else ""
+        lines.append(row + "  ".join(p.rjust(width) for p in parts) + marker)
+
+    lines.append("")
+    lines.append(
+        f"  each cell: minimum detectable effect / power at {delta:.0%}."
+        f"  [brackets] = {delta:.0%} is reachable at {power:.0%} power."
+    )
+    lines.append(
+        f"  {PROJECTION_MARKER} PROJECTION. Only psi = {measured_rate:.3f} (18 of 28, "
+        "prompt set v3 against itself) has been measured."
+    )
+    lines.append(
+        "    Every starred column is what the instrument WOULD see at a floor "
+        "nobody has observed."
+    )
+    for rate in rates:
+        cell = index[(sizes[0], rate)]
+        needed = "not reachable at any size considered" if cell.required_n is None else (
+            f"n = {cell.required_n}"
+        )
+        label = format_psi_cell(f"psi={rate:.3f}", cell.projected)
+        lines.append(
+            f"    {label:>12}: detecting {delta:.0%} at {power:.0%} power needs {needed}"
+        )
+    return "\n".join(lines)

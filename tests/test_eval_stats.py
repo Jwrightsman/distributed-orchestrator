@@ -268,3 +268,123 @@ def test_unpaired_test_refuses_an_empty_arm():
 def test_paired_test_refuses_runs_with_nothing_in_common():
     with pytest.raises(ValueError):
         stats.paired_test({"a": True}, {"b": False})
+
+
+# -- the power curve as a function of psi ------------------------------------
+
+# The table published in docs/eval-methodology.md section 7, at psi = 18/28.
+# Copied from the document, not from the implementation: the point of the
+# parameterisation is that it is a generalisation of what PR #71 published, and
+# a generalisation that moved the published numbers would be a rewrite.
+PUBLISHED_CURVE = [
+    # n,   detectable effect, = items, power at 15 points
+    (28, 0.384, 10.8, 0.19),
+    (40, 0.325, 13.0, 0.26),
+    (50, 0.290, 14.5, 0.32),
+    (60, 0.265, 15.9, 0.37),
+    (80, 0.230, 18.4, 0.46),
+    (100, 0.206, 20.6, 0.55),
+    (120, 0.188, 22.6, 0.62),
+    (160, 0.162, 26.0, 0.74),
+    (200, 0.145, 29.0, 0.82),
+    (300, 0.118, 35.4, 0.94),
+]
+
+
+def test_the_measured_rate_is_the_one_that_was_measured():
+    """18 of 28. Nothing here may quietly become a different measured floor."""
+    assert stats.MEASURED_DISCORDANT_RATE == 18 / 28
+    assert round(stats.MEASURED_DISCORDANT_RATE, 3) == 0.643
+
+
+def test_the_psi_grid_reproduces_the_published_table_at_the_measured_rate():
+    """Every published cell, to the precision it was published at."""
+    assert PUBLISHED_CURVE, "the published table is empty — this test read nothing"
+    cells = stats.psi_grid(
+        [row[0] for row in PUBLISHED_CURVE], [stats.MEASURED_DISCORDANT_RATE], 0.15
+    )
+    assert len(cells) == len(PUBLISHED_CURVE)
+    for cell, (n, mde, items, power) in zip(cells, PUBLISHED_CURVE):
+        assert cell.n == n
+        assert cell.projected is False
+        assert cell.mde == pytest.approx(mde, abs=5e-4)
+        assert cell.mde_items == pytest.approx(items, abs=0.05)
+        assert cell.power_at_delta == pytest.approx(power, abs=5e-3)
+
+
+def test_power_curve_and_psi_grid_agree_at_the_measured_rate():
+    """The grid is the old curve with one more axis, not a second implementation."""
+    sizes = [28, 100, 300]
+    old = stats.power_curve(sizes, stats.MEASURED_DISCORDANT_RATE, 0.15)
+    new = stats.psi_grid(sizes, [stats.MEASURED_DISCORDANT_RATE], 0.15)
+    assert old and new
+    for row, cell in zip(old, new):
+        assert row["n"] == cell.n
+        assert row["mde"] == pytest.approx(cell.mde)
+        assert row["power_at_delta"] == pytest.approx(cell.power_at_delta)
+
+
+def test_a_lower_floor_reaches_the_fifteen_point_target_the_measured_one_cannot():
+    """The whole reason the curve is parameterised.
+
+    At the measured floor a 15-point change needs 187 items. Halving psi is
+    worth what doubling n is worth, so at psi = 0.32 the corpus this project
+    already has becomes sufficient. That is a projection and the grid says so.
+    """
+    measured = stats.psi_grid([100], [stats.MEASURED_DISCORDANT_RATE], 0.15)[0]
+    halved = stats.psi_grid([100], [0.32], 0.15)[0]
+    assert measured.target_reachable is False
+    assert halved.target_reachable is True
+    assert measured.projected is False
+    assert halved.projected is True
+    assert measured.required_n == 187
+    assert halved.required_n == 95
+
+
+def test_required_n_scales_with_the_floor_as_the_published_model_says():
+    """delta proportional to sqrt(psi/n) means required n is linear in psi."""
+    base = stats.required_n(0.15, stats.MEASURED_DISCORDANT_RATE)
+    for rate in (0.5, 0.4, 0.32, 0.25):
+        predicted = base * rate / stats.MEASURED_DISCORDANT_RATE
+        actual = stats.required_n(0.15, rate)
+        assert actual == pytest.approx(predicted, rel=0.06), (rate, actual, predicted)
+
+
+def test_a_projected_cell_cannot_be_printed_without_its_marker():
+    with pytest.raises(ValueError, match="projection marker"):
+        stats.format_psi_cell("20.6%", projected=True, marked=False)
+    # A measured cell is unmarked, and may be printed either way.
+    assert stats.format_psi_cell("20.6%", projected=False) == "20.6%"
+    assert stats.format_psi_cell("20.6%", projected=True) == "20.6%*"
+
+
+def test_every_projected_cell_in_the_rendered_grid_carries_the_marker():
+    rates = [stats.MEASURED_DISCORDANT_RATE, 0.4, 0.25]
+    cells = stats.psi_grid([28, 100], rates, 0.15)
+    text = stats.render_psi_grid(cells, 0.15, per_item_minutes=29.3, corpus_n=100)
+    assert text.strip(), "nothing was rendered — this test asserted nothing"
+    assert "PROJECTION" in text
+    # Exactly the projected cells are starred: two projected rates over two
+    # sizes is four cells, plus their two column headers and two legend lines.
+    projected = [c for c in cells if c.projected]
+    assert len(projected) == 4
+    assert text.count(stats.PROJECTION_MARKER) == len(projected) + 2 * len(rates[1:]) + 1
+    assert "the corpus this project has" in text
+
+
+def test_the_rendered_grid_marks_where_the_target_becomes_reachable():
+    cells = stats.psi_grid([100], [stats.MEASURED_DISCORDANT_RATE, 0.25], 0.15)
+    text = stats.render_psi_grid(cells, 0.15)
+    # Brackets mark reachability, and only the projected column has any.
+    assert "[" in text
+    measured_line = [ln for ln in text.splitlines() if ln.strip().startswith("100")][0]
+    assert measured_line.index("[") > measured_line.index("20.6%")
+
+
+def test_the_grid_refuses_to_render_nothing():
+    with pytest.raises(ValueError):
+        stats.render_psi_grid([], 0.15)
+    with pytest.raises(ValueError):
+        stats.psi_grid([], [0.5], 0.15)
+    with pytest.raises(ValueError):
+        stats.psi_grid([28], [], 0.15)
