@@ -650,6 +650,39 @@ and are counted as the genesis boundary rather than retrofitted.
 
 Neither establishes correctness. An envelope says how artifacts were produced and under whose identity; a chain says no entry changed without every link after it also being recomputed. Neither is a claim that the output is right, and neither is tamper *proofing*: an operator with database access can rewrite both. See [ADR 0017](adr/0017-provenance-is-a-binding-of-identity-not-a-claim-of-correctness.md).
 
+## Trace context across the worker boundary
+
+```text
+worker                          coordinator
+------                          -----------
+GET /tasks/next        ------>  span opens (parent = inbound traceparent, or minted)
+                                unit's established trace adopted, if the unit has one
+                       <------  traceparent on the response
+POST .../stream        ------>  same trace: the unit's, not whichever the worker sent
+POST .../result        ------>  same trace
+                                    |
+                                    +--> TRACEPARENT in the validator subprocess's
+                                         environment - not in its control message
+```
+
+Off by default. When on, the coordinator accepts a `traceparent` if one arrives
+and mints one if not, so a worker that ignores the headers is not less traceable
+from the coordinator's side. A unit keeps its trace across reassignment: when a
+lease expires and another machine takes the work, the second handout joins the
+first one's trace rather than starting a new one, which is the whole point of
+being able to ask where a job went.
+
+Span attributes are an allowlist enforced by a keyword-only signature, so an
+unknown key is a `TypeError` rather than something a scanner has to catch.
+High-cardinality identifiers live in spans and in no metric label. Nothing here
+is read by routing, admission, settlement, credit, validation, or terminal
+state, and the existing event stream and `/metrics` are unchanged - spans and
+events are joined on the identifiers they already share.
+
+Export is a second switch, off by default, and on a worker it is that
+contributor's choice rather than a condition of joining. See
+[ADR 0018](adr/0018-trace-context-is-propagated-export-is-the-contributors-choice.md).
+
 ## Extension seams
 
 Six boundaries are written down and asserted by contract tests. There is no

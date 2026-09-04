@@ -305,6 +305,28 @@ success by workload/node/model/prompt-version, verifier rejection reasons, laten
 memory growth, churn, credits per verified result, compute-minutes per accepted result.
 OpenTelemetry plus Prometheus-compatible metrics; every job traceable end to end.
 
+> **Trace propagation done, Theme 4B; the metrics half is not.** W3C trace context
+> now crosses the coordinator/worker boundary - handout, result, token batch,
+> heartbeat, drain, registration - and into the validator subprocess as
+> environment rather than payload. A unit keeps one trace across reassignment,
+> which a test found was not true of the first implementation and is the whole
+> point of asking where a job went. Off by default; the OpenTelemetry SDK is an
+> optional extra and nothing imports it at module scope. Propagation and export
+> are separate switches, because accepting a trace ID costs a contributor nothing
+> while exporting their machine's spans is telemetry - export is off by default
+> and never a condition of joining. Span attributes are a keyword-only allowlist,
+> so an unknown key is a `TypeError` rather than something a scanner has to
+> catch; high-cardinality identifiers are span attributes and appear in no metric
+> label. **Nothing about diagnosis time is claimed, because nothing was
+> measured** - that needs external nodes and a diagnoser who did not write the
+> code, and the protocol including what would count as no improvement is in
+> [docs/experiments/trace-diagnosis-time.md](docs/experiments/trace-diagnosis-time.md).
+> Still open from this line: queue depth, lease age, retry and duplicate rates,
+> fallback rate, success by workload, verifier rejection reasons, latency
+> percentiles, memory growth, churn, credits per verified result, and
+> Prometheus-compatible exposition - `/metrics` is still a fixed JSON object.
+> See [ADR 0018](docs/adr/0018-trace-context-is-propagated-export-is-the-contributors-choice.md).
+
 **Protocol versioning.** **Done, Theme 4A** for the worker half: `/v1/worker-protocol`
 advertises `node_protocol_min`/`node_protocol_max` and the server version without a
 credential, an out-of-window worker is refused before any enrollment or session exists with
@@ -545,6 +567,23 @@ memory or storage growth.
 
 ## Changelog
 
+- **2026-09-03** — Theme 4B propagated W3C trace context across the coordinator/worker
+  boundary and into the validator subprocess, off by default, with the OpenTelemetry SDK
+  as an optional extra that nothing imports at module scope. Propagation and export are
+  separate switches: accepting a coordinator-minted trace ID costs a contributor nothing,
+  exporting their machine's spans is telemetry, and the second is off by default and never
+  a condition of joining. Span attributes are an allowlist enforced by a keyword-only
+  signature rather than by scanning for secrets, which is finding F8's lesson applied with
+  the polarity the right way round. Two defects were found by tests asserting their own
+  preconditions: an API-only OpenTelemetry install would have reported that it was
+  exporting while sending nothing, and a reassigned unit started a second trace so the
+  coordinator's view of one job was split in two. It also unblocked the campaign - the
+  requester clients were never entered as context managers, so every request tore down its
+  own event loop and took the background execution task with it, which is what had made
+  `execution_cancelled_while_running` and `provenance_envelope_created` look structurally
+  unreachable. Both are floored now, and fixing the honest-worker rule's prerequisites took
+  `settlement_accepted` from 2 to 30 at an unchanged budget. No diagnosis-time improvement
+  is claimed; the deferred experiment is written down instead. See ADR 0018.
 - **2026-09-03** — Theme 3C bound artifacts to a durable provenance envelope and made the
   contribution ledger tamper-evident. The envelope is created when a manifest seals, binds
   identity facts that already existed separately, is canonically hashed so replay resolves to
