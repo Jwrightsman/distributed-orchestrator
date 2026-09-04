@@ -273,6 +273,13 @@ different claims and only the first is supported.
 3. the upper end of ψ_pinned's 95% interval is below ψ_unpinned's point
    estimate.
 
+Criterion 1 is absolute rather than relative, and 0.32 is not chosen for
+symmetry with 0.643: it is the floor at which the 100 items that already exist
+detect 15 points at 80% power. A reduction that does not reach a floor somebody
+can act on is the third branch below, whatever its ratio. Criteria 2 and 3 are
+the within-study comparison, which is what makes the reduction attributable to
+pinning rather than to re-measurement.
+
 Then the operating floor for the direct arm is the measured ψ_pinned, the
 corresponding column of `scripts/eval_power.py`'s grid stops being a projection
 *for that arm*, and the corpus size the 15-point target needs is read off it.
@@ -299,6 +306,15 @@ size it implies is stated as a number. The 15-point target is described as
 reachable **only if** a bracketed cell in the grid says so at a size somebody
 will run. "It moved in the right direction" is not a finding this project
 publishes on its own; the finding is the corpus size the new floor implies.
+
+**A low unpinned arm is not a finding about the floor.** If ψ_unpinned comes in
+well below 0.643 — which the arithmetic above says to expect — that is
+reported as a second estimate of the same quantity with its own interval, and
+the two are pooled or presented side by side. It is **not** reported as the
+noise floor having improved, and it does not replace 0.643 as the measured
+value in `docs/eval-methodology.md` unless the pooled estimate is stated as
+such with both pairs named. Nothing about the instrument changed between
+August and now; the estimator moved.
 
 **Pinning makes it worse.** ψ_pinned > ψ_unpinned significantly. This gets
 published. ROADMAP §2: publish the number that makes us look worse. A plausible
