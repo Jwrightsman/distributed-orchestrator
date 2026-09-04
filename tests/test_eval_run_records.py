@@ -24,6 +24,7 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "evals"))
 import runrecord  # noqa: E402
+import sampling  # noqa: E402
 
 SUMMARY_SCRIPT = REPO / "scripts" / "eval_study_summary.py"
 
@@ -92,31 +93,76 @@ def test_absent_facts_are_recorded_as_unknown_not_inferred():
 
 
 def test_a_complete_record_claims_no_unknowns():
+    """Complete now includes a seed that was *shown* to be honoured.
+
+    Before sampling was pinnable this record only had to name a temperature and
+    a seed. It now also has to say the seed is honoured, because a seed the API
+    accepted and a seed the runner reproduced are different facts and only the
+    second one pins a generator. See `sampling.py`.
+    """
     payload = make_record(
         "x", "a",
         model=runrecord.ModelIdentity(
-            "ollama", "qwen3.5:4b", digest="sha256:aa", temperature=0.0, seed=7
+            "ollama",
+            "qwen3.5:4b",
+            digest="sha256:aa",
+            temperature=0.0,
+            seed=7,
+            seed_honouring=sampling.SEED_HONOURING_VERIFIED,
         ),
         descriptor_hash="d" * 64,
         tokens={"prompt": 100, "completion": 200},
         provenance_envelope_digest="e" * 64,
     ).as_record()
     assert payload["unknown_facts"] == []
+    assert payload["model"]["sampling_pinned"] is True
 
 
 def test_an_unpinned_temperature_and_seed_are_reported_as_unknown():
-    """Today's ordinary case, and it is a gap rather than a detail.
+    """The shipping default, and it is a gap rather than a detail.
 
-    `config.json` has no temperature or seed setting, so a local run takes
-    whatever Ollama defaults to. A study that claims to have pinned them would
-    be claiming something the harness cannot currently deliver, so the record
-    says it does not know.
+    `config.json` now *can* set a temperature and a seed, and by default sets
+    neither, so a local run still takes whatever Ollama defaults to. A study
+    that claims to have pinned them would be claiming something this run did
+    not do, so the record says it does not know.
     """
     payload = make_record("x", "a").as_record()
     assert payload["model"]["temperature"] is None
     assert payload["model"]["seed"] is None
+    assert payload["model"]["sampling_pinned"] is False
     assert runrecord.UNKNOWN_TEMPERATURE in payload["unknown_facts"]
     assert runrecord.UNKNOWN_SEED in payload["unknown_facts"]
+
+
+def test_a_seed_that_was_set_but_not_verified_is_recorded_as_unpinned():
+    """The case that matters most, because it looks like success.
+
+    Setting a seed makes the request carry one. It does not establish that the
+    runner honoured it for this model on this hardware, and nothing in this
+    repository has measured that. A record that reported such a run as pinned
+    would be the `browser_ok` mistake again: a weaker check standing in for the
+    one everybody assumes was made.
+    """
+    payload = make_record(
+        "x", "a",
+        model=runrecord.ModelIdentity(
+            "ollama",
+            "qwen3.5:4b",
+            digest="sha256:aa",
+            temperature=0.0,
+            seed=20260904,
+            seed_honouring=sampling.SEED_HONOURING_ASSUMED,
+        ),
+        descriptor_hash="d" * 64,
+        tokens={"prompt": 1, "completion": 1},
+        provenance_envelope_digest="e" * 64,
+    ).as_record()
+    assert payload["model"]["seed"] == 20260904
+    assert payload["model"]["seed_honouring"] == "assumed"
+    assert payload["model"]["sampling_pinned"] is False
+    assert runrecord.UNKNOWN_SEED_HONOURED in payload["unknown_facts"]
+    # And it is not confused with a run that set no seed at all.
+    assert runrecord.UNKNOWN_SEED not in payload["unknown_facts"]
 
 
 def test_the_judge_score_is_labelled_exploratory_in_the_record():

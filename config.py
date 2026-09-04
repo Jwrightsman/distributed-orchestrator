@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import sampling
+
 CONFIG_FILE = Path(os.environ.get("MYCELIUM_CONFIG_FILE", "config.json"))
 TRUSTED_ALPHA_MARKER = ".mycelium-trusted-alpha"
 VALID_DEPLOYMENT_MODES = frozenset({"local", "trusted_alpha"})
@@ -102,6 +104,28 @@ DEFAULTS = {
 
     # Max planner retries when model returns bad JSON
     "planner_retries": 3,
+
+    # ── Sampling (both unset by default — shipping behaviour is unchanged) ──
+    # Ollama's own defaults are temperature 0.8 and seed 0. Leaving these null
+    # means the request carries neither key and Ollama applies those defaults,
+    # exactly as every run this project has ever made did.
+    #
+    # They exist so a *measurement* can pin the generator. The eval instrument
+    # records the run-to-run noise floor at psi = 0.643, and unpinned sampling
+    # is a plausible and removable contributor to it that nobody has measured;
+    # `docs/experiments/noise-floor-under-pinned-sampling.md` is the design for
+    # measuring how much. Set both for a study; leave both null for production.
+    #
+    # null is not zero. Zero is a legal seed and is Ollama's documented
+    # default, so "nobody set a seed" has to be a different value from
+    # "somebody chose 0" or a run record cannot tell them apart.
+    #
+    # Setting a seed does not make a run reproducible on its own — see
+    # `sampling.py`: Ollama accepting the field is established, the runner
+    # honouring it on this model and hardware is not, and until it is measured
+    # a seeded run is still recorded as unpinned.
+    "temperature": None,
+    "seed": None,
 
     # ── External provider (optional) ─────────────────────────────────
     # Set provider + api_key to route planner/reviewer to a stronger model.
@@ -420,6 +444,30 @@ def load(
             raise ConfigError("tracing_endpoint must be a string of at most 512 characters")
         _LOG.warning("Invalid tracing_endpoint; no collector is configured")
         overrides["tracing_endpoint"] = DEFAULTS["tracing_endpoint"]
+
+    # Sampling. An out-of-range value is rejected rather than clamped: a study
+    # that asked for temperature 0 and silently got 2.0 is worse than one that
+    # refused to start, and a local run that quietly ignores the setting would
+    # record a temperature the request never carried.
+    configured_temperature = overrides.get("temperature", DEFAULTS["temperature"])
+    if not sampling.valid_temperature(configured_temperature):
+        if effective_strict:
+            raise ConfigError(
+                "temperature must be null or a number between "
+                f"{sampling.MIN_TEMPERATURE} and {sampling.MAX_TEMPERATURE}"
+            )
+        _LOG.warning("Invalid temperature; leaving it unset so Ollama's default applies")
+        overrides["temperature"] = DEFAULTS["temperature"]
+
+    configured_seed = overrides.get("seed", DEFAULTS["seed"])
+    if not sampling.valid_seed(configured_seed):
+        if effective_strict:
+            raise ConfigError(
+                "seed must be null or an integer between "
+                f"{sampling.MIN_SEED} and {sampling.MAX_SEED}"
+            )
+        _LOG.warning("Invalid seed; leaving it unset so Ollama's default applies")
+        overrides["seed"] = DEFAULTS["seed"]
 
     configured_validator_mode = overrides.get(
         "validator_execution_mode", DEFAULTS["validator_execution_mode"]

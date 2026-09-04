@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 import orchestrator
+import sampling
 import server_state
 from config import get as get_config
 from execution.contracts import (
@@ -118,7 +119,13 @@ def _record_provenance_envelope(execution_id, manifest, result) -> None:
             for item in getattr(result, "validation_evidence", ()) or ()
         ]
         server_state.provenance_envelope_store.record(
-            execution_id, manifest=manifest, validators=validators
+            execution_id,
+            manifest=manifest,
+            validators=validators,
+            # The coordinator's own sampling configuration, scoped as such by
+            # the envelope. Unset stays unset: an absent temperature is
+            # recorded as unknown rather than as Ollama's default written in.
+            sampling=sampling.from_config().as_record(),
         )
     except Exception as exc:  # pragma: no cover - containment, exercised by tests
         logging.getLogger("mycelium.execution").warning(

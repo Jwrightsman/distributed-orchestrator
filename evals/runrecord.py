@@ -18,6 +18,14 @@ the same reason: a run that could not determine the model digest and a run
 whose model digest happened to match are different situations, and only one of
 them supports a comparison.
 
+**A weak fact is recorded as weak.** `config.json` can now pin temperature and
+seed, but a seed the API accepted is not the same as a seed the runner
+honoured, and only the first is established here. A run that set a seed without
+that second fact records `model_seed_honoured` as unknown and reports
+`sampling_pinned: false`. See `sampling.py` for what is verified and what is
+assumed, and `docs/experiments/noise-floor-under-pinned-sampling.md` for the
+measurement that would move it.
+
 **Reuse the envelope where there is one.** A run dispatched through the normal
 execution path already has a provenance envelope binding the artifacts to the
 identity that produced them; that envelope's digest goes in
@@ -40,23 +48,45 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
+import sampling as sampling_mod
+
 RUNS_FILENAME = "runs.jsonl"
 
 UNKNOWN_MODEL_DIGEST = "model_digest"
 UNKNOWN_DESCRIPTOR_HASH = "descriptor_hash"
 UNKNOWN_TOKENS = "token_cost"
 UNKNOWN_PROVENANCE = "provenance_envelope"
-UNKNOWN_TEMPERATURE = "model_temperature"
-UNKNOWN_SEED = "model_seed"
+UNKNOWN_TEMPERATURE = sampling_mod.UNKNOWN_TEMPERATURE
+UNKNOWN_SEED = sampling_mod.UNKNOWN_SEED
+UNKNOWN_SEED_HONOURED = sampling_mod.UNKNOWN_SEED_HONOURED
 
 
 @dataclass(frozen=True)
 class ModelIdentity:
+    """The generator, as far as this run could establish it.
+
+    `seed_honouring` is the field that stops a seeded run being reported as a
+    pinned one. Ollama accepting a seed is established from its API docs and
+    from the request this project sends; the runner reproducing an identical
+    completion for this model on this hardware is not, and until it has been
+    measured the honest record says `assumed` and the run counts as unpinned.
+    See `sampling.py`.
+    """
+
     provider: str
     name: str
     digest: str | None = None
     temperature: float | None = None
     seed: int | None = None
+    seed_honouring: str = sampling_mod.SEED_HONOURING_UNSET
+
+    @property
+    def sampling(self) -> sampling_mod.Sampling:
+        return sampling_mod.Sampling(
+            temperature=self.temperature,
+            seed=self.seed,
+            seed_honouring=self.seed_honouring,
+        )
 
     def as_record(self) -> dict[str, Any]:
         return {
@@ -65,6 +95,8 @@ class ModelIdentity:
             "digest": self.digest,
             "temperature": self.temperature,
             "seed": self.seed,
+            "seed_honouring": self.seed_honouring,
+            "sampling_pinned": self.sampling.pinned,
         }
 
 
@@ -114,20 +146,19 @@ class RunRecord:
     def _missing(self) -> list[str]:
         """Facts this run could not establish.
 
-        `model_temperature` and `model_seed` are on this list far more often
-        than they should be: `config.json` has no setting for either, so every
-        local run today takes whatever Ollama defaults to and records that it
-        does not know. That is a real gap in what a study can pin, and it is
-        surfaced here rather than left to be discovered when two arms turn out
-        to have run at different temperatures.
+        `model_temperature` and `model_seed` are here whenever `config.json`
+        leaves them unset, which is the shipping default: the request then
+        carries neither and Ollama applies its own. `model_seed_honoured` is
+        here whenever a seed *was* set but has not been shown to be honoured on
+        this model and hardware — a stronger claim than the API accepting the
+        field, and one nothing in this repository has yet measured. A run in
+        that state is unpinned, and says so, rather than being reported as a
+        controlled generator. See `sampling.py`.
         """
         missing = []
         if not self.model.digest:
             missing.append(UNKNOWN_MODEL_DIGEST)
-        if self.model.temperature is None:
-            missing.append(UNKNOWN_TEMPERATURE)
-        if self.model.seed is None:
-            missing.append(UNKNOWN_SEED)
+        missing.extend(self.model.sampling.unknown_facts())
         if not self.descriptor_hash:
             missing.append(UNKNOWN_DESCRIPTOR_HASH)
         if not self.tokens:
@@ -227,7 +258,7 @@ async def capture_model_identity(provider: str = "ollama") -> ModelIdentity:
 
     settings = config.get()
     name = str(settings.get("model", "?"))
-    temperature = settings.get("temperature")
+    sampling = sampling_mod.from_config(settings)
     digest = None
     try:
         import httpx
@@ -245,6 +276,7 @@ async def capture_model_identity(provider: str = "ollama") -> ModelIdentity:
         provider=provider,
         name=name,
         digest=digest,
-        temperature=float(temperature) if temperature is not None else None,
-        seed=settings.get("seed"),
+        temperature=sampling.temperature,
+        seed=sampling.seed,
+        seed_honouring=sampling.seed_honouring,
     )

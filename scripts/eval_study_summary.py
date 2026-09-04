@@ -30,6 +30,11 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+# The repo root as well as evals/: `runrecord` reads the sampling parameters a
+# run was made under through the root-level `sampling` module, and a summariser
+# that cannot import it would report a study without knowing whether its
+# generator was pinned.
+sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "evals"))
 
 import runrecord  # noqa: E402

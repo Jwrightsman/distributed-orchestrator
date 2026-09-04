@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+import sampling
 import server_state as state
 from execution.artifacts import (
     PROVENANCE_BUNDLE_FILENAME,
@@ -33,6 +34,9 @@ from provenance import (
     PROVENANCE_ENVELOPE_VERSION,
     UNKNOWN_MODEL_DIGEST,
     UNKNOWN_PRODUCER_IDENTITY,
+    UNKNOWN_PRODUCER_SAMPLING,
+    UNKNOWN_SAMPLING,
+    UNKNOWN_SEED_HONOURED,
     ProvenanceEnvelopeStore,
     canonical_json,
     check_envelope_against_files,
@@ -409,3 +413,99 @@ def test_no_field_or_statement_claims_correctness_or_proof(store):
         assert forbidden not in rendered.lower(), f"the envelope says {forbidden!r}"
     establishes = record.payload["establishes"]
     assert "does not establish that the output is correct" in establishes
+
+
+# ── the sampling block, scoped rather than asserted ──────────────────
+
+
+@pytest.mark.asyncio
+async def test_the_envelope_records_the_sampling_it_was_configured_with(
+    tmp_path, monkeypatch
+):
+    """A configured temperature and seed reach the envelope, scoped as the
+    coordinator's own configuration and never as the producer's."""
+    database = Path(tmp_path) / "events.db"
+    envelopes = ProvenanceEnvelopeStore(database)
+    monkeypatch.setattr(state, "provenance_envelope_store", envelopes)
+    monkeypatch.setattr(
+        sampling,
+        "from_config",
+        lambda settings=None: sampling.Sampling(
+            temperature=0.0, seed=42, seed_honouring=sampling.SEED_HONOURING_ASSUMED
+        ),
+    )
+    service = _service(tmp_path)
+
+    queued = service.submit(ExecutionRequestV1(task="Produce a file", strategy="dag"))
+    await _drain(service, queued.execution_id)
+
+    record = envelopes.get(queued.execution_id)
+    assert record is not None, "sealing produced no envelope"
+    block = record.payload["sampling"]
+    assert block["temperature"] == 0.0
+    assert block["seed"] == 42
+    # Set is not honoured, so the envelope does not call it pinned.
+    assert block["pinned"] is False
+    assert UNKNOWN_SEED_HONOURED in record.payload["unknown_facts"]
+    assert "coordinator configuration" in block["scope"]
+
+
+@pytest.mark.asyncio
+async def test_an_unconfigured_generator_is_recorded_as_unknown(tmp_path, monkeypatch):
+    """The shipping default. Ollama's own 0.8 and 0 are not written in."""
+    database = Path(tmp_path) / "events.db"
+    envelopes = ProvenanceEnvelopeStore(database)
+    monkeypatch.setattr(state, "provenance_envelope_store", envelopes)
+    service = _service(tmp_path)
+
+    queued = service.submit(ExecutionRequestV1(task="Produce a file", strategy="dag"))
+    await _drain(service, queued.execution_id)
+
+    record = envelopes.get(queued.execution_id)
+    assert record is not None, "sealing produced no envelope"
+    block = record.payload["sampling"]
+    assert block["temperature"] is None and block["seed"] is None
+    assert block["pinned"] is False
+    assert UNKNOWN_SAMPLING in record.payload["unknown_facts"]
+
+
+def test_a_distributed_producers_sampling_is_never_inferred(tmp_path):
+    """The coordinator knows its own configuration and nothing about a worker's.
+
+    Same rule as `model_variant`: the receipt does not carry it, so it is
+    unknown rather than filled in with the coordinator's value. A locally
+    executed execution has no producer and so no such gap.
+    """
+    store = ProvenanceEnvelopeStore(Path(tmp_path) / "events.db")
+    store.migrate()
+    pinned = sampling.Sampling(
+        temperature=0.0, seed=1, seed_honouring=sampling.SEED_HONOURING_VERIFIED
+    ).as_record()
+
+    local, unknown_local = store._sampling(pinned, [])
+    assert local["pinned"] is True
+    assert unknown_local == []
+
+    distributed, unknown_distributed = store._sampling(
+        pinned, [{"attempt_id": "a" * 32}]
+    )
+    assert distributed["pinned"] is True
+    assert UNKNOWN_PRODUCER_SAMPLING in unknown_distributed
+
+
+def test_the_sampling_block_does_not_break_an_older_envelopes_digest(tmp_path):
+    """Additive within version 1, on ADR 0017's own reasoning.
+
+    An envelope sealed before this field existed keeps its stored payload, and
+    its digest still verifies — the digest is recomputed over what was stored,
+    not over what the current code would build.
+    """
+    legacy = {
+        "envelope_version": "1",
+        "execution_id": EXECUTION,
+        "producers": [],
+        "unknown_facts": ["producer_identity"],
+    }
+    digest = envelope_digest(legacy)
+    assert "sampling" not in legacy
+    assert envelope_digest(json.loads(canonical_json(legacy))) == digest
