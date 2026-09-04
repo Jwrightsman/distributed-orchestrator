@@ -15,6 +15,14 @@ The short version, because it is the part people skip:
 > 15-point improvement needs 187 items and 182 hours of inference per
 > comparison. That is not a corpus anyone here will run, and saying so is more
 > useful than proposing one.
+>
+> **Every one of those figures is a function of one measured number**, the
+> discordant pair rate ψ = 0.643, and δ ∝ √(ψ/n) means halving it is worth
+> exactly what doubling the corpus is worth. At ψ = 0.32 the 100 items that
+> already exist would detect 15 points. §7.1 prints the whole grid;
+> `docs/experiments/noise-floor-under-pinned-sampling.md` is the 17-hour
+> measurement that would say whether pinning the generator gets there. It has
+> not been run.
 
 ---
 
@@ -161,6 +169,13 @@ The 28 banded items were banded from the five committed runs — real recorded
 data, five observations each — and the band record says so, including that those
 runs used four different prompt sets rather than one fixed arm. It is labelled
 `provisional` in the corpus for that reason.
+
+All six banded `web_app` items now carry `known_suspect: true` and a `grader`
+of `legacy (pre-correction)` in their band records, because §1.1 reaches every
+one of them: the evidence was computed when an HTML artifact "executed" if it
+loaded without throwing. That is a stronger statement than `provisional`, it
+sits on the item rather than in this document, and
+`tests/test_eval_corpus.py` fails if any HTML band loses it.
 
 **`web-snake` is banded `ceiling` at 5/5, and that band is wrong.** It is what
 the legacy grading says, computed correctly from the recorded data, and it is
@@ -458,17 +473,87 @@ on it. At the low end (ψ = 0.46) a 15-point effect needs 135 items; at the high
 end (ψ = 0.79) it needs 227. The estimate comes from a single pair of runs, and
 a second identical-configuration pair would be the cheapest way to tighten it.
 
-### The other lever, and why it is not taken
+### 7.1 The floor is a parameter, so the curve is printed as one
+
+Everything above is computed at one value of ψ. The whole table moves when that
+value does, and it moves in a way the closed form makes exact: the minimum
+detectable effect goes as **δ ∝ √(ψ / n)**, so **halving ψ is worth exactly what
+doubling n is worth**. `scripts/eval_power.py` therefore prints a second table —
+the same corpus sizes crossed with a range of noise floors — so that when a
+floor is measured, the corpus size it implies falls out rather than being
+re-derived.
+
+The default output stays pinned to the measured ψ = 0.643, and every cell at
+any other rate is starred and labelled a projection.
+`stats.format_psi_cell` raises rather than printing a projected value unmarked,
+because this is precisely the kind of table a later reader quotes one cell from.
+
+| noise floor | detectable at n=100 | items needed for 15 points |
+| --- | ---: | ---: |
+| ψ = 0.643 — **measured** | 20.6 points | 187 |
+| ψ = 0.5 — projection | 18.2 points | 148 |
+| ψ = 0.4 — projection | 16.3 points | 118 |
+| ψ = 0.32 — projection | **14.5 points** | **95** |
+| ψ = 0.25 — projection | 12.9 points | 74 |
+
+At ψ = 0.32 — half the measured floor — the 100-item corpus that already exists
+detects 15 points at 82% power, and the conclusion above stops being true. That
+is the entire reason the next paragraph matters.
+
+**Why 0.5 is on the list, and why it is not a round number.** If two runs of one
+item are independent draws from that item's pass probability p, the item is
+discordant with probability 2p(1−p), which is at most 0.5 for any p. So
+ψ = E[2p(1−p)] ≤ 0.5 for **any** mix of items, and the measured 0.643 sits above
+the ceiling that any independent-runs model can produce. That is consistent with
+noise — P(X ≥ 18 | n = 28, ψ = 0.5) ≈ 0.09 — and its 95% interval (0.46–0.79)
+covers 0.5 comfortably. **This is arithmetic on a model, not a measurement, and
+it does not replace the 0.643.** What it says is narrower and it matters for
+sizing the next study: a re-measured floor should be expected to come in below
+0.643 before anything is done to it, so a study that pins the generator needs an
+unpinned control arm rather than a comparison against the historical number.
+
+**What could lower it.** `config.json` had no temperature and no seed, so every
+run this project has made took Ollama's own defaults. That is now settable
+(`sampling.py`), and whether it accounts for any of the 0.643 is unmeasured.
+[`docs/experiments/noise-floor-under-pinned-sampling.md`](experiments/noise-floor-under-pinned-sampling.md)
+is the pre-registered design that measures it: two identical-configuration
+pairs over a 37-item subset, one pinned and one not, about 17 hours at the
+direct arm. It has not been run.
+
+### The other lever, costed since
 
 The alternative to more items is more replicates per item, scoring each item by
 its pass *fraction* rather than a single Bernoulli draw, and testing on a
-continuous endpoint. That is genuinely more efficient per unit of inference.
+continuous endpoint. This document used to say that was "genuinely more
+efficient per unit of inference".
 
-It is not adopted here because it changes the endpoint, and this instrument's
-value comes partly from five committed runs that are comparable with each other
-under the binary definition. Changing the endpoint and the corpus in the same
-change would leave nothing to compare against. It is the obvious next
-improvement, and it should be pre-registered like anything else.
+**That was an expectation, and the arithmetic does not support it.**
+[`docs/experiments/replicate-endpoint-design.md`](experiments/replicate-endpoint-design.md)
+pre-registers the design and costs it: at matched inference cost, k runs on n
+items and one run on k×n items come out with the same power, every time. The
+signal is delta per item and the variance of a per-item difference falls as
+1/k, so power depends on the total run count n×k and barely on how it is split.
+Replicates and items are close to the same currency.
+
+**What replicates do buy is resolution inside a corpus that cannot grow.**
+Detecting 15 points with single runs needs 187 items — 87 prompts nobody has
+written. The confirmatory set is 36 and frozen by a digest, so k is the only
+lever a pre-registered study on that set has: one run each gives power 0.29,
+and k=5 gives 0.88 on the same 36 items. That, and not efficiency, is the case
+for it.
+
+It still changes the endpoint, and this instrument's value comes partly from
+five committed runs that are comparable with each other under the binary
+definition, so a replicate study is a new series rather than an extension of
+the old one.
+
+**And it is not the first thing to do.** Replicates average down within-item
+variance; pinning the generator's temperature and seed tries to remove that
+same variance at the source, for free.
+[`docs/experiments/noise-floor-under-pinned-sampling.md`](experiments/noise-floor-under-pinned-sampling.md)
+measures which, in 17 hours, and it is the measurement that decides between the
+two designs. Adopting replicates before running it would be spending a week
+averaging down noise a config setting might have removed.
 
 ---
 
@@ -488,6 +573,14 @@ Three properties worth naming:
   provenance envelope uses (ADR 0017), for the same reason: a run that could not
   determine the model digest and a run whose digest matched are different
   situations, and only one supports a comparison.
+* **A weak fact is recorded as weak.** `config.json` can now pin `temperature`
+  and `seed`, and by default sets neither, so a run still takes Ollama's own
+  0.8 and 0 and records both as unknown. When a seed *is* set, the record
+  distinguishes the seed reaching the request — established, and asserted
+  against the outbound body by `tests/test_sampling.py` — from the runner
+  honouring it, which nothing here has measured. A seeded run reports
+  `sampling_pinned: false` and lists `model_seed_honoured` as unknown until it
+  does. See `sampling.py`.
 * **The envelope is reused where there is one.** A run through the normal
   execution path already binds its artifacts to a provenance envelope; that
   digest goes in the record rather than being duplicated.
