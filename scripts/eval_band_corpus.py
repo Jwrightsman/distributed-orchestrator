@@ -51,6 +51,30 @@ PROVISIONAL_SOURCE = (
     "which used four different prompt sets rather than one fixed arm"
 )
 
+# Which grader produced the evidence a band rests on. The five committed runs
+# predate the grading correction, so a band computed from them is a band
+# computed under the old checker and the record says so rather than leaving a
+# reader to work it out from dates.
+LEGACY_GRADER = "legacy (pre-correction)"
+
+# The specific defect, on the specific items it reaches. Before the correction,
+# an HTML artifact "executed" if it loaded without throwing — `browser_ok`.
+# Under that check `web-snake` passed 5 of 5 committed runs; the behavioural
+# checker in `scripts/showcase_reliability.py` measured the same artifact at
+# 2 of 10. Every band derived from those runs for an HTML item inherits the
+# weaker check, which makes it known-suspect rather than merely provisional.
+#
+# Keyed on the expected artifact rather than the category name, because the
+# defect is in the HTML execution check. On the current corpus that is exactly
+# the six banded `web_app` items.
+PRE_CORRECTION_CAVEAT = (
+    "known-suspect: computed under the pre-correction grader, where an HTML "
+    "artifact 'executed' if it loaded without throwing (browser_ok). web-snake "
+    "bands ceiling at 5/5 under that check and measured 2/10 under the "
+    "behavioural checker in scripts/showcase_reliability.py. Re-band with "
+    "--live under the current grader before relying on any HTML band."
+)
+
 
 def bands_from_results() -> dict[str, tuple[int, int]]:
     """Per-item (passes, trials) from every committed eval run."""
@@ -106,7 +130,13 @@ async def bands_live(items, trials: int) -> dict[str, tuple[int, int]]:
     return tally
 
 
-def apply(tally: dict[str, tuple[int, int]], source: str, write: bool) -> int:
+def apply(
+    tally: dict[str, tuple[int, int]],
+    source: str,
+    write: bool,
+    grader: str,
+    pre_correction: bool = False,
+) -> int:
     data = json.loads(PROMPTS_FILE.read_text(encoding="utf-8"))
     prompts = data["prompts"]
     if not prompts:
@@ -123,14 +153,31 @@ def apply(tally: dict[str, tuple[int, int]], source: str, write: bool) -> int:
         passes, trials = evidence
         label = corpus_mod.classify_band(passes, trials)
         distribution[label] += 1
-        band = {"label": label, "passes": passes, "trials": trials, "source": source}
+        band = {
+            "label": label,
+            "passes": passes,
+            "trials": trials,
+            "source": source,
+            "grader": grader,
+        }
+        if pre_correction and entry.get("expect", {}).get("artifact") == "html":
+            band["known_suspect"] = True
+            band["caveat"] = PRE_CORRECTION_CAVEAT
         if entry.get("band") != band:
             entry["band"] = band
             changed += 1
 
+    suspect = sum(
+        1
+        for entry in prompts
+        if isinstance(entry.get("band"), dict) and entry["band"].get("known_suspect")
+    )
     print()
     print(f"{len(tally)} item(s) banded; {changed} band record(s) would change.")
     print("Resulting distribution:", dict(distribution))
+    if suspect:
+        print(f"{suspect} band(s) marked known-suspect: HTML items graded before the")
+        print("execution check was corrected. Re-band them with --live before use.")
     discriminating = distribution.get("discriminating", 0)
     banded = sum(v for k, v in distribution.items() if k in corpus_mod.BANDS)
     if banded:
@@ -174,7 +221,13 @@ def main() -> int:
         if not tally:
             print("ERROR: no committed run covers any item currently in the corpus.")
             return 1
-        return apply(tally, PROVISIONAL_SOURCE, args.write)
+        return apply(
+            tally,
+            PROVISIONAL_SOURCE,
+            args.write,
+            grader=LEGACY_GRADER,
+            pre_correction=True,
+        )
 
     unbanded = [i for i in items if i.band is None]
     if not unbanded:
@@ -186,10 +239,13 @@ def main() -> int:
     print(f"Banding {len(unbanded)} item(s) at {args.trials} trials each. "
           f"This runs the model and will take hours.")
     tally = asyncio.run(bands_live(unbanded, args.trials))
+    import grading
+
     return apply(
         tally,
         f"live banding run, {args.trials} trials of a single complete candidate",
         args.write,
+        grader=f"grading.py v{grading.GRADER_VERSION}",
     )
 
 

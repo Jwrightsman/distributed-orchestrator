@@ -273,3 +273,62 @@ def test_every_declared_fixture_and_schema_exists(items):
                     missing.append(f"{item.id}: schema {spec['schema']}")
     assert checked > 0, "no item declares an output-level check — nothing was verified"
     assert missing == [], missing
+
+
+# -- the bands that are known-suspect, not merely provisional ---------------
+
+def test_every_html_band_from_the_committed_runs_is_marked_known_suspect():
+    """PR #71 finding 1, recorded on the items it reaches rather than in prose.
+
+    Before the grading correction an HTML artifact "executed" if it loaded
+    without throwing. `web-snake` bands ceiling at 5/5 under that check and was
+    measured at 2/10 under the behavioural checker. Every band derived from the
+    five committed runs for an HTML item inherits the weaker check, so each one
+    says so in its own record — a band travels further than the document
+    explaining it.
+    """
+    data = json.loads((EVALS / "prompts.json").read_text(encoding="utf-8"))
+    prompts = data["prompts"]
+    assert prompts, "the corpus is empty — this test read nothing"
+    html_banded = [
+        entry for entry in prompts
+        if entry.get("band") and entry.get("expect", {}).get("artifact") == "html"
+    ]
+    assert html_banded, "no banded HTML item — this test asserted nothing"
+    for entry in html_banded:
+        band = entry["band"]
+        assert band.get("known_suspect") is True, entry["id"]
+        assert "browser_ok" in band.get("caveat", ""), entry["id"]
+        assert band.get("grader") == "legacy (pre-correction)", entry["id"]
+    # And the marking is confined to the items the defect reaches: a Python
+    # item graded by the same runs is provisional, not known-suspect.
+    other_banded = [
+        entry for entry in prompts
+        if entry.get("band") and entry.get("expect", {}).get("artifact") != "html"
+    ]
+    assert other_banded, "no banded non-HTML item — this test asserted nothing"
+    assert not any(entry["band"].get("known_suspect") for entry in other_banded)
+
+
+def test_every_band_records_which_grader_produced_it():
+    """Two numbers from two checkers is how this project got here twice."""
+    data = json.loads((EVALS / "prompts.json").read_text(encoding="utf-8"))
+    banded = [entry for entry in data["prompts"] if entry.get("band")]
+    assert banded, "no banded item — this test read nothing"
+    for entry in banded:
+        assert entry["band"].get("grader"), entry["id"]
+
+
+def test_web_app_is_exactly_the_html_family_so_the_marking_covers_it():
+    """The caveat is keyed on the artifact; the published figures say `web_app`.
+
+    They coincide today. If they ever stop, the marking follows the defect —
+    the HTML execution check — and this test fails so the divergence is a
+    decision rather than a silent gap.
+    """
+    data = json.loads((EVALS / "prompts.json").read_text(encoding="utf-8"))
+    banded = [entry for entry in data["prompts"] if entry.get("band")]
+    html = {e["id"] for e in banded if e.get("expect", {}).get("artifact") == "html"}
+    web_app = {e["id"] for e in banded if e["category"] == "web_app"}
+    assert html and web_app
+    assert html == web_app
