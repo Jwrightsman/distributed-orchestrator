@@ -28,7 +28,6 @@ promote an architecture the same way.
 import argparse
 import asyncio
 import json
-import math
 import random
 import sys
 import time
@@ -46,30 +45,13 @@ from showcase_reliability import check_artifact  # noqa: E402
 BASELINE = {"snake": (2, 10), "chart": (10, 10), "clock": (3, 4), "particles": (3, 4)}
 
 
-def fisher_exact_greater(a: int, b: int, c: int, d: int) -> float:
-    """One-sided p for a 2x2 table: is [a of a+b] better than [c of c+d]?
-
-    Exact hypergeometric tail. No scipy in this project's dependency list, and
-    the tables here are small enough that the sum is trivial.
-    """
-    n = a + b + c + d
-    row1, col1 = a + b, a + c
-    total = math.comb(n, col1)
-    p = 0.0
-    for k in range(a, min(row1, col1) + 1):
-        p += math.comb(row1, k) * math.comb(n - row1, col1 - k)
-    return p / total
-
-
-def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
-    """Wilson score interval — behaves at 0/n and n/n, unlike the normal one."""
-    if n == 0:
-        return (0.0, 1.0)
-    p = k / n
-    d = 1 + z**2 / n
-    centre = (p + z**2 / (2 * n)) / d
-    half = z * math.sqrt(p * (1 - p) / n + z**2 / (4 * n**2)) / d
-    return (max(0.0, centre - half), min(1.0, centre + half))
+# Fisher's exact test and the Wilson interval used to be defined here and,
+# separately, in evals/compare.py. Two implementations of the same statistic is
+# how two callers end up quietly disagreeing about what a p-value meant, so both
+# now come from one place. The behaviour is unchanged: the self-check below
+# still reproduces this project's published 10/10-vs-2/10 result, p = 0.00036.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "evals"))
+from stats import fisher_exact_greater, wilson  # noqa: E402
 
 
 def ensemble_rate_empirical(outcomes: list[bool], n: int, draws: int = 20000) -> float:

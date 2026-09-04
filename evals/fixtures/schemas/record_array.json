@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "a non-empty array of records",
+  "description": "The shape an extraction or per-row transform must print. minItems is 1 on purpose: a script that prints [] validates against a looser schema while having extracted nothing, which is the vacuous pass this whole instrument exists to stop.",
+  "type": "array",
+  "minItems": 1,
+  "items": {
+    "type": "object",
+    "minProperties": 1
+  }
+}

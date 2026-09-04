@@ -1,0 +1,390 @@
+{
+  "version": 1,
+  "notes": "Fixture corpus for the eval controls. Sixteen items with one unambiguous, mechanically checkable answer each, so a control's result is about the instrument rather than about model quality. Graded by evals/grading.py unchanged - the controls test the real grader, not a copy of it. Never run against a live model: evals/controls.py generates the artifacts with a stub.",
+  "prompts": [
+    {
+      "id": "fx-01",
+      "category": "algorithm",
+      "taxonomy": "algorithmic_kernel",
+      "task": "Fixture item 1: write a Python script that prints FIXTURE-FX-01-OK to stdout.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "FIXTURE-FX-01-OK"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_contains",
+            "substrings": [
+              "FIXTURE-FX-01-OK"
+            ],
+            "inputs": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "fx-02",
+      "category": "algorithm",
+      "taxonomy": "algorithmic_kernel",
+      "task": "Fixture item 2: write a Python script that prints FIXTURE-FX-02-OK to stdout.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "FIXTURE-FX-02-OK"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_contains",
+            "substrings": [
+              "FIXTURE-FX-02-OK"
+            ],
+            "inputs": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "fx-03",
+      "category": "algorithm",
+      "taxonomy": "algorithmic_kernel",
+      "task": "Fixture item 3: write a Python script that prints FIXTURE-FX-03-OK to stdout.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "FIXTURE-FX-03-OK"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_contains",
+            "substrings": [
+              "FIXTURE-FX-03-OK"
+            ],
+            "inputs": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "fx-04",
+      "category": "algorithm",
+      "taxonomy": "algorithmic_kernel",
+      "task": "Fixture item 4: write a Python script that prints FIXTURE-FX-04-OK to stdout.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "FIXTURE-FX-04-OK"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_contains",
+            "substrings": [
+              "FIXTURE-FX-04-OK"
+            ],
+            "inputs": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "fx-05",
+      "category": "algorithm",
+      "taxonomy": "algorithmic_kernel",
+      "task": "Fixture item 5: write a Python script that prints FIXTURE-FX-05-OK to stdout.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "FIXTURE-FX-05-OK"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_contains",
+            "substrings": [
+              "FIXTURE-FX-05-OK"
+            ],
+            "inputs": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "fx-06",
+      "category": "algorithm",
+      "taxonomy": "algorithmic_kernel",
+      "task": "Fixture item 6: write a Python script that prints FIXTURE-FX-06-OK to stdout.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "FIXTURE-FX-06-OK"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_contains",
+            "substrings": [
+              "FIXTURE-FX-06-OK"
+            ],
+            "inputs": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "fx-07",
+      "category": "algorithm",
+      "taxonomy": "algorithmic_kernel",
+      "task": "Fixture item 7: write a Python script that prints FIXTURE-FX-07-OK to stdout.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "FIXTURE-FX-07-OK"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_contains",
+            "substrings": [
+              "FIXTURE-FX-07-OK"
+            ],
+            "inputs": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "fx-08",
+      "category": "algorithm",
+      "taxonomy": "algorithmic_kernel",
+      "task": "Fixture item 8: write a Python script that prints FIXTURE-FX-08-OK to stdout.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "FIXTURE-FX-08-OK"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_contains",
+            "substrings": [
+              "FIXTURE-FX-08-OK"
+            ],
+            "inputs": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "fx-09",
+      "category": "algorithm",
+      "taxonomy": "algorithmic_kernel",
+      "task": "Fixture item 9: write a Python script that prints FIXTURE-FX-09-OK to stdout.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "FIXTURE-FX-09-OK"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_contains",
+            "substrings": [
+              "FIXTURE-FX-09-OK"
+            ],
+            "inputs": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "fx-10",
+      "category": "algorithm",
+      "taxonomy": "algorithmic_kernel",
+      "task": "Fixture item 10: write a Python script that prints FIXTURE-FX-10-OK to stdout.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "FIXTURE-FX-10-OK"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_contains",
+            "substrings": [
+              "FIXTURE-FX-10-OK"
+            ],
+            "inputs": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "fx-11",
+      "category": "algorithm",
+      "taxonomy": "algorithmic_kernel",
+      "task": "Fixture item 11: write a Python script that prints FIXTURE-FX-11-OK to stdout.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "FIXTURE-FX-11-OK"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_contains",
+            "substrings": [
+              "FIXTURE-FX-11-OK"
+            ],
+            "inputs": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "fx-12",
+      "category": "algorithm",
+      "taxonomy": "algorithmic_kernel",
+      "task": "Fixture item 12: write a Python script that prints FIXTURE-FX-12-OK to stdout.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "FIXTURE-FX-12-OK"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_contains",
+            "substrings": [
+              "FIXTURE-FX-12-OK"
+            ],
+            "inputs": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "fx-13",
+      "category": "algorithm",
+      "taxonomy": "algorithmic_kernel",
+      "task": "Fixture item 13: write a Python script that prints FIXTURE-FX-13-OK to stdout.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "FIXTURE-FX-13-OK"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_contains",
+            "substrings": [
+              "FIXTURE-FX-13-OK"
+            ],
+            "inputs": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "fx-14",
+      "category": "algorithm",
+      "taxonomy": "algorithmic_kernel",
+      "task": "Fixture item 14: write a Python script that prints FIXTURE-FX-14-OK to stdout.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "FIXTURE-FX-14-OK"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_contains",
+            "substrings": [
+              "FIXTURE-FX-14-OK"
+            ],
+            "inputs": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "fx-15",
+      "category": "algorithm",
+      "taxonomy": "algorithmic_kernel",
+      "task": "Fixture item 15: write a Python script that prints FIXTURE-FX-15-OK to stdout.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "FIXTURE-FX-15-OK"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_contains",
+            "substrings": [
+              "FIXTURE-FX-15-OK"
+            ],
+            "inputs": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "fx-16",
+      "category": "algorithm",
+      "taxonomy": "algorithmic_kernel",
+      "task": "Fixture item 16: write a Python script that prints FIXTURE-FX-16-OK to stdout.",
+      "origin": "taxonomy",
+      "split": "development",
+      "band": null,
+      "expect": {
+        "artifact": "python",
+        "keywords": [
+          "FIXTURE-FX-16-OK"
+        ],
+        "checks": [
+          {
+            "kind": "stdout_contains",
+            "substrings": [
+              "FIXTURE-FX-16-OK"
+            ],
+            "inputs": []
+          }
+        ]
+      }
+    }
+  ]
+}

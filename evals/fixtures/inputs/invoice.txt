@@ -1,0 +1,10 @@
+ACME SUPPLY CO
+Invoice Number: INV-2026-0431
+Date: 2026-07-14
+
+  4 x Flange        40.00
+  2 x Grommet        7.50
+  1 x Bracket       12.25
+
+Total: 59.75
+Currency: USD
