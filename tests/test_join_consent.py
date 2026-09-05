@@ -11,6 +11,7 @@ so it must refuse rather than assume.
 
 import builtins
 import sys
+from pathlib import Path
 
 import join
 import pytest
@@ -92,70 +93,88 @@ async def test_join_requires_an_explicit_coordinator_before_any_install(
     assert raised.value.code == 2
 
 
-# ── The advertised one-liner has to survive its own delivery mechanism ──
+# ── There is no longer a one-liner, and that is the point ──
 #
-# `curl … | bash -s -- URL` gives bash the downloaded script as *stdin*, so
-# everything install.sh exec's inherits a pipe. join.py then sees no terminal
-# and — correctly, by the rule above — refuses. The result was an installer
-# that checked Python, installed Ollama, cloned the repo, installed the deps,
-# and stopped dead on "Not running in a terminal, so nobody can consent."
-# Reproduced by piping into bash before the fix.
+# `install.sh` and `install.ps1` advertised `curl … | bash` and `irm … | iex`
+# in their own headers. That form has no step at which the person running it
+# can read what they are about to run: the download and the execution are the
+# same command, and whatever answers the URL at that moment is what executes.
+# For a project whose entire pitch is "lend me your computer", that was the
+# wrong default, and no amount of care inside the script fixed the shape of it.
 #
-# The fix is to hand over on /dev/tty, which is the controlling terminal
-# whatever stdin was redirected to — so a human still types "yes". The wrong
-# fix, which these tests exist to block, is passing --yes from the installer:
-# that consents on the machine owner's behalf, which is the entire thing the
-# gate prevents.
+# Both were deleted on 2026-09-05. The replacement is `git clone`, which fetches
+# the same code and leaves it sitting on disk to be read first, followed by
+# `python worker_installer.py`.
+#
+# These tests keep them gone. Deleting a file is easy; the failure mode is
+# somebody re-adding the convenience later, and a one-liner is exactly the kind
+# of convenience that gets re-added.
 
-def _install_sh() -> str:
-    from pathlib import Path
-    return (Path(__file__).resolve().parent.parent / "install.sh").read_text(encoding="utf-8")
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
+_PIPE_INTO_A_SHELL = ("| bash", "|bash", "| sh", "|sh", "| iex", "|iex")
 
-def _install_ps1() -> str:
-    from pathlib import Path
-    return (Path(__file__).resolve().parent.parent / "install.ps1").read_text(
-        encoding="utf-8"
-    )
+#: Files whose job is to record that this used to exist, or to forbid it.
+_HISTORY = {"test_join_consent.py", "SPRINT_PHASE2.md", "SPRINT_AUG2026.md"}
 
 
-def test_installers_require_explicit_origin_before_mutating_the_machine():
-    shell = _install_sh()
-    powershell = _install_ps1()
-
-    assert "An explicit coordinator origin is required" in shell
-    assert shell.index("An explicit coordinator origin is required") < shell.index(
-        "# 1. Python"
-    )
-    assert "SWARM_SERVER is required for durable enrollment" in powershell
-    assert powershell.index(
-        "SWARM_SERVER is required for durable enrollment"
-    ) < powershell.index("# 1. Python")
+def test_the_curl_pipe_bash_installers_are_gone():
+    for name in ("install.sh", "install.ps1"):
+        assert not (REPO_ROOT / name).exists(), (
+            f"{name} is back. Piping a download into a shell gives the person "
+            "running it no point at which to read the thing they are running."
+        )
 
 
-def test_installer_hands_over_on_the_terminal_not_the_pipe():
-    src = _install_sh()
-    assert "join.py \"$@\" < /dev/tty" in src, (
-        "install.sh must reconnect stdin to /dev/tty before exec'ing join.py, "
-        "or the one-line install can never reach a consent prompt"
-    )
+def _tracked_text_files():
+    for path in REPO_ROOT.rglob("*"):
+        if not path.is_file() or path.suffix not in {
+            ".md",
+            ".py",
+            ".sh",
+            ".ps1",
+            ".yml",
+            ".yaml",
+            ".html",
+            ".txt",
+        }:
+            continue
+        if set(path.parts) & {
+            ".git",
+            ".claude",
+            "__pycache__",
+            "node_modules",
+            "output",
+            ".venv",
+            ".pytest_cache",
+            ".ruff_cache",
+            ".hypothesis",
+        }:
+            continue
+        if path.name in _HISTORY:
+            continue
+        yield path
 
 
-def test_installer_never_consents_on_the_owners_behalf():
-    # Comments may discuss --yes (one warns against exactly this); code may not.
-    code = [ln for ln in _install_sh().splitlines() if not ln.lstrip().startswith("#")]
-    offenders = [ln for ln in code if "--yes" in ln]
+def test_nothing_advertises_piping_this_project_into_a_shell():
+    """Repo-wide. A one-liner re-added in a doc is a one-liner people run."""
+
+    offenders: list[str] = []
+    for path in _tracked_text_files():
+        for number, line in enumerate(
+            path.read_text(encoding="utf-8", errors="replace").splitlines(), start=1
+        ):
+            if "distributed-orchestrator" not in line:
+                continue
+            if any(pipe in line.lower() for pipe in _PIPE_INTO_A_SHELL):
+                offenders.append(f"{path.relative_to(REPO_ROOT)}:{number}")
     assert not offenders, (
-        f"install.sh must not pass --yes: that answers the consent prompt for "
-        f"someone who never saw it. Offending lines: {offenders}"
+        "these lines pipe this project into a shell: " + "; ".join(offenders)
     )
 
 
-def test_installer_still_refuses_when_there_is_genuinely_no_terminal():
-    """CI, containers, unattended shells: the fallback must reach plain join.py."""
-    src = _install_sh()
-    tail = src[src.index("# 5. Join the network"):]
-    assert 'exec "$PY" join.py "$@"\n' in tail, (
-        "there must be a non-tty fallback branch, so a genuinely unattended "
-        "install still hits join.py's refusal instead of failing obscurely"
-    )
+def test_the_documented_join_is_a_clone_somebody_can_read_first():
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    joining = readme[readme.index("## Worker nodes"):]
+    assert "git clone https://github.com/Jwrightsman/distributed-orchestrator" in joining
+    assert "python worker_installer.py" in joining

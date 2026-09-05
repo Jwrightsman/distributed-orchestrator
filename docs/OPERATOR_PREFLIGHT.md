@@ -149,6 +149,9 @@ Do not go looking for these; they are not missing by accident.
 
 - No auto-update for workers. A contributor updates when they choose to.
 - No telemetry, no crash reporting, no usage analytics.
-- No `curl … | bash` install for the guided installer.
+- No `curl … | bash` install at all. There were two — `install.sh` and
+  `install.ps1` — and they were deleted on 2026-09-05. Contributors clone the
+  repository and run `python worker_installer.py` out of it, so they have
+  something to read before they run it. Do not hand anybody a one-liner.
 - No code signing or notarization.
 - No sandbox around generated code. Review it before you run it.

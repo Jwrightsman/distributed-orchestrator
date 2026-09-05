@@ -245,22 +245,29 @@ currently limited to canonical HTTP submission.
 
 ## Worker nodes
 
-Any machine with 8GB RAM can join as a builder node — one copy-paste line:
+Any machine with 8GB RAM can join as a builder node. Get the code, then run the
+guided installer from inside it:
 
-**Mac / Linux**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Jwrightsman/distributed-orchestrator/master/install.sh | bash -s -- http://ORCHESTRATOR_IP:8000
+git clone https://github.com/Jwrightsman/distributed-orchestrator
+cd distributed-orchestrator
+python worker_installer.py
 ```
 
-**Windows (PowerShell)**
-```powershell
-$env:SWARM_SERVER="http://ORCHESTRATOR_IP:8000"; irm https://raw.githubusercontent.com/Jwrightsman/distributed-orchestrator/master/install.ps1 | iex
-```
+It walks nine steps, refuses to run as root or Administrator, names every file
+it will write before writing one, and asks for the invitation code at a prompt
+with the echo off — never as a command-line argument. Full walkthrough for
+somebody who has barely used a terminal: [docs/JOIN.md](docs/JOIN.md).
 
-The installer checks Python and Ollama, downloads the repo, pulls the model,
-and starts working. The coordinator origin is required: enrollment credentials
-are never sent to an unauthenticated LAN-discovery responder. Use HTTPS, a
-private-overlay HTTP address, or loopback for local development.
+**There is deliberately no `curl … | bash` one-liner.** There used to be, and it
+was removed on 2026-09-05: piping a URL into a shell runs whatever answers that
+URL, with no chance to read it and nothing to check it against. `git clone`
+fetches the same code and leaves it sitting there to be read first. That is not
+a big cost for a program somebody is about to lend a computer to.
+
+The coordinator origin is required: enrollment credentials are never sent to an
+unauthenticated LAN-discovery responder. Use HTTPS, or loopback for local
+development — plaintext `http://` to anything else is refused outright.
 
 The stock worker creates a private, coordinator-scoped identity file on first
 bootstrap. Use `--identity-file PATH` to select an explicit location. Keep that
@@ -276,25 +283,36 @@ are collected. Ollama must actually supply a digest for it to be claimed. The
 descriptor is reused for reconnects in that process and identifies eligibility,
 not measured performance, attestation, trust, or output correctness.
 
-Piping a script from the internet into your shell deserves a look first — it's short, and reading it is the right instinct: [install.sh](install.sh) · [install.ps1](install.ps1).
-
-Already have the repo?
+The older, less guided entry points still work:
 
 ```bash
 # One-command join (checks deps, pulls model, registers, starts polling):
-python join.py http://ORCHESTRATOR_IP:8000
+python join.py https://COORDINATOR
 
-# Or manually:
-python node.py --server http://ORCHESTRATOR_IP:8000
+# Or manually, once this machine is enrolled and needs no invitation code:
+python node.py --server https://COORDINATOR
 
 # Direct-start model/claim corrections; the JSON is strictly bounded:
-python node.py --server http://ORCHESTRATOR_IP:8000 \
+python node.py --server https://COORDINATOR \
   --model qwen3.5:4b --capability-overrides worker-claims.json
 
 # Legacy string tags remain available for compatibility:
-python node.py --server http://ORCHESTRATOR_IP:8000 \
+python node.py --server https://COORDINATOR \
   --capabilities code,large-context
 ```
+
+**Where the invitation code goes.** `join.py` and `node.py` accept it three
+ways, and only one of them is safe to type:
+
+| | |
+| --- | --- |
+| `--ask-secret` | Prompts for it with the echo off. Nothing reaches the argument list or your shell history. |
+| `--secret-file PATH` | Reads it from a file that must be readable only by you — the same permission check that guards the identity file. |
+| `--secret VALUE` | **Readable by every other user on the machine** through `ps`, and written to your shell history. Kept so existing scripts keep working; it prints a warning saying exactly this. |
+
+`python worker_installer.py` accepts no code on the command line at all, which
+is why it is the path this README recommends. A machine only needs a code the
+first time it joins; after that it has its own revocable credential.
 
 **Tracing, if the coordinator has it on.** The coordinator may send a
 `traceparent` header with a task; your worker echoes it back on that task's later
