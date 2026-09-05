@@ -302,7 +302,8 @@ python node.py --server https://COORDINATOR \
 ```
 
 **Where the invitation code goes.** `join.py` and `node.py` accept it three
-ways, and only one of them is safe to type:
+ways. Two of them keep it off your screen and out of your shell history; the
+third is kept only because existing scripts use it:
 
 | | |
 | --- | --- |
