@@ -299,30 +299,41 @@ def test_no_command_line_option_accepts_a_secret():
     assert "--invitation-file" in options
 
 
-def test_an_invitation_file_must_not_be_readable_by_others(stub, answers, tmp_path):
+def test_an_owner_only_invitation_file_is_accepted(stub, answers, tmp_path):
     invitation_file = tmp_path / "code.txt"
     invitation_file.write_text(INVITATION, encoding="utf-8")
-    if os.name == "posix":
-        invitation_file.chmod(0o644)
-        answers("yes")
-        code = _run_install(
+    invitation_file.chmod(0o600)
+    answers("yes")
+    assert (
+        _run_install(
+            coordinator=COORDINATOR,
+            node_id="laptop",
+            invitation_file=invitation_file,
+        )
+        == worker_installer.EXIT_OK
+    )
+    assert len(_identity_files(tmp_path / "config")) == 1
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")
+def test_an_invitation_file_others_can_read_is_refused(stub, answers, tmp_path):
+    """A credential in a world-readable file is a credential already disclosed."""
+
+    invitation_file = tmp_path / "code.txt"
+    invitation_file.write_text(INVITATION, encoding="utf-8")
+    invitation_file.chmod(0o644)
+    answers("yes")
+
+    with pytest.raises(worker_installer.InstallerError) as raised:
+        _run_install(
             coordinator=COORDINATOR, node_id="laptop", invitation_file=invitation_file
         )
-        assert code == worker_installer.EXIT_BAD_COORDINATOR
-        assert not _identity_files(tmp_path / "config")
-    else:
-        # Windows has no portable POSIX mode to assert; the readable path still
-        # has to work, which is what this branch checks.
-        invitation_file.chmod(0o600)
-        answers("yes")
-        assert (
-            _run_install(
-                coordinator=COORDINATOR,
-                node_id="laptop",
-                invitation_file=invitation_file,
-            )
-            == worker_installer.EXIT_OK
-        )
+
+    assert raised.value.exit_code == worker_installer.EXIT_BAD_COORDINATOR
+    assert "chmod 600" in raised.value.hint
+    # The identity file's own wording must not leak into a different file's error.
+    assert "worker identity file" not in str(raised.value)
+    assert not _identity_files(tmp_path / "config")
 
 
 # ── Refusals ─────────────────────────────────────────────────────────────────

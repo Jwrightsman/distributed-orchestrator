@@ -286,20 +286,33 @@ def _validate_identity_payload(
     )
 
 
-def _check_open_file(path: Path, opened: os.stat_result) -> None:
+def _check_open_file(
+    path: Path,
+    opened: os.stat_result,
+    *,
+    noun: str = "worker identity file",
+    max_bytes: int = MAX_IDENTITY_BYTES,
+) -> None:
+    """One permission check, shared by every file here that holds a secret.
+
+    `noun` exists so the same checks can guard an invitation file without
+    telling its owner that their "worker identity file" has the wrong mode. The
+    checks themselves must not be duplicated per file kind — that is how two
+    copies drift and one of them ends up laxer than the other.
+    """
+
     if not stat.S_ISREG(opened.st_mode):
-        raise WorkerIdentityError(f"worker identity is not a regular file: {path}")
-    if opened.st_size > MAX_IDENTITY_BYTES:
-        raise WorkerIdentityError("worker identity file is too large")
+        raise WorkerIdentityError(f"{noun} is not a regular file: {path}")
+    if opened.st_size > max_bytes:
+        raise WorkerIdentityError(f"{noun} is too large")
     if os.name == "posix":
         if stat.S_IMODE(opened.st_mode) & 0o077:
             raise WorkerIdentityError(
-                "worker identity file is accessible by group or other users; "
-                "set POSIX mode 0600"
+                f"{noun} is accessible by group or other users; set POSIX mode 0600"
             )
         getuid = getattr(os, "getuid", None)
         if getuid is not None and opened.st_uid != getuid():
-            raise WorkerIdentityError("worker identity file is not owned by this user")
+            raise WorkerIdentityError(f"{noun} is not owned by this user")
 
 
 MAX_SECRET_FILE_BYTES = 4096
@@ -332,7 +345,12 @@ def read_owner_only_text(path: Path | str) -> str:
     try:
         descriptor = os.open(secret_path, flags)
         with os.fdopen(descriptor, "rb") as handle:
-            _check_open_file(secret_path, os.fstat(handle.fileno()))
+            _check_open_file(
+                secret_path,
+                os.fstat(handle.fileno()),
+                noun="the file",
+                max_bytes=MAX_SECRET_FILE_BYTES,
+            )
             raw = handle.read(MAX_SECRET_FILE_BYTES + 1)
     except WorkerIdentityError:
         raise
