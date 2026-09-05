@@ -16,6 +16,25 @@ import server
 import server_state
 from verification import VerificationPool
 from tests._node_session_helpers import enable_auto_node_sessions
+from tests.deadline_guards import await_condition
+
+
+async def _comparisons_finished() -> None:
+    """Wait for every spawned background comparison to finish.
+
+    These tests used a fixed 0.1-0.2s sleep, which on a loaded machine was long
+    enough to be missed. For the two that assert something *was* recorded, a
+    missed sleep read as "the background comparison never ran". For the two that
+    assert nothing was recorded, it was worse: the assertion passed for the
+    wrong reason, because the collector had not run yet. `_spawn_comparison`
+    tracks its task, so waiting for that set to drain makes all four exact.
+    """
+
+    await await_condition(
+        lambda: not routes_pitch._verify_tasks,
+        what="the background comparison tasks to finish",
+    )
+
 
 _CODE_A = "```python\nprint('hello world from a')\n```"
 _CODE_B = "```python\nprint('hello world from b')\n```"
@@ -286,10 +305,11 @@ async def test_comparison_records_in_the_background_without_blocking():
         "verify_1", "subtask", "job_1", "trace_1", "alpha", _CODE_A,
         slow_duplicate, pool, primary_enrollment_id="enrollment-alpha",
     )
-    # The pipeline has already moved on: nothing recorded yet.
+    # The pipeline has already moved on: nothing recorded yet. This one is the
+    # subject of the test, and asserts on ordering rather than on elapsed time.
     assert pool.agreement_record("enrollment:enrollment-alpha").total == 0
 
-    await asyncio.sleep(0.2)
+    await _comparisons_finished()
     assert pool.agreement_record("enrollment:enrollment-alpha").total == 1
     assert pool.agreement_record("enrollment:enrollment-beta").total == 1
     assert pool.agreement_record("enrollment:enrollment-alpha").agreed == 1
@@ -310,7 +330,7 @@ async def test_disagreement_is_recorded_for_both_nodes():
         "verify_2", "subtask", "job_1", "trace_1", "alpha", _CODE_A,
         prose_duplicate, pool, primary_enrollment_id="enrollment-alpha",
     )
-    await asyncio.sleep(0.1)
+    await _comparisons_finished()
     assert pool.agreement_record("enrollment:enrollment-alpha").disagreed == 1
     assert pool.agreement_record("enrollment:enrollment-beta").disagreed == 1
 
@@ -329,7 +349,10 @@ async def test_absent_or_failed_duplicate_records_nothing(outcome):
     routes_pitch._spawn_comparison(
         "verify_3", "subtask", "job_1", "trace_1", "alpha", _CODE_A, duplicate, pool,
     )
-    await asyncio.sleep(0.1)
+    # Sleeping a tenth of a second here made the assertion vacuous under load:
+    # if the collector had not run yet, "nothing was recorded" was true for the
+    # wrong reason. Waiting for the task to finish makes it a real assertion.
+    await _comparisons_finished()
     assert pool.agreement_records == {}
 
 
@@ -343,5 +366,5 @@ async def test_a_broken_spot_check_cannot_fail_the_deliverable():
     routes_pitch._spawn_comparison(
         "verify_4", "subtask", "job_1", "trace_1", "alpha", _CODE_A, exploding, pool,
     )
-    await asyncio.sleep(0.1)  # must not propagate
+    await _comparisons_finished()  # the exception must not propagate
     assert pool.agreement_records == {}

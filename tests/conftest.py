@@ -112,14 +112,19 @@ class ParseValidator:
 
 
 @pytest.fixture
-def parse_validator(tmp_path):
-    """Give the parse subprocess a budget no CI machine can miss, and hand back
-    the audit for whether it met it.
+def pinned_validator_budget(tmp_path):
+    """Give every validator subprocess a budget no CI machine can miss.
 
     The budget is pinned through configuration rather than injected, because
-    the exposed callers reach the parser by more than one route — directly, and
-    down through `run_pipeline` — and a pinned budget covers both without every
-    caller having to thread an executor down to it.
+    the exposed callers reach the runner by more than one route — directly,
+    down through `run_pipeline`, and down through the execution service — and a
+    pinned budget covers all of them without every caller having to thread an
+    executor down to it.
+
+    Any test whose subject is not how long the runner takes wants this. A test
+    whose subject *is* the timeout should pass its own `deadline_monotonic`
+    instead; the executor clamps to `min(configured_deadline, deadline)`, so
+    this cannot lengthen one of those.
     """
 
     settings = tmp_path / "config.json"
@@ -146,5 +151,12 @@ def parse_validator(tmp_path):
         config.get()["validator_subprocess_timeout_seconds"]
         == PARSE_VALIDATOR_TEST_TIMEOUT_SECONDS
     ), "the pinned parse budget did not reach the loaded configuration"
+
+    return PARSE_VALIDATOR_TEST_TIMEOUT_SECONDS
+
+
+@pytest.fixture
+def parse_validator(pinned_validator_budget):
+    """The pinned budget, plus the audit for whether the parser met it."""
 
     return ParseValidator()

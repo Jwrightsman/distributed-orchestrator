@@ -273,7 +273,18 @@ async def test_ensemble_all_candidate_failure_is_structured(tmp_path, monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_deterministic_validator_selects_the_valid_candidate(tmp_path, monkeypatch):
+async def test_deterministic_validator_selects_the_valid_candidate(
+    tmp_path, monkeypatch, pinned_validator_budget
+):
+    """The subject is which candidate wins, not how fast json_schema runs.
+
+    Under load this failed as `assert 'unverified' == 'completed'`: the
+    json_schema subprocess missed the 10s production budget, the registry
+    recorded error evidence, no candidate was accepted, and the run fell back
+    to unverified. That reads as "the deterministic validator picked wrong"
+    when nothing had picked at all.
+    """
+
     outputs = iter(('{"answer": "wrong"}', '{"answer": 42}', "not json"))
 
     async def generated(*args, **kwargs):
