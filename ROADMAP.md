@@ -146,9 +146,19 @@ an identical configuration are not (0 false positives in 20 pairs), and an arm a
 relied on. That last one is measured, not argued: the old HTML check scored `web-snake` 5/5 while
 `showcase_reliability.py` measured the same artifact at 2/10.
 
-**Domain and HTTPS.** A raw IP with a port reads as sketchy in a launch post. ~$12/year plus
-Caddy for automatic certs. An afternoon, and it's the difference between "some guy's IP" and "a
-project."
+**Domain and HTTPS — NO LONGER OPTIONAL, 2026-09-05.** A raw IP with a port read as sketchy in a
+launch post; that was the whole argument, and it was an aesthetic one. It is now a hard
+prerequisite: the worker refuses plaintext HTTP to any non-loopback host, with no flag,
+environment variable, or configuration key that permits it, so an operator cannot invite anybody
+until TLS is in front. ~$12/year plus Caddy for automatic certs, and `tailscale cert` covers the
+overlay path. See [docs/OPERATOR_PREFLIGHT.md](docs/OPERATOR_PREFLIGHT.md).
+
+**Worker onboarding — DONE 2026-09-05.** `python worker_installer.py` replaces clone-install-pull-
+run-paste-a-secret with one guided command, and [docs/JOIN.md](docs/JOIN.md) is written for
+somebody who has barely used a terminal. The onboarding cost was never the interesting part; what
+made this worth doing is that the same change closed the two things a contributor could not
+evaluate for themselves — whether the transport was safe, and whether their machine would run what
+the coordinator sent.
 
 **Narrow the workload claim.** The strongest early product is not "build any app from one
 sentence." It's bounded work with cheap verification: test generation, static analysis and
@@ -598,6 +608,41 @@ memory or storage growth.
 ---
 
 ## Changelog
+
+- **2026-09-05** — Joining is one guided command, and plaintext transport is gone. The
+  second half is the one that matters: the worker now refuses `http://` to every host
+  except loopback, with **no flag, environment variable, or configuration key** that
+  relaxes it, and the check lives inside `normalize_coordinator` — the single function
+  the join flow, `node.py`, the enrollment admin tool, and identity-file validation
+  already share, so there is no path around it rather than a discouraged one. This
+  deliberately breaks the private-overlay HTTP join that DEPLOY.md recommended. That is
+  the point: an overlay ACL is an operator assertion, and a contributor being invited to
+  lend a laptop is not in a position to audit it. `tailscale cert` keeps the overlay path
+  open for operators who want it.
+
+  `worker_installer.py` walks nine steps, refuses to run as root, names every file before
+  writing one, and — because it performs the bootstrap enrolment itself — means the shared
+  invitation code never has to reach `node.py --secret`. It is typed with echo off or read
+  from a permission-checked file, travels as exactly one header on one request, and appears
+  in no output, log, temp file, or traceback. Credential generation, atomic write, and 0600
+  are Theme 2A's, reused rather than rewritten. `worker_installer.py uninstall` drains from
+  the coordinator, deletes the credential, and says what it deliberately left behind.
+
+  The contributor-safety property is now a test rather than a sentence in AGENTS.md:
+  `tests/test_contributor_safety.py` hands the worker a task carrying Python, shell
+  fragments, command substitution, and a path traversal, and asserts inference output and a
+  byte-for-byte unchanged filesystem. Writing it found one real defect — coordinator-supplied
+  task titles were printed straight into Rich, so an operator could colour a volunteer's
+  terminal and plant clickable links in it. Fixed and tested. Two known holes are recorded
+  rather than closed: `join.py --secret` and `node.py --secret` still put a secret in argv
+  where `ps` can read it (kept for existing scripted setups, and no longer needed by the
+  installer path), and `install.sh` is still advertised as `curl … | bash` in its own header
+  — the README no longer points at it.
+
+  Docs: [docs/JOIN.md](docs/JOIN.md) for contributors,
+  [docs/OPERATOR_PREFLIGHT.md](docs/OPERATOR_PREFLIGHT.md) for the things no program can
+  check on an operator's behalf, THREAT_MODEL §6a for what a contributor is and is not
+  exposed to, and DEPLOY for the Caddy configuration TLS now requires.
 
 - **2026-09-04** — The generator is pinnable, and the power curve is a function of the
   noise floor rather than a table computed at one value of it. `config.json` gained

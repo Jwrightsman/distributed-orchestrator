@@ -24,15 +24,22 @@ Decentralized, incentive-aligned agent networks *without* blockchain are an open
 
 ## Looking for nodes 🖥️
 
-The network gets real when invited testers connect hardware they own. Joining takes one command — any machine with 8GB RAM:
+The network gets real when invited testers connect hardware they own. Joining is one guided command — any machine with 8GB RAM:
 
 ```bash
-python join.py http://ORCHESTRATOR_ADDRESS:8000
+python worker_installer.py
 ```
+
+It checks your machine, explains in plain English what your computer is agreeing to, waits for you to say yes, and prints how to leave. **Read [docs/JOIN.md](docs/JOIN.md) first** — it is written for someone who has barely used a terminal, and it says what this costs you and what the operator can and cannot see.
+
+Two things worth knowing before you decide:
+
+- **Your machine never runs code the coordinator sends.** It reads text, runs a local model on it, and returns text. That is [a test](tests/test_contributor_safety.py), not a promise in a document.
+- **Plaintext `http://` is refused for anything but your own machine**, with no flag to override it. If an operator hands you an `http://` address, ask them for an `https://` one.
 
 There is an internet-reachable orchestrator used for status and invited testing, but it is **not a permissionless public network**. Initial enrollment requires shared invitation authority; each enrolled node then has a separate revocable credential. If you want to volunteer a machine you own, open the **[I'd like to join a machine to the network](https://github.com/Jwrightsman/distributed-orchestrator/issues/new?template=join-the-network.yml)** issue. Do not install or join this software on somebody else's machine without that owner's explicit informed consent.
 
-You don't have to wait for that to try it: `python cli.py "your task"` runs the whole pipeline on one machine, and [docs/DEPLOY.md](docs/DEPLOY.md) has a LAN setup that takes minutes, plus a [Tailscale](docs/DEPLOY.md) path for inviting friends to your own instance.
+You don't have to wait for that to try it: `python cli.py "your task"` runs the whole pipeline on one machine, and [docs/DEPLOY.md](docs/DEPLOY.md) has the operator side — including the TLS that inviting anyone now requires, and a [pre-flight checklist](docs/OPERATOR_PREFLIGHT.md) for the things no program can check for you.
 
 ## How it works
 

@@ -2,8 +2,9 @@
 
 Enrollment credentials are bearer secrets.  This module deliberately keeps
 them out of reprs and errors, binds an identity file to one normalized
-coordinator URL and node label, and writes the file atomically with owner-only
-POSIX permissions.  Windows has no portable stdlib API for auditing ACLs, so
+coordinator URL and node label, refuses any origin that would carry them in
+clear text (see `worker_transport`), and writes the file atomically with
+owner-only POSIX permissions.  Windows has no portable stdlib API for auditing ACLs, so
 the same atomic write is used there and permissions are best effort.
 """
 
@@ -27,6 +28,7 @@ from typing import Callable, Mapping
 from urllib.parse import urlsplit
 
 from node_sessions import InvalidNodeId, normalize_node_id
+from worker_transport import InsecureTransportError, require_secure_transport
 
 
 IDENTITY_VERSION = 1
@@ -135,6 +137,17 @@ def normalize_coordinator(value: str) -> str:
 
     if port is not None and not 1 <= port <= 65535:
         raise WorkerIdentityError("coordinator URL has an invalid port")
+
+    # The transport gate lives here, and only here, because this is the single
+    # function every worker path already funnels through: the join flow, the
+    # installer, node.py's --server, the enrollment admin tool, and the
+    # validation of an identity file that was written earlier. Putting the
+    # check anywhere else would leave one of those as a way around it.
+    try:
+        require_secure_transport(scheme, host)
+    except InsecureTransportError as exc:
+        raise WorkerIdentityError(str(exc)) from exc
+
     default_port = 80 if scheme == "http" else 443
     port_suffix = "" if port in {None, default_port} else f":{port}"
     rendered_host = f"[{host}]" if bracketed else host
@@ -273,20 +286,82 @@ def _validate_identity_payload(
     )
 
 
-def _check_open_file(path: Path, opened: os.stat_result) -> None:
+def _check_open_file(
+    path: Path,
+    opened: os.stat_result,
+    *,
+    noun: str = "worker identity file",
+    max_bytes: int = MAX_IDENTITY_BYTES,
+) -> None:
+    """One permission check, shared by every file here that holds a secret.
+
+    `noun` exists so the same checks can guard an invitation file without
+    telling its owner that their "worker identity file" has the wrong mode. The
+    checks themselves must not be duplicated per file kind — that is how two
+    copies drift and one of them ends up laxer than the other.
+    """
+
     if not stat.S_ISREG(opened.st_mode):
-        raise WorkerIdentityError(f"worker identity is not a regular file: {path}")
-    if opened.st_size > MAX_IDENTITY_BYTES:
-        raise WorkerIdentityError("worker identity file is too large")
+        raise WorkerIdentityError(f"{noun} is not a regular file: {path}")
+    if opened.st_size > max_bytes:
+        raise WorkerIdentityError(f"{noun} is too large")
     if os.name == "posix":
         if stat.S_IMODE(opened.st_mode) & 0o077:
             raise WorkerIdentityError(
-                "worker identity file is accessible by group or other users; "
-                "set POSIX mode 0600"
+                f"{noun} is accessible by group or other users; set POSIX mode 0600"
             )
         getuid = getattr(os, "getuid", None)
         if getuid is not None and opened.st_uid != getuid():
-            raise WorkerIdentityError("worker identity file is not owned by this user")
+            raise WorkerIdentityError(f"{noun} is not owned by this user")
+
+
+MAX_SECRET_FILE_BYTES = 4096
+
+
+def read_owner_only_text(path: Path | str) -> str:
+    """Read a small secret-bearing file, refusing anything others can read.
+
+    The installer needs one file check that is not an identity file: an
+    invitation code somebody wrote down so they would not have to type it. It
+    gets exactly the checks an identity file gets — no symlink, a regular file,
+    owner-only POSIX mode, owned by this user — because a credential in a
+    world-readable file is a credential already disclosed, and because writing a
+    second, laxer version of this check is how the two drift apart.
+
+    Returns the stripped contents. Never logs or echoes them.
+    """
+
+    secret_path = Path(path).expanduser()
+    try:
+        path_stat = secret_path.lstat()
+    except FileNotFoundError:
+        raise WorkerIdentityError(f"file does not exist: {secret_path}") from None
+    except OSError as exc:
+        raise WorkerIdentityError(f"file cannot be inspected: {secret_path}") from exc
+    if stat.S_ISLNK(path_stat.st_mode):
+        raise WorkerIdentityError("file must not be a symbolic link")
+
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(secret_path, flags)
+        with os.fdopen(descriptor, "rb") as handle:
+            _check_open_file(
+                secret_path,
+                os.fstat(handle.fileno()),
+                noun="the file",
+                max_bytes=MAX_SECRET_FILE_BYTES,
+            )
+            raw = handle.read(MAX_SECRET_FILE_BYTES + 1)
+    except WorkerIdentityError:
+        raise
+    except OSError as exc:
+        raise WorkerIdentityError(f"file cannot be read: {secret_path}") from exc
+    if len(raw) > MAX_SECRET_FILE_BYTES:
+        raise WorkerIdentityError("file is too large to be a credential")
+    try:
+        return raw.decode("utf-8").strip()
+    except UnicodeDecodeError:
+        raise WorkerIdentityError("file is not valid UTF-8 text") from None
 
 
 def load_worker_identity(
