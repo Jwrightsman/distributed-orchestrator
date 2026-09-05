@@ -22,6 +22,18 @@ Transport is not negotiable and is not decided here: `worker_transport` refuses
 plaintext HTTP to any non-loopback host, and this module simply inherits that
 through `normalize_coordinator`.
 
+macOS gets one specific piece of care, because the platform has a state nothing
+else does. Ollama ships there as an application, and the background service and
+the `ollama` command both come into existence the first time somebody opens it.
+So the ordinary state of a Mac two minutes after installing Ollama is:
+installed, not running, no command — and an installer that answers that with
+"install Ollama" is telling somebody to redo the thing they just did. The
+service is asked whether it answers; the command is asked about separately and
+only mentioned when it is about to be needed. Nothing here opens the
+application, edits a search path, or writes to a shell profile: those are the
+contributor's, and doing any of them quietly is how a machine ends up different
+from the way its owner left it.
+
 Order matters more than it looks. The consent screen comes before the model
 download, not after it, because a 2.5 GB write is itself a thing somebody has
 to agree to — ROADMAP §2 makes that a permanent constraint and
@@ -41,6 +53,7 @@ import getpass
 import os
 import platform
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -94,6 +107,11 @@ SUPPORTED_SYSTEMS = ("Linux", "Darwin", "Windows")
 
 OLLAMA_INSTALL_URL = "https://ollama.com/download"
 PROJECT_URL = "https://github.com/Jwrightsman/distributed-orchestrator"
+
+#: Where the macOS disk image puts Ollama. This is read, never opened: starting
+#: an application on somebody's behalf is not this program's business, and the
+#: whole point of the macOS message below is to hand that decision back to them.
+MACOS_OLLAMA_APP = Path("/Applications/Ollama.app")
 
 #: A model name is data. It reaches `ollama pull` as one element of an argument
 #: list and never as shell text, but it is also checked against this, so a value
@@ -175,12 +193,35 @@ def check_privileges() -> None:
 
 # ── Step 2: platform and Python ──────────────────────────────────────────────
 
+def describe_machine(system: str, machine: str) -> str:
+    """Name the processor family the way its owner would name it.
+
+    "arm64" is what `platform.machine()` says on an Apple Silicon Mac and it is
+    not what anybody calls their computer. The distinction is worth drawing
+    because it is the one hardware fact that changes what to expect: Ollama
+    uses Metal on Apple Silicon and the CPU on an Intel Mac, and the honest
+    numbers this project publishes were measured CPU-only.
+    """
+
+    normalized = (machine or "").strip().lower()
+    if system == "Darwin":
+        if normalized in {"arm64", "aarch64"}:
+            return f"Apple Silicon ({machine}) — Ollama uses the GPU here"
+        if normalized in {"x86_64", "amd64"}:
+            return f"Intel ({machine}) — inference runs on the processor"
+    return machine or "unknown"
+
+
 def check_platform(
-    *, system: str | None = None, version: tuple[int, ...] | None = None
+    *,
+    system: str | None = None,
+    version: tuple[int, ...] | None = None,
+    machine: str | None = None,
 ) -> None:
     _step(2, "Checking this computer and its Python version")
     running_system = platform.system() if system is None else system
     running_version = tuple(sys.version_info[:2]) if version is None else tuple(version[:2])
+    running_machine = platform.machine() if machine is None else machine
 
     if running_system not in SUPPORTED_SYSTEMS:
         raise InstallerError(
@@ -201,6 +242,12 @@ def check_platform(
             ),
         )
     _ok(f"{running_system}, Python {'.'.join(str(part) for part in running_version)}")
+    _info(f"Processor: {describe_machine(running_system, running_machine)}")
+    # The model is not architecture-specific — Ollama publishes one tag and
+    # serves the right build for the machine asking — so there is nothing to
+    # verify here that step 7 does not verify for real by pulling it. Saying
+    # which processor was detected is what the contributor can act on; claiming
+    # the model "is available for" it would be a claim nothing checked.
     if running_version < CI_PYTHON:
         _info(
             f"Tested on Python {'.'.join(str(part) for part in CI_PYTHON)}; "
@@ -210,8 +257,111 @@ def check_platform(
 
 # ── Step 3: Ollama ───────────────────────────────────────────────────────────
 
+def ollama_cli_available() -> bool:
+    """Is the `ollama` command visible to this terminal?
+
+    Deliberately separate from "is Ollama running". On macOS these come apart:
+    Ollama ships as an application, and the command-line tool is a symbolic
+    link the application creates the first time somebody opens it.
+    """
+
+    return shutil.which("ollama") is not None
+
+
+def macos_ollama_app_present(
+    *, system: str | None = None, app_path: Path | None = None
+) -> bool:
+    """Is the Ollama application sitting in /Applications on this Mac?"""
+
+    if (platform.system() if system is None else system) != "Darwin":
+        return False
+    try:
+        return (MACOS_OLLAMA_APP if app_path is None else app_path).exists()
+    except OSError:
+        return False
+
+
+def ollama_absence_hint(*, system: str | None = None, app_present: bool | None = None) -> str:
+    """What to tell somebody whose Ollama this program could not reach.
+
+    Three different situations, and telling somebody to install software they
+    have already installed is how a working machine gets read as a broken one:
+
+    * it is not installed — say where to get it;
+    * it is installed on a Mac but has never been opened — say *that*, because
+      on macOS the background service starts when the application does, and
+      somebody who just double-clicked the disk image has done everything they
+      were told to and is looking at a message saying to do it again;
+    * anywhere else — say how to start it.
+    """
+
+    running = platform.system() if system is None else system
+    installed = macos_ollama_app_present(system=running) if app_present is None else app_present
+
+    if running == "Darwin" and installed:
+        return (
+            "Ollama is already installed on this Mac — it just has not been "
+            "opened yet, and it only starts working once it has been.\n"
+            "  1. Open your Applications folder and double-click Ollama (or "
+            "press Command-Space, type 'Ollama', and press Return).\n"
+            "  2. A small llama appears in the menu bar along the top of the "
+            "screen. That means it is running. There is no window to keep open.\n"
+            "  3. Come back to this terminal and run this again.\n"
+            "You only have to do this once; from then on it starts with your Mac."
+        )
+    if running == "Darwin":
+        return (
+            f"Download it from {OLLAMA_INSTALL_URL}, drag it into Applications, "
+            "and then open it once — a small llama appears in the menu bar when "
+            "it is running. Then run this again.\n"
+            "This installer will not install it for you — putting software on "
+            "your machine without you watching is not something it should do."
+        )
+    return (
+        f"Install it from {OLLAMA_INSTALL_URL}, then start it (on Linux: "
+        "'ollama serve') and run this again.\n"
+        "This installer will not install it for you — putting software on "
+        "your machine without you watching is not something it should do."
+    )
+
+
+def ollama_cli_missing_hint(*, system: str | None = None) -> str:
+    """Ollama answers on the network, but its command is not in this terminal.
+
+    Almost always macOS, and almost always the same cause: the application
+    creates its command-line tool the first time it is opened, and a terminal
+    opened before that has an older idea of where to look. The fix belongs to
+    the contributor — this program does not edit anybody's shell configuration
+    or their search path, and says so instead of doing it quietly.
+    """
+
+    running = platform.system() if system is None else system
+    if running == "Darwin":
+        return (
+            "Ollama is running, but this terminal cannot find its 'ollama' "
+            "command. On a Mac the application creates that command the first "
+            "time it is opened.\n"
+            "  1. Open Ollama from your Applications folder if you never have.\n"
+            "  2. Close this terminal window and open a new one — a window "
+            "opened earlier does not pick the command up.\n"
+            "  3. Type 'ollama --version'. When that answers, run this again.\n"
+            "This installer will not change your search path or edit your shell "
+            "settings on your behalf."
+        )
+    return (
+        "Ollama is installed somewhere this terminal cannot see. "
+        "Close and reopen the terminal, then try again."
+    )
+
+
 async def check_ollama_present() -> list[str]:
-    """Confirm Ollama is installed and running. Never install it."""
+    """Confirm Ollama is installed and running. Never install it.
+
+    The question asked is whether the local service *answers*, not whether a
+    command exists — the service is what does the work, and on macOS the two
+    are genuinely independent. The command is checked separately, and only
+    mentioned when it is both missing and about to be needed.
+    """
 
     _step(3, "Looking for Ollama, the program that runs the AI model")
     status = await check_ollama()
@@ -219,15 +369,15 @@ async def check_ollama_present() -> list[str]:
         raise InstallerError(
             "Ollama is not running on this computer.",
             EXIT_OLLAMA_MISSING,
-            hint=(
-                f"Install it from {OLLAMA_INSTALL_URL}, then start it (on Linux: "
-                "'ollama serve') and run this again.\n"
-                "This installer will not install it for you — putting software on "
-                "your machine without you watching is not something it should do."
-            ),
+            hint=ollama_absence_hint(),
         )
     models = [str(name) for name in status.get("models", [])]
     _ok(f"Ollama is running, with {len(models)} model(s) already downloaded")
+    if not ollama_cli_available():
+        _info(
+            "Its 'ollama' command is not on this terminal's path. That only "
+            "matters if the model still has to be downloaded."
+        )
     return models
 
 
@@ -427,14 +577,11 @@ async def ensure_model(model: str, present: list[str]) -> str | None:
         )
         try:
             completed = subprocess.run(["ollama", "pull", model], check=False)
-        except FileNotFoundError:
+        except (FileNotFoundError, NotADirectoryError, PermissionError):
             raise InstallerError(
                 "The 'ollama' command could not be found, even though Ollama is running.",
                 EXIT_MODEL_FAILED,
-                hint=(
-                    "Ollama is installed somewhere this terminal cannot see. "
-                    "Close and reopen the terminal, then try again."
-                ),
+                hint=ollama_cli_missing_hint(),
             ) from None
         if completed.returncode != 0:
             raise InstallerError(
