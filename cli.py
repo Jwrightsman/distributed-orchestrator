@@ -248,6 +248,14 @@ async def run_task(
         for p in result["code_problems"]:
             console.print(f"  [yellow]{p}[/yellow]")
 
+    # A precheck that never reached a verdict is not a clean bill of health.
+    if result.get("code_precheck_error"):
+        console.print(
+            "\n[bold yellow]The code check did not finish "
+            f"({result['code_precheck_error']}) — these files are "
+            "unchecked, not verified.[/bold yellow]"
+        )
+
     elapsed = time.time() - start
     pid = result.get("project_id") or project_id
     if pid:

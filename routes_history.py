@@ -127,6 +127,7 @@ async def history_detail(timestamp: str):
         "reviewer_rating": reviewer_rating,
         "code_files": code_files,
         "code_problems": log.get("code_problems", []),
+        "code_precheck_error": log.get("code_precheck_error"),
         "mode": log.get("mode", "local"),
         "project_id": log.get("project_id") or None,
     }

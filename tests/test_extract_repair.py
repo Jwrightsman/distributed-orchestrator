@@ -42,14 +42,22 @@ async def run_stage(parse_validator, *args, **kwargs):
     """Run the stage under test, and refuse to report on `problems` until the
     parser has actually returned a verdict.
 
-    The parse precheck is a subprocess on a wall-clock budget, and an overrun
-    arrives as the problem string "validator_timeout" — indistinguishable, to
-    every assertion below, from "this code does not parse". The fixture gives
-    the subprocess a budget CI cannot miss; this fails by name if it misses one
-    anyway, instead of letting a runner failure be scored as a defect in the
-    extracted code.
+    The parse precheck is a subprocess on a wall-clock budget. An overrun no
+    longer reaches `problems` at all — it comes back through the stage's own
+    `precheck_error` — but a starved runner still tells the assertions below
+    nothing about the code, so they must not run. The fixture gives the
+    subprocess a budget CI cannot miss, and this fails by name if it misses one
+    anyway.
     """
-    final, files, problems = await extract_and_repair(*args, **kwargs)
+    final, files, problems, precheck_error = await extract_and_repair(*args, **kwargs)
+    # The stage now reports a starved runner through its own field, so this is
+    # a direct assertion rather than an inference from the runner's counters.
+    assert precheck_error is None, (
+        f"the parse precheck never reached a verdict ({precheck_error}), so "
+        "`problems` describes the runner and not the extracted code"
+    )
+    # The counters still cover the intermediate parses -- the one that judges a
+    # repair -- whose outcome the return value does not carry.
     parse_validator.assert_reached_a_verdict()
     return final, files, problems
 

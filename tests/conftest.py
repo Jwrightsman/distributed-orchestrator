@@ -52,10 +52,11 @@ def isolated_cwd(tmp_path, monkeypatch):
 # dominated by spawning an interpreter and fsyncing a staging tree, so its cost
 # tracks what the disk is doing rather than how fast the machine is: measured
 # here it is ~0.29s idle and >1s under a fsync storm, and fsync latency has no
-# ceiling. When the subprocess overruns, `check_code_files_isolated` reports the
-# overrun as the problem string "validator_timeout" in the same list as real
-# parse defects — so a test that reads `problems` cannot tell "the validator
-# never ran" from "the extracted code is broken", and blames the code.
+# ceiling. `check_code_files_isolated` now returns an overrun through
+# `ParsePrecheckResult.runner_failure` rather than mixing it into the parse
+# defects, so the two are no longer confusable — but a starved runner still
+# reaches no verdict, and a test that reads `problems` would be reading an
+# empty list that means "not checked" rather than "checked and clean".
 #
 # 120s is the configuration maximum — ~400x the idle cost and ~100x the cost
 # under that storm. Missing it means something is genuinely wrong with the
