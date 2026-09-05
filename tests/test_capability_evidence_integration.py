@@ -49,9 +49,26 @@ VIEWER_KEY = "evidence-viewer-secret-that-is-private"
 MODEL_DIGEST = f"sha256:{'a' * 64}"
 
 
+# ── Shadow-executor exit guards ─────────────────────────────────────────────
+# The subject of the test below is that the shadow executor's worker threads do
+# not hold process exit: the proof is that the child process exits at all. The
+# two wall clocks it used to carry -- 2s for a submitted callable to start, 5s
+# for the whole child including interpreter start and importing the app -- were
+# not that subject. Under three competing pytest sessions this machine stretched
+# comparable work by ~45x, and importing `server_state` alone is well over 100ms
+# idle, so 5s was reachable by load rather than by regression. When it was
+# reached, `subprocess.run` raised `TimeoutExpired` and read as a flake.
+#
+# Both are deadlock guards now. 120s for the child means a process that has not
+# exited is never going to, which is exactly the regression this test is for,
+# and the assertion says which guard tripped.
+SHADOW_CHILD_EXIT_GUARD_SECONDS = 120
+SHADOW_SUBMIT_START_GUARD_SECONDS = 60
+
+
 def test_shadow_daemon_executor_does_not_hold_process_exit():
     repository = Path(__file__).resolve().parents[1]
-    script = """
+    script = f"""
 import threading
 import server_state as state
 
@@ -64,18 +81,29 @@ def block_forever():
 
 state.begin_capability_shadow_runtime()
 state._capability_shadow_work_executor.submit(block_forever)
-assert entered.wait(2)
+assert entered.wait({SHADOW_SUBMIT_START_GUARD_SECONDS}), (
+    "the submitted callable never started; the executor is not running work, "
+    "so this child says nothing about whether it holds process exit"
+)
 state._capability_shadow_work_executor.close()
 print("daemon-exit-ready")
 """
-    completed = subprocess.run(
-        [sys.executable, "-c", script],
-        cwd=repository,
-        text=True,
-        capture_output=True,
-        timeout=5,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=repository,
+            text=True,
+            capture_output=True,
+            timeout=SHADOW_CHILD_EXIT_GUARD_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as expired:
+        raise AssertionError(
+            "the child did not exit within the "
+            f"{SHADOW_CHILD_EXIT_GUARD_SECONDS}s exit guard while a submitted "
+            "callable was still blocked — the shadow executor is holding "
+            "process exit, which is the regression this test exists to catch"
+        ) from expired
 
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout.strip() == "daemon-exit-ready"

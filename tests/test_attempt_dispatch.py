@@ -14,6 +14,7 @@ from node_capabilities import (
     capability_descriptor_digest,
 )
 from node_enrollments import NodeEnrollmentStore
+from tests.deadline_guards import await_condition
 
 
 @pytest.fixture(autouse=True)
@@ -66,11 +67,12 @@ def _descriptor_binding(enrollment_id: str) -> tuple[str, str]:
 
 
 async def _wait_for_queue() -> dict:
-    for _ in range(100):
-        if state.task_queue:
-            return state.task_queue[0]
-        await asyncio.sleep(0.005)
-    raise AssertionError("distributed task was not queued")
+    # 0.5s of polling used to end in "distributed task was not queued", which
+    # a loaded machine could reach without anything being wrong with queueing.
+    await await_condition(
+        lambda: state.task_queue, what="the distributed task to be queued"
+    )
+    return state.task_queue[0]
 
 
 @pytest.mark.asyncio

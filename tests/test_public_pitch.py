@@ -12,6 +12,7 @@ import server
 import server_state
 from execution.contracts import EnsembleOptionsV1, ExecutionRequestV1
 from execution.service import get_execution_service
+from tests.deadline_guards import await_condition, await_event
 
 
 @pytest.fixture(autouse=True)
@@ -157,13 +158,13 @@ async def test_global_public_inference_concurrency_is_one(tmp_path, monkeypatch)
         routes_pitch._run_job("job_public_0", "build", trace_id="0"),
         routes_pitch._run_job("job_public_1", "build", trace_id="1"),
     )
-    for _ in range(200):
-        if all(
+    await await_condition(
+        lambda: all(
             server.jobs[f"job_public_{index}"]["status"] == "complete"
             for index in range(2)
-        ):
-            break
-        await asyncio.sleep(0.01)
+        ),
+        what="both public jobs to finish",
+    )
 
     assert maximum == 1
     assert all(server.jobs[f"job_public_{index}"]["status"] == "complete" for index in range(2))
@@ -199,15 +200,15 @@ async def test_legacy_job_transitions_through_running(tmp_path, monkeypatch):
     }
 
     await routes_pitch._run_job(job_id, "build", trace_id="trace")
-    await asyncio.wait_for(started.wait(), timeout=1)
+    await await_event(started, what="the legacy job to begin generating")
     assert server.jobs[job_id]["status"] == "running"
     assert server.jobs[job_id]["started_at"]
 
     release.set()
-    for _ in range(200):
-        if server.jobs[job_id]["status"] == "complete":
-            break
-        await asyncio.sleep(0.01)
+    await await_condition(
+        lambda: server.jobs[job_id]["status"] == "complete",
+        what="the legacy job to reach 'complete'",
+    )
     assert server.jobs[job_id]["status"] == "complete"
 
 

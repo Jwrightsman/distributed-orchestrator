@@ -19,7 +19,7 @@ import platform
 from ollama_client import generate, generate_stream, strip_thinking
 from config import get as get_config
 from ledger import log_contribution
-from execution.validators import check_code_files_isolated_async
+from execution.validators import ParsePrecheckResult, check_code_files_isolated_async
 from extract import extract_code_files
 import prompts
 
@@ -463,7 +463,7 @@ async def extract_and_repair(
     validator_cancel_event=None,
     validator_artifact_store=None,
     validator_execution_id: str | None = None,
-) -> tuple[str | None, list[str], list[str]]:
+) -> tuple[str | None, list[str], list[str], str | None]:
     """Extract code files, verify them mechanically, and repair once if broken.
 
     The reviewer rates prose quality and will pass code that doesn't parse, so
@@ -471,14 +471,17 @@ async def extract_and_repair(
     one revision quoting them, and keep the result only if it actually fixed
     more than it broke.
 
-    Returns (final_output, code_files, remaining_problems). Writes output.md
-    and the code/ directory as a side effect. Shared by the local pipeline and
-    the distributed path so both produce the same guarantees.
+    Returns (final_output, code_files, remaining_problems, precheck_error).
+    `remaining_problems` only ever describes the code; when the parse runner
+    itself could not reach a verdict, `precheck_error` carries that reason and
+    the problem list stays empty. Writes output.md and the code/ directory as a
+    side effect. Shared by the local pipeline and the distributed path so both
+    produce the same guarantees.
     """
     extract_source = final_output if final_output else review_output
-    async def parse_files(paths: list[str], artifact_root: Path) -> list[str]:
+    async def parse_files(paths: list[str], artifact_root: Path) -> ParsePrecheckResult:
         if not paths:
-            return []
+            return ParsePrecheckResult()
         authoritative_root = None
         validated_entries = None
         if validator_artifact_store is not None and validator_execution_id is not None:
@@ -503,26 +506,38 @@ async def extract_and_repair(
         )
 
     code_files = extract_code_files(extract_source, project_dir)
-    code_problems = await parse_files(code_files, project_dir / "code")
+    precheck = await parse_files(code_files, project_dir / "code")
 
+    # A runner that never reached a verdict has said nothing about the code.
+    # Repairing on it would quote "validator_timeout" back to the model as a
+    # defect to fix, and would spend a revision on output that may be fine.
+    if not precheck.reached_a_verdict:
+        return final_output, code_files, [], precheck.runner_failure
+
+    code_problems = list(precheck.problems)
     if not code_problems or not final_output or not allow_repair:
-        return final_output, code_files, code_problems
+        return final_output, code_files, code_problems, None
 
     issue_text = "The extracted code does not run. Fix exactly these defects:\n" + "\n".join(
         f"- {p}" for p in code_problems
     )
     repaired = await revise(task, issue_text, final_output)
     if len(repaired.strip()) <= len(final_output) // 2:
-        return final_output, code_files, code_problems  # came back truncated
+        return final_output, code_files, code_problems, None  # came back truncated
 
     candidate_dir = project_dir / "_repair_check"
     candidate_dir.mkdir(exist_ok=True)
     try:
         candidate_files = extract_code_files(repaired, candidate_dir)
-        if len(await parse_files(candidate_files, candidate_dir / "code")) >= len(
-            code_problems
+        repair_precheck = await parse_files(candidate_files, candidate_dir / "code")
+        # Without a verdict on the repair there is no evidence it improved
+        # anything, so the original stands. Counting a starved runner's empty
+        # problem list as zero defects would accept any revision at all.
+        if (
+            not repair_precheck.reached_a_verdict
+            or len(repair_precheck.problems) >= len(code_problems)
         ):
-            return final_output, code_files, code_problems  # no improvement
+            return final_output, code_files, code_problems, None  # no improvement
     finally:
         shutil.rmtree(candidate_dir, ignore_errors=True)
 
@@ -531,7 +546,13 @@ async def extract_and_repair(
     for stale in (project_dir / "code").glob("*"):
         stale.unlink()
     code_files = extract_code_files(final_output, project_dir)
-    return final_output, code_files, await parse_files(code_files, project_dir / "code")
+    final_precheck = await parse_files(code_files, project_dir / "code")
+    return (
+        final_output,
+        code_files,
+        list(final_precheck.problems),
+        final_precheck.runner_failure,
+    )
 
 
 async def review(task: str, subtasks: list[dict], results: dict[int, str], memory_context: str = "") -> str:
@@ -891,7 +912,7 @@ async def run_pipeline(
         (project_dir / "output.md").write_text(final_output, encoding="utf-8")
 
     # Extract runnable code files, then mechanically verify and repair them
-    final_output, code_files, code_problems = await extract_and_repair(
+    final_output, code_files, code_problems, code_precheck_error = await extract_and_repair(
         task,
         final_output,
         review_output,
@@ -916,6 +937,10 @@ async def run_pipeline(
         "rating": rating,
         "code_files": [str(f) for f in code_files],
         "code_problems": code_problems,
+        # Set when the parse precheck never reached a verdict. It is not a
+        # code defect and must not be displayed as one: an empty
+        # `code_problems` beside this means "not checked", not "checked clean".
+        "code_precheck_error": code_precheck_error,
         "mode": execution_mode,
         "project_id": project_id or "",
         # Everything below is what /run/{id} shows. Runs recorded before this
@@ -952,6 +977,7 @@ async def run_pipeline(
         "rating": rating,
         "code_files": code_files,
         "code_problems": code_problems,
+        "code_precheck_error": code_precheck_error,
         "project_id": project_id or "",
         "mode": execution_mode,
     }

@@ -301,6 +301,14 @@ def _files(log: dict) -> str:
             'and they are published rather than hidden:</p>'
             f'<div class="chips">{listed}</div>'
         )
+    precheck_error = log.get("code_precheck_error")
+    if precheck_error:
+        # An empty problem list here would otherwise read as "checked, clean".
+        out += (
+            '<p class="lede is-spaced">The mechanical check did not run to a '
+            f'verdict on this run ({esc(str(precheck_error))}), so these files '
+            'are unchecked rather than known good.</p>'
+        )
     return out
 
 

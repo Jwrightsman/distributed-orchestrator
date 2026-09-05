@@ -60,6 +60,10 @@ class CandidateResult:
     problems: list[str] = field(default_factory=list)
     elapsed_seconds: float = 0.0
     error: str | None = None
+    # Set when the parse precheck never reached a verdict about this candidate.
+    # It is the coordinator's failure, not the candidate's, so it stays out of
+    # `problems` and out of the ranking key.
+    precheck_error: str | None = None
 
     @property
     def extracted(self) -> bool:
@@ -95,10 +99,16 @@ def materialise(
     if not result.files:
         result.problems = ["nothing extracted"]
     elif validate_parsers:
-        result.problems = check_code_files_isolated(
+        precheck = check_code_files_isolated(
             result.files,
             artifact_root=cand_dir / "code",
         )
+        # Only defects the parser actually found reach `problems`. A starved or
+        # crashed runner would otherwise rank this candidate below one that
+        # merely got a working validator, which is the coordinator's load
+        # choosing the winner.
+        result.problems = list(precheck.problems)
+        result.precheck_error = precheck.runner_failure
     else:
         # Canonical execution immediately runs the registry's owned async
         # validation path with deadline, cancellation, and artifact snapshot.

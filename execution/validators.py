@@ -506,6 +506,41 @@ def execute_runner_request(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class ParsePrecheckResult:
+    """What the legacy parse precheck concluded, with the runner's own failures
+    kept out of the defect list.
+
+    `problems` describes the code, and is populated only when the parser
+    actually reached a verdict about it.  When the runner could not produce one
+    -- spawn failure, timeout, cancellation, rejected input, a malformed
+    response -- `runner_failure` carries the stable reason and `problems` stays
+    empty, because nothing was learned about the code.
+
+    This is a record rather than a list because the two facts used to travel in
+    one `list[str]`, where `"validator_timeout"` sat beside
+    `"main.py is not valid Python (line 3)"` and no caller could tell them
+    apart.  A record is not iterable, indexable, or sized, so a caller that
+    still treats the verdict as a bare list of defects fails loudly instead of
+    blaming a worker's code for a starved coordinator.
+    """
+
+    problems: tuple[str, ...] = ()
+    runner_failure: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.runner_failure is not None and self.problems:
+            raise ValueError(
+                "a precheck that did not reach a verdict has no code problems to report"
+            )
+
+    @property
+    def reached_a_verdict(self) -> bool:
+        """True when `problems` is a statement about the code under test."""
+
+        return self.runner_failure is None
+
+
 def check_code_files_isolated(
     paths: Sequence[str | Path],
     *,
@@ -515,16 +550,18 @@ def check_code_files_isolated(
     process_executor: ValidatorProcessExecutor | None = None,
     deadline_monotonic: float | None = None,
     cancel_event: CancellationSignal | None = None,
-) -> list[str]:
+) -> ParsePrecheckResult:
     """Compatibility parser check using the same bounded child boundary.
 
     Legacy extraction/repair uses this before canonical validation evidence is
-    assembled.  It returns only bounded parser problems; infrastructure errors
-    become one stable problem and never trigger an inline parser fallback.
+    assembled.  Bounded parser problems and infrastructure failures are
+    returned through separate fields of `ParsePrecheckResult`; an
+    infrastructure failure never becomes a code problem and never triggers an
+    inline parser fallback.
     """
 
     if not paths:
-        return []
+        return ParsePrecheckResult()
     from config import get as get_config
 
     selected = [Path(path) for path in paths]
@@ -533,14 +570,16 @@ def check_code_files_isolated(
         try:
             root = Path(os.path.commonpath([str(path.resolve().parent) for path in selected]))
         except (OSError, ValueError):
-            return ["validator_input_rejected"]
+            return ParsePrecheckResult(runner_failure="validator_input_rejected")
     executor = process_executor or ValidatorProcessExecutor(
         ValidatorProcessSettings.from_config(get_config())
     )
     if executor.settings.execution_mode == "inline":
         # Explicit local-development compatibility is intentionally weaker.
         # Trusted-alpha preflight rejects this configuration.
-        return check_code_files([str(path) for path in selected])[:10]
+        return ParsePrecheckResult(
+            problems=tuple(check_code_files([str(path) for path in selected])[:10])
+        )
     outcome = executor.execute(
         validator_name="code_parse",
         validator_version="2",
@@ -554,11 +593,17 @@ def check_code_files_isolated(
         cancel_event=cancel_event,
     )
     if not outcome.completed:
-        return [outcome.failure_reason or "validator_execution_error"]
+        return ParsePrecheckResult(
+            runner_failure=outcome.failure_reason or "validator_execution_error"
+        )
     problems = outcome.detail.get("problems", [])
     if not isinstance(problems, list):
-        return ["validator_malformed_response"]
-    return [str(problem)[:500] for problem in problems[:10]]
+        # An off-shape response is a protocol failure by ADR 0013, so it says
+        # nothing about the code either.
+        return ParsePrecheckResult(runner_failure="validator_malformed_response")
+    return ParsePrecheckResult(
+        problems=tuple(str(problem)[:500] for problem in problems[:10])
+    )
 
 
 async def check_code_files_isolated_async(
@@ -570,7 +615,7 @@ async def check_code_files_isolated_async(
     process_executor: ValidatorProcessExecutor | None = None,
     deadline_monotonic: float | None = None,
     cancel_event: CancellationSignal | None = None,
-) -> list[str]:
+) -> ParsePrecheckResult:
     """Run the legacy parse precheck off-loop with owned cancellation."""
 
     if process_executor is None:

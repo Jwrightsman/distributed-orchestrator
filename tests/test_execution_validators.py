@@ -43,10 +43,66 @@ class _PopenRecorder:
         return process
 
 
+# ── Ambient runner budget ───────────────────────────────────────────────────
+# Almost every test in this file is about the containment boundary -- staging,
+# the protocol, response caps, output references, sanitization -- and not about
+# how long the child takes. The ambient budget used to be 10s, which is the
+# production default and far too tight to be incidental here: a run of this
+# file under a CPU-and-fsync storm timed out 27 tests at exactly 10s
+# (duration_ms 10053-10143), and every one of them then failed on its *next*
+# assertion. `assert outcome.completed` read as "the child never ran",
+# `registry.accepted(...)` read as "validation rejected valid output", and
+# `assert failure_reason == "validator_response_oversized"` read as "the
+# oversize guard is broken" when the actual reason was `validator_timeout`.
+# The suite that is supposed to be authoritative about the boundary was
+# blaming the boundary for the machine being busy.
+#
+# 120s is the configuration maximum from ADR 0013 and a deadlock guard, not a
+# latency assertion. Tests whose subject *is* the timeout are unaffected: they
+# pass their own `deadline_monotonic`, and the executor clamps to
+# `min(configured_deadline, deadline_monotonic)`.
+VALIDATOR_RUNNER_DEADLOCK_GUARD_SECONDS = 120
+
+
+@pytest.fixture(autouse=True)
+def _guard_the_runner_budget(monkeypatch):
+    """Pin the budget for the routes that read it from configuration.
+
+    `_settings` below covers the tests that build their own executor, but
+    `ValidatorRegistry.default()` and the bare constructor build one from
+    config and would otherwise ride the 10s production default -- the same
+    budget that timed 27 of these tests out under load, each of which then
+    failed on its next assertion as though staging, the protocol, or a
+    reference check were broken.
+
+    Pinned in memory rather than through `conftest.py`'s
+    `pinned_validator_budget`, which writes `config.json` into `tmp_path`:
+    several tests here pass `tmp_path` as the artifact root, and an extra file
+    appearing under it changes what the artifact validators count.
+
+    Tests whose subject *is* the timeout are unaffected: they pass their own
+    `deadline_monotonic`, and the executor clamps to
+    `min(configured_deadline, deadline_monotonic)`.
+    """
+
+    import config
+
+    real_get = config.get
+
+    def pinned(*args, **kwargs):
+        values = dict(real_get(*args, **kwargs))
+        values["validator_subprocess_timeout_seconds"] = (
+            VALIDATOR_RUNNER_DEADLOCK_GUARD_SECONDS
+        )
+        return values
+
+    monkeypatch.setattr(config, "get", pinned)
+
+
 def _settings(
     *,
     mode: str = "auto",
-    timeout: int = 10,
+    timeout: int = VALIDATOR_RUNNER_DEADLOCK_GUARD_SECONDS,
     request_max_bytes: int = 2 * 1024 * 1024,
     response_max_bytes: int = 32 * 1024,
     memory_mb: int = 256,

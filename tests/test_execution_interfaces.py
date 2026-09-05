@@ -22,6 +22,7 @@ from execution.dispatch import DispatchResult, Dispatcher, ExecutionUnit, Placem
 from execution.persistence import ExecutionStore
 from execution.service import ExecutionService
 from server import app
+from tests.deadline_guards import await_condition
 from verification import VerificationPool, verification_identity_key
 
 
@@ -204,11 +205,11 @@ async def test_execution_events_cover_selection_units_validation_and_completion(
     queued = service.submit(
         ExecutionRequestV1(task="Complete it", strategy="direct", placement="local")
     )
-    for _ in range(100):
-        await asyncio.sleep(0.01)
+    def _reached_terminal():
         result = service.get(queued.execution_id)
-        if result and result.status not in ("queued", "running"):
-            break
+        return result and result.status not in ("queued", "running")
+
+    await await_condition(_reached_terminal, what="the execution to leave 'running'")
 
     names = [name for name, _ in emitted]
     assert names[:2] == ["execution_created", "strategy_selected"]
@@ -263,13 +264,13 @@ async def test_terminal_state_is_published_only_after_artifact_sealing_and_event
     finally:
         release_seal.set()
 
-    for _ in range(200):
-        await asyncio.sleep(0.01)
+    def _published_terminal():
         visible = service.get(queued.execution_id)
-        if visible and visible.lifecycle_status == "completed":
-            break
-    else:
-        pytest.fail("execution never published its terminal state")
+        return visible and visible.lifecycle_status == "completed"
+
+    await await_condition(
+        _published_terminal, what="the execution to publish its terminal state"
+    )
 
     assert emitted[-1][0] == "execution_completed"
 
@@ -302,10 +303,9 @@ async def test_distributed_worker_payload_carries_protocol_identity():
             PlacementDecision("distributed", "test", qualifying_nodes=("worker",)),
         )
     )
-    for _ in range(100):
-        await asyncio.sleep(0.001)
-        if state.task_queue:
-            break
+    await await_condition(
+        lambda: state.task_queue, what="the distributed task to reach the queue"
+    )
     queued = state.task_queue[0]
     with state._task_queue_lock:
         state.task_queue.remove(queued)
