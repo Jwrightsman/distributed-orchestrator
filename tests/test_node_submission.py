@@ -134,7 +134,7 @@ async def test_worker_executes_the_server_bound_advertised_model(monkeypatch):
     monkeypatch.setattr(node, "generate_stream", generated)
 
     completed = await node.poll_and_execute(
-        "http://server",
+        "https://server",
         "worker",
         {"tasks": 0, "credits": 0},
         model="configured:latest",
@@ -169,7 +169,7 @@ async def test_worker_rejects_a_model_binding_outside_its_immutable_descriptor(
     monkeypatch.setattr(node, "generate_stream", should_not_generate)
 
     completed = await node.poll_and_execute(
-        "http://server",
+        "https://server",
         "worker",
         {"tasks": 0, "credits": 0},
         model="configured:latest",
@@ -198,7 +198,7 @@ async def test_rejected_result_submission_is_not_reported_as_done(monkeypatch):
     monkeypatch.setattr(node.console, "print", lambda value="": messages.append(str(value)))
     session = {"tasks": 0, "credits": 0}
 
-    completed = await node.poll_and_execute("http://server", "worker", session)
+    completed = await node.poll_and_execute("https://server", "worker", session)
 
     assert completed is None
     assert session == {"tasks": 0, "credits": 0}
@@ -222,7 +222,7 @@ async def test_failed_error_report_does_not_hide_generation_exception(monkeypatc
     monkeypatch.setattr(node.console, "print", lambda value="": messages.append(str(value)))
 
     completed = await node.poll_and_execute(
-        "http://server",
+        "https://server",
         "worker",
         {"tasks": 0, "credits": 0},
     )
@@ -254,7 +254,7 @@ async def test_worker_stops_before_byte_budget_and_reports_limit_failure(monkeyp
     }
 
     completed = await node.poll_and_execute(
-        "http://server", "worker", session
+        "https://server", "worker", session
     )
 
     assert completed is None
@@ -284,7 +284,7 @@ async def test_enrolled_worker_sends_only_session_on_normal_operations(monkeypat
     }
 
     await node.poll_and_execute(
-        "http://server", "worker", session, secret="bootstrap-secret"
+        "https://server", "worker", session, secret="bootstrap-secret"
     )
 
     for _url, _payload, headers in client.posts:
@@ -308,7 +308,7 @@ async def test_worker_echoes_the_trace_context_it_was_handed(monkeypatch):
     monkeypatch.setattr(node, "generate_stream", generated)
     session = {"tasks": 0, "credits": 0, "session_token": "session-token", "enrolled": True}
 
-    await node.poll_and_execute("http://server", "worker", session, secret="s")
+    await node.poll_and_execute("https://server", "worker", session, secret="s")
 
     assert client.posts, "the worker made no request to echo anything on"
     for _url, _payload, headers in client.posts:
@@ -334,7 +334,7 @@ async def test_a_worker_launders_nothing_it_cannot_revalidate(monkeypatch):
     monkeypatch.setattr(node, "generate_stream", generated)
     session = {"tasks": 0, "credits": 0, "session_token": "session-token", "enrolled": True}
 
-    await node.poll_and_execute("http://server", "worker", session, secret="s")
+    await node.poll_and_execute("https://server", "worker", session, secret="s")
 
     assert client.posts
     for _url, _payload, headers in client.posts:
@@ -354,7 +354,7 @@ async def test_a_worker_adds_no_trace_header_when_it_was_handed_none(monkeypatch
     monkeypatch.setattr(node, "generate_stream", generated)
     session = {"tasks": 0, "credits": 0, "session_token": "session-token", "enrolled": True}
 
-    await node.poll_and_execute("http://server", "worker", session, secret="s")
+    await node.poll_and_execute("https://server", "worker", session, secret="s")
 
     assert client.posts
     for _url, _payload, headers in client.posts:
@@ -525,7 +525,7 @@ async def test_worker_automatically_reregisters_after_session_rejection(
         [
             "node.py",
             "--server",
-            "http://server",
+            "https://server",
             "--node-id",
             "Worker",
             "--identity-file",

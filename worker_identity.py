@@ -2,8 +2,9 @@
 
 Enrollment credentials are bearer secrets.  This module deliberately keeps
 them out of reprs and errors, binds an identity file to one normalized
-coordinator URL and node label, and writes the file atomically with owner-only
-POSIX permissions.  Windows has no portable stdlib API for auditing ACLs, so
+coordinator URL and node label, refuses any origin that would carry them in
+clear text (see `worker_transport`), and writes the file atomically with
+owner-only POSIX permissions.  Windows has no portable stdlib API for auditing ACLs, so
 the same atomic write is used there and permissions are best effort.
 """
 
@@ -27,6 +28,7 @@ from typing import Callable, Mapping
 from urllib.parse import urlsplit
 
 from node_sessions import InvalidNodeId, normalize_node_id
+from worker_transport import InsecureTransportError, require_secure_transport
 
 
 IDENTITY_VERSION = 1
@@ -135,6 +137,17 @@ def normalize_coordinator(value: str) -> str:
 
     if port is not None and not 1 <= port <= 65535:
         raise WorkerIdentityError("coordinator URL has an invalid port")
+
+    # The transport gate lives here, and only here, because this is the single
+    # function every worker path already funnels through: the join flow, the
+    # installer, node.py's --server, the enrollment admin tool, and the
+    # validation of an identity file that was written earlier. Putting the
+    # check anywhere else would leave one of those as a way around it.
+    try:
+        require_secure_transport(scheme, host)
+    except InsecureTransportError as exc:
+        raise WorkerIdentityError(str(exc)) from exc
+
     default_port = 80 if scheme == "http" else 443
     port_suffix = "" if port in {None, default_port} else f":{port}"
     rendered_host = f"[{host}]" if bracketed else host

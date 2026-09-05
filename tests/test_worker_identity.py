@@ -29,9 +29,12 @@ def _create(path: Path, coordinator: str = "https://Example.COM:443/"):
     ("raw", "expected"),
     [
         ("HTTPS://Example.COM:443/", "https://example.com"),
-        ("http://EXAMPLE.com:80", "http://example.com"),
-        ("http://example.com:8000/", "http://example.com:8000"),
-        ("http://[2001:0db8::1]:8000", "http://[2001:db8::1]:8000"),
+        ("https://example.com:8000/", "https://example.com:8000"),
+        ("https://[2001:0db8::1]:8000", "https://[2001:db8::1]:8000"),
+        # Plaintext survives only where there is no network to protect.
+        ("http://LOCALHOST:8000", "http://localhost:8000"),
+        ("http://127.0.0.1:8000/", "http://127.0.0.1:8000"),
+        ("http://[::1]:8000", "http://[::1]:8000"),
     ],
 )
 def test_coordinator_normalization_is_stable(raw, expected):
@@ -52,6 +55,32 @@ def test_coordinator_normalization_is_stable(raw, expected):
 def test_ambiguous_or_unsafe_coordinator_urls_are_rejected(raw):
     with pytest.raises(identities.WorkerIdentityError):
         identities.normalize_coordinator(raw)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "http://example.com",
+        "http://EXAMPLE.com:80",
+        "http://example.com:8000/",
+        "http://[2001:0db8::1]:8000",
+        "http://192.168.1.50:8000",        # a LAN address is still a network
+        "http://100.101.102.103:8000",     # so is a private overlay address
+        "http://coordinator.local:8000",   # mDNS resolves somewhere, so not loopback
+        "http://0.0.0.0:8000",
+    ],
+)
+def test_plaintext_coordinators_are_refused_at_the_identity_boundary(raw):
+    """The transport gate is reachable through the function everything uses.
+
+    `worker_transport` owns the policy and has its own tests; this asserts the
+    wiring, because a policy nothing calls protects nobody.
+    """
+
+    with pytest.raises(identities.WorkerIdentityError) as raised:
+        identities.normalize_coordinator(raw)
+    assert "http://" in str(raised.value)
+    assert "https://" in str(raised.value), "the message must say what to ask for"
 
 
 def test_default_filename_hashes_coordinator_and_never_contains_url(tmp_path):
