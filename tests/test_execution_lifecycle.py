@@ -16,6 +16,7 @@ from execution.contracts import ExecutionRequestV1
 from execution.persistence import ExecutionStore
 from execution.registry import StrategyOutcome, StrategyRegistry
 from execution.service import ExecutionControl, ExecutionService
+from tests.deadline_guards import await_event
 
 
 def _service(tmp_path) -> ExecutionService:
@@ -233,7 +234,7 @@ async def test_cancellation_during_local_generation_stops_work(tmp_path, monkeyp
     monkeypatch.setattr(strategies.EnsembleStrategy, "artifact_root", tmp_path / "artifacts")
     service = _service(tmp_path)
     queued = service.submit(ExecutionRequestV1(task="Build it", strategy="direct"))
-    await asyncio.wait_for(started.wait(), timeout=1)
+    await await_event(started, what="generation to start before cancelling it")
 
     cancelled = await service.cancel(queued.execution_id, "stop now")
 

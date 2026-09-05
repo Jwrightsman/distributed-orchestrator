@@ -25,6 +25,7 @@ from execution.contracts import ExecutionRequestV1
 from execution.persistence import ExecutionStore
 from execution.registry import StrategyRegistry
 from execution.service import ExecutionService
+from tests.deadline_guards import await_condition
 from tests.protocol_harness import (
     CREDENTIALS,
     REQUESTER_HOSTS,
@@ -685,10 +686,10 @@ async def test_cancelling_a_running_execution_is_never_the_subjects_fault(tmp_pa
     service._emit = lambda *args, **kwargs: None
 
     queued = service.submit(ExecutionRequestV1(task="Park until cancelled", strategy="dag"))
-    for _ in range(200):
-        if service.get(queued.execution_id).lifecycle_status == "running":
-            break
-        await asyncio.sleep(0.005)
+    await await_condition(
+        lambda: service.get(queued.execution_id).lifecycle_status == "running",
+        what="the execution to reach 'running' before cancelling it",
+    )
     assert service.get(queued.execution_id).lifecycle_status == "running"
 
     cancelled = await service.cancel(queued.execution_id, "requester changed their mind")

@@ -7,6 +7,7 @@ job-store → history path without Ollama.
 
 import asyncio
 import json
+import time
 from pathlib import Path
 
 import httpx
@@ -78,12 +79,49 @@ def fake_pipeline(monkeypatch):
     monkeypatch.setattr(routes_pitch, "run_pipeline", _fake)
 
 
-async def _drain_jobs():
-    """Let the _run_job background task scheduled by /pitch/async finish."""
-    for _ in range(20):
+# ── Background-job drain budget ─────────────────────────────────────────────
+# Waiting for the `_run_job` task scheduled by /pitch/async is not the subject
+# of any test here; the MCP -> HTTP -> job-store -> history path is. The old
+# budget was 20 x 10ms = 200ms of wall clock, and when a loaded machine missed
+# it `_drain_jobs` returned quietly, leaving the job "queued" -- so
+# `assert "complete" in status` failed as though the MCP flow were broken.
+# Measured on this machine the drain lands in well under 50ms idle, and three
+# competing pytest sessions stretched comparable work by ~45x.
+#
+# 120s is a deadlock guard, not a performance assertion. Reaching it means the
+# job is never going to finish, and the failure says so by name instead of
+# letting a stall read as a functional defect.
+JOB_DRAIN_DEADLOCK_GUARD_SECONDS = 120
+
+
+def _terminal(job) -> bool:
+    return job["status"] in ("complete", "failed")
+
+
+async def _drain_jobs(guard_seconds: float = JOB_DRAIN_DEADLOCK_GUARD_SECONDS):
+    """Wait for the _run_job background task scheduled by /pitch/async.
+
+    Raises rather than returning early, so a missed budget can never be read as
+    "the job finished and the result was wrong".
+    """
+
+    deadline = time.monotonic() + guard_seconds
+    while time.monotonic() < deadline:
         await asyncio.sleep(0.01)
-        if server.jobs and all(j["status"] in ("complete", "failed") for j in server.jobs.values()):
+        if server.jobs and all(_terminal(job) for job in server.jobs.values()):
             return
+    if not server.jobs:
+        raise AssertionError(
+            f"the job-drain deadlock guard ({guard_seconds}s) expired with no "
+            "job registered at all: /pitch/async never reached the job store, "
+            "which is a failure of the endpoint and not of the drain"
+        )
+    raise AssertionError(
+        f"the job-drain deadlock guard ({guard_seconds}s) expired with jobs "
+        "still unfinished — the background task is stuck, so nothing below "
+        "this point is a statement about the MCP flow "
+        f"(statuses: { {k: v['status'] for k, v in server.jobs.items()} })"
+    )
 
 
 def _job_id_from(text: str) -> str:
