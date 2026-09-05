@@ -23,6 +23,7 @@ from typing import Any
 import httpx
 from pydantic import Field, ValidationError, field_validator
 from rich.console import Console
+from rich.markup import escape as escape_markup
 from rich.panel import Panel
 from rich.table import Table
 from rich import box
@@ -859,7 +860,13 @@ async def poll_and_execute(
         trace_headers = tracing.worker_echo_headers(getattr(resp, "headers", None))
 
         task_id = task["task_id"]
-        title = task.get("title", "unnamed")
+        # The title is written by the coordinator and printed on the
+        # contributor's screen. Rich reads square brackets as markup, so an
+        # unescaped title lets whoever runs the coordinator colour a
+        # volunteer's terminal and plant clickable links in it. Cheap to
+        # take away, and a contributor should not have to trust the sender
+        # of a task for anything at all.
+        title = escape_markup(str(task.get("title", "unnamed")))
         prompt = task["prompt"]
         system = task.get("system", "")
         try:
