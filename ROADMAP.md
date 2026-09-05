@@ -609,6 +609,47 @@ memory or storage growth.
 
 ## Changelog
 
+- **2026-09-05** — The three exposures the previous entry recorded are closed, and macOS
+  stopped being a platform nobody had ever run this on. The two halves are unrelated
+  except in who they are for: somebody on a Mac being handed an invitation code.
+
+  **Secrets and argv.** `join.py` and `node.py` grew `--secret-file PATH`, checked by the
+  same `read_owner_only_text` that guards the identity file rather than a second copy of
+  that check, and `--ask-secret`, which reads it with `getpass`. `--secret` still works
+  — removing it would break setups that already script it — but now prints a warning
+  naming both exposures (`ps`, and the shell's history file) and both alternatives, and
+  says so in `--help` too. Prompting is opt-in rather than automatic on purpose: a
+  returning worker needs no code at all, and an unconditional prompt would hang every one
+  of them. `join.py` no longer rewrites `sys.argv` to hand over to `node.main`; it passes
+  a function argument, so the code never reaches an argument vector even in-process.
+
+  **`curl … | bash`.** `install.sh` and `install.ps1` are deleted. Not fixed — deleted.
+  The form itself is the problem: the download and the execution are one command, so
+  there is no point at which the person running it can read what is about to run, and
+  nothing to check the bytes against. That is the wrong default for software whose entire
+  request is "lend me your computer". README, `docs/demo-script.md`,
+  `docs/community-pitch.md`, `docs/DEPLOY.md`, `.gitattributes`, and the CI shell-parse
+  step all pointed at them and were updated; `tests/test_join_consent.py` now scans the
+  whole tree for a one-liner rather than asserting the deleted script's contents. Deleting
+  it also closed a fourth exposure nobody had reported: `install.ps1` read the invitation
+  code from `$env:SWARM_SECRET` and appended it to a child's argument list, so the code was
+  in the environment *and* in argv.
+
+  **macOS.** The gap was never the identity path — that already targeted
+  `~/Library/Application Support/Mycelium/` — it was that nothing around it had ever been
+  executed on a Mac. The installer now distinguishes "Ollama is not installed" from
+  "installed but never opened", which is the normal state of a Mac two minutes after
+  installing it, because macOS starts the service and creates the `ollama` command only
+  when the application is first opened. It prefers the daemon check over the command,
+  reports Apple Silicon versus Intel, and changes no search path, shell profile, trust
+  store, launch agent, or quarantine attribute — asserted across every worker module, not
+  just the installer.
+
+  CI grew a **macOS job on `macos-14`** (Apple Silicon, free for public repositories),
+  because a green Windows run skips every POSIX permission assertion and a green Linux run
+  never touches `Application Support`. That job is what makes the 0600 claim on macOS an
+  executed one rather than a reasoned one.
+
 - **2026-09-05** — Joining is one guided command, and plaintext transport is gone. The
   second half is the one that matters: the worker now refuses `http://` to every host
   except loopback, with **no flag, environment variable, or configuration key** that
@@ -636,8 +677,12 @@ memory or storage growth.
   terminal and plant clickable links in it. Fixed and tested. Two known holes are recorded
   rather than closed: `join.py --secret` and `node.py --secret` still put a secret in argv
   where `ps` can read it (kept for existing scripted setups, and no longer needed by the
-  installer path), and `install.sh` is still advertised as `curl … | bash` in its own header
-  — the README no longer points at it.
+  installer path), and `install.sh` is still advertised as `curl … | bash` in its own
+  header. **Both were closed the next day — see the 2026-09-05 entry below this one.**
+  One sentence in the original version of this entry claimed the README no longer pointed
+  at `install.sh`; it did, at the top of its own "Worker nodes" section, and that is
+  corrected rather than quietly deleted because a wrong reassurance in a security note is
+  worse than the gap it was describing.
 
   Docs: [docs/JOIN.md](docs/JOIN.md) for contributors,
   [docs/OPERATOR_PREFLIGHT.md](docs/OPERATOR_PREFLIGHT.md) for the things no program can

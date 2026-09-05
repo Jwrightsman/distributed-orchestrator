@@ -134,11 +134,23 @@ it is typed with echo off, or read from a file whose permissions are checked
 first. After that the machine has its own revocable credential and starts with
 `python node.py --server https://ADDRESS` and no secret at all.
 
-`python join.py https://ADDRESS` remains for existing scripted setups. Its
-`--secret` flag puts the shared invitation code in the process's argument list,
-where any other user on the machine can read it with `ps` and where the shell
-records it in history; prefer the installer. Send contributors
+`python join.py https://ADDRESS` remains for existing scripted setups, and now
+takes the invitation code the same two safe ways the installer does:
+
+| | |
+| --- | --- |
+| `--ask-secret` | Prompts with the echo off. Nothing reaches argv or shell history. |
+| `--secret-file PATH` | Reads it from a file that must be readable only by the running user. |
+| `--secret VALUE` | Still works, still exposed: any other user on the machine can read it with `ps`, and the shell records the line in history. It now prints a warning saying exactly that. |
+
+`node.py` takes the same three. Prefer the installer, and send contributors
 [JOIN.md](JOIN.md) rather than a command to paste.
+
+**There is no `curl … | bash` installer.** `install.sh` and `install.ps1` were
+deleted on 2026-09-05. Piping a URL into a shell gives the person running it no
+point at which to read what they are about to run, which is the wrong default
+for software whose whole request is "lend me your computer". Contributors clone
+the repository and run the installer from inside it.
 
 To leave, `python worker_installer.py uninstall` drains from the coordinator
 and removes the credential. An agent must not bypass the consent gate on

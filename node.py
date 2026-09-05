@@ -6,8 +6,8 @@ via Ollama, and sends results back. This is what turns a laptop into
 a node in the network.
 
 Usage:
-    python node.py --server http://ORCHESTRATOR_IP:8000
-    python node.py --server http://192.168.1.50:8000
+    python node.py --server https://COORDINATOR
+    python node.py --server https://COORDINATOR --ask-secret   # first join only
 """
 
 import argparse
@@ -52,6 +52,11 @@ from worker_identity import (
     normalize_enrollment_id,
     normalize_worker_node_id,
     persist_learned_enrollment,
+)
+from worker_secret import (
+    AdmissionSecretError,
+    add_admission_secret_arguments,
+    resolve_from_args,
 )
 
 console = Console()
@@ -1078,9 +1083,24 @@ async def poll_and_execute(
             return None
 
 
-async def main():
+async def main(argv: list[str] | None = None, *, admission_secret: str | None = None):
+    """Run one worker.
+
+    `argv` defaults to this process's own arguments. `admission_secret`, when
+    given, is an already-resolved code from a caller that asked for it safely —
+    `join.py` does exactly this — so it is never re-read from the argument list
+    and never warned about a second time.
+    """
+
     parser = argparse.ArgumentParser(description="Join the network as a worker node")
-    parser.add_argument("--server", required=True, help="Orchestrator URL (e.g. http://192.168.1.50:8000)")
+    parser.add_argument(
+        "--server",
+        required=True,
+        help=(
+            "Coordinator origin, e.g. https://coordinator.example. Plaintext "
+            "http:// is refused for every host except loopback"
+        ),
+    )
     parser.add_argument("--node-id", default=None, help="Custom node ID (defaults to hostname)")
     parser.add_argument(
         "--identity-file",
@@ -1090,14 +1110,9 @@ async def main():
             "file in the current user's Mycelium configuration directory)"
         ),
     )
-    parser.add_argument(
-        "--secret",
-        default="",
-        help=(
-            "Shared network-admission secret (node_secret); registration then "
-            "issues a process-local node session"
-        ),
-    )
+    # Three ways in, only one of which is an argument vector — and that one
+    # warns about itself. See worker_secret for why prompting is opt-in.
+    add_admission_secret_arguments(parser)
     parser.add_argument(
         "--model",
         help=(
@@ -1114,7 +1129,14 @@ async def main():
         ),
     )
     parser.add_argument("--capabilities", default="", help="Comma-separated capability tags, e.g. 'gpu,large-context' (auto-detected if omitted)")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+
+    if admission_secret is None:
+        try:
+            admission_secret = resolve_from_args(args)
+        except AdmissionSecretError as exc:
+            console.print(f"[red bold]Cannot read the admission secret:[/red bold] {exc}")
+            return
 
     config = get_config()
     selected_model = str(args.model or config.get("model") or DEFAULT_MODEL)
@@ -1130,7 +1152,7 @@ async def main():
     except WorkerIdentityError as exc:
         console.print(f"[red bold]Invalid worker identity configuration:[/red bold] {exc}")
         return
-    secret = args.secret
+    secret = admission_secret
     capabilities = [c.strip() for c in args.capabilities.split(",") if c.strip()] if args.capabilities else None
 
     # Pre-flight: check local Ollama

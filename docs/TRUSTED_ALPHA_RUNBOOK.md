@@ -164,8 +164,13 @@ that is best-effort local behavior and not durable user identity.
 The machine owner must run the consent gate on the worker machine:
 
 ```bash
-python join.py "$BASE_URL" --secret NODE_SECRET
+python join.py "$BASE_URL" --ask-secret
 ```
+
+`--ask-secret` prompts for `node_secret` with the echo off. `--secret-file PATH`
+reads it from a file only the running user can read. `--secret VALUE` still
+works and still warns: an argument vector is readable by every other user on the
+machine through `ps`, and the shell writes the line to its history.
 
 On first join, the stock worker generates a high-entropy enrollment credential,
 writes it to its coordinator-scoped private identity file, and bootstraps with

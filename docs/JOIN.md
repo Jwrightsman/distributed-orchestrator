@@ -75,21 +75,108 @@ you can stop at any time.
 > [docs/DEPLOY.md](DEPLOY.md) and ask for an `https://` address. It costs them
 > an afternoon.
 
-## Joining
+## If you are on a Mac
 
-Open a terminal, put yourself in the project folder, and run:
+**Read this before the section below.** Everything here also applies to you;
+this part is the handful of things that are different on macOS, and one of them
+trips up almost everybody.
+
+### 1. Opening a terminal
+
+Press **Command-Space**, type `Terminal`, press **Return**. That black window is
+the terminal. You can close it whenever you like.
+
+### 2. Getting the code
 
 ```bash
+git clone https://github.com/Jwrightsman/distributed-orchestrator
+cd distributed-orchestrator
+```
+
+If `git` is missing, macOS offers to install the developer tools — say yes, wait,
+and run it again. **Prefer this to downloading a zip.** A zip that came from a
+browser is marked by macOS as having come from the internet, and while that mark
+does not stop `python worker_installer.py` from running, it does mean the files
+carry a flag you did not put there. `git clone` writes the files itself, so they
+carry nothing. If you already downloaded a zip, it will still work; nothing in
+this project asks you to remove that mark, and you should be suspicious of any
+program that does.
+
+Some Macs have `python` and some only have `python3`. If `python` says "command
+not found", use `python3` everywhere below.
+
+### 3. Ollama — the step almost everybody gets caught by
+
+Download it from [ollama.com/download](https://ollama.com/download). You get a
+disk image; drag Ollama into your Applications folder. So far so ordinary.
+
+**Then open it once.** Double-click it in Applications, or press Command-Space
+and type `Ollama`. Nothing much appears to happen — there is no window — but a
+small llama shows up in the menu bar along the top of your screen. That means it
+is running.
+
+This matters because on a Mac, Ollama does not start until you open it, and the
+`ollama` command the terminal uses is created the first time you open it. So the
+normal state of a Mac two minutes after installing Ollama is: installed, not
+running, no command. If the installer says
+
+> Ollama is already installed on this Mac — it just has not been opened yet
+
+that is what happened, and opening it is the whole fix. You only do this once;
+after that it starts with your Mac.
+
+If you open Ollama and the terminal *still* cannot find it, close that terminal
+window and open a new one. A window you opened before installing Ollama does not
+know about it. The installer will not edit your settings to fix this for you.
+
+### 4. Apple Silicon or Intel
+
+The installer prints which one you have. On **Apple Silicon** (M1 and later) the
+model runs on the graphics hardware and is noticeably quicker. On an **Intel**
+Mac it runs on the processor, which is what the numbers this project publishes
+were measured on. Both work; the model is the same download either way.
+
+### 5. Where your file goes
+
+`~/Library/Application Support/Mycelium/nodes/`. That folder is hidden in the
+Finder by default — to look at it, open Finder, press **Command-Shift-G**, and
+paste that path. The file inside is created readable only by you.
+
+### 6. If macOS warns you about something
+
+It should not. This project has no application to open, no installer package,
+and nothing that gets double-clicked — you run Python and hand it a file, and
+Gatekeeper does not check files handed to a program you already trust. If macOS
+*does* put up a warning about something from this project, **stop and ask the
+person who invited you** rather than clicking through it.
+
+---
+
+## Joining
+
+Get the code, then run the installer from inside it:
+
+```bash
+git clone https://github.com/Jwrightsman/distributed-orchestrator
+cd distributed-orchestrator
 python worker_installer.py
 ```
 
-It walks through nine steps and tells you what each one is doing.
+There is deliberately **no one-line command that downloads and runs something
+in one go**. There used to be. It was removed because it gave you no moment at
+which to look at what you were about to run — and looking is exactly what you
+should do with software a friend asked you to install. The clone leaves it all
+sitting on your disk, readable, before anything happens.
+
+The installer walks through nine steps and tells you what each one is doing.
 
 1. **Checks it is not running as an administrator.** It refuses if it is —
    nothing here needs those rights.
-2. **Checks your computer and Python version.**
-3. **Looks for Ollama.** If it is not there, it tells you where to get it and
-   stops.
+2. **Checks your computer and Python version**, and says which processor it
+   found — Apple Silicon, Intel, or otherwise.
+3. **Looks for Ollama.** It asks whether Ollama is *answering*, not whether the
+   `ollama` command exists, because the service is what does the work. On a Mac
+   those two come apart; see the Mac section above.
 4. **Asks for the address.** Paste what you were given.
 5. **Shows you exactly what is about to happen**, in plain English, including
    every file it will write — and waits. Nothing has been downloaded or
@@ -166,6 +253,8 @@ Every failure prints a sentence and an exit code, not a wall of red text.
 | --- | --- |
 | "refusing plaintext http://…" | The address is not `https://`. Ask for an `https://` one. |
 | "Ollama is not running" | Install it from [ollama.com](https://ollama.com/download), or start it (`ollama serve` on Linux). |
+| "Ollama is already installed on this Mac" | You installed it but never opened it. Open it from Applications once; a llama appears in the menu bar. |
+| "this terminal cannot find its 'ollama' command" | Open Ollama once if you have not, then close this terminal window and open a new one. |
 | "running as root or Administrator" | Close that terminal, open a normal one, run it again. |
 | "Your copy of Mycelium is too old" | Yours to fix: `git pull` and run it again. |
 | "This coordinator is running older software than your copy" | Not yours to fix. Tell the operator; quote both version numbers. |

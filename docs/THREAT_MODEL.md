@@ -304,7 +304,10 @@ it.
   revocable, and it lives in a file created readable only by its owner;
 - change the contributor's firewall, certificate trust store, startup programs,
   or any other security setting. The installer touches none of them, and a test
-  asserts it does not so much as reference the commands that would.
+  asserts it does not so much as reference the commands that would. On macOS
+  that list explicitly includes Gatekeeper: nothing here strips a quarantine
+  attribute, re-signs anything, edits a shell profile, or alters the search
+  path. `tests/test_macos_worker.py` holds that across every worker module.
 
 **A coordinator can:**
 
@@ -330,6 +333,14 @@ it.
 
 ### What still protects nobody
 
+- **There is no longer a `curl … | bash` install**, which used to be the first
+  thing the README offered. The download and the execution were one command,
+  so there was no moment at which the person running it could read what they
+  were about to run, and nothing to check the bytes against. `install.sh` and
+  `install.ps1` were deleted on 2026-09-05; a contributor clones the repository
+  and runs the installer out of it. This does not make the code trustworthy —
+  see the next two bullets — it makes it *readable before it runs*, which is
+  the most a project without code signing can honestly offer.
 - **The model runs as the contributor's user account.** Nothing here sandboxes
   Ollama. A flaw in the model runtime is a flaw on their machine.
 - **The protections live in the contributor's copy of the code.** They are only
@@ -338,9 +349,20 @@ it.
   operator reading what their machine produces should not join.
 - **`join.py --secret` and `node.py --secret` still exist**, and a secret in an
   argument list is readable by every other user on the machine through `ps` and
-  is written to shell history. They are kept for existing scripted setups; the
-  guided installer never uses them, and enrolment through it leaves the worker
-  needing no secret at all afterwards.
+  is written to shell history. Since 2026-09-05 they are no longer the only
+  way in: both commands take `--ask-secret` (typed with the echo off) and
+  `--secret-file PATH` (read through the same owner-only check that guards the
+  identity file), and `--secret` prints a warning naming both exposures and
+  both alternatives. It is kept rather than removed because setups already
+  script it. The guided installer still accepts no code on the command line at
+  all, and enrolment through any of these leaves the worker needing no secret
+  afterwards.
+- **Nothing reads a credential out of the environment any more.**
+  `install.ps1` took the invitation code from `$env:SWARM_SECRET` and appended
+  it to a child process's argument list — an environment variable is inherited
+  by everything a process starts, so the code was exposed twice over. That
+  script is gone, and a test asserts no worker module writes to the
+  environment at all.
 - **Transport is no longer the contributor's problem to assess**, which is the
   point: since 2026-09-05 the worker refuses plaintext HTTP to any non-loopback
   host, with no flag, environment variable, or configuration key that permits

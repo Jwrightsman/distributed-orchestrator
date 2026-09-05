@@ -26,6 +26,51 @@ jobs:
       - name: Tests (pytest — no Ollama needed)
         run: pytest -q
 
+  macos:
+    # macOS is where the worker's file paths, permission bits, and Ollama story
+    # all differ, and until 2026-09-05 none of it had ever been executed on a
+    # Mac — a green Windows run skips every POSIX assertion, and a green Linux
+    # run never touches ~/Library/Application Support. GitHub's macOS runners
+    # are Apple Silicon and are free for public repositories, so this costs
+    # wall-clock time and no money.
+    #
+    # Scoped to the worker-facing modules rather than the whole suite: those
+    # are the ones with platform-dependent behaviour, and the full suite takes
+    # 20-plus minutes on every push. Widening it is a one-line change if the
+    # coordinator ever grows macOS-specific behaviour worth pinning.
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Report what this runner actually is
+        run: python -c "import platform, sys; print(platform.system(), platform.machine(), platform.mac_ver()[0], sys.version)"
+
+      - name: Worker, installer, and contributor-safety suites on macOS
+        run: >-
+          python -m pytest -q
+          tests/test_macos_worker.py
+          tests/test_worker_secret.py
+          tests/test_worker_installer.py
+          tests/test_worker_identity.py
+          tests/test_worker_transport.py
+          tests/test_contributor_safety.py
+          tests/test_join_consent.py
+          tests/test_node_submission.py
+          tests/test_node_capabilities_worker.py
+
+      - name: Server imports on macOS
+        run: python -c "from server import app; print('ok:', len(app.routes), 'routes')"
+
   trusted-alpha:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -102,4 +147,4 @@ jobs:
         run: docker compose config --quiet
 
       - name: Deploy script parses
-        run: bash -n deploy.sh install.sh
+        run: bash -n deploy.sh

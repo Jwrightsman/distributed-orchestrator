@@ -36,6 +36,7 @@ WORKER_MODULES = (
     "worker_transport.py",
     "worker_identity.py",
     "worker_installer.py",
+    "worker_secret.py",
     "join.py",
     "node.py",
 )

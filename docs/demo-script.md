@@ -315,24 +315,23 @@ joins the swarm."*
 > live, or overlay the real address in the edit. It is the single most
 > load-bearing frame in the video: it is the one people act on.
 >
-> **2. The page and the caption show different commands.** The page shows
-> `python join.py <address>`; the one-liner below is the `curl … install.sh`
-> form. Both work — `join.py` assumes the repo is already cloned, `install.sh`
-> does the cloning for you — but showing one and reading the other is how a
-> viewer ends up running neither. **Pick the `install.sh` one-liner for the
-> voiceover and the end card**, since a stranger has not cloned anything yet.
+> **2. The page and the caption must show the same command.** There is no
+> longer a `curl … | bash` one-liner — both installers were deleted on
+> 2026-09-05, because piping a URL into a shell runs whatever answers that URL
+> and gives the viewer nothing to read first. Showing one command and reading
+> another is how a viewer ends up running neither, so show the clone.
 
-Show the one-liner large enough to read:
+Show the three lines large enough to read. They are the same on macOS, Linux,
+and Windows, which is one fewer thing to get wrong on an end card:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Jwrightsman/distributed-orchestrator/master/install.sh | bash -s -- http://YOUR_ORCHESTRATOR:8000
+git clone https://github.com/Jwrightsman/distributed-orchestrator
+cd distributed-orchestrator
+python worker_installer.py
 ```
 
-Windows viewers need the PowerShell form instead — put both on the end card:
-
-```powershell
-$env:SWARM_SERVER="http://YOUR_ORCHESTRATOR:8000"; irm https://raw.githubusercontent.com/Jwrightsman/distributed-orchestrator/master/install.ps1 | iex
-```
+The installer asks for the invitation code at a prompt, so nothing secret goes
+on screen — worth knowing before pointing a camera at a terminal.
 
 If the public orchestrator is live by recording day, **put its real address on
 screen here** — that single detail is the difference between "neat project" and

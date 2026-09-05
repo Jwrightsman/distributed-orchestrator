@@ -92,10 +92,18 @@ about 90 seconds.
 ## How a human joins
 
 ```bash
-python join.py http://ORCHESTRATOR_ADDRESS:8000
+git clone https://github.com/Jwrightsman/distributed-orchestrator
+cd distributed-orchestrator
+python worker_installer.py
 ```
 
-It prints what it will do and waits for confirmation. Joining the project's own
+There is no `curl … | bash` one-liner; both install scripts were deleted on
+2026-09-05 because that form gives the person running it nothing to read first.
+`python join.py https://COORDINATOR` remains for existing scripted setups. The
+address must be `https://` — plaintext to any non-loopback host is refused with
+no override.
+
+Both print what they will do and wait for confirmation. Joining the project's own
 orchestrator is currently by invite: a shared key admits only the initial
 bootstrap, after which that worker uses its own revocable enrollment credential
 and process-local sessions. The address alone is not enough. Anyone can run

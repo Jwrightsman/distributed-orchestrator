@@ -2,7 +2,13 @@
 One-command setup to join the network as a worker node.
 
 Usage:
-    python join.py http://ORCHESTRATOR_IP:8000   # direct
+    python join.py https://COORDINATOR                 # no code needed if enrolled
+    python join.py https://COORDINATOR --ask-secret    # type the code, echo off
+    python join.py https://COORDINATOR --secret-file ~/code.txt
+
+`--secret VALUE` still works and still warns: an argument vector is readable by
+every other user on the machine. `python worker_installer.py` is the guided
+path and never accepts a code on the command line at all.
 
 Does everything:
   1. Validates the explicit coordinator origin you provide
@@ -22,6 +28,12 @@ from rich.console import Console
 from rich.panel import Panel
 from ollama_client import check_ollama, DEFAULT_MODEL
 from worker_identity import WorkerIdentityError, normalize_coordinator
+from worker_secret import (
+    AdmissionSecretError,
+    add_admission_secret_arguments,
+    resolve_from_args,
+    warn_if_argv_secret,
+)
 
 console = Console()
 
@@ -29,14 +41,25 @@ async def ensure_ollama():
     """Make sure Ollama is running and has the right model."""
     status = await check_ollama()
     if not status["ok"]:
+        # The same diagnosis the guided installer gives, imported rather than
+        # written a second time: a Mac with Ollama installed but never opened
+        # must not be told to install Ollama.
+        from worker_installer import ollama_absence_hint
+
         console.print("[red bold]Ollama is not running.[/red bold]")
-        console.print("Start it with: [dim]ollama serve[/dim]")
-        console.print("Download from: [dim]https://ollama.com[/dim]")
+        console.print(ollama_absence_hint())
         return False
 
     if not any(DEFAULT_MODEL in m for m in status["models"]):
+        from worker_installer import ollama_cli_missing_hint
+
         console.print(f"Model [yellow]{DEFAULT_MODEL}[/yellow] not found. Pulling now (~2-3GB)...")
-        result = subprocess.run(["ollama", "pull", DEFAULT_MODEL], capture_output=False)
+        try:
+            result = subprocess.run(["ollama", "pull", DEFAULT_MODEL], capture_output=False)
+        except (FileNotFoundError, NotADirectoryError, PermissionError):
+            console.print("[red]The 'ollama' command is not on this terminal's path.[/red]")
+            console.print(ollama_cli_missing_hint())
+            return False
         if result.returncode != 0:
             console.print(f"[red]Failed to pull {DEFAULT_MODEL}.[/red]")
             return False
@@ -109,18 +132,13 @@ async def main():
     parser.add_argument(
         "server",
         help=(
-            "Explicit orchestrator origin (HTTPS, private-overlay HTTP, or "
-            "loopback local development)"
+            "Explicit coordinator origin. https:// for anything on a network; "
+            "http:// only for loopback local development"
         ),
     )
-    parser.add_argument(
-        "--secret",
-        default="",
-        help=(
-            "Shared node-admission secret; the orchestrator issues a separate "
-            "process-local session after registration"
-        ),
-    )
+    # Three ways in, only one of which is an argument vector — and that one
+    # warns about itself. See worker_secret for why prompting is opt-in.
+    add_admission_secret_arguments(parser)
     parser.add_argument(
         "--identity-file",
         help=(
@@ -133,6 +151,12 @@ async def main():
                              "agents should not pass this on someone else's behalf (see AGENTS.md).")
     args = parser.parse_args()
 
+    # Before anything else, because by the time this runs the exposure has
+    # already happened: the code is in this process's argument vector and in
+    # the shell's history file. Saying so only on the paths that get as far as
+    # a valid address would be saying so uselessly.
+    warned_about_argv = warn_if_argv_secret(args.secret)
+
     try:
         server = normalize_coordinator(args.server)
     except WorkerIdentityError as exc:
@@ -142,18 +166,25 @@ async def main():
     if not confirm_consent(server, args.yes):
         sys.exit(0)
 
+    # After consent, so nobody types an invitation code before being told what
+    # joining costs them, and before ensure_ollama() writes 2.5 GB to disk.
+    try:
+        secret = resolve_from_args(args, warn=not warned_about_argv)
+    except AdmissionSecretError as exc:
+        console.print(f"[red bold]Cannot read the admission secret:[/red bold] {exc}")
+        sys.exit(1)
+
     if not await ensure_ollama():
         sys.exit(1)
 
-    # Delegate entirely to node.main() — it handles register, poll, Rich output
-    node_argv = ["node.py", "--server", server]
-    if args.secret:
-        node_argv += ["--secret", args.secret]
+    # Delegate entirely to node.main() — it handles register, poll, Rich output.
+    # The secret is handed over as an argument to a Python function, not as an
+    # element of an argument list, so it never reaches argv even in-process.
+    node_argv = ["--server", server]
     if args.identity_file:
         node_argv += ["--identity-file", args.identity_file]
-    sys.argv = node_argv
     from node import main as node_main
-    await node_main()
+    await node_main(node_argv, admission_secret=secret)
 
 
 if __name__ == "__main__":

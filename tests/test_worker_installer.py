@@ -643,7 +643,7 @@ def test_the_installer_talks_to_the_coordinator_and_ollama_and_nobody_else(
 
 
 def test_the_installer_never_changes_the_hosts_security_posture():
-    """No firewall rule, no trust store, no boot service."""
+    """No firewall rule, no trust store, no boot service, no Gatekeeper edit."""
 
     source = Path(worker_installer.__file__).read_text(encoding="utf-8").lower()
     for forbidden in (
@@ -660,6 +660,14 @@ def test_the_installer_never_changes_the_hosts_security_posture():
         "crontab",
         "setuid",
         "chown",
+        # macOS. Stripping a quarantine attribute or re-signing something would
+        # each leave a contributor's Mac fractionally less protected than they
+        # left it, without them noticing. tests/test_macos_worker.py holds the
+        # same property across the other worker modules.
+        "xattr",
+        "spctl",
+        "codesign",
+        "com.apple.quarantine",
     ):
         assert forbidden not in source, (
             f"the installer references {forbidden}; it must not change the host"
