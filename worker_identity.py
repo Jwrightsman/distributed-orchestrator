@@ -302,6 +302,50 @@ def _check_open_file(path: Path, opened: os.stat_result) -> None:
             raise WorkerIdentityError("worker identity file is not owned by this user")
 
 
+MAX_SECRET_FILE_BYTES = 4096
+
+
+def read_owner_only_text(path: Path | str) -> str:
+    """Read a small secret-bearing file, refusing anything others can read.
+
+    The installer needs one file check that is not an identity file: an
+    invitation code somebody wrote down so they would not have to type it. It
+    gets exactly the checks an identity file gets — no symlink, a regular file,
+    owner-only POSIX mode, owned by this user — because a credential in a
+    world-readable file is a credential already disclosed, and because writing a
+    second, laxer version of this check is how the two drift apart.
+
+    Returns the stripped contents. Never logs or echoes them.
+    """
+
+    secret_path = Path(path).expanduser()
+    try:
+        path_stat = secret_path.lstat()
+    except FileNotFoundError:
+        raise WorkerIdentityError(f"file does not exist: {secret_path}") from None
+    except OSError as exc:
+        raise WorkerIdentityError(f"file cannot be inspected: {secret_path}") from exc
+    if stat.S_ISLNK(path_stat.st_mode):
+        raise WorkerIdentityError("file must not be a symbolic link")
+
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(secret_path, flags)
+        with os.fdopen(descriptor, "rb") as handle:
+            _check_open_file(secret_path, os.fstat(handle.fileno()))
+            raw = handle.read(MAX_SECRET_FILE_BYTES + 1)
+    except WorkerIdentityError:
+        raise
+    except OSError as exc:
+        raise WorkerIdentityError(f"file cannot be read: {secret_path}") from exc
+    if len(raw) > MAX_SECRET_FILE_BYTES:
+        raise WorkerIdentityError("file is too large to be a credential")
+    try:
+        return raw.decode("utf-8").strip()
+    except UnicodeDecodeError:
+        raise WorkerIdentityError("file is not valid UTF-8 text") from None
+
+
 def load_worker_identity(
     path: Path | str,
     *,
