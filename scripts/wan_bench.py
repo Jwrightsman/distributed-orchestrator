@@ -16,7 +16,7 @@ So this measures the transport separately from the thinking:
 
 Run against the live orchestrator from a machine somewhere else entirely:
 
-    python scripts/wan_bench.py --server http://IP:8000 --secret NODE_SECRET
+    python scripts/wan_bench.py --server https://COORDINATOR --ask-secret
 
 Add --pitch-key KEY to also time a full end-to-end distributed pitch, which
 reports the network share of total wall clock. That part needs a model on the
@@ -31,11 +31,22 @@ import asyncio
 import json
 import platform
 import statistics
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from worker_secret import (  # noqa: E402
+    AdmissionSecretError,
+    add_admission_secret_arguments,
+    resolve_from_args,
+)
 
 RESULTS_DIR = Path(__file__).parent / "wan_results"
 
@@ -217,7 +228,10 @@ async def measure_end_to_end(
 async def main():
     ap = argparse.ArgumentParser(description="Measure WAN cost of the distributed swarm")
     ap.add_argument("--server", required=True)
-    ap.add_argument("--secret", default="", help="node_secret")
+    # `--secret VALUE` is readable by every other user on the machine through
+    # `ps`. Shared with the worker rather than re-declared, so this tool gets
+    # --secret-file and --ask-secret and the same warning for free.
+    add_admission_secret_arguments(ap)
     ap.add_argument("--pitch-key", default="", help="enables the end-to-end pitch")
     ap.add_argument("--samples", type=int, default=20)
     ap.add_argument("--payload-kb", type=int, default=8, help="simulated builder output size")
@@ -229,6 +243,11 @@ async def main():
         help="record numbers even if this machine is busy (they will be marked untrusted)",
     )
     args = ap.parse_args()
+    try:
+        node_secret = resolve_from_args(args)
+    except AdmissionSecretError as exc:
+        print(f"Cannot read the admission secret: {exc}")
+        raise SystemExit(2) from None
 
     server = args.server.rstrip("/")
 
@@ -259,18 +278,18 @@ async def main():
         print(f"    median {results['http_rtt'].get('median_ms')} ms")
 
         print("2/5 node registration...")
-        results["registration"] = await measure_registration(client, server, args.secret, 5)
+        results["registration"] = await measure_registration(client, server, node_secret, 5)
         print(f"    median {results['registration'].get('median_ms')} ms")
 
         print(f"3/5 result submission ({args.payload_kb} KB payload)...")
         results["result_submission"] = await measure_result_submission(
-            client, server, args.secret, 8, args.payload_kb
+            client, server, node_secret, 8, args.payload_kb
         )
         print(f"    median {results['result_submission'].get('median_ms')} ms")
 
         print(f"4/5 idle poll stability ({args.idle_minutes} min)...")
         results["poll_stability"] = await measure_poll_stability(
-            client, server, args.secret, args.idle_minutes
+            client, server, node_secret, args.idle_minutes
         )
         print(f"    error rate {results['poll_stability']['error_rate_pct']}%")
 
