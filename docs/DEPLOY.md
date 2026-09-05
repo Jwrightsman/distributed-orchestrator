@@ -105,16 +105,44 @@ docker compose up -d
 Restrict the overlay ACL so only invited operators and workers can reach port
 8000. Do not set `MYCELIUM_PUBLISH_ADDRESS=0.0.0.0` as a shortcut.
 
+### The overlay still needs TLS
+
+**A worker will not join over plaintext `http://`, overlay or not.** Since
+2026-09-05 the worker refuses plaintext transport to every host except loopback,
+with no flag, environment variable, or configuration key that relaxes it. An
+overlay address is still a network address, and an ACL is an operator assertion
+that a contributor cannot verify.
+
+You do not have to give up the overlay. Put a certificate on it — `tailscale
+cert` issues one for your tailnet name — and keep the ACL as well; they solve
+different problems. Or use the reverse-proxy section below. Either way the
+address you hand a contributor starts with `https://`.
+
+### Joining
+
 The owner of each worker machine must explicitly consent before it joins:
 
 ```bash
-python join.py http://OVERLAY_ADDRESS:8000 --secret NODE_SECRET
+python worker_installer.py
 ```
 
-`join.py` describes the model download and CPU/RAM/disk cost and waits for the
-owner. It creates a private, coordinator-scoped worker identity file before
-bootstrap; later joins use that file and no longer need `--secret`. An agent
-must not bypass the consent gate on someone else's machine.
+The guided installer asks for the address and the invitation code, describes
+the model download and CPU/RAM/disk cost in plain language, names every file it
+will write, and waits for the owner. It performs the bootstrap enrollment
+itself, so **the shared secret is never passed as a command-line argument** —
+it is typed with echo off, or read from a file whose permissions are checked
+first. After that the machine has its own revocable credential and starts with
+`python node.py --server https://ADDRESS` and no secret at all.
+
+`python join.py https://ADDRESS` remains for existing scripted setups. Its
+`--secret` flag puts the shared invitation code in the process's argument list,
+where any other user on the machine can read it with `ps` and where the shell
+records it in history; prefer the installer. Send contributors
+[JOIN.md](JOIN.md) rather than a command to paste.
+
+To leave, `python worker_installer.py uninstall` drains from the coordinator
+and removes the credential. An agent must not bypass the consent gate on
+someone else's machine.
 
 Pass a coordinator origin only—no path, query, user information, or fragment.
 The stock worker intentionally ignores ambient `HTTP_PROXY`/`HTTPS_PROXY`
@@ -176,6 +204,15 @@ The generator writes `.mycelium-trusted-alpha` beside the config. This
 out-of-band marker makes a later missing or malformed JSON file fail closed
 instead of silently reverting to local defaults. A successfully loaded manual
 `deployment_mode: trusted_alpha` config also establishes the marker.
+
+## Operator pre-flight checklist
+
+`scripts/preflight.py` checks the configuration. It cannot check your host, your
+certificate, or where your secrets have already been.
+[OPERATOR_PREFLIGHT.md](OPERATOR_PREFLIGHT.md) is the list for those — TLS,
+secret rotation after any recording, `git log -p` for committed secrets,
+firewall to 22/80/443, SSH keys not passwords, unattended upgrades. Work
+through it before you invite anybody.
 
 ## Preflight
 

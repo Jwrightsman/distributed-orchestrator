@@ -271,6 +271,83 @@ Workers run a local model and return text. They do not execute the generated
 artifact. That last boundary depends on operators continuing not to run
 unreviewed generated code.
 
+## 6a. What a contributor is and is not exposed to
+
+Section 6 asks what a bad worker can do to the network. This one asks the
+question a contributor actually has: *what can this do to my machine?* They are
+not the same question and the second one has a worse historical answer, because
+until now it was only ever answered in prose.
+
+### The coordinator is the adversary here
+
+Not a hypothetical intruder — the person whose invitation the contributor
+accepted. That is the honest framing, and everything below is written against
+it.
+
+**A coordinator cannot, through the worker protocol:**
+
+- run code on the contributor's machine. The worker receives a prompt, hands it
+  to a local model, and returns text. It never executes, compiles, or evaluates
+  anything it was sent. `tests/test_contributor_safety.py` drives the worker
+  with a task carrying Python, shell fragments, command substitution, and a
+  path traversal, and asserts the filesystem is byte-for-byte unchanged;
+- cause a file to be written anywhere. The task-execution path contains no
+  filesystem call at all, which is asserted structurally so it holds for inputs
+  no test thought of;
+- name a model the worker did not advertise. A server model binding is checked
+  against the worker's own immutable capability descriptor and refused
+  otherwise, so the one server-supplied value reaching a local runtime is
+  bounded by something the contributor's machine chose;
+- open an inbound port, read files, or reach anything on the contributor's
+  network. The worker dials out; nothing dials in;
+- read the credential of any other node. Each enrolment is separate and
+  revocable, and it lives in a file created readable only by its owner;
+- change the contributor's firewall, certificate trust store, startup programs,
+  or any other security setting. The installer touches none of them, and a test
+  asserts it does not so much as reference the commands that would.
+
+**A coordinator can:**
+
+- read every answer the contributor's machine produces, and every prompt it
+  chose to send;
+- see that the machine is connected, what it claimed about itself, and how much
+  work it has done;
+- occupy the contributor's processor for as long as they leave it running;
+- stop trusting or paying the contributor, which is not a security property.
+
+**A coordinator could try, and gets much less than it looks:**
+
+- *sending markup in a task title.* Task titles are coordinator-controlled text
+  printed on the contributor's screen. They are escaped before rendering, so a
+  title cannot colour a volunteer's terminal or plant a clickable link in it.
+  Found and closed while writing the contributor-safety tests;
+- *supplying a hostile model name to the pull step.* Model names come from the
+  contributor's own config, are validated against a strict pattern, and reach
+  `ollama` as one element of an argument list. There is no shell anywhere in
+  the worker or the installer;
+- *redirecting the registration.* The installer does not follow redirects while
+  carrying a credential, and says so rather than failing obscurely.
+
+### What still protects nobody
+
+- **The model runs as the contributor's user account.** Nothing here sandboxes
+  Ollama. A flaw in the model runtime is a flaw on their machine.
+- **The protections live in the contributor's copy of the code.** They are only
+  worth what "this is the real copy" is worth. There is no code signing.
+- **The operator sees the output.** A contributor who would not want their
+  operator reading what their machine produces should not join.
+- **`join.py --secret` and `node.py --secret` still exist**, and a secret in an
+  argument list is readable by every other user on the machine through `ps` and
+  is written to shell history. They are kept for existing scripted setups; the
+  guided installer never uses them, and enrolment through it leaves the worker
+  needing no secret at all afterwards.
+- **Transport is no longer the contributor's problem to assess**, which is the
+  point: since 2026-09-05 the worker refuses plaintext HTTP to any non-loopback
+  host, with no flag, environment variable, or configuration key that permits
+  it. Previously a contributor was implicitly asked to evaluate whether an
+  operator's overlay was really private, which is not a judgement they were in
+  a position to make.
+
 ## 7. Read access and shares
 
 `viewer_key` is one instance-wide reader authority. Every holder can read every
@@ -642,8 +719,11 @@ request-count and concurrency cap reduce abuse; they do not eliminate it.
   signature, and identity-file recovery is an operator responsibility.
 - Node sessions are process-local incarnation credentials, not durable
   scheduling state.
-- No built-in HTTPS; enrollment/session secrets and content require external
-  TLS or a private authenticated overlay.
+- No built-in HTTPS. The coordinator still needs an external TLS terminator;
+  what changed on 2026-09-05 is that the *worker* now refuses plaintext to any
+  non-loopback host, so an operator cannot invite anyone until one is in place.
+  A private authenticated overlay is no longer sufficient on its own — put a
+  certificate on the overlay address.
 - No generated-code or model-executor sandbox. The validator child contains
   allowlisted parser failures only; it is not same-user filesystem isolation.
 - Windows lacks the runner's POSIX CPU, address-space, output-file, descriptor,
@@ -682,8 +762,8 @@ operators you trust. Use `deployment_mode=trusted_alpha`, run preflight, set
 independent strong `node_secret`, `pitch_key`, and `viewer_key` values, require
 durable enrollment, keep `validator_execution_mode` at `auto` or
 `subprocess`, and allow exactly one process to own the state directory
-before binding beyond localhost. Use TLS or a private authenticated overlay;
-configure access logs to redact share capabilities and never capture
+before binding beyond localhost. Use TLS — the worker will not join without it, on an overlay or
+otherwise — and configure access logs to redact share capabilities and never capture
 idempotency, admission, enrollment, session, or attempt credentials; keep
 keyless pitching off unless you explicitly acknowledge and accept its compute
 risk; take and verify backups; protect worker identity files; review generated
