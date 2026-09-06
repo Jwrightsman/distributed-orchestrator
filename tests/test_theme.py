@@ -19,7 +19,8 @@ from fastapi.testclient import TestClient
 from server import app
 
 TEMPLATES = Path(__file__).resolve().parent.parent / "templates"
-PAGES = ("index.html", "dashboard.html", "try.html", "run.html", "status.html")
+PAGES = ("index.html", "dashboard.html", "try.html", "run.html", "status.html",
+         "locked.html")
 # /node/{id} renders status.html — one layout, two sets of figures.
 ROUTES = {"/": "index.html", "/dashboard": "dashboard.html", "/try": "try.html"}
 

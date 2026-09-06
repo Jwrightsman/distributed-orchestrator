@@ -343,11 +343,16 @@ async function refresh() {
     // /health is public and thin; /nodes and /metrics are private. Health is
     // fetched plainly so the fail-open state is still readable from a browser
     // that has no session, and only the private two can lock the screen.
-    const [health, nodes, met] = await Promise.all([
+    const [health, nodes, met, evidence] = await Promise.all([
       fetch('/health').then(r => r.json()),
       apiJson('/nodes'),
       apiJson('/metrics').catch(() => null),
+      // Optional: a deployment with evidence off, or an older server, simply
+      // has no observations to show. That is a state the row renders, not an
+      // error that should empty the view.
+      apiJson('/v1/operator/capability-evidence').catch(() => null),
     ]);
+    if (evidence) capabilityEvidence = evidence;
 
     // Deny-by-default is off. The server says so about itself; the banner is
     // that fact, not an inference from a failed request.
@@ -397,44 +402,242 @@ async function refresh() {
   }
 }
 
+/* Node state: a filled square, a colour AND a word. Never colour alone — this
+   view is filmed, compressed, and read by people who do not all separate these
+   hues. */
+function nodeState(n) {
+  if (n.enrollment_status === 'revoked') return {key: 'revoked', word: 'revoked'};
+  if (n.current_task) return {key: 'building', word: 'building'};
+  return {key: 'idle', word: 'idle — holding nothing'};
+}
+
+/* Enrollment is durable identity; a session is not. A compatibility session
+   records work against nothing that survives a reconnect, which is a fact the
+   operator needs, so it is stated rather than left blank. */
+function enrollmentLine(n) {
+  if (n.enrollment_status === 'revoked') {
+    return {cls: 'is-revoked', label: escHtml(n.enrollment_id || 'revoked'),
+            note: 'revoked · offered no further work'};
+  }
+  if (!n.enrolled || !n.enrollment_id) {
+    return {cls: 'is-warn', label: 'not enrolled',
+            note: 'compatibility session · work recorded against nothing durable'};
+  }
+  return {cls: 'is-ok', label: escHtml(n.enrollment_id),
+          note: 'durable identity · survives reconnect and relabelling'};
+}
+
+/* Capability evidence, from /v1/operator/capability-evidence. Deliberately not
+   from /nodes: that endpoint excludes observation records on purpose, so
+   reading a sample count off a node record would always render "none" and read
+   as "this machine has produced nothing" rather than "this endpoint does not
+   carry it".
+
+   The endpoint states `affects_routing: false` and calls agreement
+   `bounded_output_comparison_not_correctness`. Both are repeated in the row,
+   because a sample count with neither caveat reads as a score. */
+let capabilityEvidence = null;
+
+function evidenceLine(n) {
+  const ev = capabilityEvidence;
+  if (!ev) {
+    return `<div class="node-evidence is-none">observations
+      <span class="node-evidence-v is-absent">not loaded</span></div>`;
+  }
+  if (ev.mode === 'off') {
+    return `<div class="node-evidence is-none">observations
+      <span class="node-evidence-v">collection is off</span>
+      <span class="node-evidence-note">nothing is being recorded about this machine's
+        behaviour</span></div>`;
+  }
+
+  const minimum = Number(ev.minimum_samples || 0);
+  const scopes = (ev.scopes || []).filter(s =>
+    (n.enrollment_id && s.enrollment_id === n.enrollment_id) ||
+    (!n.enrollment_id && s.node_label === n.node_id));
+  const samples = scopes.reduce((sum, s) => sum + Number(s.observation_count || 0), 0);
+
+  // Below the configured minimum is an explicit state, not a small number and
+  // not an empty cell. A rate computed from two samples is not a finding.
+  if (samples < minimum || samples === 0) {
+    return `<div class="node-evidence is-none">observations
+      <span class="node-evidence-v">${samples} of ${minimum} — insufficient evidence</span>
+      <span class="node-evidence-note">shadow only; never affects which machine gets
+        work</span></div>`;
+  }
+  return `<div class="node-evidence">observations
+    <span class="node-evidence-v">${samples} sample${samples === 1 ? '' : 's'}</span>
+    <span class="node-evidence-note">shadow only; never affects which machine gets work,
+      and agreement between two runs is not correctness</span></div>`;
+}
+
 function renderNodes(nodes) {
   const nodesList = $('nodes-list');
+  const summary = $('nodes-summary');
   if (!nodesList) return;
+
+  renderNodeMap(nodes);
+
   if (nodes.count === 0) {
+    if (summary) summary.textContent = 'No machines connected.';
     nodesList.innerHTML = `
       <div class="empty-state">
         <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="18" r="2.2"/><path d="M10.5 6.8 6.5 15.8M13.5 6.8l4 9M7.4 18h9.2"/></svg></div>
-        <p>No nodes connected yet.<br>Run <code class="code-inline">python join.py ${escHtml(location.origin)}</code> on another machine to join.</p>
+        <p>No machines connected yet.<br>Run <code class="code-inline">python join.py ${escHtml(location.origin)}</code> on another machine to join.</p>
       </div>`;
     return;
   }
-  nodesList.innerHTML = nodes.nodes.map(n => {
-    const busy = n.current_task;
-    const dotClass = busy ? 'node-dot busy' : 'node-dot';
-    const activeHtml = busy
-      ? `<div class="node-active-task">&#9654; ${escHtml(n.current_task)}</div>`
-      : '';
-    const hwParts = [];
-    if (n.cpu_count) hwParts.push(`${n.cpu_count} CPU`);
-    if (n.ram_gb) hwParts.push(`${n.ram_gb}GB RAM`);
-    if (n.gpu) hwParts.push(escHtml(n.gpu));
-    const hwHtml = hwParts.length ? `<div class="node-meta">${hwParts.join(' &middot; ')}</div>` : '';
-    // Filter the auto-added model: tag out of the visible chips — model is shown explicitly
-    const visibleCaps = (n.capabilities || []).filter(c => !c.startsWith('model:'));
-    const capsRow = visibleCaps.length
-      ? `<div class="node-meta">${visibleCaps.map(c => `<span class="chip">${escHtml(c)}</span>`).join('')}</div>`
-      : '';
+
+  const list = nodes.nodes || [];
+  if (summary) {
+    summary.textContent = list.length === 1
+      ? '1 machine connected'
+      : `${list.length} machines connected`;
+  }
+
+  /* Rows, not an eight-column table. There are 2-5 of these and each is an
+     entity you read individually — whose machine, what is it building, what is
+     its identity. The live-status line needs room to be a sentence, which no
+     column width allows. */
+  nodesList.innerHTML = list.map(n => {
+    const st = nodeState(n);
+    const enr = enrollmentLine(n);
+
+    const spec = [
+      n.model, n.platform && n.machine ? `${n.platform} / ${n.machine}` : n.platform,
+      n.cpu_count ? `${n.cpu_count} CPU` : null,
+      n.ram_gb ? `${n.ram_gb} GB` : null,
+      n.gpu && n.gpu !== 'none' ? n.gpu : 'no GPU',
+    ].filter(Boolean).map(escHtml).join(' · ');
+
+    const live = n.current_task
+      ? `Building ${escHtml(n.current_task)} now.`
+      : 'Offering compute and holding nothing. It is handed a subtask when one is ready and its dependencies are met.';
+
+    // Served by /nodes; the descriptor body itself deliberately is not.
+    const descriptor = n.capability_descriptor_hash
+      ? `<div class="node-kv"><span class="node-k">capability descriptor</span>
+           <span class="node-v mono">v${escHtml(n.capability_descriptor_version || '1')}
+             · ${escHtml(String(n.capability_descriptor_hash).slice(0, 16))}</span></div>`
+      : `<div class="node-kv"><span class="node-k">capability descriptor</span>
+           <span class="node-v is-absent">not reported by this machine</span></div>`;
+
+    const claims = (n.claimed_capabilities || n.capabilities || [])
+      .filter(c => !String(c).startsWith('model:'));
+    const claimsHtml = claims.length
+      ? claims.map(c => `<span class="chip">${escHtml(c)}</span>`).join('')
+      : '<span class="node-v is-absent">none declared</span>';
+
     return `
-      <button type="button" class="node-card active" id="nodecard-${escHtml(n.node_id)}"
-              data-node="${escHtml(JSON.stringify(n))}">
-        <span class="node-name"><span class="${dotClass}" aria-hidden="true"></span>${escHtml(n.node_id)}</span>
-        <div class="node-meta">${escHtml(n.platform)} / ${escHtml(n.machine)}</div>
-        <div class="node-meta">${escHtml(n.model)}</div>
-        ${hwHtml}${capsRow}
-        <div class="node-tasks">${n.tasks_completed} tasks &middot; ${n.credits_earned || 0} credits</div>
-        ${activeHtml}
-      </button>`;
+      <article class="node-row" id="nodecard-${escHtml(n.node_id)}">
+        <div class="node-row-main">
+          <div class="node-ident">
+            <span class="node-square is-${st.key}" aria-hidden="true"></span>
+            <span class="node-id mono">${escHtml(n.node_id)}</span>
+            <span class="node-state is-${st.key}">${escHtml(st.word)}</span>
+          </div>
+          <div class="node-spec mono">${spec}</div>
+          <div class="node-live">${live}</div>
+          <div class="node-kv"><span class="node-k">enrollment</span>
+            <span class="node-v ${enr.cls} mono">${enr.label}</span>
+            <span class="node-note">${escHtml(enr.note)}</span></div>
+          ${descriptor}
+          <div class="node-kv"><span class="node-k">claims</span>
+            <span class="node-v">${claimsHtml}</span></div>
+          ${evidenceLine(n)}
+        </div>
+        <div class="node-row-figures">
+          <div class="node-fig"><span class="node-fig-n mono">${escHtml(n.lifetime_tasks_completed ?? n.tasks_completed ?? 0)}</span>
+            <span class="node-fig-k">TASKS · LIFETIME</span></div>
+          <div class="node-fig"><span class="node-fig-n mono">${escHtml(n.lifetime_contribution_points ?? n.credits_earned ?? 0)}</span>
+            <span class="node-fig-k">POINTS · LIFETIME</span></div>
+          <div class="node-fig-actions">
+            <button type="button" class="btn-quiet is-sm"
+                    data-node="${escHtml(JSON.stringify(n))}">Details</button>
+            <a class="node-fig-link" href="/node/${encodeURIComponent(n.node_id)}">machine page →</a>
+          </div>
+        </div>
+      </article>`;
   }).join('');
+}
+
+/* The map. Deterministic grid: gx is the pipeline column, gy the lane. Sorted
+   by node_id so the same fleet lays out identically on every open — a view that
+   settles differently each time is wrong for something being recorded.
+
+   It draws machines and no task lines. Per-unit node assignment is not served
+   (handoff §8.2): `observed_placements` and per-unit `depends_on` exist, but
+   nothing says which machine holds which unit, so an edge here would be an
+   invented assignment. The note under the map says that rather than drawing a
+   plausible-looking lie. */
+function renderNodeMap(nodes) {
+  const stage = $('nodemap-stage');
+  const meta = $('nodemap-meta');
+  const note = $('nodemap-note');
+  const legend = $('nodemap-legend');
+  if (!stage) return;
+
+  const list = (nodes.nodes || []).slice().sort((a, b) =>
+    String(a.node_id).localeCompare(String(b.node_id)));
+
+  if (meta) {
+    meta.textContent = list.length
+      ? `live · ${list.length} machine${list.length === 1 ? '' : 's'}`
+      : 'live · nothing connected';
+  }
+
+  if (!list.length) {
+    stage.innerHTML = '<div class="nodemap-empty">No machines are connected, so there is no flow to draw. '
+      + 'The coordinator still runs work on itself.</div>';
+    if (legend) legend.innerHTML = '';
+    if (note) note.textContent = '';
+    return;
+  }
+
+  const LANE = 46, TOP = 34, COORD_X = 62, WORKER_X = 300;
+  const height = Math.max(140, TOP + list.length * LANE + 24);
+  const parts = [];
+
+  // Coordinator at the edge, not the centre. Planning and review are its work;
+  // the hardware doing the building belongs to other people.
+  parts.push(`<line class="nodemap-spine" x1="${COORD_X}" y1="${TOP}" x2="${COORD_X}" y2="${height - 30}"></line>`);
+  parts.push(`<rect class="nodemap-square is-coordinator" x="${COORD_X - 6}" y="${TOP - 6}" width="12" height="12"></rect>`);
+  parts.push(`<text class="nodemap-label-text" x="${COORD_X + 14}" y="${TOP + 4}">this machine · plans and reviews</text>`);
+
+  list.forEach((n, i) => {
+    const y = TOP + (i + 1) * LANE;
+    const st = nodeState(n);
+    // A hairline from the coordinator column to each machine: the coordinator
+    // brokers every handoff, so this is "connected to the coordinator" and not
+    // a task edge. Machines never connect to each other directly.
+    parts.push(`<line class="nodemap-link" x1="${COORD_X}" y1="${y}" x2="${WORKER_X - 10}" y2="${y}"></line>`);
+    parts.push(`<rect class="nodemap-square is-${st.key}" x="${WORKER_X - 6}" y="${y - 6}" width="12" height="12"></rect>`);
+    parts.push(`<text class="nodemap-label-text" x="${WORKER_X + 14}" y="${y + 4}">${escHtml(n.node_id)} · ${escHtml(st.word)}</text>`);
+  });
+
+  stage.innerHTML =
+    `<svg viewBox="0 0 720 ${height}" role="img" preserveAspectRatio="xMinYMin meet"
+          aria-label="${escHtml(list.length)} machines connected to this coordinator">
+       ${parts.join('\n')}
+     </svg>`;
+
+  if (legend) {
+    legend.innerHTML = [
+      ['is-coordinator', 'coordinator'],
+      ['is-building', 'building'],
+      ['is-idle', 'holding nothing'],
+      ['is-revoked', 'revoked'],
+    ].map(([cls, label]) =>
+      `<span class="nodemap-key"><i class="nodemap-swatch ${cls}" aria-hidden="true"></i>${label}</span>`
+    ).join('');
+  }
+
+  if (note) {
+    note.textContent = 'Lines run to the coordinator because it brokers every handoff — '
+      + 'machines never connect to each other directly. No line is drawn between machines '
+      + 'for a task: which machine holds which unit of work is not served by the API, and '
+      + 'drawing it would mean inventing the assignment.';
+  }
 }
 
 // ── Stage bar ────────────────────────────────────────────────────
@@ -773,7 +976,7 @@ function appendEvent(ev) {
     return;
   }
   if (ev.type === 'node_idle') {
-    _setNodeIdle(ev.node_id, ev.credits_earned);
+    _setNodeIdle(ev.node_id);
     if (ev.credits_earned > 0) loadStandings();
     return;
   }
@@ -806,58 +1009,49 @@ function appendEvent(ev) {
   log.scrollTop = log.scrollHeight;
 }
 
-function _setNodeBusy(nodeId, taskTitle) {
-  const card = $(`nodecard-${nodeId}`);
-  if (!card) return;
-  card.classList.remove('finished');
-  card.classList.add('working');
-  const dot = card.querySelector('.node-dot');
-  if (dot) dot.className = 'node-dot busy';
-  let active = card.querySelector('.node-active-task');
-  if (!active) {
-    active = document.createElement('div');
-    active.className = 'node-active-task';
-    card.appendChild(active);
-  }
-  active.textContent = '▶ ' + taskTitle;
+/* Live state on a row. The square, its colour and the word move together —
+   there is no state that is colour only. The glow pulse and the credit-pop
+   flash are deliberately gone: a 22px animated halo and a number flying off a
+   row are decoration, and on a view whose job is reporting state they compete
+   with the state itself. */
+function _setNodeSquare(nodeId, stateKey, word) {
+  const row = $(`nodecard-${nodeId}`);
+  if (!row) return null;
+  const square = row.querySelector('.node-square');
+  const label = row.querySelector('.node-state');
+  if (square) square.className = `node-square is-${stateKey}`;
+  if (label) { label.className = `node-state is-${stateKey}`; label.textContent = word; }
+  return row;
 }
 
-function _setNodeIdle(nodeId, creditsEarned) {
-  const card = $(`nodecard-${nodeId}`);
-  if (!card) return;
-  card.classList.remove('working');
-  card.classList.add('finished');
-  card.addEventListener('animationend', () => card.classList.remove('finished'), {once: true});
-  const dot = card.querySelector('.node-dot');
-  if (dot) dot.className = 'node-dot';
-  const active = card.querySelector('.node-active-task');
-  if (active) active.remove();
+function _setNodeBusy(nodeId, taskTitle) {
+  const row = _setNodeSquare(nodeId, 'building', 'building');
+  if (!row) return;
+  const live = row.querySelector('.node-live');
+  if (live) live.textContent = `Building ${taskTitle} now.`;
+}
 
-  if (creditsEarned > 0) {
-    const flash = document.createElement('div');
-    flash.className = 'credit-flash';
-    flash.textContent = `+${creditsEarned}`;
-    card.appendChild(flash);
-    setTimeout(() => flash.remove(), 2000);
+function _setNodeIdle(nodeId) {
+  const row = _setNodeSquare(nodeId, 'idle', 'idle — holding nothing');
+  if (!row) return;
+  const live = row.querySelector('.node-live');
+  if (live) {
+    live.textContent = 'Offering compute and holding nothing. It is handed a subtask '
+      + 'when one is ready and its dependencies are met.';
   }
 }
 
 function _setNodeBlacklisted(nodeId, seconds) {
-  const card = $(`nodecard-${nodeId}`);
-  if (!card) return;
-  const dot = card.querySelector('.node-dot');
-  if (dot) dot.className = 'node-dot down';
-  let badge = card.querySelector('.node-breaker-badge');
-  if (!badge) {
-    badge = document.createElement('div');
-    badge.className = 'node-breaker-badge';
-    card.appendChild(badge);
+  const row = _setNodeSquare(nodeId, 'down', `no work offered for ${seconds}s`);
+  if (!row) return;
+  const live = row.querySelector('.node-live');
+  if (live) {
+    // The live line is a sentence for exactly this reason: a column could not
+    // hold it, and "CIRCUIT OPEN" alone tells the operator nothing actionable.
+    live.textContent = `Repeated failures — no work is being offered to this machine for `
+      + `${seconds}s, then it is tried again on its own.`;
   }
-  badge.textContent = `CIRCUIT OPEN — ${seconds}s`;
-  setTimeout(() => {
-    badge.remove();
-    if (dot) dot.className = 'node-dot';
-  }, seconds * 1000);
+  setTimeout(() => _setNodeIdle(nodeId), seconds * 1000);
 }
 
 function connectWebSocket() {

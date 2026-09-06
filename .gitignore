@@ -27,3 +27,10 @@ evals/banding/
 # config.json and events.db are already ignored by name above, but the lock and
 # the trusted-alpha marker are not, and none of it belongs in the repository.
 data/
+
+# The same state, but at the repo root -- which is where it lands when the
+# server is run the way .claude/launch.json and the README run it. events.db is
+# ignored by name above; SQLite's sidecars and the coordinator lock were not.
+events.db-shm
+events.db-wal
+.mycelium-coordinator.lock
