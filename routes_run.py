@@ -374,12 +374,12 @@ def _summary(log: dict) -> str:
     n = len(log.get("plan", []))
     verdict = {"PASS": "passed review", "NEEDS_WORK": "needed work",
                "FAIL": "failed review"}.get(rating, "was built")
-    where = ("across volunteer machines" if log.get("mode") == "distributed"
+    where = ("across invited machines" if log.get("mode") == "distributed"
              else "on one machine")
     duration = _duration(log.get("duration_seconds"))
     tail = f" in {duration}" if duration else ""
     return (f"Split into {n} subtasks and built {where} by local AI models{tail}, "
-            f"then {verdict}. Mycelium runs on ordinary computers — no cloud, no API keys.")
+            f"then {verdict}. Mycelium runs local models on computers you trust.")
 
 
 # ── Route ────────────────────────────────────────────────────────────

@@ -99,7 +99,7 @@ def _closed_panel(origin: str) -> str:
     <div class="closed-body">
       <p>
         A pitch is not a chat message — it spends <b>real minutes of CPU on other
-        people's computers</b>. This network is a handful of volunteer machines, so
+        people's computers</b>. This network is a handful of invited machines, so
         the door opens a few people at a time rather than to everyone at once.
       </p>
       <p>

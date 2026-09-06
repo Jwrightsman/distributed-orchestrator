@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Mycelium — one task, split across many computers</title>
-<meta name="description" content="Describe something you want built. Mycelium splits the work across ordinary computers running local AI models, then assembles the finished code. No cloud, no API keys.">
+<meta name="description" content="Describe something you want built. Mycelium splits the work across ordinary computers running local AI models, then assembles the finished code. Local models by default; an external provider is optional and off.">
 <!-- THEME -->
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -180,11 +180,12 @@
   <header class="hero">
     <div class="eyebrow"><span class="mark" aria-hidden="true"></span>MYCELIUM</div>
 
-    <h1>Describe what you want built.<br>A swarm of ordinary computers builds it.</h1>
+    <h1>Describe what you want built.<br>Computers you trust build it.</h1>
 
     <p class="lede">
       Each piece is written by an <strong>AI model running on someone's actual
-      laptop</strong>, then checked and assembled into working code. No cloud, no API keys.
+      laptop</strong>, then checked and assembled into working code. Local models are the default; an
+      external OpenAI-compatible provider is optional and off.
     </p>
 
     <!-- Live, from /status.json — never hardcoded. If this panel is stale or
@@ -222,7 +223,7 @@
     <div class="steps">
       <div class="step"><span class="i">1</span><p><b>You pitch a task</b> in plain English — "build a CSV deduplication script".</p></div>
       <div class="step"><span class="i">2</span><p><b>A planner splits it up</b> into a few smaller jobs that can be worked on at the same time.</p></div>
-      <div class="step"><span class="i">3</span><p><b>Volunteer machines build the pieces</b> in parallel, each running a local AI model.</p></div>
+      <div class="step"><span class="i">3</span><p><b>Invited machines build the pieces</b> in parallel, each running a local AI model.</p></div>
       <div class="step"><span class="i">4</span><p><b>A reviewer assembles and grades</b> the result, and the code is checked to see whether it actually runs.</p></div>
     </div>
   </section>
@@ -230,7 +231,6 @@
   <section>
     <h2>What it can and can't do</h2>
     <div class="facts">
-      <div class="fact"><b>~57%</b> of 28 varied test tasks come back runnable and on-spec (95% confidence: 44–69%).</div>
       <div class="fact"><b>10/10</b> — a labelled bar chart, built correctly ten times out of ten.</div>
       <div class="fact"><b>2/10</b> — a playable Snake game. Tightly-coupled code is where a small model falls over, and that number is published for the same reason as the good one.</div>
       <div class="fact">Every figure is reproducible from the repo, and the raw logs are committed alongside them.</div>

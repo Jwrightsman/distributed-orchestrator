@@ -927,7 +927,7 @@ function openNodeModal(n) {
     row('GPU', n.gpu),
     row('Joined', n.registered_at ? n.registered_at.slice(0, 19).replace('T', ' ') + ' UTC' : null),
     row('Tasks done', n.tasks_completed),
-    row('Credits', n.credits_earned || 0),
+    row('Points', n.credits_earned || 0),
   ];
 
   const visibleCaps = (n.capabilities || []).filter(c => !c.startsWith('model:'));
@@ -1127,7 +1127,7 @@ async function loadStandings() {
     const el = $('standings-list');
 
     if (!data.standings.length) {
-      el.innerHTML = '<div class="empty-state"><p>No contributions yet.<br>Credits are recorded when a machine builds, reviews or pitches.</p></div>';
+      el.innerHTML = '<div class="empty-state"><p>No contributions yet.<br>Points are recorded when a machine builds, reviews or pitches.</p></div>';
       return;
     }
 

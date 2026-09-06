@@ -40,7 +40,7 @@ server = MCPServer(
     name="mycelium",
     instructions=(
         "Delegate coding/writing/analysis tasks to a swarm of AI agents running "
-        "on volunteer hardware. pitch_task returns a job_id immediately; the swarm "
+        "on invited hardware. pitch_task returns a job_id immediately; the swarm "
         "works in the background (minutes on CPU hardware — poll get_job_status, "
         "don't wait synchronously). Use projects to iterate: work pitched with the "
         "same project_id remembers what was built before when using DAG; "
