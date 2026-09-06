@@ -23,6 +23,150 @@ function escHtml(str) {
                     .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+/* ── Viewer auth and degraded state ───────────────────────────────
+   Every private route answers 401 when viewer_key is set and this browser has
+   no session, and /ws/events closes 4401 in the same situation. Before this,
+   both produced a shell full of empty tables — a locked server that read as a
+   broken one.
+
+   The static key is never in this file. The operator types it into the locked
+   screen, it is exchanged once at POST /v1/viewer/session, and what comes back
+   is an HttpOnly cookie this script cannot read. So every request here is a
+   plain same-origin fetch that carries the cookie, and no code path holds a
+   credential. */
+
+let viewerLocked = false;
+let currentTab = 'overview';
+
+/* Thrown instead of returning, so a caller's `await apiFetch(...)` unwinds
+   rather than continuing on to parse a 401 body as data. Callers already wrap
+   their loads in try/catch; this rides that. */
+class ViewerLocked extends Error {
+  constructor() { super('viewer authentication required'); this.name = 'ViewerLocked'; }
+}
+
+function showLockedScreen() {
+  if (viewerLocked) return;          // idempotent: 13 fetches can all 401 at once
+  viewerLocked = true;
+  const app = $('app'), locked = $('locked-screen');
+  if (!locked || !app) return;
+  app.hidden = true;
+  locked.hidden = false;
+  document.querySelectorAll('.banner').forEach(b => { b.hidden = true; });
+  loadPublicHealthLine();
+  const field = $('locked-key');
+  if (field) field.focus();
+}
+
+/* The claim the screen makes is "the server is up, it just will not answer for
+   private things". /status.json is public, so it can still be fetched from
+   here — and it is the only honest way to back that claim. */
+async function loadPublicHealthLine() {
+  const line = $('locked-health-line');
+  const dot = document.querySelector('.locked-dot');
+  if (!line) return;
+  try {
+    const d = await (await fetch('/status.json')).json();
+    const machines = d.nodes_online === 1 ? '1 machine online' : `${d.nodes_online} machines online`;
+    const inference = d.status === 'ok' ? 'inference ready' : 'inference offline';
+    line.textContent = `server up · ${machines} · ${inference}`;
+    if (dot && d.status !== 'ok') dot.classList.add('is-down');
+  } catch (e) {
+    // Do not claim the server is up if the public endpoint did not answer.
+    line.textContent = 'could not reach the public status endpoint';
+    if (dot) dot.classList.add('is-down');
+  }
+}
+
+function showDegradedBanner(on) {
+  const el = $('banner-degraded');
+  if (el) el.hidden = !on;
+}
+
+/* The fail-open banner is suppressed on Config, where the more actionable
+   version of the same warning lives. Config does not exist yet — it is a later
+   phase — so the suppression list is here and empty of effect until it does. */
+const BANNER_SUPPRESSED_ON = ['config'];
+
+function updateFailOpenBanner(protectedRoutes) {
+  const el = $('banner-failopen');
+  if (!el) return;
+  el.dataset.failOpen = protectedRoutes === false ? '1' : '';
+  applyBannerSuppression();
+}
+
+function applyBannerSuppression() {
+  const el = $('banner-failopen');
+  if (!el) return;
+  const failOpen = el.dataset.failOpen === '1';
+  el.hidden = !failOpen || BANNER_SUPPRESSED_ON.indexOf(currentTab) !== -1;
+}
+
+/* Every private request goes through here. Public ones (/status.json) do not
+   need to, and deliberately do not, so a locked console can still prove the
+   server is alive. */
+async function apiFetch(url, opts) {
+  const resp = await fetch(url, Object.assign({credentials: 'same-origin'}, opts || {}));
+  if (resp.status === 401) {
+    showLockedScreen();
+    throw new ViewerLocked();
+  }
+  if (resp.status === 503) {
+    // Only the persistence refusal gets the degraded banner. A generic 503 is
+    // not the same claim and must not borrow its wording.
+    let code = '';
+    try { code = ((await resp.clone().json()).detail || {}).code || ''; } catch (e) {}
+    if (code === 'execution_persistence_unavailable') showDegradedBanner(true);
+  }
+  return resp;
+}
+
+/* Convenience for the common `await (await fetch(x)).json()` shape. */
+async function apiJson(url, opts) {
+  return (await apiFetch(url, opts)).json();
+}
+
+function wireLockedScreen() {
+  const form = $('locked-form');
+  if (!form) return;
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const field = $('locked-key'), btn = $('locked-submit'), err = $('locked-error');
+    const key = (field?.value || '').trim();
+    if (!key) return;
+    if (err) err.hidden = true;
+    if (btn) { btn.disabled = true; btn.textContent = 'Unlocking…'; }
+    try {
+      const resp = await fetch('/v1/viewer/session', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        credentials: 'same-origin',
+        body: JSON.stringify({viewer_key: key}),
+      });
+      if (resp.ok) {
+        // The cookie is set. Reload rather than resuming in place: several
+        // loads failed on the way here and their views are half-filled.
+        if (field) field.value = '';
+        location.reload();
+        return;
+      }
+      if (err) {
+        err.textContent = resp.status === 401
+          ? 'That key was not accepted.'
+          : resp.status === 409
+            ? 'This server has no viewer key configured, so there is nothing to unlock.'
+            : `The server answered ${resp.status}.`;
+        err.hidden = false;
+      }
+    } catch (e2) {
+      if (err) { err.textContent = 'Could not reach the server to exchange the key.'; err.hidden = false; }
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Unlock this browser'; }
+      if (field) field.focus();
+    }
+  });
+}
+
 /* Rating → class. One place, so a new rating never leaks a raw colour. */
 const RATING_CLASS = {PASS: 'is-pass', NEEDS_WORK: 'is-needs-work', FAIL: 'is-fail'};
 function ratingClass(r) { return RATING_CLASS[r] || 'is-unknown'; }
@@ -134,6 +278,10 @@ const TAB_TITLES = {
 
 function showTab(name, opts) {
   if (TABS.indexOf(name) === -1) name = 'overview';
+  currentTab = name;
+  // The fail-open banner is per-view, so it has to be re-evaluated on every
+  // switch rather than only when health is polled.
+  applyBannerSuppression();
   TABS.forEach(t => {
     const view = $('view-' + t);
     const btn = $('tab-' + t);
@@ -192,11 +340,18 @@ function anyModalOpen() {
 // ── Health / nodes / metrics polling ─────────────────────────────
 async function refresh() {
   try {
+    // /health is public and thin; /nodes and /metrics are private. Health is
+    // fetched plainly so the fail-open state is still readable from a browser
+    // that has no session, and only the private two can lock the screen.
     const [health, nodes, met] = await Promise.all([
       fetch('/health').then(r => r.json()),
-      fetch('/nodes').then(r => r.json()),
-      fetch('/metrics').then(r => r.json()).catch(() => null),
+      apiJson('/nodes'),
+      apiJson('/metrics').catch(() => null),
     ]);
+
+    // Deny-by-default is off. The server says so about itself; the banner is
+    // that fact, not an inference from a failed request.
+    updateFailOpenBanner(health.private_routes_protected);
 
     $('stat-nodes').textContent = nodes.count;
     $('stat-tasks').textContent = health.tasks_pending;
@@ -348,7 +503,7 @@ async function pitchTask() {
   let stageCursor = eventCursor;
   const stageWatcher = setInterval(async () => {
     try {
-      const d = await (await fetch(`/events?since=${stageCursor}`)).json();
+      const d = await apiJson(`/events?since=${stageCursor}`);
       d.events.forEach(ev => {
         if (ev.type === 'plan') {
           planDone = true;
@@ -388,7 +543,7 @@ async function pitchTask() {
     // when nodes are connected.
     const body = {task};
     if (activeProjectId) body.project_id = activeProjectId;
-    const resp = await fetch('/pitch/async', {
+    const resp = await apiFetch('/pitch/async', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(body),
@@ -424,7 +579,7 @@ async function _pollJobCompletion(jobId, pipelineId, task, stageWatcher, elapsed
   while (true) {
     await new Promise(r => setTimeout(r, 3000));
     try {
-      const job = await (await fetch(`/jobs/${jobId}`)).json();
+      const job = await apiJson(`/jobs/${jobId}`);
       if (job.status === 'complete' || job.status === 'failed') {
         clearInterval(stageWatcher);
         clearInterval(elapsedTicker);
@@ -517,7 +672,7 @@ let _currentModalTimestamp = null;
 async function viewRun(timestamp) {
   try {
     _currentModalTimestamp = timestamp;
-    const data = await (await fetch(`/history/${encodeURIComponent(timestamp)}`)).json();
+    const data = await apiJson(`/history/${encodeURIComponent(timestamp)}`);
 
     $('modal-title').innerHTML =
       escHtml(data.task) + ' ' + ratingBadge(data.rating) + distBadge(data.mode);
@@ -716,7 +871,15 @@ function connectWebSocket() {
       if (ev.id && ev.id > eventCursor) eventCursor = ev.id;
     } catch (_) {}
   };
-  ws.onclose = () => { wsConnected = false; setTimeout(connectWebSocket, 3000); };
+  ws.onclose = (e) => {
+    wsConnected = false;
+    // 4401 is the server saying this browser has no viewer credential. It will
+    // say the same thing every time, so reconnecting is a loop that never ends
+    // and never reports anything. Show the locked screen and stop.
+    if (e && e.code === 4401) { showLockedScreen(); return; }
+    if (viewerLocked) return;
+    setTimeout(connectWebSocket, 3000);
+  };
   ws.onerror = () => ws.close();
 }
 
@@ -724,7 +887,7 @@ function connectWebSocket() {
 async function pollEvents() {
   if (wsConnected) return;
   try {
-    const data = await (await fetch(`/events?since=${eventCursor}`)).json();
+    const data = await apiJson(`/events?since=${eventCursor}`);
     data.events.forEach(ev => {
       appendEvent(ev);
       if (ev.id && ev.id > eventCursor) eventCursor = ev.id;
@@ -739,7 +902,7 @@ async function loadHistory() {
   const q = ($('history-search')?.value || '').trim();
   const url = q ? `/history?search=${encodeURIComponent(q)}` : '/history';
   try {
-    const data = await (await fetch(url)).json();
+    const data = await apiJson(url);
     const el = $('history-list');
 
     if (data.count === 0) {
@@ -766,7 +929,7 @@ async function loadHistory() {
 // ── Standings ────────────────────────────────────────────────────
 async function loadStandings() {
   try {
-    const data = await (await fetch('/standings')).json();
+    const data = await apiJson('/standings');
     const el = $('standings-list');
 
     if (!data.standings.length) {
@@ -793,7 +956,7 @@ async function loadStandings() {
 // ── Projects ─────────────────────────────────────────────────────
 async function loadProjects() {
   try {
-    const data = await (await fetch('/projects')).json();
+    const data = await apiJson('/projects');
     const el = $('projects-list');
 
     if (!data.projects || data.projects.length === 0) {
@@ -820,7 +983,7 @@ async function promptNewProject() {
   const name = prompt('Project name:');
   if (!name || !name.trim()) return;
   try {
-    const resp = await fetch('/projects', {
+    const resp = await apiFetch('/projects', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({name: name.trim(), initial_task: ''}),
@@ -851,7 +1014,7 @@ function clearProjectContext() {
 // ── Gallery ──────────────────────────────────────────────────────
 async function loadGallery() {
   try {
-    const data = await (await fetch('/gallery')).json();
+    const data = await apiJson('/gallery');
     const el = $('gallery-grid');
 
     if (!data.cards || data.cards.length === 0) {
@@ -1035,6 +1198,7 @@ window.matchMedia(DRAWER_QUERY).addEventListener?.('change', (e) => {
 
 // ── Start ────────────────────────────────────────────────────────
 renderTemplates();
+wireLockedScreen();
 
 // Restore the view from the URL. #run=<ts> opens a run; #gallery selects a
 // view. Before this, reloading on #gallery silently landed on Overview.

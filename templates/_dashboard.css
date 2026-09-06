@@ -945,3 +945,162 @@ a.gallery-task:hover { color: var(--accent-text); }
   .stats-bar { gap: 10px 16px; }
   .content h2 { letter-spacing: 1.4px; }
 }
+
+/* ── Locked screen and server-state banners ──────────────────────────────
+   Both exist so a private server reads as *locked* and a server that cannot
+   write to its own records reads as *refusing*, rather than either one
+   reading as a broken page. Colour here is state, never decoration: warn for
+   a deliberate configuration, danger for a coordinator that has stopped
+   being able to keep its own records. */
+
+.locked {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.locked-panel { width: 100%; max-width: 420px; }
+
+.locked-brand { display: flex; align-items: center; gap: 9px; }
+
+.locked-mark {
+  width: 9px;
+  height: 9px;
+  background: var(--mark);
+  flex-shrink: 0;
+}
+
+.locked-wordmark {
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.16em;
+  color: var(--text-dim);
+}
+
+.locked-title {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.3px;
+  margin-top: 20px;
+}
+
+.locked-lede {
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.65;
+  margin-top: 9px;
+}
+
+.locked-form {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  margin-top: 20px;
+}
+
+.locked-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 11px 13px;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--text);
+  /* 44px: this screen is reachable on a phone. */
+  min-height: 44px;
+}
+
+.locked-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.locked-submit {
+  width: 100%;
+  background: var(--accent);
+  color: var(--on-accent);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  min-height: 44px;
+}
+
+.locked-submit:hover { background: var(--accent-strong); }
+.locked-submit[disabled] { opacity: 0.6; cursor: default; }
+
+.locked-note {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.65;
+  margin-top: 14px;
+}
+
+#locked-error { color: var(--danger-text); }
+
+.locked-health {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-top: 1px solid var(--border-subtle);
+  margin-top: 18px;
+  padding-top: 14px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.locked-dot {
+  width: 6px;
+  height: 6px;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+
+.locked-dot.is-down { background: var(--danger); }
+
+/* Banners. Not dismissible: the condition does not stop being true because
+   somebody clicked an x. */
+.banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 13px 20px;
+  border-bottom: 1px solid var(--border-subtle);
+  flex-wrap: wrap;
+}
+
+.banner-dot {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  margin-top: 5px;
+}
+
+.banner-text { min-width: 0; flex: 1 1 340px; }
+
+.banner-head { font-size: 12.5px; font-weight: 500; }
+
+.banner-body {
+  font-size: 12.5px;
+  line-height: 1.6;
+  margin-top: 3px;
+}
+
+.banner-body .mono { font-family: var(--mono); }
+
+.banner.is-warn { background: var(--warn-wash); }
+.banner.is-warn .banner-dot { background: var(--warn); }
+.banner.is-warn .banner-head { color: var(--warn-text); }
+.banner.is-warn .banner-body { color: var(--warn-body); }
+
+.banner.is-danger { background: var(--danger-wash); }
+.banner.is-danger .banner-dot { background: var(--danger); }
+.banner.is-danger .banner-head { color: var(--danger-text); }
+.banner.is-danger .banner-body { color: var(--danger-body); }
