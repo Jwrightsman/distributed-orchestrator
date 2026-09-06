@@ -194,6 +194,39 @@ It is evidence rather than proof: a credential chosen to look like an ordinary
 word would slip past it, which is a further reason to let the generator pick
 them.
 
+### Two kinds of finding
+
+The report has up to two sections, and they are not the same emergency.
+
+**In this repository's history.** A branch or a tag reaches the blob, or it is
+staged in the index and a commit away from the same thing. It is in every
+clone, it is on the remote if you have pushed, and it is what the steps below
+are for. This is the section that makes the command exit non-zero.
+
+**In unreachable objects.** Nothing reaches the blob. This is mostly what
+`git add` leaves behind when you stage a file and then amend the commit away:
+the blob is written the moment you stage it, and it outlives the commit that
+never happened. `git push` and `git clone` do not transfer these, so the remote
+has never had them, and a fresh clone of your repository does not contain them
+at all. That last point is why they do not fail the command — a check that goes
+red over objects only your machine has is a check you stop believing.
+
+They are still on your disk, and still worth clearing:
+
+```bash
+git gc --prune=now
+```
+
+If the value was ever pushed on a branch, or shown in a screen share, rotate it
+anyway. That an object is unreachable *now* says nothing about where it has
+already been.
+
+Where a finding in that second section names a path, git no longer records one:
+the path was recovered by matching the blob's content against the files still
+in history, and names the file the blob was a draft of. It is a good guess
+rather than a fact, which is why an ambiguous match is left unnamed and
+reported rather than quietly filed under a path that would have silenced it.
+
 ### If it finds something
 
 **Rotate first. Everything else is secondary.**
