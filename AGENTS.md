@@ -142,3 +142,10 @@ A point-in-time comparative architecture audit is available at
 
 The audit is non-normative. Current source code, protocol documentation, and
 accepted ADRs take precedence when they conflict with the report.
+
+## Console design handoff
+
+The 2026-08-28 console design handoff is archived at
+`docs/design/console-2026-08-28/`. It is point-in-time and non-normative;
+`docs/design/HANDOFF-DELTA.md` records where it has gone stale and wins wherever
+the two disagree.
