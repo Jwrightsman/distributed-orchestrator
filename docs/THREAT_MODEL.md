@@ -182,6 +182,112 @@ three secrets as appropriate, put TLS in front, and prefer a private network
 such as Tailscale. Viewer access control without transport encryption still
 sends bearer credentials and private content in clear text.
 
+## 4a. What each deployment path protects, and what it does not
+
+Two deployment shapes are documented in [DEPLOY.md](DEPLOY.md). They are not
+two flavours of the same protection; they defend against different things, and
+each leaves different things open.
+
+### Common to both
+
+Both put a TLS reverse proxy on the public socket and keep the application
+published on `127.0.0.1:8000` only. That placement is load-bearing rather than
+tidy: if the application port is reachable directly, a client can bypass the
+proxy entirely, and the certificate, the security headers and the request-body
+limit all become decoration while enrollment credentials cross the network in
+clear text.
+
+`docker-compose.yml` therefore publishes a literal `127.0.0.1:8000:8000` with
+no variable to override it. **A host firewall is not a substitute for that
+bind.** Docker writes published ports into its own iptables chain, evaluated
+before the chain ufw manages, so `ufw deny 8000` reports "deny" on a port that
+is still answering the Internet, and `ufw status` never reveals it. The trap and
+the two commands that expose it (`ss -tlnp`, `sudo iptables -L DOCKER -n`) are
+documented in
+[DEPLOY.md](DEPLOY.md#the-trap-docker-does-not-consult-ufw).
+
+Neither path changes anything about worker-result integrity, attempt authority,
+enrollment, settlement, or the protocol window. Neither adds a generated-code
+sandbox. Neither makes the coordinator multi-tenant.
+
+### Path A — private overlay (Tailscale)
+
+**Protects against:** every unauthenticated party who is not on the tailnet.
+`POST /nodes/register` — which has no rate limit (§14) — cannot be reached at
+all without tailnet membership, so the unlimited guessing surface is removed
+rather than merely narrowed. Port scanning, opportunistic exploitation and
+mass-scanned vulnerabilities do not apply to a coordinator with no public
+socket.
+
+**Does not protect against:** anyone already on the tailnet. A tailnet is a
+network, not an authorization boundary for this application: any device on it
+reaches the coordinator and is then subject only to the same three credentials
+as anybody else. It also does not protect against a compromised or shared
+tailnet account, and it does not make plaintext acceptable — the worker refuses
+`http://` to an overlay address exactly as it does to a public one, because an
+overlay ACL is an operator assertion that a contributor cannot verify.
+
+**Two independent authorities, and both must be revoked.** Tailnet membership
+decides whether a machine can reach the address; a Mycelium enrollment
+credential decides whether it is admitted once it can. Removing a device from
+the tailnet does not revoke its enrollment — that credential is a bearer token
+and still works if the machine ever regains tailnet access. Revoking the
+enrollment does not remove the device from the tailnet, where it retains
+whatever else that network reaches. Neither action implies the other and
+neither is sufficient alone.
+
+**`private_overlay: true` is an assertion, not a detection.** Preflight records
+it and cannot inspect an ACL.
+
+### Path B — public domain (Caddy)
+
+**Protects against:** passive interception and tampering on the path, through a
+publicly-trusted certificate with automatic renewal; downgrade to plaintext,
+through an HTTP-to-HTTPS redirect and HSTS; oversized request bodies, through a
+limit set just above the coordinator's own 10 MiB result ceiling so the
+coordinator refuses them with a protocol error rather than the proxy with an
+opaque 413; and — in the shipped configuration — public reach to `/dashboard`,
+`/v1/operator/*` and `/metrics`, which are refused at the edge so a viewer key
+never has to travel over the Internet.
+
+**Does not protect against:** anything reachable by anyone. Every
+unauthenticated route in §4 is exposed to the whole Internet, and the only
+thing standing between a stranger and an enrollment is the entropy of
+`node_secret`, guessable without limit and without a log line an operator would
+notice (§14). The certificate authenticates the *server* to workers; nothing
+authenticates a worker to the server except a bearer credential. Caddy's
+access log records request paths, so share tokens are filtered out of it in the
+shipped configuration — an unfiltered proxy log is a credential store.
+
+### What proxying changes about what the application sees
+
+Behind either proxy every request arrives from `127.0.0.1`. The coordinator does
+not consume `X-Forwarded-For`; `trust_proxy_headers` defaults to `false` and
+trusted-alpha preflight rejects `true`. Two behaviours follow from this and are
+documented rather than left to be discovered:
+
+- **Open-mode idempotency scoping** hashes the direct peer host and
+  deliberately ignores forwarding headers. Behind a proxy every caller shares
+  one scope. This does not affect either documented path, because both
+  configure a `pitch_key` and a configured key becomes the scope; it matters
+  only for open mode behind a proxy, which is not a supported shape. The scope
+  was never authorization or identity, and behind a proxy it stops being a
+  useful duplicate boundary either.
+- **The pitch rate limiter** buckets by the same address, so behind a proxy the
+  configured limit is global rather than per-visitor. For an invited alpha that
+  is acceptable; with `public_pitch` enabled it means one visitor can consume
+  the whole allowance.
+
+### Self-signed certificates cannot work, by construction
+
+A worker trusts the certifi CA bundle and nothing else, and builds its HTTP
+client with `trust_env=False` — the same decision that stops an ambient
+`HTTPS_PROXY` inheriting enrollment bearers also stops `SSL_CERT_FILE` adding a
+private CA. There is no flag anywhere that relaxes it. Both documented paths
+obtain publicly-trusted certificates for this reason, and
+`scripts/tls_local_check.py` lets an operator confirm theirs is acceptable
+before inviting anybody rather than during somebody's failed install.
+
 ## 5. Worker-result integrity
 
 ### The invariant
@@ -735,6 +841,21 @@ request-count and concurrency cap reduce abuse; they do not eliminate it.
 
 ## 14. Remaining weaknesses
 
+- **`POST /nodes/register` is not rate-limited.** The coordinator has a per-IP
+  limiter (`_check_rate_limit` in `server_state.py`, configured by
+  `pitch_rate_max`/`pitch_rate_window`) but it is wired only into the pitch
+  routes and `POST /v1/executions`; the registration route does not call it.
+  Invitation codes can therefore be guessed as fast as the network allows, and
+  the entropy of `node_secret` is the entire defence — which is why the
+  generator produces 256 bits and `scripts/deploy_preflight.py` fails a value
+  below 128. A refused bootstrap creates nothing durable, and on Path A the
+  route is unreachable without tailnet membership. **A failed bootstrap is also
+  not logged in a way an operator would notice:** `_check_node_auth` raises a
+  plain 401 with no application log line, no event, and no counter; the only
+  trace is the access log. Both halves are deliberately recorded here rather
+  than fixed in a deployment change, because the existing limiter is
+  pitch-scoped and coupling registration to it would alter worker-protocol
+  behaviour — stock workers re-register automatically after a session expires.
 - Shared static secrets still provide instance-wide bootstrap, pitch, or viewer
   authority within their separate roles.
 - Enrollment uses a symmetric bearer credential, not public-key identity or a
@@ -745,7 +866,11 @@ request-count and concurrency cap reduce abuse; they do not eliminate it.
   what changed on 2026-09-05 is that the *worker* now refuses plaintext to any
   non-loopback host, so an operator cannot invite anyone until one is in place.
   A private authenticated overlay is no longer sufficient on its own — put a
-  certificate on the overlay address.
+  certificate on the overlay address. Two configurations are shipped in
+  `deploy/`; §4a describes what each does and does not defend.
+- The deployment configuration in `deploy/` and [DEPLOY.md](DEPLOY.md) **has
+  not been reviewed by a security professional.** It is tested and it is
+  written carefully; that is not the same thing.
 - No generated-code or model-executor sandbox. The validator child contains
   allowlisted parser failures only; it is not same-user filesystem isolation.
 - Windows lacks the runner's POSIX CPU, address-space, output-file, descriptor,

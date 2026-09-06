@@ -8,7 +8,7 @@
 # See docs/DEPLOY.md; do not run two compose projects against the same folder.
 #
 # To run a worker node against a remote orchestrator instead:
-#   docker compose run --rm orchestrator python /app/node.py --server http://ORCHESTRATOR:8000
+#   docker compose run --rm orchestrator python /app/node.py --server https://ORCHESTRATOR
 
 services:
   ollama:
@@ -20,10 +20,21 @@ services:
   orchestrator:
     build: .
     ports:
-      # Loopback is the safe default. Set MYCELIUM_PUBLISH_ADDRESS to a private
-      # overlay address (or a restricted reverse-proxy interface), never an
-      # unrestricted public interface without TLS and network policy.
-      - "${MYCELIUM_PUBLISH_ADDRESS:-127.0.0.1}:8000:8000"
+      # 127.0.0.1 is written literally, and there is deliberately no variable
+      # here to override it.
+      #
+      # Docker does not consult ufw. A published port becomes a rule in
+      # Docker's own iptables chain, which is evaluated *before* the chain ufw
+      # writes into, so `ufw deny 8000` reports "deny" while the port is still
+      # answering the whole Internet. An operator reading `ufw status` has no
+      # way to see that. Binding the host side to loopback is the one form
+      # that cannot be undone by a firewall the kernel never reaches: the
+      # socket is simply not on a public interface.
+      #
+      # Nothing outside this host should reach the application directly.
+      # Public reachability belongs to a TLS reverse proxy — see deploy/ and
+      # docs/DEPLOY.md — which holds 443 and forwards here over loopback.
+      - "127.0.0.1:8000:8000"
     volumes:
       - ./data:/data
     environment:

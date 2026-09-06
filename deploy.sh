@@ -2,12 +2,23 @@
 # Take a fresh Ubuntu VM to a trusted-alpha Mycelium coordinator.
 #
 #   ssh ubuntu@YOUR_VM_IP
-#   curl -fsSL https://raw.githubusercontent.com/Jwrightsman/distributed-orchestrator/master/deploy.sh \
-#     | MYCELIUM_PRIVATE_OVERLAY_CONFIRMED=1 bash
+#   git clone https://github.com/Jwrightsman/distributed-orchestrator
+#   cd distributed-orchestrator
+#   MYCELIUM_PRIVATE_OVERLAY_CONFIRMED=1 ./deploy.sh
+#
+# Clone first and run second, so there is a point at which the thing about to
+# run can be read. This project deleted its contributor-facing one-liners on
+# 2026-09-05 for exactly that reason, and the operator path should not keep one.
 #
 # Safe to re-run: valid existing authorities and unrelated configuration are
 # preserved. Credential values are written atomically to data/config.json and
 # are never copied into this script's output.
+#
+# Each generated authority is 32 bytes from the operating system's
+# cryptographic random source, rendered as 43 URL-safe characters - about 256
+# bits, against the 128-bit floor scripts/deploy_preflight.py enforces. That
+# margin matters most for worker admission, because nothing rate-limits guesses
+# at it; see docs/THREAT_MODEL.md section 14.
 
 set +x  # Never expose generated credentials even if a caller used `bash -x`.
 set -euo pipefail
@@ -61,6 +72,11 @@ else
 fi
 cd "$DEST"
 mkdir -p data
+# 700, not the umask default of 755. SQLite creates events.db at 0644 and
+# nothing in this project can change that, so the directory is what keeps
+# every other account on the host out of the enrollment table and the run
+# output. scripts/deploy_preflight.py checks for exactly this.
+chmod 700 data
 
 # 3. Trusted-alpha configuration
 CONFIG="data/config.json"
@@ -147,18 +163,30 @@ cat <<EOF
 
 The three separate authorities (viewer_key, pitch_key, and node_secret) are in
 the private configuration file above. Their values were deliberately not
-printed. Move only the authority a person or machine needs through your secret
-manager or another secure channel. node_secret authorizes initial worker
-bootstrap only; each current worker then uses its own private, independently
+printed, and each is about 256 bits of generated randomness. Move only the
+authority a person or machine needs through your secret manager or another
+secure channel. node_secret authorizes initial worker bootstrap only; each
+current worker then uses its own private, independently
 revocable enrollment identity. Viewer and pitch keys remain instance-wide.
 
-Keep port 8000 off the public Internet. Prefer a private overlay such as
-Tailscale/WireGuard. If browser access crosses an untrusted network, terminate
-TLS at a restricted reverse proxy and follow docs/DEPLOY.md before connecting.
+NOBODY CAN JOIN YET. The coordinator is on 127.0.0.1:8000 and nowhere else,
+which is correct, and a worker refuses plaintext http:// to anything but its
+own machine, with no override on their side. You still need TLS in front.
+docs/DEPLOY.md has the two paths in full; the short version is:
+
+  Path A, private overlay:  tailscale cert YOUR-HOST.YOUR-TAILNET.ts.net
+                            sudo cp deploy/Caddyfile.tailscale /etc/caddy/Caddyfile
+  Path B, public domain:    sudo cp deploy/Caddyfile.public /etc/caddy/Caddyfile
+
+Do not publish port 8000 itself to reach around the proxy. A host firewall will
+not save you if you do: Docker writes published ports into its own iptables
+chain, evaluated before ufw's, so "ufw deny 8000" reports deny on a port that
+is still answering. Verify with "ss -tlnp", never with "ufw status".
 
 Next checks:
 
   python3 scripts/preflight.py --config "$CONFIG" --state-dir data --mode trusted_alpha
+  python3 scripts/deploy_preflight.py --state-dir data
   $DOCKER compose logs --tail 100 orchestrator
 
 EOF

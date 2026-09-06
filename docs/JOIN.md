@@ -68,12 +68,64 @@ you can stop at any time.
    - the **address** of their coordinator, which must start with `https://`
    - an **invitation code**
 
+   Possibly a third — see the next section if the address they gave you ends
+   in `.ts.net`.
+
 > **If the address they gave you starts with `http://`, it will be refused, and
 > that is on purpose.** Plaintext means your invitation code and your work
 > travel in the clear, readable by anything in between. You cannot turn this
 > off, and neither can they — there is no flag for it. Send them
 > [docs/DEPLOY.md](DEPLOY.md) and ask for an `https://` address. It costs them
 > an afternoon.
+
+## If the address ends in `.ts.net`
+
+Then you are joining over a **private network** rather than the open Internet,
+and there is one extra step before anything else here works. This is the
+recommended shape for a small invited group, so it is quite likely the one you
+are in.
+
+`.ts.net` is a [Tailscale](https://tailscale.com) address. Tailscale is a
+private network that connects a set of machines directly to each other; the
+coordinator has no public address at all, so until your machine is on that
+network the address will simply not resolve.
+
+**What you need:** a **third** thing from whoever invited you — an invitation
+to their tailnet, which arrives as an email or a link.
+
+**What you do:**
+
+1. Install Tailscale from [tailscale.com/download](https://tailscale.com/download).
+2. Accept their invitation and sign in.
+3. Check it worked:
+
+   ```bash
+   ping YOUR-COORDINATORS-ADDRESS.ts.net
+   ```
+
+   If that answers, you are on the network. If it does not resolve, Tailscale
+   is not running or the invitation was not accepted.
+
+Then continue with [Joining](#joining) exactly as written. Nothing else about
+the installer changes: the address still starts with `https://`, the invitation
+code still works the same way, and TLS still applies. Being on a private
+network does **not** remove the need for `https://` — an overlay is still a
+network, and your invitation code still travels across it.
+
+**What this means for you, honestly:**
+
+- **Two separate permissions.** Being on their tailnet and being enrolled in
+  their Mycelium network are different things. They can revoke either one
+  without the other.
+- **Tailscale sees more of your machine than Mycelium does.** It is a network
+  layer: while it is running, your machine is reachable by other devices on
+  that tailnet, subject to whatever rules the tailnet owner set. That is a
+  bigger ask than running the worker, and it is a reasonable thing to think
+  about before accepting.
+- **You can leave in either direction.** Uninstall Tailscale, or leave the
+  tailnet from its admin interface, or run
+  `python worker_installer.py uninstall` — any of these stops the work.
+  Doing all three is the clean exit.
 
 ## If you are on a Mac
 
