@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import re
 import json
 import sqlite3
 import zipfile
@@ -159,6 +160,22 @@ def _cli_history(monkeypatch) -> str:
     return stream.getvalue()
 
 
+def _status_built_count(client) -> int:
+    """The "tasks built" figure on the public /status page.
+
+    /status carries counts and no task text, so this is how publication is
+    observable there. Parsed from the rendered figure rather than from
+    /status.json, because the page is the surface under test.
+    """
+    body = client.get("/status").text
+    match = re.search(
+        r'<span class="n[^"]*">(\d+)</span><span class="k">tasks built</span>',
+        body,
+    )
+    assert match, "the /status page did not render a 'tasks built' figure"
+    return int(match.group(1))
+
+
 def test_current_run_is_hidden_until_durable_terminal_commit(
     publication_runtime,
     monkeypatch,
@@ -174,7 +191,11 @@ def test_current_run_is_hidden_until_durable_terminal_commit(
     assert client.get(f"/history/{RUN_NAME}").status_code == 404
     assert client.get(f"/history/{RUN_NAME}/download").status_code == 404
     assert client.get(f"/run/{RUN_NAME}").status_code == 404
+    # /status is the public page and carries counts only, so publication shows
+    # up there as a number moving. The task text is absent in both states by
+    # construction now — asserted on both sides, below and after the commit.
     assert "Durable publication task" not in client.get("/status").text
+    assert _status_built_count(client) == 0
     assert f"/run/{RUN_NAME}" not in client.get("/try").text
     assert "Durable publication task" not in _cli_history(monkeypatch)
 
@@ -190,7 +211,9 @@ def test_current_run_is_hidden_until_durable_terminal_commit(
             zipped.namelist()
         )
     assert client.get(f"/run/{RUN_NAME}").status_code == 200
-    assert "Durable publication task" in client.get("/status").text
+    # Published: the public count moved, and the task text still never appears.
+    assert _status_built_count(client) == 1
+    assert "Durable publication task" not in client.get("/status").text
     assert f"/run/{RUN_NAME}" in client.get("/try").text
     assert "Durable publication task" in _cli_history(monkeypatch)
 

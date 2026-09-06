@@ -64,7 +64,40 @@ async def _inference() -> tuple[bool, str]:
         return False, ""
 
 
+# Outcome vocabulary for the public page. The reviewer's rating is a judgement
+# about the run; it is not an assurance level and is never rendered as one.
+_OUTCOME = {"PASS": ("passed", "is-ok"), "NEEDS_WORK": ("partial", "is-warn"),
+            "FAIL": ("failed", "is-down")}
+
+
+def _assurance(log: dict) -> str:
+    """Which class of evidence actually ran, for a legacy run directory.
+
+    Only two of the five labels are reachable from a `full_log.json`, because
+    only two kinds of evidence were ever recorded in one: the extractor wrote
+    files and the parse precheck reached a verdict about them, or it did not.
+    Contract validation, behaviour testing and model review are not recorded
+    here, so they are not claimed here.
+
+    A precheck that never reached a verdict is `not checked` and not `passed
+    with no problems` — an empty problem list beside a precheck error means
+    nothing was learned about the code, which is the distinction PR #73 exists
+    to preserve.
+    """
+    if log.get("code_precheck_error"):
+        return "not checked"
+    return "structure checked" if log.get("code_files") else "not checked"
+
+
 def _recent_runs(limit: int = 8) -> list[dict]:
+    """Outcome, assurance, placement and age — deliberately nothing else.
+
+    This feeds the one page that answers a stranger. What was asked for is
+    somebody's writing about work they wanted done, and the run's own page is
+    reachable only through a share capability its owner created on purpose, so
+    neither the task text nor a run link is assembled here at all. They are not
+    fetched and then hidden; the values never enter the template.
+    """
     runs = []
     if not OUTPUT_DIR.exists():
         return runs
@@ -76,11 +109,13 @@ def _recent_runs(limit: int = 8) -> list[dict]:
             require_legacy_run_publication(d, log)
         except (json.JSONDecodeError, LegacyRunNotPublished, OSError):
             continue
+        outcome, cls = _OUTCOME.get(str(log.get("rating", "")), ("unknown", "is-none"))
         runs.append({
-            "timestamp": log.get("timestamp", d.name),
-            "task": log.get("task", "Unknown"),
-            "rating": log.get("rating", "?"),
-            "mode": log.get("mode", "local"),
+            "outcome": outcome,
+            "outcome_class": cls,
+            "assurance": _assurance(log),
+            "placement": "distributed" if log.get("mode") == "distributed" else "local",
+            "when": _ago(log.get("timestamp", d.name)),
         })
         if len(runs) >= limit:
             break
@@ -139,11 +174,13 @@ async def status_page(request: Request):
                    "reachable, so nothing can be built right now.")
     elif online:
         lamp, headline = "is-ok", f"Live — {len(online)} machine{'' if len(online) == 1 else 's'} connected"
-        summary = ("Work pitched now gets split up and handed to the machines below. "
-                   "Every completed run gets a page of its own.")
+        summary = ("Work pitched now is dispatched to the machines this orchestrator has "
+                   "invited. This page carries counts only: it is the one page here that "
+                   "answers without a sign-in, so it says how much has happened and not "
+                   "what any of it was.")
     else:
         lamp, headline = "is-warn", "Online, no machines connected"
-        summary = ("The orchestrator is up and inference works, but no volunteer machines "
+        summary = ("The orchestrator is up and inference works, but no invited machines "
                    "are offering compute at the moment. This network is small on purpose — "
                    "testers are added a few at a time.")
 
@@ -158,26 +195,25 @@ async def status_page(request: Request):
         _fig(sum(c["compute_tasks"] for c in standings), "subtasks executed"),
     ])
 
+    # Machines are a count and nothing else. Which machines they are, what
+    # hardware they run and what each has earned is what /nodes and /node/{id}
+    # are viewer-gated for; naming that as private is more honest than an
+    # unexplained absence.
     if online:
-        rows = "".join(
-            f'<tr><td class="mono"><a href="/node/{esc(n.get("node_id"))}">{esc(n.get("node_id"))}</a></td>'
-            f'<td class="mono">{esc(n.get("model", "—"))}</td>'
-            f'<td>{esc(n.get("platform", "—"))}</td>'
-            f'<td class="num mono">{esc(n.get("tasks_completed", 0))}</td>'
-            f'<td class="num mono">{esc(n.get("credits_earned", 0))}</td></tr>'
-            for n in online
-        )
+        count = len(online)
+        word = "machine is" if count == 1 else "machines are"
         nodes_html = (
-            '<div class="table-scroll"><table>'
-            '<thead><tr><th>Machine</th><th>Model</th><th>Platform</th>'
-            '<th class="num">Tasks</th><th class="num">Credits</th></tr></thead>'
-            f"<tbody>{rows}</tbody></table></div>"
+            f'<div class="empty"><b>{count} {word} connected.</b> '
+            "Which machines they are, what hardware they run, what each one is building and "
+            "what it has earned are private — that is the console's Nodes view, and it needs "
+            "an operator sign-in.</div>"
         )
     else:
         nodes_html = (
             '<div class="empty"><b>No machines are connected right now.</b> '
             "That is a real state of a small network, not a fault — the orchestrator still "
-            "runs work on itself. Joining takes one command on any machine with 8&nbsp;GB of RAM:"
+            "runs work on itself. Joining takes one command on any machine with 8&nbsp;GB of RAM, "
+            "and an invitation — an enrolment token from whoever runs this orchestrator:"
             f'<div class="cmd"><span class="p" aria-hidden="true">$</span>'
             f'python join.py {esc(str(request.base_url).rstrip("/"))}</div></div>'
         )
@@ -185,20 +221,24 @@ async def status_page(request: Request):
     recent = _recent_runs()
     if recent:
         rows = "".join(
-            f'<tr><td><a href="/run/{esc(r["timestamp"])}">{esc(r["task"][:90])}</a></td>'
-            f'<td class="mono">{esc(r["rating"])}</td>'
-            f'<td class="mono">{esc(r["mode"])}</td>'
-            f'<td class="num mono">{esc(_ago(r["timestamp"]))}</td></tr>'
+            f'<tr><td><span class="n {esc(r["outcome_class"])}">{esc(r["outcome"])}</span></td>'
+            f'<td class="mono">{esc(r["assurance"])}</td>'
+            f'<td class="mono">{esc(r["placement"])}</td>'
+            f'<td class="num mono">{esc(r["when"])}</td></tr>'
             for r in recent
         )
         recent_html = (
             '<div class="table-scroll"><table>'
-            '<thead><tr><th>Task</th><th>Rating</th><th>Mode</th><th class="num">When</th></tr></thead>'
+            '<thead><tr><th>Outcome</th><th>Assurance</th><th>Placement</th>'
+            '<th class="num">When</th></tr></thead>'
             f"<tbody>{rows}</tbody></table></div>"
+            '<p class="note">What was asked for is not listed. A task description is '
+            "somebody's writing about work they wanted done, and a run page is reachable "
+            "only through a link its owner deliberately created.</p>"
         )
     else:
         recent_html = ('<div class="empty"><b>Nothing built yet.</b> '
-                       "Completed runs appear here, each with its own page.</div>")
+                       "Completed runs appear here as an outcome and an age.</div>")
 
     build_html = (
         f'<div class="cmd"><span class="p" aria-hidden="true">#</span>{esc(BUILD)}</div>'
@@ -218,7 +258,9 @@ async def status_page(request: Request):
         UPTIME=esc(_uptime(uptime)),
         SUMMARY=esc(summary),
         FIGURES=figures,
+        NODES_LEDE="How many computers are offering compute right now.",
         NODES=nodes_html,
+        RECENT_LEDE=("The last things this network finished. Failures are counted here too."),
         RECENT=recent_html,
         BUILD=build_html,
     )
@@ -255,7 +297,7 @@ async def node_page(node_id: str, request: Request):
     # what is actually knowable in each case.
     figures = [
         _fig(builds, "subtasks built", "is-live" if builds else "is-none"),
-        _fig(f"{credits:g}", "credits earned", "is-live" if credits else "is-none"),
+        _fig(f"{credits:g}", "points earned", "is-live" if credits else "is-none"),
     ]
     if node:
         figures += [_fig(node.get("model") or "—", "model"),
@@ -280,9 +322,16 @@ async def node_page(node_id: str, request: Request):
         )
         recent_html = (
             '<div class="table-scroll"><table>'
-            '<thead><tr><th>Work</th><th>Type</th><th class="num">Credits</th>'
+            '<thead><tr><th>Work</th><th>Type</th><th class="num">Points</th>'
             '<th class="num">When (UTC)</th></tr></thead>'
             f"<tbody>{rows}</tbody></table></div>"
+            # The footnote travels with the column. A page whose whole subject
+            # is what one machine earned is the last place to drop the sentence
+            # saying what earning does not mean.
+            '<p class="note">Points mean a nonempty, attempt-bound worker result was '
+            "accepted. They do not mean the candidate was selected, that validation passed, "
+            "or that the output is correct — and they are not money, a token, or a claim on "
+            "future value.</p>"
         )
     else:
         recent_html = ('<div class="empty"><b>Nothing recorded yet.</b> '
@@ -314,13 +363,15 @@ async def node_page(node_id: str, request: Request):
     return render(
         "status.html",
         META_DESCRIPTION=esc(f"{node_id} has built {builds} subtasks for the Mycelium network "
-                             f"and earned {credits:g} credits."),
+                             f"and earned {credits:g} contribution points."),
         LAMP_CLASS=lamp,
         HEADLINE=esc(headline),
         UPTIME=esc(f"{builds} entries on the ledger"),
         SUMMARY=esc(summary),
         FIGURES=figures,
+        NODES_LEDE="What this machine reports about itself while it is connected.",
         NODES=nodes_html,
+        RECENT_LEDE="What this machine has been handed, and what it earned for it.",
         RECENT=recent_html,
         BUILD='<div class="cmd"><span class="p" aria-hidden="true">#</span>'
               f'{esc(BUILD)}</div>' if BUILD else "",

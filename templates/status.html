@@ -102,6 +102,17 @@
   td a { color: var(--text); text-decoration: none; }
   td a:hover { color: var(--accent-text); }
 
+  /* Outcome cell on the public recent-work list. Word first, colour second:
+     the state has to survive being read in greyscale, or by someone who does
+     not distinguish these hues. */
+  td .n { font-weight: 600; color: var(--text); }
+  td .n.is-ok { color: var(--accent-text); }
+  td .n.is-warn { color: var(--warn-text); }
+  td .n.is-down { color: var(--danger-text); }
+  td .n.is-none { color: var(--text-muted); }
+
+  .note { font-size: 12.5px; color: var(--text-muted); line-height: 1.6; margin-top: 12px; }
+
   .empty {
     padding: 16px 18px; border-radius: var(--radius);
     background: var(--surface); border: 1px dashed var(--border);
@@ -157,13 +168,13 @@
 
   <section aria-labelledby="h-nodes">
     <h2 id="h-nodes">Machines</h2>
-    <p class="lede">Every computer currently offering compute to this orchestrator.</p>
+    <p class="lede"><!--SLOT:NODES_LEDE--></p>
     <!--SLOT:NODES-->
   </section>
 
   <section aria-labelledby="h-recent">
     <h2 id="h-recent">Recent work</h2>
-    <p class="lede">The last things this network built. Failures are listed too — the honest rate is published.</p>
+    <p class="lede"><!--SLOT:RECENT_LEDE--></p>
     <!--SLOT:RECENT-->
   </section>
 
