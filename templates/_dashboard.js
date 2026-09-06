@@ -303,6 +303,9 @@ function showTab(name, opts) {
   if (name === 'gallery') loadGallery();
   if (name === 'guild') loadStandings();
   if (name === 'runs') loadHistory();
+  // Evidence is only fetched while this view is open, so opening it has to ask
+  // rather than waiting up to 3s for the next tick to notice.
+  if (name === 'nodes') refresh();
 }
 
 function focusPitch() {
@@ -350,7 +353,7 @@ async function refresh() {
       // Optional: a deployment with evidence off, or an older server, simply
       // has no observations to show. That is a state the row renders, not an
       // error that should empty the view.
-      apiJson('/v1/operator/capability-evidence').catch(() => null),
+      maybeLoadEvidence(),
     ]);
     if (evidence) capabilityEvidence = evidence;
 
@@ -437,6 +440,24 @@ function enrollmentLine(n) {
    `bounded_output_comparison_not_correctness`. Both are repeated in the row,
    because a sample count with neither caveat reads as a score. */
 let capabilityEvidence = null;
+let _evidenceLoadedAt = 0;
+
+/* The evidence endpoint aggregates per scope and computes shadow diagnostics,
+   which is real work. refresh() runs every 3 seconds and only the Nodes view
+   shows any of it, so this fetches at most every 30 seconds and only while
+   that view is open. Everywhere else the last answer is reused, and before the
+   first one the row says "not loaded" rather than "none". */
+const EVIDENCE_MAX_AGE_MS = 30000;
+
+function maybeLoadEvidence() {
+  if (currentTab !== 'nodes') return Promise.resolve(null);
+  if (capabilityEvidence && Date.now() - _evidenceLoadedAt < EVIDENCE_MAX_AGE_MS) {
+    return Promise.resolve(null);
+  }
+  return apiJson('/v1/operator/capability-evidence')
+    .then(d => { _evidenceLoadedAt = Date.now(); return d; })
+    .catch(() => null);
+}
 
 function evidenceLine(n) {
   const ev = capabilityEvidence;
