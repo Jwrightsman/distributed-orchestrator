@@ -48,7 +48,7 @@ that would show it is built. Listed with the module that owns the truth.
 
 | Surface | Owner | Note for whoever designs it |
 |---|---|---|
-| Provenance envelope | `provenance.py` | **Not** a signature and **not** an attestation — see §4.5. |
+| Provenance envelope | `provenance.py` | **Not** a signature and **not** an attestation — see §4.6. |
 | Ledger hash chain (Theme 3C) | `ledger.py` | Tamper-**evident**, not tamper-proof. ADR-0017. |
 | Worker protocol window, `GET /v1/worker-protocol` (4A) | `worker_protocol.py` | Already public in `_PUBLIC_EXACT`; exposes versions only. |
 | Trace propagation (4B) | `tracing.py`, `tracing_middleware.py` | |
@@ -146,11 +146,30 @@ phrases ship where this says, not where the handoff says:
 | §7 row | Handoff says | Actually |
 |---|---|---|
 | "a swarm of ordinary computers" | `run.html` footer | `run.html:323` **and `index.html:183`** (the landing-page `<h1>`). Two sites, not one. |
-| "volunteer machines" | `status.html` empty state | `routes_status.py:146`. `status.html` contains neither phrase — it is slots only. Also `try.html:7` and `try.html:266`. |
+| "volunteer machines" | `status.html` empty state | `routes_status.py:146`. `status.html` contains neither phrase — it is slots only. Also `try.html:7`, `try.html:266`. |
 | `CREDITS` column | `status.html`, `/node/{id}` | `routes_status.py:173` and `:283`. Same reason. |
 
 Anyone following §7 literally would edit `status.html`, find nothing, and conclude
 the phrases were already fixed.
+
+**The wider finding: most of this copy is not in a template at all.** Adding the
+prohibited-phrase test surfaced four more sites, every one of them in Python:
+
+| Phrase | Where it actually lived |
+|---|---|
+| "no cloud, no API keys" | `templates/index.html` meta + hero, **and** `routes_run.py:382` |
+| "across volunteer machines" | `routes_run.py:377` |
+| "a handful of volunteer machines" | `routes_try.py:102` |
+| "on volunteer hardware" | `mcp_server.py:43` (the MCP tool description) |
+
+So the test has a third layer covering `routes_status.py`, `routes_run.py` and
+`routes_try.py`. A language rule that only reads `templates/` would have passed
+green over all four.
+
+Two instances were left deliberately, both outside the UI vocabulary this rule
+governs: `node.py:871` uses "volunteer" for a *person*, and
+`scripts/deploy_preflight.py:802` is an operator security warning rather than
+product copy.
 
 ### 4.4 The theme file is not safely drop-in, and two claims about it are wrong
 
@@ -186,7 +205,32 @@ once in dark `:root` (line 47) and once in `[data-theme="light"]` (line 106),
 which is one per block and correct. There was no duplication. Both blocks of the
 new file were checked for repeated declarations: none, in either.
 
-### 4.5 Additions to the prohibited list
+### 4.5 The locked screen was unreachable as specified
+
+Handoff §4 says "`401` on any private fetch → show the locked screen", and §11
+asks you to "confirm a private page with no credential renders the locked screen
+rather than a broken shell". Those two cannot both hold as written: `/dashboard`
+is itself a private route, so with `viewer_key` set a browser navigating there
+got a raw JSON `401` body and never loaded the page that would have drawn the
+screen. The design treats `viewerAuth: 'locked'` as a state of a console that
+has already loaded.
+
+Making `/dashboard` public would have fixed it and was rejected — the owner had
+just declined a comparable exposure for `/status` (§6), and a second one should
+not arrive as a side effect.
+
+**What shipped instead:** the refusal keeps its `401` and its
+`WWW-Authenticate: Bearer` and changes only its *body*. A request that prefers
+`text/html` gets `templates/locked.html`; a `fetch()` (`Accept: */*`) still gets
+the JSON object it parses. No route moved into `_PUBLIC_EXACT`, the page carries
+no data, and `/dashboard`, `/status`, `/node/{id}` and `/run/{id}` all still
+answer `401`.
+
+The in-console locked screen still exists and still matters — it is what a
+session expiring mid-use looks like, where the page is already loaded and a
+fetch is what fails.
+
+### 4.6 Additions to the prohibited list
 
 From work that landed after the handoff. `docs/adr/0017` is the normative source
 for the first two and already forbids "verified, trustless, tamper-proof, proof of
