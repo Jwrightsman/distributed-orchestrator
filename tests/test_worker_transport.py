@@ -127,6 +127,47 @@ def test_https_is_accepted_everywhere(host):
     require_secure_transport("https", host)  # must not raise
 
 
+#: The two hostname shapes the two documented deployment paths produce. Path A
+#: is `tailscale cert`, which issues for a name under `.ts.net`; Path B is a
+#: domain with a certificate from Let's Encrypt. Both are ordinary names as far
+#: as this module is concerned, and that is the point of asserting it: a
+#: tailnet name looks private, and nothing here may treat "looks private" as a
+#: reason to relax anything.
+_DEPLOYMENT_HOSTNAMES = (
+    "orchestrator.tail9f3c2.ts.net",
+    "my-coordinator.tailnet-abc1.ts.net",
+    "mycelium.example.com",
+    "coordinator.example.org",
+)
+
+
+@pytest.mark.parametrize("host", _DEPLOYMENT_HOSTNAMES)
+def test_both_documented_paths_are_accepted_over_https(host):
+    require_secure_transport("https", host)  # must not raise
+
+
+@pytest.mark.parametrize("host", _DEPLOYMENT_HOSTNAMES)
+def test_neither_documented_path_is_mistaken_for_loopback(host):
+    """A tailnet name is a network name; the overlay does not make it local.
+
+    If `.ts.net` were ever treated as loopback, plaintext would silently
+    become legal on exactly the path this project recommends first.
+    """
+
+    assert is_loopback_host(host) is False
+    with pytest.raises(InsecureTransportError):
+        require_secure_transport("http", host)
+
+
+@pytest.mark.parametrize("host", _DEPLOYMENT_HOSTNAMES)
+def test_the_deployment_hostnames_survive_normalisation(host):
+    """The whole join flow goes through this one function, so test it here."""
+
+    assert worker_identity.normalize_coordinator(f"https://{host}") == f"https://{host}"
+    with pytest.raises(worker_identity.WorkerIdentityError):
+        worker_identity.normalize_coordinator(f"http://{host}")
+
+
 @pytest.mark.parametrize("scheme", ["ftp", "file", "javascript", "ws", "", "HTTPX"])
 def test_no_other_scheme_is_a_transport(scheme):
     with pytest.raises(InsecureTransportError):

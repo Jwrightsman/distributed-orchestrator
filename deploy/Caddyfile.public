@@ -1,0 +1,78 @@
+# Path B — public domain, automatic Let's Encrypt. See docs/DEPLOY.md.
+#
+# Copy to /etc/caddy/Caddyfile, replace the domain and the email, then:
+#
+#     sudo caddy validate --config /etc/caddy/Caddyfile
+#     sudo systemctl reload caddy
+#
+# Caddy obtains and renews the certificate on its own and redirects
+# http:// to https:// with no configuration. Both are why this file is short.
+#
+# The application is published on 127.0.0.1:8000 (docker-compose.yml) and is
+# not reachable from anywhere else. Everything below is the only way in.
+{
+	# Let's Encrypt uses this to warn you before a certificate expires.
+	email YOUR-EMAIL@example.com
+
+	servers {
+		timeouts {
+			# See the note in Caddyfile.tailscale: read_header only. A read or
+			# write timeout would break the 25s worker long poll and the
+			# dashboard WebSocket.
+			read_header 10s
+			idle 5m
+		}
+	}
+}
+
+YOUR-DOMAIN.example.com {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	# Matches the coordinator's own 10 MiB result ceiling with room for JSON
+	# framing, so the coordinator refuses an oversized result rather than the
+	# proxy. See execution/attempts.py: MAX_OUTPUT_BYTES.
+	request_body {
+		max_size 12MB
+	}
+
+	# The operator surface does not belong on the public Internet. These routes
+	# are already viewer-key protected inside the application; refusing them at
+	# the edge as well means the viewer key never has to travel over the public
+	# Internet at all, so a leaked one cannot be spent from it.
+	#
+	# Reach the dashboard through an SSH tunnel instead, which puts your
+	# browser on this host's loopback interface:
+	#
+	#     ssh -L 8000:127.0.0.1:8000 you@YOUR-SERVER
+	#     # then open http://127.0.0.1:8000/dashboard
+	#
+	# Delete this block if you would rather log in over the Internet with the
+	# viewer key. That is a real trade and it is yours to make.
+	@operator path /dashboard* /v1/operator/* /metrics
+	respond @operator 404
+
+	reverse_proxy 127.0.0.1:8000 {
+		transport http {
+			dial_timeout 10s
+			response_header_timeout 60s
+		}
+	}
+
+	# A share URL is a bearer capability. Keep the query string out of the log.
+	log {
+		output file /var/log/caddy/mycelium.log
+		format filter {
+			request>uri query {
+				delete token
+			}
+		}
+	}
+}

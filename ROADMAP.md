@@ -146,12 +146,20 @@ an identical configuration are not (0 false positives in 20 pairs), and an arm a
 relied on. That last one is measured, not argued: the old HTML check scored `web-snake` 5/5 while
 `showcase_reliability.py` measured the same artifact at 2/10.
 
-**Domain and HTTPS — NO LONGER OPTIONAL, 2026-09-05.** A raw IP with a port read as sketchy in a
-launch post; that was the whole argument, and it was an aesthetic one. It is now a hard
-prerequisite: the worker refuses plaintext HTTP to any non-loopback host, with no flag,
-environment variable, or configuration key that permits it, so an operator cannot invite anybody
-until TLS is in front. ~$12/year plus Caddy for automatic certs, and `tailscale cert` covers the
-overlay path. See [docs/OPERATOR_PREFLIGHT.md](docs/OPERATOR_PREFLIGHT.md).
+**Domain and HTTPS — NO LONGER OPTIONAL, 2026-09-05; REACHABLE, 2026-09-06.** A raw IP with a
+port read as sketchy in a launch post; that was the whole argument, and it was an aesthetic one.
+It became a hard prerequisite instead: the worker refuses plaintext HTTP to any non-loopback
+host, with no flag, environment variable, or configuration key that permits it, so an operator
+cannot invite anybody until TLS is in front. ~$12/year plus Caddy for automatic certs, and
+`tailscale cert` covers the overlay path.
+
+That left a prerequisite with no instructions, which is a prerequisite nobody meets.
+[docs/DEPLOY.md](docs/DEPLOY.md) is now written around two paths — private overlay first,
+public domain second — for somebody who has never administered a server, with the Caddyfiles
+in `deploy/` and an executable host preflight in `scripts/deploy_preflight.py`. **Recommendation
+for a first invited node: Path A**, because it removes the entire category of problem where a
+stranger can reach the coordinator at all, which matters more than the one extra thing a
+contributor has to install. See [docs/OPERATOR_PREFLIGHT.md](docs/OPERATOR_PREFLIGHT.md).
 
 **Worker onboarding — DONE 2026-09-05.** `python worker_installer.py` replaces clone-install-pull-
 run-paste-a-secret with one guided command, and [docs/JOIN.md](docs/JOIN.md) is written for
@@ -608,6 +616,67 @@ memory or storage growth.
 ---
 
 ## Changelog
+
+- **2026-09-06** — TLS became a hard prerequisite yesterday and there was no way to meet it.
+  This closes that: two deployment paths written out in full, the coordinator pinned where a
+  proxy has to be in front of it, and the parts of the pre-flight that a program can check
+  turned into a program.
+
+  **The bind, and the trap under it.** `docker-compose.yml` publishes a literal
+  `127.0.0.1:8000:8000`. It previously published `${MYCELIUM_PUBLISH_ADDRESS:-127.0.0.1}` — a
+  safe default with an override, and the override is the whole problem. **Docker does not
+  consult ufw.** A published port becomes a rule in Docker's own iptables chain, evaluated
+  before the chain ufw manages, so `ufw deny 8000` reports "deny" on a port that is answering
+  the entire Internet and `ufw status` will never say otherwise. That is the single most likely
+  way this deployment ends up exposed while its owner believes it is not, so the address is now
+  a literal that no `.env` file can move, and DEPLOY.md documents the trap with the two commands
+  that actually reveal it (`ss -tlnp`, `sudo iptables -L DOCKER -n`).
+
+  **Self-signed certificates cannot work, and now we say so.** A worker trusts the certifi
+  bundle and nothing else, and builds its client with `trust_env=False` — the same decision that
+  stops an ambient `HTTPS_PROXY` inheriting enrollment bearers also means `SSL_CERT_FILE` cannot
+  add a private CA. Verified by execution rather than by reading: with `trust_env=False`, httpx
+  ignores a bogus `SSL_CERT_FILE` entirely rather than failing. Both documented paths therefore
+  obtain publicly-trusted certificates, and `scripts/tls_local_check.py` lets an operator
+  confirm theirs before inviting anybody — it serves the certificate to a fully verifying client
+  on loopback and reports what a worker would do. The test suite runs the **real** installer
+  (`worker_installer.fetch_protocol_window`) against a TLS-terminated stub, with the untrusted
+  case asserted as a control, because a passing test that passed for the wrong reason would look
+  identical.
+
+  **Registration is not rate-limited, and that is written down rather than papered over.**
+  `_check_rate_limit` exists but is wired only into the pitch routes; `POST /nodes/register`
+  does not call it, so invitation codes can be guessed as fast as the network allows. A failed
+  bootstrap is also not logged in a way an operator would notice — a plain 401, no event, no
+  counter, only the access log. No limiter was invented here: the existing one is pitch-scoped,
+  and coupling registration to it changes worker-protocol behaviour, since stock workers
+  re-register automatically after a session expires. It is a finding for its own change, in
+  THREAT_MODEL §14 and DEPLOY.md, and it is why the entropy floor exists.
+
+  **`scripts/deploy_preflight.py`** turns the checkable half of OPERATOR_PREFLIGHT.md into
+  something executable: publicly bound ports read from the kernel's own socket table, whether
+  the coordinator's port is among them, SSH password and root login, unattended upgrades, state
+  and database file modes, credential strength, certificate validity and expiry, and whether the
+  protocol window answers over HTTPS. Read-only, and it prints no credential value — asserted by
+  a test that generates three real credentials and greps the whole report for them. Its entropy
+  estimator over-rates prose, which is the one direction that would be dangerous, so a shape
+  check refuses a typed passphrase outright rather than pricing it.
+
+  **`scripts/secret_history_scan.py`** scans every blob in the object database rather than the
+  working tree, because deleting a credential in a later commit changes nothing. Its first two
+  rule sets were too loose and are kept as regression tests: `keyHandlers` supplied the word
+  "key" and a worktree name supplied the entropy on ten benchmark-result lines; then an
+  assignment-shaped rule matched `credential_version=normalize_credential_version(...)`. A
+  scanner that cries wolf is one people stop running. [docs/SECRET_ROTATION.md](docs/SECRET_ROTATION.md)
+  covers all four credentials, what each breaks, and the demo-recording case.
+
+  **Two authorities on Path A.** Tailnet membership and Mycelium enrollment are independent and
+  both must be revoked; removing a device from the tailnet leaves a working bearer credential,
+  and revoking the enrollment leaves the device on the network. Said in DEPLOY.md, THREAT_MODEL
+  §4a, SECRET_ROTATION.md, and JOIN.md, which now has a section for contributors handed a
+  `.ts.net` address.
+
+  DEPLOY.md states plainly that none of this has been reviewed by a security professional.
 
 - **2026-09-05** — The three exposures the previous entry recorded are closed, and macOS
   stopped being a platform nobody had ever run this on. The two halves are unrelated

@@ -22,3 +22,8 @@ scripts/demo_results/
 # committed in evals/prompts.json; the thousands of generated files behind
 # them are not.
 evals/banding/
+
+# The Compose deployment's state directory (docker-compose.yml mounts ./data).
+# config.json and events.db are already ignored by name above, but the lock and
+# the trusted-alpha marker are not, and none of it belongs in the repository.
+data/

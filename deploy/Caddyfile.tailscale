@@ -1,0 +1,81 @@
+# Path A — private overlay (Tailscale). See docs/DEPLOY.md.
+#
+# Copy to /etc/caddy/Caddyfile, replace the two placeholder names, then:
+#
+#     sudo caddy validate --config /etc/caddy/Caddyfile
+#     sudo systemctl reload caddy
+#
+# Certificate: `tailscale cert` writes a Let's Encrypt certificate for your
+# tailnet name to the current directory. It is a publicly-trusted certificate,
+# which matters more than it sounds like: a Mycelium worker trusts the certifi
+# CA bundle and nothing else, and it builds its HTTP client with
+# `trust_env=False`, so SSL_CERT_FILE cannot add a private CA to it. A
+# self-signed certificate cannot be made to work on a worker. `tailscale cert`
+# and Caddy's automatic issuance both produce certificates that already work.
+#
+# Reachability: the site address below is a tailnet name, so Caddy binds only
+# the interface the tailnet gave this host. Nothing here is on the public
+# Internet, and the application itself is on 127.0.0.1:8000 where only this
+# host can reach it.
+{
+	# No public ACME issuance on this path — the certificate comes from
+	# `tailscale cert` and is named explicitly in the site block.
+	auto_https disable_redirects
+
+	servers {
+		timeouts {
+			# Bounds a client that opens a connection and sends its request
+			# line slowly. Deliberately the only inbound timeout set: the
+			# worker holds GET /tasks/next open for 25 seconds waiting for
+			# work, and the dashboard holds /ws/events open indefinitely.
+			# A read or write timeout would break both.
+			read_header 10s
+			idle 5m
+		}
+	}
+}
+
+# Replace with your own tailnet name: `tailscale status --json | grep DNSName`
+# gives it, and it always ends in .ts.net.
+YOUR-HOST.YOUR-TAILNET.ts.net {
+	# Written by: tailscale cert YOUR-HOST.YOUR-TAILNET.ts.net
+	tls /var/lib/caddy/YOUR-HOST.YOUR-TAILNET.ts.net.crt /var/lib/caddy/YOUR-HOST.YOUR-TAILNET.ts.net.key
+
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	# The application's own ceiling on a worker result is 10 MiB
+	# (execution/attempts.py: MAX_OUTPUT_BYTES = 10_485_760). This sits just
+	# above it on purpose, so an oversized result is refused by the
+	# coordinator with a protocol error the worker can act on, rather than by
+	# the proxy with an opaque 413.
+	request_body {
+		max_size 12MB
+	}
+
+	reverse_proxy 127.0.0.1:8000 {
+		# Longer than the 25s long poll on GET /tasks/next.
+		transport http {
+			dial_timeout 10s
+			response_header_timeout 60s
+		}
+	}
+
+	# A share URL is a bearer capability: whoever reads the log line can open
+	# the run. Keep the query string out of the log.
+	log {
+		output file /var/log/caddy/mycelium.log
+		format filter {
+			request>uri query {
+				delete token
+			}
+		}
+	}
+}

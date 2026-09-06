@@ -22,7 +22,13 @@ COPY execution/ execution/
 # Server startup imports the trusted-alpha preflight, and operators need the
 # matching backup/restore tools in the immutable image. Copy only runtime
 # scripts, not benchmark result fixtures or local bytecode.
-COPY scripts/__init__.py scripts/preflight.py scripts/backup.py scripts/restore.py scripts/node_enrollment_admin.py scripts/
+#
+# deploy_preflight.py and tls_local_check.py are here because the host they
+# check is the host the container runs on, and running them from the image
+# means an operator does not need a source checkout, a matching Python, or any
+# dependency the host happens to lack:
+#   docker compose exec orchestrator python /app/scripts/deploy_preflight.py --state-dir /data
+COPY scripts/__init__.py scripts/preflight.py scripts/backup.py scripts/restore.py scripts/node_enrollment_admin.py scripts/deploy_preflight.py scripts/tls_local_check.py scripts/
 
 # All state files are resolved relative to the working directory
 WORKDIR /data
