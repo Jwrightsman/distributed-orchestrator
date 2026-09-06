@@ -663,10 +663,17 @@ memory or storage growth.
   check refuses a typed passphrase outright rather than pricing it.
 
   **`scripts/secret_history_scan.py`** scans every blob in the object database rather than the
-  working tree, because deleting a credential in a later commit changes nothing. Its first two
+  working tree, because deleting a credential in a later commit changes nothing. Its first three
   rule sets were too loose and are kept as regression tests: `keyHandlers` supplied the word
   "key" and a worktree name supplied the entropy on ten benchmark-result lines; then an
-  assignment-shaped rule matched `credential_version=normalize_credential_version(...)`. A
+  assignment-shaped rule matched `credential_version=normalize_credential_version(...)`; then a
+  deliberately weak *test fixture* was reported as a live credential, because the blob holding it
+  had been orphaned by an amended commit and `^tests/` had no path to match — the finding read
+  `(unreachable blob)`. Paths for those are now recovered from the reflog, from dangling trees,
+  and failing both by matching the blob's content against the files still in history, with an
+  ambiguous match left unnamed rather than filed under a path that would silence it. An
+  unreachable object is also reported at its own severity and does not fail the run, since no
+  push or clone carries one and a fresh clone does not have it. A
   scanner that cries wolf is one people stop running. [docs/SECRET_ROTATION.md](docs/SECRET_ROTATION.md)
   covers all four credentials, what each breaks, and the demo-recording case.
 

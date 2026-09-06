@@ -7,6 +7,12 @@ still finds it. The rest are the false positives that an earlier version of
 this rule actually produced against this repository -- they are kept because
 each one made the scan useless in a different way, and precision is what
 decides whether an operator keeps running it.
+
+The last section covers orphaned blobs -- the ones `git add` leaves behind when
+the commit is amended away. No tree names them, so the path-based ignore rules
+had nothing to match on and a test fixture came back as a credential. They are
+also the one place where a *recovered* path suppresses a finding, so the tests
+that matter most there are the ones asserting it does not.
 """
 
 from __future__ import annotations
@@ -22,9 +28,13 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT / "scripts") not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+import scripts.secret_history_scan as scanner  # noqa: E402
 from scripts.secret_history_scan import (  # noqa: E402
+    blob_index,
+    candidate_blobs,
     entropy_per_character,
     looks_random,
+    main,
     scan_repository,
     scan_text,
 )
@@ -39,18 +49,22 @@ def _git(repo: Path, *arguments: str) -> None:
     )
 
 
+def _init_repo(path: Path) -> Path:
+    path.mkdir(parents=True, exist_ok=True)
+    _git(path, "init")
+    _git(path, "config", "user.email", "test@example.invalid")
+    _git(path, "config", "user.name", "Test")
+    _git(path, "config", "commit.gpgsign", "false")
+    return path
+
+
 @pytest.fixture
 def throwaway_repo(tmp_path: Path) -> Path:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _git(repo, "init")
-    _git(repo, "config", "user.email", "test@example.invalid")
-    _git(repo, "config", "user.name", "Test")
-    _git(repo, "config", "commit.gpgsign", "false")
-    return repo
+    return _init_repo(tmp_path / "repo")
 
 
 def _commit(repo: Path, name: str, body: str, message: str) -> None:
+    (repo / name).parent.mkdir(parents=True, exist_ok=True)
     (repo / name).write_text(body, encoding="utf-8")
     _git(repo, "add", name)
     _git(repo, "commit", "-m", message)
@@ -210,3 +224,322 @@ def test_no_finding_carries_the_secret_it_found(throwaway_repo: Path):
 
     assert findings
     assert leaked not in rendered
+
+
+# -- Blobs no commit names ----------------------------------------------------
+#
+# `git add` writes the blob there and then. Amend the commit, or stage the file
+# twice, and the first blob stays in the object database with no tree naming
+# it. The scan reported two of those as credentials against this repository:
+# they were the weak-secret fixtures in tests/test_deploy_preflight.py, drafted
+# during a commit that was later amended, and `^tests/` never got to fire
+# because the finding's path was "(unreachable blob)".
+
+
+def _git_out(repo: Path, *arguments: str) -> str:
+    completed = subprocess.run(
+        ["git", "-C", str(repo), *arguments],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout.strip()
+
+
+def _fixture_module(secret: str, tail: str = "") -> str:
+    """A test file shaped like the one that actually caused this."""
+
+    return (
+        '''"""The preflight has to report a weak secret without printing it."""
+
+from __future__ import annotations
+
+import json
+
+from scripts.deploy_preflight import run_host_preflight
+
+
+def test_a_weak_secret_is_reported_without_showing_it(tmp_path):
+    configuration = tmp_path / "config.json"
+    configuration.write_text(json.dumps({"node_secret": "'''
+        + secret
+        + '''"}))
+
+    report = run_host_preflight(state_dir=tmp_path, config_path=configuration)
+
+    assert report.failed, "a weak node secret has to fail the preflight"
+'''
+        + tail
+    )
+
+
+def _orphan_a_draft(repo: Path, name: str, draft: str, final: str) -> str:
+    """Stage `draft` at `name`, replace it with `final`, commit only `final`.
+
+    Returns the draft's blob, which is now in the object database with nothing
+    naming it: no tree ever held it, the index has moved on, and no reflog
+    entry points at a commit that contained it.
+    """
+
+    (repo / name).parent.mkdir(parents=True, exist_ok=True)
+    (repo / name).write_text(draft, encoding="utf-8")
+    _git(repo, "add", name)
+    orphan = _git_out(repo, "rev-parse", f":{name}")
+    (repo / name).write_text(final, encoding="utf-8")
+    _git(repo, "add", name)
+    _git(repo, "commit", "-m", f"commit only the final {name}")
+    return orphan
+
+
+def _assert_orphaned(repo: Path, blob: str) -> None:
+    """Guard against the test passing because nothing was planted."""
+
+    located = blob_index(repo)
+    assert blob in candidate_blobs(repo), "the draft blob is not in the database"
+    assert blob not in located.paths, "git still names it; this is not an orphan"
+    assert blob not in located.in_history
+
+
+def test_an_orphaned_draft_of_a_test_fixture_is_not_reported(throwaway_repo: Path):
+    """The bug: a fixture credential, orphaned, reported as a real one.
+
+    The blob is a draft of a file under tests/, so `^tests/` should silence it
+    exactly as it silences the committed copy. Before the path was recovered
+    there was nothing for that rule to match.
+    """
+
+    _commit(throwaway_repo, "README.md", "# a repository\n", "first")
+    fixture = _fixture_module(secrets.token_urlsafe(32))
+    orphan = _orphan_a_draft(
+        throwaway_repo,
+        "tests/test_deploy_preflight.py",
+        fixture,
+        fixture + "\n\ndef test_the_preflight_also_checks_the_ssh_configuration():\n    pass\n",
+    )
+
+    _assert_orphaned(throwaway_repo, orphan)
+
+    assert scan_repository(throwaway_repo) == []
+
+
+def test_an_orphaned_draft_of_a_scanned_file_is_still_reported(throwaway_repo: Path):
+    """Recovering a path must not become a way of losing findings.
+
+    Same mechanism, but the recovered path is one the scan reads. The credential
+    has to survive, and it has to be marked as the local-only thing it is.
+    """
+
+    _commit(throwaway_repo, "README.md", "# a repository\n", "first")
+    leaked = secrets.token_urlsafe(32)
+    draft = _fixture_module(leaked)
+    orphan = _orphan_a_draft(
+        throwaway_repo,
+        "deploy/configure.py",
+        draft,
+        # What got committed is the placeholder, so the only credential in this
+        # repository is the one in the orphan. Anything reported is that blob.
+        draft.replace(leaked, "changeme-before-committing"),
+    )
+
+    _assert_orphaned(throwaway_repo, orphan)
+    findings = scan_repository(throwaway_repo)
+
+    assert [finding.path for finding in findings] == ["deploy/configure.py"]
+    assert not findings[0].reachable, "no ref reaches it, so it is local only"
+    assert all(leaked not in f"{finding.path} {finding.note}" for finding in findings)
+
+
+def test_an_orphan_resembling_nothing_keeps_its_finding(throwaway_repo: Path):
+    """No path recoverable is the case the ignore rules cannot help with."""
+
+    _commit(throwaway_repo, "README.md", "# a repository\n", "first")
+    leaked = secrets.token_urlsafe(32)
+    orphan = _orphan_a_draft(
+        throwaway_repo,
+        "notes.md",
+        '{\n  "node_secret": "' + leaked + '"\n}\n',
+        "# notes\n\nNothing in this file resembles the draft it replaced.\n",
+    )
+
+    _assert_orphaned(throwaway_repo, orphan)
+    findings = scan_repository(throwaway_repo)
+
+    assert [finding.path for finding in findings] == ["(unreachable blob)"]
+    assert all(not finding.reachable for finding in findings)
+
+
+def _plant_ambiguity(repo: Path, leaked: str, *, rival: bool) -> str:
+    """A credential-bearing orphan, and one or two files it resembles.
+
+    The committed copies hold a placeholder, so the only real credential in the
+    repository is in the orphan and any finding is that blob. With `rival` the
+    orphan resembles a scanned file exactly as much as the ignored one.
+    """
+
+    base = _fixture_module("changeme-before-committing")
+    _commit(repo, "README.md", "# a repository\n", "first")
+    _commit(
+        repo,
+        "tests/test_preflight.py",
+        base + "\n\ndef test_only_the_test_copy_has_this_line():\n    pass\n",
+        "the copy under tests/",
+    )
+    if rival:
+        _commit(
+            repo,
+            "deploy/preflight.py",
+            base + "\n\ndef only_the_deploy_copy_has_this_line():\n    return None\n",
+            "the copy that gets scanned",
+        )
+    return _orphan_a_draft(
+        repo,
+        "notes/scratch.py",
+        base.replace("changeme-before-committing", leaked),
+        "# scratch\n\nnothing here resembles the draft it replaced\n",
+    )
+
+
+def test_an_orphan_one_file_matches_inherits_that_path(throwaway_repo: Path):
+    """The control for the test below: one clear match, and it is adopted.
+
+    Without this, the next test would pass just as well if the similarity were
+    too low to match anything -- which is a different reason for the same
+    answer, and would leave the ambiguity rule untested.
+    """
+
+    orphan = _plant_ambiguity(throwaway_repo, secrets.token_urlsafe(32), rival=False)
+
+    _assert_orphaned(throwaway_repo, orphan)
+
+    assert scan_repository(throwaway_repo) == []
+
+
+def test_an_orphan_two_files_match_equally_is_not_silenced(
+    tmp_path: Path,
+):
+    """Ambiguity resolves towards reporting, never towards an ignored path.
+
+    Same orphan as the control, and now it resembles a scanned file exactly as
+    much as the ignored one. Adopting the ignored path on a coin toss would
+    suppress a real credential, so a match this close adopts neither.
+    """
+
+    repo = _init_repo(tmp_path / "contested")
+    leaked = secrets.token_urlsafe(32)
+    orphan = _plant_ambiguity(repo, leaked, rival=True)
+
+    _assert_orphaned(repo, orphan)
+    findings = scan_repository(repo)
+
+    assert [finding.path for finding in findings] == ["(unreachable blob)"]
+    assert all(leaked not in f"{finding.path} {finding.note}" for finding in findings)
+
+
+def test_a_reset_away_commit_is_named_by_the_reflog(throwaway_repo: Path):
+    """When git still records the path, use it rather than guessing.
+
+    Nothing in this repository resembles the discarded file, so content
+    matching has nothing to work with. The reflog still points at the commit
+    that held it, and that names the path outright.
+    """
+
+    _commit(throwaway_repo, "README.md", "# a repository\n", "first")
+    _commit(
+        throwaway_repo,
+        "tests/test_credentials.py",
+        _fixture_module(secrets.token_urlsafe(32)),
+        "a test that was thought better of",
+    )
+    blob = _git_out(throwaway_repo, "rev-parse", "HEAD:tests/test_credentials.py")
+    _git(throwaway_repo, "reset", "--hard", "HEAD~1")
+
+    located = blob_index(throwaway_repo)
+
+    assert located.paths[blob] == "tests/test_credentials.py"
+    assert blob not in located.in_history, "a reflog is not pushed and not cloned"
+    assert scan_repository(throwaway_repo) == []
+
+
+def test_a_staged_credential_is_named_and_counted_as_travelling(
+    throwaway_repo: Path,
+):
+    """The index names its blobs, and they are one commit from the remote."""
+
+    _commit(throwaway_repo, "README.md", "# a repository\n", "first")
+    leaked = secrets.token_urlsafe(32)
+    (throwaway_repo / "config.json").write_text(
+        '{\n  "node_secret": "' + leaked + '"\n}\n', encoding="utf-8"
+    )
+    _git(throwaway_repo, "add", "config.json")
+
+    findings = scan_repository(throwaway_repo)
+
+    assert [finding.path for finding in findings] == ["config.json"]
+    assert findings[0].reachable
+
+
+# -- Severity ------------------------------------------------------------------
+
+
+def test_only_a_credential_that_travels_fails_the_scan(throwaway_repo: Path):
+    """An unreachable object is reported, and does not fail the run.
+
+    A fresh clone does not have these objects at all, so failing over them
+    makes the result depend on which machine ran it. It is still printed.
+    """
+
+    _commit(throwaway_repo, "README.md", "# a repository\n", "first")
+    orphan = _orphan_a_draft(
+        throwaway_repo,
+        "notes.md",
+        '{\n  "node_secret": "' + secrets.token_urlsafe(32) + '"\n}\n',
+        "# notes\n\nNothing in this file resembles the draft it replaced.\n",
+    )
+
+    _assert_orphaned(throwaway_repo, orphan)
+
+    assert scan_repository(throwaway_repo), "still reported"
+    assert main(["--repo", str(throwaway_repo)]) == 0
+
+
+def test_a_committed_credential_still_fails_the_scan(throwaway_repo: Path):
+    """The counterpart: reachable is what the exit status is for."""
+
+    _commit(
+        throwaway_repo,
+        "config.json",
+        '{\n  "node_secret": "' + secrets.token_urlsafe(32) + '"\n}\n',
+        "oops",
+    )
+
+    findings = scan_repository(throwaway_repo)
+
+    assert all(finding.reachable for finding in findings)
+    assert main(["--repo", str(throwaway_repo)]) == 1
+
+
+def test_giving_up_on_attribution_still_reports_the_blob(
+    throwaway_repo: Path, monkeypatch
+):
+    """The cap on how many orphans to name degrades towards reporting.
+
+    Nothing reaches this cap in a repository anyone has run `git gc` on, so the
+    branch would otherwise never execute. What it must not do is drop findings:
+    an orphan it declines to name is reported without a path, not skipped.
+    """
+
+    monkeypatch.setattr(scanner, "MAX_ATTRIBUTED_BLOBS", 0)
+    _commit(throwaway_repo, "README.md", "# a repository\n", "first")
+    fixture = _fixture_module(secrets.token_urlsafe(32))
+    orphan = _orphan_a_draft(
+        throwaway_repo,
+        "tests/test_deploy_preflight.py",
+        fixture,
+        fixture + "\n\ndef test_the_preflight_reads_the_ssh_configuration():\n    pass\n",
+    )
+
+    _assert_orphaned(throwaway_repo, orphan)
+    findings = scan_repository(throwaway_repo)
+
+    assert [finding.path for finding in findings] == ["(unreachable blob)"]
+    assert all(not finding.reachable for finding in findings)
