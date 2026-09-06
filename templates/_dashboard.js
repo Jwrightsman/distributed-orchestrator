@@ -448,15 +448,23 @@ let _evidenceLoadedAt = 0;
    that view is open. Everywhere else the last answer is reused, and before the
    first one the row says "not loaded" rather than "none". */
 const EVIDENCE_MAX_AGE_MS = 30000;
+let _evidenceInFlight = null;
 
 function maybeLoadEvidence() {
   if (currentTab !== 'nodes') return Promise.resolve(null);
   if (capabilityEvidence && Date.now() - _evidenceLoadedAt < EVIDENCE_MAX_AGE_MS) {
     return Promise.resolve(null);
   }
-  return apiJson('/v1/operator/capability-evidence')
+  // Opening the view calls refresh() directly while the 3s interval is also
+  // running, so two ticks can arrive before either has an answer to cache.
+  // Sharing the in-flight promise is what actually makes this one request;
+  // a freshness check alone still let the first few through.
+  if (_evidenceInFlight) return _evidenceInFlight;
+  _evidenceInFlight = apiJson('/v1/operator/capability-evidence')
     .then(d => { _evidenceLoadedAt = Date.now(); return d; })
-    .catch(() => null);
+    .catch(() => null)
+    .finally(() => { _evidenceInFlight = null; });
+  return _evidenceInFlight;
 }
 
 function evidenceLine(n) {
