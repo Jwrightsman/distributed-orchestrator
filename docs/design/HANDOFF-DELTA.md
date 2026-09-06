@@ -48,7 +48,7 @@ that would show it is built. Listed with the module that owns the truth.
 
 | Surface | Owner | Note for whoever designs it |
 |---|---|---|
-| Provenance envelope | `provenance.py` | **Not** a signature and **not** an attestation — see §4.4. |
+| Provenance envelope | `provenance.py` | **Not** a signature and **not** an attestation — see §4.5. |
 | Ledger hash chain (Theme 3C) | `ledger.py` | Tamper-**evident**, not tamper-proof. ADR-0017. |
 | Worker protocol window, `GET /v1/worker-protocol` (4A) | `worker_protocol.py` | Already public in `_PUBLIC_EXACT`; exposes versions only. |
 | Trace propagation (4B) | `tracing.py`, `tracing_middleware.py` | |
@@ -152,7 +152,41 @@ phrases ship where this says, not where the handoff says:
 Anyone following §7 literally would edit `status.html`, find nothing, and conclude
 the phrases were already fixed.
 
-### 4.4 Additions to the prohibited list
+### 4.4 The theme file is not safely drop-in, and two claims about it are wrong
+
+`README.md` says to copy `_theme.html` in as-is and handoff §2 says
+"`test_theme.py` still passes". Neither holds.
+
+**Line 2 of the theme file breaks every page that includes it.** Its header
+comment documents itself with a literal nested marker:
+
+```html
+<!-- Shared theme layer — …
+     Injected into every page by dashboard.py at the `<!-- THEME -->` marker.
+```
+
+HTML comments do not nest. The inner `-->` terminates the outer comment, so
+roughly twenty lines of designer prose — "This is a SUPERSET of the previous
+token set…" — parse as text and render on the page. Confirmed with
+`html.parser` against the served `/dashboard`, not by reading.
+
+It also fails `test_theme.py::test_served_pages_carry_the_tokens`, which asserts
+the raw marker is absent from the served body: the marker *is* in the body,
+inside the theme's own comment. Three of the twenty theme tests failed on the
+unmodified file.
+
+**Fix applied:** line 2 now reads "at the THEME marker comment", with no nested
+delimiter. Zero tokens and zero colour values changed — the palette is
+byte-identical to the handoff. The archived copy keeps the original.
+
+**A separate claim that is simply not true of this repo:** the brief introducing
+this port says the new theme "fixes the duplicated `--accent-dim` in the light
+block". Master's `templates/_theme.html` declares `--accent-dim` exactly twice —
+once in dark `:root` (line 47) and once in `[data-theme="light"]` (line 106),
+which is one per block and correct. There was no duplication. Both blocks of the
+new file were checked for repeated declarations: none, in either.
+
+### 4.5 Additions to the prohibited list
 
 From work that landed after the handoff. `docs/adr/0017` is the normative source
 for the first two and already forbids "verified, trustless, tamper-proof, proof of
