@@ -6,6 +6,7 @@ ledger.json
 config.json
 projects/
 events.db
+events.db-*
 capability-shadow-health.db
 capability-shadow-health.db-*
 scripts/wan_results/
@@ -27,3 +28,9 @@ evals/banding/
 # config.json and events.db are already ignored by name above, but the lock and
 # the trusted-alpha marker are not, and none of it belongs in the repository.
 data/
+
+# Left in the repository root by a full `py -m pytest -q` run. SQLite writes the
+# -wal and -shm sidecars next to events.db (the events.db-* rule above), and the
+# coordinator lock falls back to the working directory when MYCELIUM_STATE_DIR
+# is unset, so it lands here rather than in the data/ directory ignored above.
+.mycelium-coordinator.lock
