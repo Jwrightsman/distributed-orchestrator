@@ -97,6 +97,11 @@ check where they have been.
       later commit changes nothing. See
       [SECRET_ROTATION.md](SECRET_ROTATION.md#if-it-finds-something).
 
+      A second section, where it appears, lists unreachable objects — leftovers
+      on this machine that no push and no clone carries. Those do not fail the
+      command, and `git gc --prune=now` clears them. See
+      [SECRET_ROTATION.md](SECRET_ROTATION.md#two-kinds-of-finding).
+
 - [ ] **Invitation codes go to contributors through a channel you would send a
       password over.** Not a public issue, not a Discord channel with 200
       people.
