@@ -51,20 +51,12 @@ NODE = shutil.which("node")
 # are real; only the waiting is skipped.
 
 
-def test_the_rig_is_actually_running_somewhere():
-    """A skipped rig is a green suite that proved nothing.
-
-    Locally a missing Node is a skip. In CI it is a failure, because a silent
-    skip there would mean every scenario below stopped being exercised and
-    nobody would see it happen.
-    """
-    if os.environ.get("CI"):
-        assert NODE, (
-            "CI has no `node` on PATH, so every scenario in this file skipped "
-            "silently and the status model went untested."
-        )
-
-
+# Locally, a missing Node skips this file. In CI that would be a green suite
+# proving nothing, so the guard against it lives in tests/test_status_bar.py —
+# deliberately *outside* this module, because a module-level skipif applies to
+# every test in its module, and a guard sitting under the condition it guards
+# against is not a guard. That was found after the guard had already shipped
+# here and CI had already gone green past it.
 pytestmark = pytest.mark.skipif(
     NODE is None, reason="node is not installed; the status model rig needs it"
 )
