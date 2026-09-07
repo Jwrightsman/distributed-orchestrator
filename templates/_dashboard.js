@@ -452,7 +452,10 @@ async function pollStatus() {
   }
 
   if (health) {
-    statusText.inference = health.ollama === 'connected' ? 'ready' : 'offline';
+    /* The INFERENCE word is set in renderStatus from the derived facet, not
+       from this payload. One probe saying no is not an outage, and writing
+       "offline" here would put that word on screen beside a lamp still saying
+       not-heard-back — the cell contradicting its own lamp. */
     statusText.nodes = String(health.nodes_online);
     statusFresh.inference = true;
     statusFresh.nodes = true;
@@ -528,7 +531,9 @@ function setText(id, value) {
 function toneClass(state) {
   if (state === 'good') return 'is-ok';
   if (state === 'bad') return 'is-bad';
-  if (state === 'warn') return 'is-warn';
+  // A recovering facet answered, so its lamp fills. It is warn rather than
+  // green because one yes is not two.
+  if (state === 'warn' || state === 'recovering') return 'is-warn';
   return 'is-unknown';
 }
 
@@ -545,7 +550,15 @@ function paintWord(el, word, tone, base) {
 }
 
 /* One polled cell. `state` is the facet's value once the dependency rule has
-   been applied; a cell with no value at all is hollow regardless. */
+   been applied; `text` is the last value the coordinator gave, or null if it
+   never gave one.
+
+   A value that has stopped being current is held and greyed rather than
+   blanked. Blanking would throw away the last thing the coordinator said,
+   which is exactly what the silence banner then promises is still on screen —
+   and an empty queue cell reads as "the swarm is idle", which is a claim
+   nobody is in a position to make. The hollow lamp and the age carry the
+   "not now" instead. */
 function paintCell(cellId, valueId, state, text) {
   const cell = $(cellId);
   if (!cell) return;
@@ -553,6 +566,7 @@ function paintCell(cellId, valueId, state, text) {
   const shown = known ? state : 'unknown';
   paintLamp(cell.querySelector('.lamp'), shown);
   cell.classList.toggle('is-stale', shown === 'unknown');
+  cell.classList.toggle('is-bad', shown === 'bad');
   setText(valueId, known ? text : '—');
 }
 
@@ -594,24 +608,45 @@ function renderStatus() {
     pillAge.classList.toggle('is-stale', d.ageStale);
   }
 
-  const served = d.linkUp ? 'good' : 'unknown';
-  paintCell('cell-inference', 'cell-inference-v', d.values.inference,
-            statusFresh.inference ? statusText.inference : null);
-  paintCell('cell-nodes', 'cell-nodes-v', served,
-            statusFresh.nodes ? statusText.nodes : null);
-  paintCell('cell-running', 'cell-running-v', served,
-            statusFresh.running ? statusText.running : null);
-  paintCell('cell-queued', 'cell-queued-v', served,
-            statusFresh.queued ? statusText.queued : null);
+  /* NODES, RUNNING and QUEUED are counts the answer carried rather than
+     facets of their own, so their freshness is the link's. `statusFresh`
+     narrows that for the two that come from /metrics: a 401 there means those
+     two are not current even while /health is answering. */
+  /* `ready` and `offline` are the confirmed states, so the word follows the
+     facet rather than the last payload. While the facet is unknown the last
+     confirmed word is held and greyed, exactly like the counts. */
+  if (d.values.inference === 'good' || d.values.inference === 'recovering') {
+    statusText.inference = 'ready';
+  } else if (d.values.inference === 'bad') {
+    statusText.inference = 'offline';
+  }
+
+  const served = d.answering ? (d.recovering.link ? 'recovering' : 'good') : 'unknown';
+  const cellState = (key, state) => (statusFresh[key] ? state : 'unknown');
+  paintCell('cell-inference', 'cell-inference-v',
+            cellState('inference', d.values.inference), statusText.inference);
+  paintCell('cell-nodes', 'cell-nodes-v',
+            cellState('nodes', served), statusText.nodes);
+  paintCell('cell-running', 'cell-running-v',
+            cellState('running', served), statusText.running);
+  paintCell('cell-queued', 'cell-queued-v',
+            cellState('queued', served), statusText.queued);
 
   /* The Overview tile and the locked screen read the same derivation rather
      than deriving again, so neither can disagree with the bar. */
   const tile = $('stat-status');
   if (tile) {
-    tile.className = 'stat-status ' + (d.values.inference === 'good' ? 'is-ok' : 'is-down');
-    tile.innerHTML = '<i aria-hidden="true"></i>' + escHtml(
-      d.values.inference === 'good' ? 'connected'
-        : d.values.inference === 'bad' ? 'unavailable' : 'no answer');
+    const state = d.values.inference;
+    const word = state === 'bad' ? 'unavailable'
+               : state === 'unknown' ? 'no answer'
+               : state === 'recovering' ? 'answering again'
+               : 'connected';
+    const cls = state === 'bad' ? 'is-down'
+              : state === 'unknown' ? 'is-unknown'
+              : state === 'recovering' ? 'is-unknown'
+              : 'is-ok';
+    tile.className = 'stat-status ' + cls;
+    tile.innerHTML = '<i aria-hidden="true"></i>' + escHtml(word);
   }
 
   const lockedLamp = $('locked-lamp');

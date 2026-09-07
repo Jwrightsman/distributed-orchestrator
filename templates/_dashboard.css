@@ -273,6 +273,11 @@ body {
 .stat-status.is-ok i  { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-wash); }
 .stat-status.is-down  { color: var(--danger); }
 .stat-status.is-down i{ background: var(--danger); box-shadow: 0 0 0 3px var(--danger-wash); }
+/* Not heard back. Hollow, and in no colour that could be read as a verdict:
+   this tile had two states, so a silent coordinator painted red here and said
+   "unavailable" — the console asserting an outage nobody had reported. */
+.stat-status.is-unknown  { color: var(--text-muted); }
+.stat-status.is-unknown i{ background: transparent; box-shadow: inset 0 0 0 1px var(--text-faint); }
 
 .stat-value {
   font-size: 22px;
@@ -1318,6 +1323,7 @@ a.gallery-task:hover { color: var(--accent-text); }
   display: flex; align-items: center; gap: 7px;
   padding: 0 11px; flex-shrink: 0;
   border-right: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
 }
 .statusbar-word { white-space: nowrap; }
 
@@ -1344,6 +1350,9 @@ a.gallery-task:hover { color: var(--accent-text); }
 /* A polled cell whose value is not current greys out with its lamp: the
    number stays readable and stops claiming to be now. */
 .statusbar-cell.is-stale .statusbar-v { color: var(--text-faint); }
+/* A confirmed negative colours the word as well as the dot. A 5px dot is not
+   enough on its own at the distance this row is read from. */
+.statusbar-cell.is-bad .statusbar-v { color: var(--danger-text); }
 /* At-load cells read dimmer than polled ones on purpose — they are
    configuration, not weather. */
 .statusbar-cell.is-atload .statusbar-v { color: var(--text-dim); }
@@ -1354,6 +1363,7 @@ a.gallery-task:hover { color: var(--accent-text); }
   border-left: 1px solid var(--border-subtle);
   white-space: nowrap;
   color: var(--text-faint);
+  background: var(--bg-elevated);
 }
 .statusbar-age.is-stale { color: var(--warn-text); }
 
@@ -1416,7 +1426,9 @@ a.gallery-task:hover { color: var(--accent-text); }
 /* Collapsed: the bar becomes the pill, in the bar's own left corner. */
 .statusbar.is-collapsed {
   background: none; border-top: none;
-  height: auto; padding: 0 0 10px 12px;
+  /* 28px pill + 2px sits inside the 30px the app already reserves, so the
+     collapsed bar covers no content either. */
+  height: auto; padding: 0 0 2px 12px;
   pointer-events: none;
 }
 .statusbar.is-collapsed .statusbar-cells,
