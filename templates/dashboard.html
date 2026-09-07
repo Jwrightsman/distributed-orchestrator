@@ -12,6 +12,37 @@
 
 <a class="skip-link" href="#main">Skip to content</a>
 
+<!-- Locked screen. Shown when a private fetch answers 401 or /ws/events closes
+     4401, and it replaces the app rather than overlaying it — a shell with
+     empty tables behind a dialog is the "broken" reading this screen exists to
+     prevent. The public health line at the bottom is the proof that the server
+     is up: it comes from /status.json, which needs no credential. -->
+<div class="locked" id="locked-screen" hidden>
+  <div class="locked-panel">
+    <div class="locked-brand">
+      <span class="locked-mark" aria-hidden="true"></span>
+      <span class="locked-wordmark">MYCELIUM</span>
+    </div>
+    <h1 class="locked-title">This orchestrator is private</h1>
+    <p class="locked-lede">It is running and healthy — it just will not answer for runs, machines
+      or projects without the viewer key. Ask whoever runs it for the key.</p>
+    <form class="locked-form" id="locked-form">
+      <label class="sr-only" for="locked-key">Viewer key</label>
+      <input class="locked-input" id="locked-key" type="password" name="key"
+             placeholder="viewer key" autocomplete="current-password" spellcheck="false">
+      <button class="locked-submit" id="locked-submit" type="submit">Unlock this browser</button>
+    </form>
+    <p class="locked-note" id="locked-error" role="alert" hidden></p>
+    <p class="locked-note">The key is exchanged for a session that lasts 8 hours and is never
+      stored in this page. It signs out on its own; rotating the key signs out every browser
+      at once.</p>
+    <div class="locked-health">
+      <span class="locked-dot" aria-hidden="true"></span>
+      <span id="locked-health-line">checking the public health line…</span>
+    </div>
+  </div>
+</div>
+
 <div class="app" id="app">
   <aside class="nav" id="nav">
     <a class="nav-brand" href="/" title="Mycelium home">
@@ -49,8 +80,8 @@
       </nav>
 
       <div class="topbar-actions">
-        <span class="credit-chip" id="credit-chip" title="Credits earned by this orchestrator for pitches, local builds and reviews">
-          <span id="credit-host">—</span><span class="credit-sep" aria-hidden="true">·</span><span id="credit-value">0</span> credits
+        <span class="credit-chip" id="credit-chip" title="Contribution points earned by this orchestrator for pitches, local builds and reviews">
+          <span id="credit-host">—</span><span class="credit-sep" aria-hidden="true">·</span><span id="credit-value">0</span> points
         </span>
         <button class="btn-primary" id="focus-pitch" type="button">Pitch a task</button>
         <button class="theme-toggle" id="theme-toggle" type="button"
@@ -60,6 +91,31 @@
         </button>
       </div>
     </header>
+
+    <!-- Banners sit between the topbar and the content, so they are the first
+         thing under the view title on every view. Both are server-state, not
+         notifications: neither is dismissible, because the condition does not
+         go away by being acknowledged. -->
+    <div class="banner is-warn" id="banner-failopen" hidden>
+      <span class="banner-dot" aria-hidden="true"></span>
+      <div class="banner-text">
+        <div class="banner-head">Everything on this page is readable by anyone who can reach this address</div>
+        <div class="banner-body">No viewer key is set, so the server is serving your tasks, results,
+          projects and machine records without asking. It works this way on purpose for local
+          development and reports itself as unprotected.</div>
+      </div>
+    </div>
+
+    <div class="banner is-danger" id="banner-degraded" hidden>
+      <span class="banner-dot" aria-hidden="true"></span>
+      <div class="banner-text">
+        <div class="banner-head">The coordinator cannot write to its own records, so it is refusing to say anything happened</div>
+        <div class="banner-body">A run counts once it is written down, not once it is started — so
+          pitching answers <span class="mono">503</span> rather than showing you a run that may not
+          exist. Everything already finished stays readable at its last written state. Check the
+          disk and permissions on the state directory.</div>
+      </div>
+    </div>
 
     <main class="content" id="main" tabindex="-1">
 
@@ -168,13 +224,38 @@
 
       <!-- ── NODES ── -->
       <section id="view-nodes" aria-labelledby="tab-nodes" hidden>
-        <div class="view-head"><h2>Network nodes</h2><span class="view-sub">Machines contributing compute right now</span></div>
+        <h2 class="sr-only">Nodes</h2>
+
+        <!-- The map opens the view: the dashboard's on-camera job is the glance
+             that confirms a second machine connected. Left to right is the
+             pipeline, so the coordinator sits at the edge — planning and review
+             are its work, and the hardware doing the building belongs to other
+             people. Deterministic grid, never a force solve: a layout that
+             settles differently on each open is wrong for something recorded. -->
+        <div class="nodemap" id="nodemap">
+          <div class="nodemap-head">
+            <span class="nodemap-label">MAP</span>
+            <span class="nodemap-meta" id="nodemap-meta">—</span>
+          </div>
+          <div class="nodemap-stage" id="nodemap-stage"></div>
+          <div class="nodemap-legend" id="nodemap-legend"></div>
+          <p class="nodemap-note" id="nodemap-note"></p>
+        </div>
+
+        <div class="nodes-head">
+          <span class="nodes-summary" id="nodes-summary">—</span>
+        </div>
+
         <div id="nodes-list">
           <div class="empty-state">
             <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="18" r="2.2"/><path d="M10.5 6.8 6.5 15.8M13.5 6.8l4 9M7.4 18h9.2"/></svg></div>
-            <p>No nodes connected yet.<br>Run <code class="code-inline">python join.py http://YOUR_IP:8000</code> on another machine to join.</p>
+            <p>No machines connected yet.<br>Run <code class="code-inline">python join.py http://YOUR_IP:8000</code> on another machine to join.</p>
           </div>
         </div>
+
+        <p class="points-footnote">Points mean a nonempty, attempt-bound worker result was
+          accepted. They do not mean the candidate was selected, that validation passed, or that
+          the output is correct — and they are not money, a token, or a claim on future value.</p>
       </section>
 
       <!-- ── PROJECTS ── -->
@@ -193,7 +274,7 @@
 
       <!-- ── GUILD ── -->
       <section id="view-guild" aria-labelledby="tab-guild" hidden>
-        <div class="view-head"><h2>Guild standings</h2><span class="view-sub">Credits earned for compute, pitches and reviews</span></div>
+        <div class="view-head"><h2>Guild standings</h2><span class="view-sub">Points earned for compute, pitches and reviews</span></div>
         <div id="standings-list">
           <div class="empty-state"><p>No contributions yet.</p></div>
         </div>

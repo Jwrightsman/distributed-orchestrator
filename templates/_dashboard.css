@@ -565,12 +565,6 @@ button.node-card { cursor: pointer; }
 button.node-card:hover { border-color: var(--border-strong); background: var(--surface-hover); }
 .node-card.active { border-color: var(--accent-wash-mid); }
 
-/* Camera-visible states: glow-pulse while working, one bright flash on finish */
-.node-card.working {
-  border-color: var(--accent-glow);
-  animation: cardWorking 1.6s ease-in-out infinite;
-}
-.node-card.finished { animation: cardFinished 1.2s ease-out; }
 
 .node-name { font-weight: 700; color: var(--text); font-size: 14px; margin-bottom: 4px; }
 .node-meta { font-size: 12.5px; color: var(--text-muted); font-family: var(--mono); }
@@ -606,16 +600,6 @@ button.node-card:hover { border-color: var(--border-strong); background: var(--s
   margin-top: 16px; padding: 10px 14px;
   background: var(--accent-wash); border: 1px solid var(--accent-wash-mid);
   border-radius: var(--radius-sm); font-size: 14px; color: var(--accent-text);
-}
-.credit-flash {
-  position: absolute;
-  right: 14px; top: 50%;
-  transform: translateY(-50%);
-  font-family: var(--mono);
-  font-size: 14px; font-weight: 700;
-  color: var(--warn);
-  pointer-events: none;
-  animation: creditPop 1.8s ease-out forwards;
 }
 
 /* ── History rows ────────────────────────────────────────────── */
@@ -867,20 +851,6 @@ a.gallery-task:hover { color: var(--accent-text); }
   0%, 100% { opacity: 1; }
   50%      { opacity: 0.4; }
 }
-@keyframes cardWorking {
-  0%, 100% { box-shadow: 0 0 4px var(--accent-wash-mid); background: var(--accent-wash); }
-  50%      { box-shadow: 0 0 22px var(--accent-line); background: var(--accent-wash); }
-}
-@keyframes cardFinished {
-  0%   { box-shadow: 0 0 34px var(--accent-glow); background: var(--accent-wash-mid); border-color: var(--accent); }
-  100% { box-shadow: none; background: var(--surface); }
-}
-@keyframes creditPop {
-  0%   { opacity: 0; transform: translateY(-50%) scale(0.8); }
-  20%  { opacity: 1; transform: translateY(-50%) scale(1.1); }
-  70%  { opacity: 1; transform: translateY(-60%); }
-  100% { opacity: 0; transform: translateY(-80%); }
-}
 
 /* Someone who asks the OS to stop animation means it. index.html already
    honours this; the dashboard is the page with the pulsing node cards, the
@@ -944,4 +914,367 @@ a.gallery-task:hover { color: var(--accent-text); }
   .search-input { width: 100%; }
   .stats-bar { gap: 10px 16px; }
   .content h2 { letter-spacing: 1.4px; }
+}
+
+/* ── Locked screen and server-state banners ──────────────────────────────
+   Both exist so a private server reads as *locked* and a server that cannot
+   write to its own records reads as *refusing*, rather than either one
+   reading as a broken page. Colour here is state, never decoration: warn for
+   a deliberate configuration, danger for a coordinator that has stopped
+   being able to keep its own records. */
+
+.locked {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.locked-panel { width: 100%; max-width: 420px; }
+
+.locked-brand { display: flex; align-items: center; gap: 9px; }
+
+.locked-mark {
+  width: 9px;
+  height: 9px;
+  background: var(--mark);
+  flex-shrink: 0;
+}
+
+.locked-wordmark {
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.16em;
+  color: var(--text-dim);
+}
+
+.locked-title {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.3px;
+  margin-top: 20px;
+}
+
+.locked-lede {
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.65;
+  margin-top: 9px;
+}
+
+.locked-form {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  margin-top: 20px;
+}
+
+.locked-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 11px 13px;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--text);
+  /* 44px: this screen is reachable on a phone. */
+  min-height: 44px;
+}
+
+.locked-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.locked-submit {
+  width: 100%;
+  background: var(--accent);
+  color: var(--on-accent);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  min-height: 44px;
+}
+
+.locked-submit:hover { background: var(--accent-strong); }
+.locked-submit[disabled] { opacity: 0.6; cursor: default; }
+
+.locked-note {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.65;
+  margin-top: 14px;
+}
+
+#locked-error { color: var(--danger-text); }
+
+.locked-health {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-top: 1px solid var(--border-subtle);
+  margin-top: 18px;
+  padding-top: 14px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.locked-dot {
+  width: 6px;
+  height: 6px;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+
+.locked-dot.is-down { background: var(--danger); }
+
+/* Banners. Not dismissible: the condition does not stop being true because
+   somebody clicked an x. */
+.banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 13px 20px;
+  border-bottom: 1px solid var(--border-subtle);
+  flex-wrap: wrap;
+}
+
+.banner-dot {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  margin-top: 5px;
+}
+
+.banner-text { min-width: 0; flex: 1 1 340px; }
+
+.banner-head { font-size: 12.5px; font-weight: 500; }
+
+.banner-body {
+  font-size: 12.5px;
+  line-height: 1.6;
+  margin-top: 3px;
+}
+
+.banner-body .mono { font-family: var(--mono); }
+
+.banner.is-warn { background: var(--warn-wash); }
+.banner.is-warn .banner-dot { background: var(--warn); }
+.banner.is-warn .banner-head { color: var(--warn-text); }
+.banner.is-warn .banner-body { color: var(--warn-body); }
+
+.banner.is-danger { background: var(--danger-wash); }
+.banner.is-danger .banner-dot { background: var(--danger); }
+.banner.is-danger .banner-head { color: var(--danger-text); }
+.banner.is-danger .banner-body { color: var(--danger-body); }
+
+/* ── Nodes view: map, then rows ──────────────────────────────────────────
+   Rows rather than an eight-column table. A table wins when you scan many
+   rows for an outlier; there are 2-5 machines here and each is an entity you
+   read individually — whose machine, what is it building, can its identity be
+   trusted. The live-status line has to have room to be a sentence, which no
+   column width allows. */
+
+.nodemap {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  margin-bottom: 16px;
+}
+
+.nodemap-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.nodemap-label {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.13em;
+  color: var(--text-faint);
+}
+
+.nodemap-meta { font-family: var(--mono); font-size: 11px; color: var(--text-muted); }
+
+.nodemap-stage { padding: 8px 14px; overflow-x: auto; }
+.nodemap-stage svg { width: 100%; min-width: 460px; height: auto; display: block; }
+
+.nodemap-empty {
+  padding: 22px 4px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+/* Squares, not circles, and never colour alone — every square is paired with
+   a word in the legend and in its row. */
+.nodemap-square { fill: var(--text-muted); }
+.nodemap-square.is-coordinator { fill: var(--mark); }
+.nodemap-square.is-building { fill: var(--accent); }
+.nodemap-square.is-idle { fill: var(--slate); }
+.nodemap-square.is-revoked { fill: var(--danger); }
+.nodemap-square.is-down { fill: var(--warn); }
+
+.nodemap-spine { stroke: var(--border-strong); stroke-width: 1; }
+.nodemap-link { stroke: var(--border); stroke-width: 1; }
+
+.nodemap-label-text {
+  fill: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.nodemap-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  padding: 0 14px 10px;
+}
+
+.nodemap-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.nodemap-swatch { width: 8px; height: 8px; flex-shrink: 0; background: var(--text-muted); }
+.nodemap-swatch.is-coordinator { background: var(--mark); }
+.nodemap-swatch.is-building { background: var(--accent); }
+.nodemap-swatch.is-idle { background: var(--slate); }
+.nodemap-swatch.is-revoked { background: var(--danger); }
+
+.nodemap-note {
+  padding: 0 14px 12px;
+  font-size: 12px;
+  color: var(--text-faint);
+  line-height: 1.6;
+  max-width: 70em;
+}
+
+.nodes-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.nodes-summary { font-size: 12.5px; color: var(--text-muted); }
+
+.node-row {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  margin-bottom: 8px;
+}
+
+.node-row-main { flex: 1 1 340px; min-width: 0; }
+.node-row-figures {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.node-ident { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+
+/* Filled square + colour + word. Three signals for one state. */
+.node-square { width: 9px; height: 9px; flex-shrink: 0; background: var(--slate); }
+.node-square.is-building { background: var(--accent); }
+.node-square.is-idle { background: var(--slate); }
+.node-square.is-revoked { background: var(--danger); }
+.node-square.is-down { background: var(--warn); }
+
+.node-id { font-size: 13px; font-weight: 600; color: var(--text); }
+
+.node-state { font-family: var(--mono); font-size: 11px; color: var(--text-muted); }
+.node-state.is-building { color: var(--accent-text); }
+.node-state.is-revoked { color: var(--danger-text); }
+.node-state.is-down { color: var(--warn-text); }
+
+.node-spec { font-size: 11.5px; color: var(--text-muted); margin-top: 5px; }
+
+/* The reason rows exist: this is allowed to be a sentence. */
+.node-live { font-size: 12.5px; color: var(--text-dim); line-height: 1.6; margin-top: 6px; }
+
+.node-kv, .node-evidence {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 7px;
+  font-size: 11.5px;
+}
+
+.node-k, .node-evidence {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+}
+
+.node-v { color: var(--text-dim); }
+.node-v.is-ok { color: var(--accent-text); }
+.node-v.is-warn { color: var(--warn-text); }
+.node-v.is-revoked { color: var(--danger-text); }
+.node-v.is-absent { color: var(--text-faint); font-style: italic; }
+
+.node-note, .node-evidence-note { font-size: 11px; color: var(--text-faint); }
+.node-evidence-v { font-family: var(--mono); color: var(--text-dim); }
+.node-evidence.is-none .node-evidence-v { color: var(--text-faint); }
+
+.node-fig-n {
+  display: block;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.node-fig-k {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+}
+
+.node-fig-actions { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+
+.node-fig-link {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  text-decoration: none;
+}
+
+.node-fig-link:hover { color: var(--accent-text); }
+
+/* Travels with the POINTS column wherever it goes. */
+.points-footnote {
+  margin-top: 14px;
+  font-size: 12px;
+  color: var(--text-faint);
+  line-height: 1.6;
+  max-width: 70em;
+}
+
+@media (max-width: 720px) {
+  .node-row-figures { gap: 14px; }
+  .nodemap-note, .points-footnote { font-size: 11.5px; }
 }

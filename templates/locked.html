@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Private — Mycelium</title>
+<meta name="robots" content="noindex">
+<!-- THEME -->
+<style>
+  /* The page a browser gets when it asks for a private page without a
+     credential. It is served with 401 and WWW-Authenticate, exactly as before
+     — only the body changed, from a JSON error object to something a person
+     can act on. No route became public and no data is on this page.
+
+     It is standalone rather than the dashboard shell because the shell would
+     start thirteen fetches that are all going to 401, to render tables it
+     cannot fill. */
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  [hidden] { display: none !important; }
+
+  .panel { width: 100%; max-width: 420px; }
+
+  .brand { display: flex; align-items: center; gap: 9px; }
+  .mark { width: 9px; height: 9px; background: var(--mark); flex-shrink: 0; }
+  .wordmark {
+    font-family: var(--mono); font-size: 12px;
+    letter-spacing: 0.16em; color: var(--text-dim);
+  }
+
+  h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.3px; margin-top: 20px; }
+  .lede { font-size: 13px; color: var(--text-muted); line-height: 1.65; margin-top: 9px; }
+
+  form { display: flex; flex-direction: column; gap: 9px; margin-top: 20px; }
+
+  input {
+    width: 100%;
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    padding: 11px 13px;
+    font-family: var(--mono); font-size: 13px;
+    color: var(--text);
+    /* 44px — this screen is reachable on a phone. */
+    min-height: 44px;
+  }
+  input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  button {
+    width: 100%;
+    background: var(--accent);
+    color: var(--on-accent);
+    border: none; border-radius: var(--radius-sm);
+    padding: 12px 14px;
+    font-size: 13px; font-weight: 600;
+    cursor: pointer; min-height: 44px;
+  }
+  button:hover { background: var(--accent-strong); }
+  button[disabled] { opacity: .6; cursor: default; }
+
+  .note { font-size: 12px; color: var(--text-muted); line-height: 1.65; margin-top: 14px; }
+  #error { color: var(--danger-text); }
+
+  .health {
+    display: flex; align-items: center; gap: 8px;
+    border-top: 1px solid var(--border-subtle);
+    margin-top: 18px; padding-top: 14px;
+    font-family: var(--mono); font-size: 11px; color: var(--text-faint);
+  }
+  .dot { width: 6px; height: 6px; background: var(--accent); flex-shrink: 0; }
+  .dot.is-down { background: var(--danger); }
+
+  .sr-only {
+    position: absolute; width: 1px; height: 1px;
+    padding: 0; margin: -1px; overflow: hidden;
+    clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+  }
+</style>
+</head>
+<body>
+
+<main class="panel">
+  <div class="brand">
+    <span class="mark" aria-hidden="true"></span>
+    <span class="wordmark">MYCELIUM</span>
+  </div>
+
+  <h1>This orchestrator is private</h1>
+  <p class="lede">It is running and healthy — it just will not answer for runs, machines or
+    projects without the viewer key. Ask whoever runs it for the key.</p>
+
+  <form id="unlock">
+    <label class="sr-only" for="key">Viewer key</label>
+    <input id="key" type="password" name="key" placeholder="viewer key"
+           autocomplete="current-password" spellcheck="false">
+    <button id="submit" type="submit">Unlock this browser</button>
+  </form>
+
+  <p class="note" id="error" role="alert" hidden></p>
+  <p class="note">The key is exchanged for a session that lasts 8 hours and is never stored in
+    this page. It signs out on its own; rotating the key signs out every browser at once.</p>
+
+  <div class="health">
+    <span class="dot" id="dot" aria-hidden="true"></span>
+    <span id="health-line">checking the public health line…</span>
+  </div>
+</main>
+
+<script>
+  // The claim this page makes is "the server is up, it just will not answer for
+  // private things". /status.json is public, so it can back that claim.
+  (async function () {
+    var line = document.getElementById('health-line');
+    var dot = document.getElementById('dot');
+    try {
+      var d = await (await fetch('/status.json')).json();
+      var machines = d.nodes_online === 1 ? '1 machine online' : d.nodes_online + ' machines online';
+      line.textContent = 'server up · ' + machines + ' · ' +
+        (d.status === 'ok' ? 'inference ready' : 'inference offline');
+      if (d.status !== 'ok') dot.classList.add('is-down');
+    } catch (e) {
+      // Never claim the server is up if the public endpoint did not answer.
+      line.textContent = 'could not reach the public status endpoint';
+      dot.classList.add('is-down');
+    }
+  })();
+
+  document.getElementById('unlock').addEventListener('submit', async function (e) {
+    e.preventDefault();
+    var field = document.getElementById('key');
+    var btn = document.getElementById('submit');
+    var err = document.getElementById('error');
+    var key = (field.value || '').trim();
+    if (!key) return;
+    err.hidden = true;
+    btn.disabled = true;
+    btn.textContent = 'Unlocking…';
+    try {
+      // The key goes straight to the session endpoint and is never stored
+      // here; what comes back is an HttpOnly cookie this script cannot read.
+      var resp = await fetch('/v1/viewer/session', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        credentials: 'same-origin',
+        body: JSON.stringify({viewer_key: key}),
+      });
+      if (resp.ok) { field.value = ''; location.reload(); return; }
+      err.textContent = resp.status === 401
+        ? 'That key was not accepted.'
+        : resp.status === 409
+          ? 'This server has no viewer key configured, so there is nothing to unlock.'
+          : 'The server answered ' + resp.status + '.';
+      err.hidden = false;
+    } catch (e2) {
+      err.textContent = 'Could not reach the server to exchange the key.';
+      err.hidden = false;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Unlock this browser';
+      field.focus();
+    }
+  });
+</script>
+</body>
+</html>

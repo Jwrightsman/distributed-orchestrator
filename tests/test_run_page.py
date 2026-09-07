@@ -94,7 +94,12 @@ def test_open_graph_tags_describe_the_actual_run(client):
         assert tag in body, f"missing {tag} — the link preview will be blank"
     desc = body.split('name="description" content="')[1].split('"')[0]
     assert "2 subtasks" in desc
-    assert "volunteer machines" in desc, "a distributed run should say so in its preview"
+    # The claim under test is that a distributed run says where it ran, not
+    # that it uses any particular wording. "volunteer machines" was the wording
+    # until it became prohibited language — see docs/design/HANDOFF-DELTA.md
+    # §4.3 — so this asserts the fact and lets the vocabulary move.
+    assert "invited machines" in desc, "a distributed run should say so in its preview"
+    assert "volunteer" not in desc, "prohibited language reached a link preview"
     assert "5m 05s" in desc, "the preview does not carry the real duration"
 
 

@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Pitch the swarm a task — Mycelium</title>
-<meta name="description" content="Describe a task in plain English. A planner splits it up, builder agents on volunteer machines write the pieces, and a reviewer assembles the result.">
+<meta name="description" content="Describe a task in plain English. A planner splits it up, builder agents on invited machines write the pieces, and a reviewer assembles the result.">
 <!-- THEME -->
 <style>
   /* Written phone-first, deliberately: this is the page most likely to be
@@ -263,7 +263,7 @@
   <h1>Pitch the swarm a task</h1>
   <p class="sub">
     Describe something you want built. A planner splits it into pieces, builder
-    agents write them on <b>volunteer machines running local AI models</b>, and a
+    agents write them on <b>invited machines running local AI models</b>, and a
     reviewer assembles the result. Expect <b>minutes, not seconds</b>.
   </p>
 
@@ -332,7 +332,7 @@
         return;
       }
       jobId = body.job_id;
-      say('The swarm is on it — this takes a few minutes on volunteer hardware.');
+      say('The swarm is on it — this takes a few minutes on invited hardware.');
       $('stages').hidden = false;
       setStage('plan');
       listen();

@@ -23,7 +23,7 @@ import time
 from typing import Any
 
 from fastapi import HTTPException, Request, WebSocket
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import Response
 
@@ -210,6 +210,37 @@ def is_public_or_separately_authenticated(method: str, path: str) -> bool:
     return False
 
 
+def _wants_html(request: Request) -> bool:
+    """Whether this is a browser navigating, rather than a client fetching.
+
+    Only GET, and only when HTML is preferred over JSON. A fetch() from the
+    console sends `Accept: */*` and must keep getting the JSON body it parses.
+    """
+    if request.method.upper() != "GET":
+        return False
+    accept = request.headers.get("Accept", "")
+    if "text/html" not in accept:
+        return False
+    return accept.index("text/html") < (
+        accept.index("application/json") if "application/json" in accept else len(accept)
+    )
+
+
+def _locked_page() -> str | None:
+    """The locked screen, or None if it cannot be read.
+
+    Imported lazily: access_control is imported by modules that must not depend
+    on the template layer, and a missing template must degrade to the JSON body
+    rather than turning an auth refusal into a 500.
+    """
+    try:
+        from dashboard import render
+
+        return render("locked.html")
+    except Exception:  # noqa: BLE001 - any template failure falls back to JSON
+        return None
+
+
 class ViewerAccessMiddleware(BaseHTTPMiddleware):
     """Protect every route not present in the deliberate public allowlist."""
 
@@ -220,6 +251,20 @@ class ViewerAccessMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         if request_viewer_authorized(request):
             return await call_next(request)
+
+        # Still 401, still WWW-Authenticate, still nothing served. Only the body
+        # changes: a browser that navigated here gets a page saying the server
+        # is private and offering to exchange a key, instead of a raw JSON error
+        # object that reads as a broken site. No route becomes public and the
+        # page carries no data of its own.
+        if _wants_html(request):
+            body = _locked_page()
+            if body is not None:
+                return HTMLResponse(
+                    body,
+                    status_code=401,
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
         return JSONResponse(
             status_code=401,
             content={"detail": "Viewer authentication required"},
