@@ -48,7 +48,8 @@ TEMPLATES = Path(__file__).resolve().parent.parent / "templates"
 STANDALONE = ("index.html", "dashboard.html", "try.html", "locked.html")
 
 # Every template and partial, checked as raw source.
-SOURCES = STANDALONE + ("run.html", "status.html", "_dashboard.css", "_dashboard.js")
+SOURCES = STANDALONE + ("run.html", "status.html", "_dashboard.css", "_dashboard.js",
+           "_status_model.js")
 
 # The modules that build user-visible HTML in Python. Every phrase this suite
 # caught on its first run was in one of these rather than in a template, which

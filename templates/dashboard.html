@@ -36,13 +36,20 @@
     <p class="locked-note">The key is exchanged for a session that lasts 8 hours and is never
       stored in this page. It signs out on its own; rotating the key signs out every browser
       at once.</p>
+    <!-- The same derived state as the status bar, from the same poller. It
+         used to derive its own from /status.json, which is how a locked
+         console could report "inference ready" while the bar said otherwise.
+         /health is public, so a locked browser can still read it — and this
+         browser's 401 contributes nothing to the lamp: the coordinator
+         refusing you is not the coordinator being unwell. -->
     <div class="locked-health">
-      <span class="locked-dot" aria-hidden="true"></span>
-      <span id="locked-health-line">checking the public health line…</span>
+      <i class="lamp is-unknown" id="locked-lamp" aria-hidden="true"></i>
+      <span id="locked-health-line">no answer · no answer for 0s</span>
     </div>
   </div>
 </div>
 
+<div class="shell">
 <div class="app" id="app">
   <aside class="nav" id="nav">
     <a class="nav-brand" href="/" title="Mycelium home">
@@ -57,10 +64,6 @@
       <button class="nav-item" id="tab-projects" type="button" data-tab="projects" title="Projects"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span class="nav-label">Projects</span></button>
       <button class="nav-item" id="tab-guild" type="button" data-tab="guild" title="Guild"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l2.6 5.6 6.4.8-4.7 4.3 1.2 6.3L12 17l-5.5 3 1.2-6.3L3 9.4l6.4-.8z"/></svg><span class="nav-label">Guild</span></button>
     </nav>
-    <div class="nav-foot">
-      <span class="stat-status" id="nav-status"><i aria-hidden="true"></i>checking</span>
-      <span class="nav-label nav-foot-sub" id="nav-model">—</span>
-    </div>
   </aside>
 
   <div class="app-body">
@@ -92,28 +95,19 @@
       </div>
     </header>
 
-    <!-- Banners sit between the topbar and the content, so they are the first
-         thing under the view title on every view. Both are server-state, not
-         notifications: neither is dismissible, because the condition does not
-         go away by being acknowledged. -->
-    <div class="banner is-warn" id="banner-failopen" hidden>
-      <span class="banner-dot" aria-hidden="true"></span>
-      <div class="banner-text">
-        <div class="banner-head">Everything on this page is readable by anyone who can reach this address</div>
-        <div class="banner-body">No viewer key is set, so the server is serving your tasks, results,
-          projects and machine records without asking. It works this way on purpose for local
-          development and reports itself as unprotected.</div>
-      </div>
-    </div>
+    <!-- One banner, filled by the status model. It sits between the topbar and
+         the content, so it is the first thing under the view title on every
+         view. Server state, not a notification: it is not dismissible, because
+         the condition does not go away by being acknowledged.
 
-    <div class="banner is-danger" id="banner-degraded" hidden>
+         Four states earn words, and only four. `recovering` and `ok` get none,
+         and neither does a single dropped poll — a banner that fires on one
+         missed poll is a banner nobody reads by the second week. -->
+    <div class="banner" id="banner" role="status" hidden>
       <span class="banner-dot" aria-hidden="true"></span>
       <div class="banner-text">
-        <div class="banner-head">The coordinator cannot write to its own records, so it is refusing to say anything happened</div>
-        <div class="banner-body">A run counts once it is written down, not once it is started — so
-          pitching answers <span class="mono">503</span> rather than showing you a run that may not
-          exist. Everything already finished stays readable at its last written state. Check the
-          disk and permissions on the state directory.</div>
+        <div class="banner-head" id="banner-head"></div>
+        <div class="banner-body" id="banner-body"></div>
       </div>
     </div>
 
@@ -284,6 +278,88 @@
   </div>
 </div>
 
+<!-- ── Status bar ────────────────────────────────────────────────────────
+     One poller, four facets, one derived severity. It replaces the fail-open
+     banner, the persistence-degraded banner, the locked screen's status line
+     and the rail's inference line, all four of which used to derive their own
+     truth and could disagree.
+
+     Two kinds of cell:
+       * polled  — INFERENCE, NODES, RUNNING, QUEUED. Each carries a lamp,
+                   because each is a claim about this second.
+       * at-load — MODE, LOCK, TRACING, EVIDENCE. No lamp, on purpose: none of
+                   them can change while the process runs, so a lamp beside
+                   them would be a freshness claim about a constant.
+
+     The age of the last answer is in the row at all times and is never
+     hidden by a narrow window. There is no utilization figure anywhere:
+     capability descriptors *claim* CPU, memory and GPU at registration and
+     nothing samples them, so a load line here would be a drawing rather than
+     a measurement. -->
+<div class="statusbar" id="statusbar">
+  <!-- The collapsed form. Same derived state, nothing new. -->
+  <button class="statuspill" id="statuspill" type="button"
+          title="Expand the status bar" aria-expanded="false" aria-controls="statusbar">
+    <i class="lamp is-unknown" id="statuspill-lamp" aria-hidden="true"></i>
+    <span class="statuspill-word is-unknown" id="statuspill-word">no answer</span>
+    <span class="statuspill-age" id="statuspill-age">no answer for 0s</span>
+  </button>
+
+  <div class="statusbar-severity">
+    <i class="lamp is-lg is-unknown" id="statusbar-lamp" aria-hidden="true"></i>
+    <span class="statusbar-word is-unknown" id="statusbar-word">no answer</span>
+  </div>
+
+  <div class="statusbar-cells">
+    <div class="statusbar-cell" id="cell-inference">
+      <i class="lamp is-unknown" aria-hidden="true"></i>
+      <span class="statusbar-k">INFERENCE</span>
+      <span class="statusbar-v" id="cell-inference-v">&mdash;</span>
+      <span class="statusbar-k" id="cell-model">&middot; <!--SLOT:STATUS_MODEL_NAME--></span>
+    </div>
+    <div class="statusbar-cell" id="cell-nodes">
+      <i class="lamp is-unknown" aria-hidden="true"></i>
+      <span class="statusbar-k">NODES</span>
+      <span class="statusbar-v" id="cell-nodes-v">&mdash;</span>
+    </div>
+    <div class="statusbar-cell" id="cell-running">
+      <i class="lamp is-unknown" aria-hidden="true"></i>
+      <span class="statusbar-k">RUNNING</span>
+      <span class="statusbar-v" id="cell-running-v">&mdash;</span>
+    </div>
+    <div class="statusbar-cell" id="cell-queued">
+      <i class="lamp is-unknown" aria-hidden="true"></i>
+      <span class="statusbar-k">QUEUED</span>
+      <span class="statusbar-v is-quiet" id="cell-queued-v">&mdash;</span>
+    </div>
+
+    <!-- No lamp below this line. -->
+    <div class="statusbar-cell is-atload">
+      <span class="statusbar-k">MODE</span>
+      <span class="statusbar-v" id="cell-mode-v">&mdash;</span>
+    </div>
+    <div class="statusbar-cell is-atload">
+      <span class="statusbar-k">LOCK</span>
+      <span class="statusbar-v" id="cell-lock-v">&mdash;</span>
+    </div>
+    <div class="statusbar-cell is-atload">
+      <span class="statusbar-k">TRACING</span>
+      <span class="statusbar-v"><!--SLOT:STATUS_TRACING--></span>
+    </div>
+    <div class="statusbar-cell is-atload">
+      <span class="statusbar-k">EVIDENCE</span>
+      <span class="statusbar-v"><!--SLOT:STATUS_EVIDENCE--></span>
+    </div>
+  </div>
+
+  <div class="statusbar-age" id="statusbar-age">
+    <span id="statusbar-age-text">no answer for 0s</span>
+    <button class="statusbar-collapse" id="statusbar-collapse" type="button"
+            title="Collapse the status bar" aria-expanded="true" aria-controls="statusbar">&#8964;</button>
+  </div>
+</div>
+</div>
+
 <!-- Dialogs live outside the app shell: they cover it, they are not part of
      it. Nested inside the main landmark they were content of the current view. -->
 <div id="node-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="node-modal-title" hidden>
@@ -316,6 +392,7 @@
   </div>
 </div>
 
+<!-- STATUS_MODEL_JS -->
 <!-- DASHBOARD_JS -->
 </body>
 </html>

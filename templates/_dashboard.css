@@ -102,12 +102,10 @@ body {
   border-radius: 20px; padding: 1px 7px; min-width: 22px; text-align: center;
 }
 
-.nav-foot {
-  margin-top: auto; padding: 14px 16px;
-  border-top: 1px solid var(--border-subtle);
-  display: flex; flex-direction: column; gap: 5px;
-}
-.nav-foot-sub { font-family: var(--mono); font-size: 11px; color: var(--text-muted); }
+/* The rail's inference line used to live here. It was one of four indicators
+   deriving their own truth, and the only one whose disagreement with the
+   others was on screen at all times. The status bar replaced it; it was
+   deleted rather than duplicated, so there is no .nav-foot. */
 
 /* Scrim behind the mobile drawer. Without it the drawer floats over live
    content with no way back except picking a destination. */
@@ -521,10 +519,8 @@ body {
   border-radius: 4px; padding: 2px 8px;
   border: 1px solid transparent; white-space: nowrap;
 }
-.badge.is-pass       { color: var(--accent-text); background: var(--accent-wash); border-color: var(--accent-wash-mid); }
-.badge.is-needs-work { color: var(--warn); background: var(--highlight-wash); border-color: var(--highlight-line); }
-.badge.is-fail       { color: var(--danger); background: var(--danger-wash); border-color: var(--danger-line); }
-.badge.is-unknown    { color: var(--text-muted); background: var(--surface); border-color: var(--border); }
+/* The rating variants moved to .verdict, which carries five values instead
+   of three-and-a-blank. .badge keeps only the placement badge. */
 .badge.is-dist {
   color: var(--accent-text); background: var(--accent-wash);
   border-color: var(--accent-wash-mid);
@@ -1026,14 +1022,9 @@ a.gallery-task:hover { color: var(--accent-text); }
   color: var(--text-faint);
 }
 
-.locked-dot {
-  width: 6px;
-  height: 6px;
-  background: var(--accent);
-  flex-shrink: 0;
-}
-
-.locked-dot.is-down { background: var(--danger); }
+/* The locked screen's dot became a .lamp, because a two-state dot could say
+   up and down but had no way to say "no answer" — and a locked console is
+   exactly where that third value has to be sayable. */
 
 /* Banners. Not dismissible: the condition does not stop being true because
    somebody clicked an x. */
@@ -1069,6 +1060,13 @@ a.gallery-task:hover { color: var(--accent-text); }
 .banner.is-warn .banner-dot { background: var(--warn); }
 .banner.is-warn .banner-head { color: var(--warn-text); }
 .banner.is-warn .banner-body { color: var(--warn-body); }
+
+/* Silence is neither warn nor danger: nothing is broken, the console simply
+   does not know. Design section 05, "SILENT 60s". */
+.banner.is-quiet { background: var(--surface); }
+.banner.is-quiet .banner-dot { background: var(--text-faint); }
+.banner.is-quiet .banner-head { color: var(--text); }
+.banner.is-quiet .banner-body { color: var(--text-muted); }
 
 .banner.is-danger { background: var(--danger-wash); }
 .banner.is-danger .banner-dot { background: var(--danger); }
@@ -1277,4 +1275,211 @@ a.gallery-task:hover { color: var(--accent-text); }
 @media (max-width: 720px) {
   .node-row-figures { gap: 14px; }
   .nodemap-note, .points-footnote { font-size: 11.5px; }
+}
+
+/* ── Status bar ──────────────────────────────────────────────────────────
+   Ported from docs/design/status-model-2026-09-07 §02 and §04.
+
+   30px, pinned below the rail and the view and spanning both. Two kinds of
+   cell, told apart by whether they carry a lamp: polled facts do, facts read
+   once at page load do not. A cell with no lamp is making no claim about this
+   second, and that distinction is the whole point of the row.
+
+   Shape carries the third value. A filled square is a fresh answer, a hollow
+   square is no answer, and colour only says *which* answer — so the state
+   survives greyscale, video compression, and a reader who does not see green.
+   Never colour alone. */
+
+.shell {
+  /* --bar-h is a length, not a colour, so it belongs here rather than in the
+     theme: nothing outside this file needs to know how tall the bar is. */
+  --bar-h: 30px;
+}
+
+.statusbar {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  z-index: 45;
+  display: flex;
+  align-items: stretch;
+  height: var(--bar-h);
+  background: var(--bg-elevated);
+  border-top: 1px solid var(--border);
+  font-family: var(--mono);
+  /* 11px floor. The console is filmed at the nodes-connected glance. */
+  font-size: 11px;
+}
+
+/* Nothing in the app hides behind the bar. */
+.app { padding-bottom: 30px; }
+.nav { height: calc(100vh - 30px); }
+
+.statusbar-severity {
+  display: flex; align-items: center; gap: 7px;
+  padding: 0 11px; flex-shrink: 0;
+  border-right: 1px solid var(--border-subtle);
+}
+.statusbar-word { white-space: nowrap; }
+
+/* The strip that scrolls sideways when nine cells do not fit. The severity
+   lamp and the age never scroll: whatever the width, the reader can see what
+   the console claims and how old the claim is. */
+.statusbar-cells {
+  display: flex; align-items: stretch;
+  flex: 1; min-width: 0;
+  overflow-x: auto; overflow-y: hidden;
+  scrollbar-width: none;
+}
+.statusbar-cells::-webkit-scrollbar { height: 0; }
+
+.statusbar-cell {
+  display: flex; align-items: center; gap: 6px;
+  padding: 0 11px; flex-shrink: 0;
+  border-right: 1px solid var(--border-subtle);
+  white-space: nowrap;
+}
+.statusbar-k { letter-spacing: 0.1em; color: var(--text-faint); }
+.statusbar-v { color: var(--text); }
+.statusbar-v.is-quiet { color: var(--text-muted); }
+/* A polled cell whose value is not current greys out with its lamp: the
+   number stays readable and stops claiming to be now. */
+.statusbar-cell.is-stale .statusbar-v { color: var(--text-faint); }
+/* At-load cells read dimmer than polled ones on purpose — they are
+   configuration, not weather. */
+.statusbar-cell.is-atload .statusbar-v { color: var(--text-dim); }
+
+.statusbar-age {
+  display: flex; align-items: center; gap: 10px;
+  margin-left: auto; padding: 0 11px; flex-shrink: 0;
+  border-left: 1px solid var(--border-subtle);
+  white-space: nowrap;
+  color: var(--text-faint);
+}
+.statusbar-age.is-stale { color: var(--warn-text); }
+
+.statusbar-collapse {
+  background: none; border: none; cursor: pointer;
+  padding: 0 2px; line-height: 1;
+  font-family: var(--mono); font-size: 11px;
+  color: var(--text-muted);
+}
+.statusbar-collapse:hover { color: var(--text); }
+
+/* ── The lamp ────────────────────────────────────────────────────────────
+   One class per state, and the hollow one is the only one with no fill. That
+   is deliberate and is asserted by tests/test_status_bar.py: if `unknown`
+   ever gains a background, not-heard-back stops surviving greyscale. */
+.lamp {
+  width: 5px; height: 5px; flex-shrink: 0;
+  border: 1px solid var(--border-strong);
+  background: var(--border-strong);
+}
+.lamp.is-lg { width: 6px; height: 6px; }
+.lamp.is-ok      { background: var(--accent); border-color: var(--accent); }
+.lamp.is-warn    { background: var(--warn);   border-color: var(--warn); }
+.lamp.is-bad     { background: var(--danger); border-color: var(--danger); }
+.lamp.is-unknown { background: transparent;   border-color: var(--text-faint); }
+
+.statusbar-severity .statusbar-word.is-ok      { color: var(--accent-text); }
+.statusbar-severity .statusbar-word.is-warn    { color: var(--warn-text); }
+.statusbar-severity .statusbar-word.is-bad     { color: var(--danger-text); }
+.statusbar-severity .statusbar-word.is-unknown { color: var(--text-muted); }
+
+/* ── The ambient pill ────────────────────────────────────────────────────
+   The bar collapsed: one lamp, one word, one age, the same derived state and
+   nothing new. 28px in the console and mouse-only; 44px on a page a stranger
+   might open on a phone, where it is the only tappable thing in the corner.
+   It sits in the corner opposite the primary action, so it never covers one. */
+.statuspill {
+  display: inline-flex; align-items: center; gap: 8px;
+  height: 28px; padding: 0 11px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--lift);
+  font-family: var(--mono); font-size: 11px;
+  cursor: pointer;
+}
+.statuspill.is-public {
+  height: 44px; padding: 0 15px; border-radius: 22px;
+  gap: 9px; cursor: default;
+}
+.statuspill .lamp { width: 6px; height: 6px; }
+.statuspill.is-public .lamp { width: 7px; height: 7px; }
+.statuspill-word.is-ok      { color: var(--accent-text); }
+.statuspill-word.is-warn    { color: var(--warn-text); }
+.statuspill-word.is-bad     { color: var(--danger-text); }
+.statuspill-word.is-unknown { color: var(--text-muted); }
+.statuspill-age { color: var(--text-faint); }
+.statuspill-age.is-stale { color: var(--warn-text); }
+
+/* Collapsed: the bar becomes the pill, in the bar's own left corner. */
+.statusbar.is-collapsed {
+  background: none; border-top: none;
+  height: auto; padding: 0 0 10px 12px;
+  pointer-events: none;
+}
+.statusbar.is-collapsed .statusbar-cells,
+.statusbar.is-collapsed .statusbar-severity,
+.statusbar.is-collapsed .statusbar-age { display: none; }
+.statusbar.is-collapsed .statuspill { pointer-events: auto; }
+.statusbar:not(.is-collapsed) .statuspill { display: none; }
+
+@media (max-width: 900px) {
+  /* The drawer slides over a full-height rail again once the bar is not
+     sitting under it. */
+  .nav { height: 100vh; }
+}
+
+@media (max-width: 560px) {
+  /* The lamp, the word and the age keep their room; the cells give theirs up
+     to the scroll strip. */
+  .statusbar-severity, .statusbar-cell, .statusbar-age { padding: 0 8px; }
+}
+
+/* ── Run verdict chips ───────────────────────────────────────────────────
+   Five values, no sixth, never a percentage. UNCHECKED is not a softer PASS:
+   it means the mechanical check did not run to a verdict, so an empty problem
+   list beside it says "not checked", not "checked clean". */
+.verdict {
+  display: inline-flex; align-items: center; gap: 6px;
+  border-radius: 3px; padding: 1px 7px;
+  font-family: var(--mono); font-size: 11px;
+  border: 1px solid var(--border-strong);
+  color: var(--text-muted);
+  margin-right: 4px;
+  white-space: nowrap;
+}
+.verdict .lamp { border-color: var(--border-strong); background: var(--border-strong); }
+.verdict.is-pass {
+  color: var(--accent-text);
+  background: var(--accent-wash); border-color: var(--accent-dim);
+}
+.verdict.is-pass .lamp { background: var(--accent); border-color: var(--accent); }
+.verdict.is-needs-work {
+  color: var(--warn-text);
+  background: var(--warn-wash); border-color: var(--warn-line);
+}
+.verdict.is-needs-work .lamp { background: var(--warn); border-color: var(--warn); }
+.verdict.is-fail {
+  color: var(--danger-text);
+  background: var(--danger-wash); border-color: var(--danger-line);
+}
+.verdict.is-fail .lamp { background: var(--danger); border-color: var(--danger); }
+/* Both of these are deliberately colourless: neither is a verdict about the
+   work, and giving either one a tone would make it read as a soft PASS. */
+.verdict.is-unchecked  { color: var(--text-muted); background: none; border-color: var(--border-strong); }
+.verdict.is-no-verdict { color: var(--text-muted); background: none; border-color: var(--border-strong); }
+
+/* The prose that travels with UNCHECKED. The distinction routes_run.py
+   already renders correctly; this is the same sentence in the modal. */
+.precheck-note {
+  font-size: 12px; color: var(--text-muted);
+  line-height: 1.6; margin-top: 8px;
+}
+.problem-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.problem-chip {
+  background: var(--warn-wash); border: 1px solid var(--warn-line);
+  border-radius: 4px; padding: 3px 10px;
+  font-family: var(--mono); font-size: 12px; color: var(--warn-text);
 }
