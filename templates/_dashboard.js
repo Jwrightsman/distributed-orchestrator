@@ -608,10 +608,6 @@ function renderStatus() {
     pillAge.classList.toggle('is-stale', d.ageStale);
   }
 
-  /* NODES, RUNNING and QUEUED are counts the answer carried rather than
-     facets of their own, so their freshness is the link's. `statusFresh`
-     narrows that for the two that come from /metrics: a 401 there means those
-     two are not current even while /health is answering. */
   /* `ready` and `offline` are the confirmed states, so the word follows the
      facet rather than the last payload. While the facet is unknown the last
      confirmed word is held and greyed, exactly like the counts. */
@@ -621,6 +617,10 @@ function renderStatus() {
     statusText.inference = 'offline';
   }
 
+  /* NODES, RUNNING and QUEUED are counts the answer carried rather than facets
+     of their own, so their freshness is the link's. `statusFresh` narrows that
+     for the two that come from /metrics: a 401 there means those two are not
+     current even while /health is answering. */
   const served = d.answering ? (d.recovering.link ? 'recovering' : 'good') : 'unknown';
   const cellState = (key, state) => (statusFresh[key] ? state : 'unknown');
   paintCell('cell-inference', 'cell-inference-v',
