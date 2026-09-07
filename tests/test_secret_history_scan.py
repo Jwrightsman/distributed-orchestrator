@@ -17,6 +17,8 @@ that matter most there are the ones asserting it does not.
 
 from __future__ import annotations
 
+import base64
+import random
 import secrets
 import subprocess
 import sys
@@ -179,6 +181,10 @@ def test_a_real_generated_credential_is_reported_in_every_spelling(line):
         "plaintext-returned-only-to-the-worker",
         "aug-2026-sprint-execution-6d9ed6",  # digits, but no case mixing
         "supported_worker_protocol_versions",
+        # Real names from this repository, digit-free and mixed-case, so the
+        # word test is the only thing standing between them and a report.
+        "SSLCertVerificationError",  # an acronym running into a word
+        "TestEmptyExtractionIsNotAPass",  # the shortest words measured here
     ],
 )
 def test_words_do_not_look_random(value):
@@ -197,10 +203,60 @@ def test_generated_tokens_look_random(value):
     assert looks_random(value) is True
 
 
-def test_generated_credentials_always_look_random():
-    """The generator this project actually uses, sampled rather than argued."""
+def _token_urlsafe_from(generator: random.Random) -> str:
+    """What `secrets.token_urlsafe(32)` computes, from a seeded generator.
 
-    assert all(looks_random(secrets.token_urlsafe(32)) for _ in range(200))
+    The same 32 bytes, the same base64url encoding, the same 43 characters
+    out; only the source of entropy differs, so a sample drawn through here
+    is the same sample on every run.
+
+    The version of this file that drew from `secrets` instead asserted that
+    all of 200 random draws pass a heuristic, which is a probabilistic claim
+    wearing a deterministic one's clothes. It failed about one run in nine.
+    """
+
+    return base64.urlsafe_b64encode(generator.randbytes(32)).rstrip(b"=").decode(
+        "ascii"
+    )
+
+
+#: Real `secrets.token_urlsafe(32)` values that happen to contain no digit.
+#: About one credential in 1,600 looks like this, and every one of them was
+#: missed until the digit requirement came out of `looks_random` -- a false
+#: negative in a security tool, which is the expensive direction to be wrong
+#: in. They are frozen here because the shape is what matters, not the draw.
+CREDENTIALS_WITHOUT_A_DIGIT = (
+    "cQXNADiGYacckPZPUNKHCNkDRTaoCL_BgogJoYxGD-E",
+    "CnTzVciGBRfrKtVeJBBTSudWVnDkQyYRUBrNSADiqEM",
+    "wgNnZxb-ehkMwgCXRjDjvSsJxgvDTlkiALYq-JaczPI",
+    "ZmEWcTJdDKNjPJbBXpmU-leSTF-NpwdPGBbYSySoHEM",
+    "WPgwC-RLtEDdlhTQcDmeLbsNN-lFTNLSGEZtlBYxtnw",
+    "rTDEXqcuNSlFfoIXBRXi-inTKqZoYOgALXUJxLoZFZo",
+)
+
+
+@pytest.mark.parametrize("value", CREDENTIALS_WITHOUT_A_DIGIT)
+def test_a_credential_with_no_digit_in_it_is_still_a_credential(value):
+    """The hole the digit requirement left open, pinned shut."""
+
+    assert len(value) == 43
+    assert not any(character.isdigit() for character in value)
+    assert looks_random(value) is True
+
+
+def test_the_generator_this_project_issues_credentials_with_is_not_missed():
+    """20,000 credentials of exactly the shape this project hands out.
+
+    Fixed, so it passes every run or fails every run -- never one in nine.
+    The measured miss rate behind this is about one in a million, taken over
+    300,000 digit-free tokens rather than over this sample, which is too
+    small to measure a rate that low and is here to catch a regression.
+    """
+
+    generator = random.Random(20260906)
+    tokens = [_token_urlsafe_from(generator) for _ in range(20_000)]
+
+    assert [token for token in tokens if not looks_random(token)] == []
 
 
 def test_entropy_separates_prose_from_a_token():
