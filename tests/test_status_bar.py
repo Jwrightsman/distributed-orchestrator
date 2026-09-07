@@ -46,6 +46,43 @@ DASHBOARD_CSS = TEMPLATES / "_dashboard.css"
 NODE = shutil.which("node")
 
 
+def missing_node_complaint(ci, node):
+    """The complaint when CI has no `node`, or None when there is nothing wrong.
+
+    Pure and taking both inputs as arguments so the check below can prove it
+    fires, rather than trusting that it would.
+    """
+    if ci and not node:
+        return (
+            "CI has no `node` on PATH, so tests/test_status_model.py skipped "
+            "every scenario in the design's rig and the status model went "
+            "untested."
+        )
+    return None
+
+
+def test_a_missing_node_in_ci_is_a_failure_rather_than_a_silent_skip():
+    """The status model rig needs Node, and a skipped rig proves nothing.
+
+    This lives here rather than in tests/test_status_model.py on purpose. That
+    module carries a module-level `skipif` for a missing Node, and a
+    module-level mark applies to every test in its module — so the guard that
+    was originally written there would have been skipped by the very condition
+    it existed to catch. This file has no module-level mark, so this always
+    runs.
+    """
+    assert missing_node_complaint(os.environ.get("CI"), NODE) is None
+
+
+def test_that_guard_can_actually_fire():
+    """A guard nobody has seen fail is a guard nobody knows works."""
+    assert missing_node_complaint("true", None), "the guard never complains"
+    assert missing_node_complaint("true", "/usr/bin/node") is None
+    assert missing_node_complaint(None, None) is None, (
+        "a developer with no Node installed would fail this suite locally"
+    )
+
+
 @pytest.fixture
 def client():
     with TestClient(app) as c:
