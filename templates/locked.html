@@ -6,6 +6,7 @@
 <title>Private — Mycelium</title>
 <meta name="robots" content="noindex">
 <!-- THEME -->
+<!-- STATUS_MODEL_JS -->
 <style>
   /* The page a browser gets when it asks for a private page without a
      credential. It is served with 401 and WWW-Authenticate, exactly as before
@@ -74,14 +75,37 @@
   .note { font-size: 12px; color: var(--text-muted); line-height: 1.65; margin-top: 14px; }
   #error { color: var(--danger-text); }
 
-  .health {
-    display: flex; align-items: center; gap: 8px;
-    border-top: 1px solid var(--border-subtle);
-    margin-top: 18px; padding-top: 14px;
-    font-family: var(--mono); font-size: 11px; color: var(--text-faint);
+  /* The ambient indicator, 44px because most visitors reach this page from a
+     link on a phone, and it is the only thing in the corner. It sits in the
+     corner opposite the primary action so it never covers the unlock button.
+
+     Filled square for a fresh answer, hollow for none. Colour only says which
+     answer, so the state survives greyscale and a reader who does not see
+     green — and "no answer" can never be mistaken for "ok". */
+  .statuspill {
+    position: fixed; left: 16px; bottom: 16px;
+    display: inline-flex; align-items: center; gap: 9px;
+    height: 44px; padding: 0 15px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 22px;
+    box-shadow: var(--lift);
+    font-family: var(--mono); font-size: 11px;
   }
-  .dot { width: 6px; height: 6px; background: var(--accent); flex-shrink: 0; }
-  .dot.is-down { background: var(--danger); }
+  .lamp {
+    width: 7px; height: 7px; flex-shrink: 0;
+    background: transparent; border: 1px solid var(--text-faint);
+  }
+  .lamp.is-ok      { background: var(--accent); border-color: var(--accent); }
+  .lamp.is-warn    { background: var(--warn);   border-color: var(--warn); }
+  .lamp.is-bad     { background: var(--danger); border-color: var(--danger); }
+  .lamp.is-unknown { background: transparent;   border-color: var(--text-faint); }
+  .statuspill-word.is-ok      { color: var(--accent-text); }
+  .statuspill-word.is-warn    { color: var(--warn-text); }
+  .statuspill-word.is-bad     { color: var(--danger-text); }
+  .statuspill-word.is-unknown { color: var(--text-muted); }
+  .statuspill-age { color: var(--text-faint); }
+  .statuspill-age.is-stale { color: var(--warn-text); }
 
   .sr-only {
     position: absolute; width: 1px; height: 1px;
@@ -113,29 +137,82 @@
   <p class="note">The key is exchanged for a session that lasts 8 hours and is never stored in
     this page. It signs out on its own; rotating the key signs out every browser at once.</p>
 
-  <div class="health">
-    <span class="dot" id="dot" aria-hidden="true"></span>
-    <span id="health-line">checking the public health line…</span>
-  </div>
 </main>
 
+<!-- The claim this page makes is "the coordinator is up, it just will not
+     answer *you* for private things". /health is public, so it can back that
+     claim — and it is the same model the console runs, so the two can never
+     disagree about the same coordinator. This page's own 401 is deliberately
+     outside the model: being refused is not evidence of ill health. -->
+<div class="statuspill" id="statuspill" role="status">
+  <i class="lamp is-unknown" id="dot" aria-hidden="true"></i>
+  <span class="statuspill-word is-unknown" id="health-line">no answer</span>
+  <span class="statuspill-age" id="health-age">no answer for 0s</span>
+</div>
+
 <script>
-  // The claim this page makes is "the server is up, it just will not answer for
-  // private things". /status.json is public, so it can back that claim.
-  (async function () {
-    var line = document.getElementById('health-line');
-    var dot = document.getElementById('dot');
-    try {
-      var d = await (await fetch('/status.json')).json();
-      var machines = d.nodes_online === 1 ? '1 machine online' : d.nodes_online + ' machines online';
-      line.textContent = 'server up · ' + machines + ' · ' +
-        (d.status === 'ok' ? 'inference ready' : 'inference offline');
-      if (d.status !== 'ok') dot.classList.add('is-down');
-    } catch (e) {
-      // Never claim the server is up if the public endpoint did not answer.
-      line.textContent = 'could not reach the public status endpoint';
-      dot.classList.add('is-down');
+  /* One poller, the same state machine the console runs. A single fetch used
+     to paint this line and never expire it, so a coordinator that died while
+     this page sat open still read as up. Green is never a cached value: the
+     lamp fills only on a fresh answer, and the age of that answer is beside
+     it at all times. */
+  (function () {
+    var M = window.STATUS_MODEL;
+    if (!M) return;
+    var state = M.create();
+    var pollMs = M.CONSTANTS.POLL_SEC * 1000;
+    var lamp = document.getElementById('dot');
+    var word = document.getElementById('health-line');
+    var age = document.getElementById('health-age');
+
+    function tone(t) {
+      return t === 'good' || t === 'ok' ? 'is-ok'
+           : t === 'bad' ? 'is-bad'
+           : t === 'warn' ? 'is-warn' : 'is-unknown';
     }
+
+    function paint() {
+      var d = M.derive(state, Date.now());
+      lamp.className = 'lamp ' + tone(d.tone);
+      word.className = 'statuspill-word ' + tone(d.tone);
+      word.textContent = d.severity;
+      age.textContent = d.ageText;
+      age.className = 'statuspill-age' + (d.ageStale ? ' is-stale' : '');
+    }
+
+    async function poll() {
+      var now = Date.now();
+      var ctl = null;
+      try { ctl = new AbortController(); } catch (e) {}
+      var timer = setTimeout(function () { if (ctl) ctl.abort(); }, pollMs);
+      try {
+        var resp = await fetch('/health', ctl ? {signal: ctl.signal} : undefined);
+        if (!resp.ok) {
+          M.pollAnswered(state, {ok: false}, now);
+        } else {
+          var h = await resp.json();
+          M.pollAnswered(state, {
+            ok: true,
+            inference: h.ollama === 'connected',
+            // Only an explicit false is a statement that the gate is open.
+            gate: h.private_routes_protected !== false,
+          }, now);
+        }
+      } catch (e) {
+        M.pollMissed(state, now);
+      } finally {
+        clearTimeout(timer);
+      }
+      paint();
+    }
+
+    // Painted before the first poll: on load the state is not-heard-back,
+    // never ok. The age keeps moving between polls, which is what makes a
+    // hung request read as silence rather than as the last good answer.
+    paint();
+    poll();
+    setInterval(poll, pollMs);
+    setInterval(paint, 1000);
   })();
 
   document.getElementById('unlock').addEventListener('submit', async function (e) {

@@ -7,9 +7,10 @@ Serves a web UI at http://localhost:8000/dashboard when the server runs.
 Pages live in templates/ and are assembled here as they are served. Each
 marker in a page is replaced by a partial:
 
-    <!-- THEME -->          templates/_theme.html   (palette + theme toggle)
-    <!-- DASHBOARD_CSS -->  templates/_dashboard.css
-    <!-- DASHBOARD_JS -->   templates/_dashboard.js
+    <!-- THEME -->            templates/_theme.html   (palette + theme toggle)
+    <!-- DASHBOARD_CSS -->    templates/_dashboard.css
+    <!-- STATUS_MODEL_JS -->  templates/_status_model.js
+    <!-- DASHBOARD_JS -->     templates/_dashboard.js
 
 The theme indirection exists because the palette used to be written out in
 full inside every page, so a light theme meant editing three files and the
@@ -21,11 +22,15 @@ markup, styles and script in one file, which is not navigable. There is still
 no build step — the server pastes the parts together.
 """
 
+import html
 import re
 from pathlib import Path
 
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
+
+import tracing
+from config import get as get_config
 
 router = APIRouter()
 
@@ -39,6 +44,10 @@ _THEME_MARKER = "<!-- THEME -->"
 # CSS/JS that an editor and a linter can both understand.
 _PARTIALS = {
     "<!-- DASHBOARD_CSS -->": ("_dashboard.css", "style"),
+    # Before DASHBOARD_JS in every page that wants both: _dashboard.js reads
+    # STATUS_MODEL at load. Dict order is insertion order, and a page that
+    # carries only one of the two markers simply gets that one.
+    "<!-- STATUS_MODEL_JS -->": ("_status_model.js", "script"),
     "<!-- DASHBOARD_JS -->": ("_dashboard.js", "script"),
 }
 
@@ -82,6 +91,42 @@ def render(name: str, **slots: str) -> str:
     return re.sub(r"<!--SLOT:[A-Z_]+-->", "", html)
 
 
+def tracing_state() -> str:
+    """`off`, `propagating` or `exporting` — the three states tracing.py has.
+
+    Not a boolean, and the difference is not cosmetic: `propagating` accepts and
+    mints trace context without anything leaving the machine, while `exporting`
+    additionally sends spans to a collector. Reading `tracing_enabled` alone
+    would report `exporting` for a deployment that exports nothing, which is the
+    mistake tracing.py's own docstring records.
+    """
+    if not tracing.propagation_enabled():
+        return "off"
+    return "exporting" if tracing.export_enabled() else "propagating"
+
+
+def status_bar_at_load() -> dict[str, str]:
+    """The status bar's four lampless cells, and the model name beside INFERENCE.
+
+    These are config, not endpoints — nothing serves them, and none of them can
+    change while the process runs. So they are read once, here, and the cells
+    that carry them deliberately have no lamp: a cell with no lamp is making no
+    claim about this second. See docs/design/status-model-2026-09-07 §07.
+
+    MODEL is `config · model` on purpose. `/health.models` lists everything
+    installed on the host and `/status.json.model` is whichever tag answered
+    first; neither is the model this coordinator will use.
+    """
+    settings = get_config()
+    return {
+        "STATUS_MODEL_NAME": html.escape(str(settings.get("model", "") or "not configured")),
+        "STATUS_TRACING": html.escape(tracing_state()),
+        "STATUS_EVIDENCE": html.escape(
+            str(settings.get("capability_evidence_mode", "off") or "off")
+        ),
+    }
+
+
 @router.get("/", response_class=HTMLResponse)
 async def landing():
     return _page("index.html")
@@ -89,5 +134,5 @@ async def landing():
 
 @router.get("/dashboard", response_class=HTMLResponse)
 async def dashboard():
-    return _page("dashboard.html")
+    return render("dashboard.html", **status_bar_at_load())
 

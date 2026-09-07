@@ -52,54 +52,14 @@ function showLockedScreen() {
   if (!locked || !app) return;
   app.hidden = true;
   locked.hidden = false;
-  document.querySelectorAll('.banner').forEach(b => { b.hidden = true; });
-  loadPublicHealthLine();
+  // The bar belongs to the console, and the console is gone. The panel's own
+  // line carries the same derived state so there is one lamp on screen, not
+  // two — and it is the same lamp, so it cannot disagree with itself.
+  const bar = $('statusbar');
+  if (bar) bar.hidden = true;
+  renderStatus();
   const field = $('locked-key');
   if (field) field.focus();
-}
-
-/* The claim the screen makes is "the server is up, it just will not answer for
-   private things". /status.json is public, so it can still be fetched from
-   here — and it is the only honest way to back that claim. */
-async function loadPublicHealthLine() {
-  const line = $('locked-health-line');
-  const dot = document.querySelector('.locked-dot');
-  if (!line) return;
-  try {
-    const d = await (await fetch('/status.json')).json();
-    const machines = d.nodes_online === 1 ? '1 machine online' : `${d.nodes_online} machines online`;
-    const inference = d.status === 'ok' ? 'inference ready' : 'inference offline';
-    line.textContent = `server up · ${machines} · ${inference}`;
-    if (dot && d.status !== 'ok') dot.classList.add('is-down');
-  } catch (e) {
-    // Do not claim the server is up if the public endpoint did not answer.
-    line.textContent = 'could not reach the public status endpoint';
-    if (dot) dot.classList.add('is-down');
-  }
-}
-
-function showDegradedBanner(on) {
-  const el = $('banner-degraded');
-  if (el) el.hidden = !on;
-}
-
-/* The fail-open banner is suppressed on Config, where the more actionable
-   version of the same warning lives. Config does not exist yet — it is a later
-   phase — so the suppression list is here and empty of effect until it does. */
-const BANNER_SUPPRESSED_ON = ['config'];
-
-function updateFailOpenBanner(protectedRoutes) {
-  const el = $('banner-failopen');
-  if (!el) return;
-  el.dataset.failOpen = protectedRoutes === false ? '1' : '';
-  applyBannerSuppression();
-}
-
-function applyBannerSuppression() {
-  const el = $('banner-failopen');
-  if (!el) return;
-  const failOpen = el.dataset.failOpen === '1';
-  el.hidden = !failOpen || BANNER_SUPPRESSED_ON.indexOf(currentTab) !== -1;
 }
 
 /* Every private request goes through here. Public ones (/status.json) do not
@@ -112,11 +72,21 @@ async function apiFetch(url, opts) {
     throw new ViewerLocked();
   }
   if (resp.status === 503) {
-    // Only the persistence refusal gets the degraded banner. A generic 503 is
-    // not the same claim and must not borrow its wording.
+    // Only the persistence refusal speaks for `commit`. A generic 503 is not
+    // the same claim and must not borrow its wording.
     let code = '';
     try { code = ((await resp.clone().json()).detail || {}).code || ''; } catch (e) {}
-    if (code === 'execution_persistence_unavailable') showDegradedBanner(true);
+    // Stated by the coordinator, so it is believed on this observation rather
+    // than waiting for a second poll to agree.
+    if (code === 'execution_persistence_unavailable') {
+      STATUS_MODEL.writeRefused(statusState, Date.now());
+      renderStatus();
+    }
+  } else if (resp.ok && (opts || {}).method && String(opts.method).toUpperCase() !== 'GET') {
+    // A write that landed is the only proof the coordinator is writing again.
+    // Clearing the latch does not turn the lamp green: the next two polls do
+    // that, and the first of them reads `recovering`.
+    STATUS_MODEL.writeAccepted(statusState);
   }
   return resp;
 }
@@ -167,12 +137,50 @@ function wireLockedScreen() {
   });
 }
 
-/* Rating → class. One place, so a new rating never leaks a raw colour. */
-const RATING_CLASS = {PASS: 'is-pass', NEEDS_WORK: 'is-needs-work', FAIL: 'is-fail'};
-function ratingClass(r) { return RATING_CLASS[r] || 'is-unknown'; }
-function ratingBadge(r) {
-  if (!r || r === '?') return '';
-  return `<span class="badge ${ratingClass(r)}">${escHtml(r)}</span>`;
+/* ── A run's verdict, in five values ──────────────────────────────
+   Ported from docs/design/status-model-2026-09-07 §06. Five, no sixth, and
+   never a percentage: the published quality figures rest on a check that
+   counted a blank page as a working app (HANDOFF-DELTA §4.1).
+
+   PASS means the reviewer passed it *and* the mechanical check found no
+   defects. So a run whose check never reached a verdict cannot wear it — an
+   empty problem list beside a precheck error means "not checked", not
+   "checked clean". The badge this replaces had two failure modes: it rendered
+   nothing at all for rating "?", and it had no way to say "unchecked".
+
+   execution/validators.py refuses to construct a ParsePrecheckResult carrying
+   both a runner failure and code problems — a starved validator runner and a
+   defect in the code are separate channels, deliberately. This function is
+   where the UI could quietly re-merge them, so it reads the two fields
+   separately and never lets one stand in for the other.
+
+   Precedence is worst-wins, the same rule the status bar's severity uses: a
+   named negative verdict outranks "we do not know", and "we do not know"
+   outranks PASS. There is no path through this function that renders an
+   unchecked run as PASS. */
+const VERDICTS = {
+  PASS:       {label: 'PASS',       cls: 'is-pass'},
+  NEEDS_WORK: {label: 'NEEDS WORK', cls: 'is-needs-work'},
+  FAIL:       {label: 'FAIL',       cls: 'is-fail'},
+  UNCHECKED:  {label: 'UNCHECKED',  cls: 'is-unchecked'},
+  NO_VERDICT: {label: 'NO VERDICT', cls: 'is-no-verdict'},
+};
+const RECORDED_RATINGS = ['PASS', 'NEEDS_WORK', 'FAIL'];
+
+function runVerdict(rating, precheckError) {
+  if (rating === 'FAIL') return 'FAIL';
+  if (rating === 'NEEDS_WORK') return 'NEEDS_WORK';
+  // No rating was recorded at all. That says nothing about the work, and it
+  // is the more fundamental absence, so it is reported ahead of UNCHECKED.
+  if (RECORDED_RATINGS.indexOf(rating) === -1) return 'NO_VERDICT';
+  // The rating is PASS. The mechanical check is the other half of that claim.
+  if (precheckError) return 'UNCHECKED';
+  return 'PASS';
+}
+
+function verdictChip(rating, precheckError) {
+  const v = VERDICTS[runVerdict(rating, precheckError)];
+  return `<span class="verdict ${v.cls}"><i class="lamp" aria-hidden="true"></i>${v.label}</span>`;
 }
 function distBadge(mode) {
   return mode === 'distributed' ? '<span class="badge is-dist">DIST</span>' : '';
@@ -279,9 +287,9 @@ const TAB_TITLES = {
 function showTab(name, opts) {
   if (TABS.indexOf(name) === -1) name = 'overview';
   currentTab = name;
-  // The fail-open banner is per-view, so it has to be re-evaluated on every
-  // switch rather than only when health is polled.
-  applyBannerSuppression();
+  // Two of the four banners are scoped to a view, so the banner has to be
+  // re-evaluated on every switch rather than only when health is polled.
+  renderStatus();
   TABS.forEach(t => {
     const view = $('view-' + t);
     const btn = $('tab-' + t);
@@ -340,16 +348,331 @@ function anyModalOpen() {
   return ['output-modal', 'node-modal'].some(id => !$(id).hidden);
 }
 
-// ── Health / nodes / metrics polling ─────────────────────────────
+/* ── The status model, wired to the page ──────────────────────────
+   One poller. It replaces four indicators that each derived their own truth
+   — the fail-open banner, the persistence-degraded banner, the locked
+   screen's health line and the rail's inference line — and could disagree
+   with one another. The rail's line was deleted rather than moved.
+
+   The state machine itself is in _status_model.js, which has no DOM, no
+   timers and no fetch, so tests/test_status_model.py can run the design's
+   six-transport rig against it. Everything below is the page half. */
+
+const statusState = STATUS_MODEL.create();
+const STATUS_POLL_MS = STATUS_MODEL.CONSTANTS.POLL_SEC * 1000;
+const OPERATOR_POLL_MS = STATUS_MODEL.CONSTANTS.OPERATOR_POLL_SEC * 1000;
+
+/* Last-known values for the four polled cells, and whether each one came from
+   a poll that answered. Values are held rather than blanked when the
+   coordinator goes quiet: the number stays readable and the hollow lamp says
+   it is not current. Blanking would lose information; leaving it filled would
+   lie about its age. */
+const statusText = {inference: null, nodes: null, running: null, queued: null};
+const statusFresh = {inference: false, nodes: false, running: false, queued: false};
+
+/* The four states that earn words. Copy is the design's, verbatim.
+   `scope` is the tab this banner is worth interrupting; null means every view.
+   `suppress` is where a more actionable version of the same warning lives —
+   Config does not exist yet, so that list is inert until it does. */
+const BANNER_SUPPRESSED_ON = ['config'];
+const BANNERS = {
+  gate: {
+    tone: 'is-danger',
+    scope: null,
+    suppress: BANNER_SUPPRESSED_ON,
+    head: 'Anyone who can reach this address can read runs, machines and projects',
+    body: 'No viewer key is set, so the gate is letting every request through. Set ' +
+          'viewer_key and restart before this host is reachable by anyone but you.',
+  },
+  commit: {
+    tone: 'is-danger',
+    scope: null,
+    head: 'Finished work cannot be written down right now',
+    body: 'A run counts once it is recorded, so nothing will be published until this ' +
+          'clears. Anything already recorded is unaffected, and pitches will be ' +
+          'refused rather than lost.',
+  },
+  inference: {
+    /* warn, not danger: nothing can be built, but every past run stays
+       readable. Scoped to the view you pitch from. */
+    tone: 'is-warn',
+    scope: 'overview',
+    head: 'Ollama is not reachable — nothing can be built right now',
+    body: 'Start it with ollama serve and this clears on its own. Connected machines ' +
+          'stay registered and pick work up again by themselves.',
+  },
+  silent: {
+    tone: 'is-quiet',
+    scope: null,
+    head: 'No answer from the coordinator',
+    body: 'Every count on screen is the last one it gave. Nothing here is current, ' +
+          'and an empty queue on this screen is not a claim that the swarm is idle.',
+  },
+};
+
+/* A poll that never returns is silence, not a pending answer. Without this a
+   hung socket would hold the last state on screen indefinitely — the exact
+   defect this model exists to prevent, arriving by a different route. */
+function fetchWithTimeout(url, ms) {
+  let ctl = null;
+  try { ctl = new AbortController(); } catch (e) {}
+  const opts = {credentials: 'same-origin'};
+  if (ctl) opts.signal = ctl.signal;
+  const timer = setTimeout(() => { if (ctl) ctl.abort(); }, ms);
+  return fetch(url, opts).finally(() => clearTimeout(timer));
+}
+
+/* One poll of /health, every POLL_SEC.
+
+   /health is public, so it is fetched plainly rather than through apiFetch:
+   this request cannot 401, and a 401 from anywhere else must never reach the
+   model. The coordinator refusing *this browser* is not the coordinator being
+   unwell. */
+async function pollStatus() {
+  const now = Date.now();
+  let health = null;
+  try {
+    const resp = await fetchWithTimeout('/health', STATUS_POLL_MS);
+    if (!resp.ok) {
+      // It answered, and refused. link is a probe here, so one 502 from a
+      // restarting proxy holds rather than flipping the whole bar.
+      STATUS_MODEL.pollAnswered(statusState, {ok: false}, now);
+    } else {
+      health = await resp.json();
+      STATUS_MODEL.pollAnswered(statusState, {
+        ok: true,
+        inference: health.ollama === 'connected',
+        // Only an explicit false is a statement. A server too old to carry the
+        // field has not told us the gate is open, and we must not say it did.
+        gate: health.private_routes_protected !== false,
+      }, now);
+    }
+  } catch (e) {
+    STATUS_MODEL.pollMissed(statusState, now);
+  }
+
+  if (health) {
+    /* The INFERENCE word is set in renderStatus from the derived facet, not
+       from this payload. One probe saying no is not an outage, and writing
+       "offline" here would put that word on screen beside a lamp still saying
+       not-heard-back — the cell contradicting its own lamp. */
+    statusText.nodes = String(health.nodes_online);
+    statusFresh.inference = true;
+    statusFresh.nodes = true;
+    setText('stat-nodes', health.nodes_online);
+    setText('stat-tasks', health.tasks_pending);
+    setText('stat-models', (health.models || []).length);
+  } else {
+    statusFresh.inference = false;
+    statusFresh.nodes = false;
+  }
+
+  /* RUNNING and QUEUED are jobs, from /metrics. /health.tasks_pending is the
+     subtask queue — a different number, and showing it under these labels
+     would be wrong. It has its own tile on Overview, labelled as itself.
+
+     /metrics is private, so a 401 here is this browser's session rather than
+     the coordinator's health: it means these two cells have no current value,
+     and it touches nothing else. */
+  try {
+    const met = await apiJson('/metrics');
+    statusText.running = String(met.jobs_running);
+    statusText.queued = String(met.jobs_queued);
+    statusFresh.running = true;
+    statusFresh.queued = true;
+    setText('stat-done', met.tasks_completed_total);
+    const latEl = $('stat-latency');
+    if (latEl) latEl.textContent = met.avg_task_latency_seconds != null
+      ? met.avg_task_latency_seconds + 's' : '-';
+    // Name whose balance this is — anyone can open this dashboard.
+    const hostEl = $('credit-host');
+    if (hostEl && met.orchestrator_id) hostEl.textContent = met.orchestrator_id;
+    const credEl = $('credit-value');
+    if (credEl) credEl.textContent = met.orchestrator_credits ?? 0;
+  } catch (e) {
+    statusFresh.running = false;
+    statusFresh.queued = false;
+  }
+
+  renderStatus();
+}
+
+/* mode and lock, every OPERATOR_POLL_SEC. Neither can change while the process
+   runs — the lock is held for its life, so a running console can never observe
+   it lost — which is why both cells carry no lamp. The poll exists to fetch
+   them once and to pick them up again after a reconnect, not to claim they are
+   fresh. The two-coordinator case arrives here as a preflight warning. */
+async function pollOperator() {
+  try {
+    const d = await apiJson('/v1/operator/health');
+    setText('cell-mode-v', d.deployment_mode || '—');
+    setText('cell-lock-v', d.single_coordinator_lock ? 'held' : 'not held');
+    const warnings = d.preflight_warnings || [];
+    const lockCell = $('cell-lock-v');
+    if (lockCell) {
+      lockCell.title = warnings.length
+        ? warnings.join(' · ')
+        : 'Held for the life of this process';
+    }
+  } catch (e) {
+    // Leave both cells as they are. They carry no lamp, so they are making no
+    // claim about now, and a failed fetch is not news about a constant.
+  }
+}
+
+function setText(id, value) {
+  const el = $(id);
+  if (el) el.textContent = String(value);
+}
+
+/* Filled square for a fresh answer, hollow for none — colour only says which
+   answer. That is what makes the third value survive greyscale, video
+   compression and a reader who does not separate these hues. */
+function toneClass(state) {
+  if (state === 'good') return 'is-ok';
+  if (state === 'bad') return 'is-bad';
+  // A recovering facet answered, so its lamp fills. It is warn rather than
+  // green because one yes is not two.
+  if (state === 'warn' || state === 'recovering') return 'is-warn';
+  return 'is-unknown';
+}
+
+function paintLamp(el, tone) {
+  if (!el) return;
+  const big = el.classList.contains('is-lg');
+  el.className = 'lamp' + (big ? ' is-lg' : '') + ' ' + toneClass(tone);
+}
+
+function paintWord(el, word, tone, base) {
+  if (!el) return;
+  el.className = base + ' ' + toneClass(tone);
+  el.textContent = word;
+}
+
+/* One polled cell. `state` is the facet's value once the dependency rule has
+   been applied; `text` is the last value the coordinator gave, or null if it
+   never gave one.
+
+   A value that has stopped being current is held and greyed rather than
+   blanked. Blanking would throw away the last thing the coordinator said,
+   which is exactly what the silence banner then promises is still on screen —
+   and an empty queue cell reads as "the swarm is idle", which is a claim
+   nobody is in a position to make. The hollow lamp and the age carry the
+   "not now" instead. */
+function paintCell(cellId, valueId, state, text) {
+  const cell = $(cellId);
+  if (!cell) return;
+  const known = text !== null && text !== undefined;
+  const shown = known ? state : 'unknown';
+  paintLamp(cell.querySelector('.lamp'), shown);
+  cell.classList.toggle('is-stale', shown === 'unknown');
+  cell.classList.toggle('is-bad', shown === 'bad');
+  setText(valueId, known ? text : '—');
+}
+
+function renderBanner(d) {
+  const el = $('banner');
+  if (!el) return;
+  const spec = d.banner ? BANNERS[d.banner] : null;
+  const suppressed = spec && spec.suppress && spec.suppress.indexOf(currentTab) !== -1;
+  const outOfScope = spec && spec.scope && spec.scope !== currentTab;
+  if (!spec || suppressed || outOfScope) {
+    el.hidden = true;
+    return;
+  }
+  el.className = 'banner ' + spec.tone;
+  setText('banner-head', d.banner === 'silent'
+    ? spec.head + ' for ' + d.bannerAge
+    : spec.head);
+  setText('banner-body', spec.body);
+  el.hidden = false;
+}
+
+/* Derive once, paint everywhere. Called on every poll and once a second in
+   between, because the age has to keep moving even when nothing answers —
+   a still age is how a dead coordinator reads as a live one. */
+function renderStatus() {
+  const d = STATUS_MODEL.derive(statusState, Date.now());
+
+  paintLamp($('statusbar-lamp'), d.tone);
+  paintWord($('statusbar-word'), d.severity, d.tone, 'statusbar-word');
+  paintLamp($('statuspill-lamp'), d.tone);
+  paintWord($('statuspill-word'), d.severity, d.tone, 'statuspill-word');
+
+  const ageEl = $('statusbar-age');
+  if (ageEl) ageEl.classList.toggle('is-stale', d.ageStale);
+  setText('statusbar-age-text', d.ageText);
+  const pillAge = $('statuspill-age');
+  if (pillAge) {
+    pillAge.textContent = d.ageText;
+    pillAge.classList.toggle('is-stale', d.ageStale);
+  }
+
+  /* `ready` and `offline` are the confirmed states, so the word follows the
+     facet rather than the last payload. While the facet is unknown the last
+     confirmed word is held and greyed, exactly like the counts. */
+  if (d.values.inference === 'good' || d.values.inference === 'recovering') {
+    statusText.inference = 'ready';
+  } else if (d.values.inference === 'bad') {
+    statusText.inference = 'offline';
+  }
+
+  /* NODES, RUNNING and QUEUED are counts the answer carried rather than facets
+     of their own, so their freshness is the link's. `statusFresh` narrows that
+     for the two that come from /metrics: a 401 there means those two are not
+     current even while /health is answering. */
+  const served = d.answering ? (d.recovering.link ? 'recovering' : 'good') : 'unknown';
+  const cellState = (key, state) => (statusFresh[key] ? state : 'unknown');
+  paintCell('cell-inference', 'cell-inference-v',
+            cellState('inference', d.values.inference), statusText.inference);
+  paintCell('cell-nodes', 'cell-nodes-v',
+            cellState('nodes', served), statusText.nodes);
+  paintCell('cell-running', 'cell-running-v',
+            cellState('running', served), statusText.running);
+  paintCell('cell-queued', 'cell-queued-v',
+            cellState('queued', served), statusText.queued);
+
+  /* The Overview tile and the locked screen read the same derivation rather
+     than deriving again, so neither can disagree with the bar. */
+  const tile = $('stat-status');
+  if (tile) {
+    const state = d.values.inference;
+    const word = state === 'bad' ? 'unavailable'
+               : state === 'unknown' ? 'no answer'
+               : state === 'recovering' ? 'answering again'
+               : 'connected';
+    const cls = state === 'bad' ? 'is-down'
+              : state === 'unknown' ? 'is-unknown'
+              : state === 'recovering' ? 'is-unknown'
+              : 'is-ok';
+    tile.className = 'stat-status ' + cls;
+    tile.innerHTML = '<i aria-hidden="true"></i>' + escHtml(word);
+  }
+
+  const lockedLamp = $('locked-lamp');
+  if (lockedLamp) paintLamp(lockedLamp, d.tone);
+  const lockedLine = $('locked-health-line');
+  if (lockedLine) lockedLine.textContent = d.severity + ' · ' + d.ageText;
+
+  renderBanner(d);
+}
+
+/* Collapsed, the bar is the pill: same derived state, nothing new. */
+function toggleStatusBar() {
+  const bar = $('statusbar');
+  if (!bar) return;
+  const collapsed = bar.classList.toggle('is-collapsed');
+  try { localStorage.setItem('mycelium-statusbar', collapsed ? 'collapsed' : 'open'); } catch (e) {}
+  const pill = $('statuspill'), chev = $('statusbar-collapse');
+  if (pill) pill.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+  if (chev) chev.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+}
+
+// ── Nodes polling ────────────────────────────────────────────────
 async function refresh() {
   try {
-    // /health is public and thin; /nodes and /metrics are private. Health is
-    // fetched plainly so the fail-open state is still readable from a browser
-    // that has no session, and only the private two can lock the screen.
-    const [health, nodes, met, evidence] = await Promise.all([
-      fetch('/health').then(r => r.json()),
+    const [nodes, evidence] = await Promise.all([
       apiJson('/nodes'),
-      apiJson('/metrics').catch(() => null),
       // Optional: a deployment with evidence off, or an older server, simply
       // has no observations to show. That is a state the row renders, not an
       // error that should empty the view.
@@ -357,25 +680,6 @@ async function refresh() {
     ]);
     if (evidence) capabilityEvidence = evidence;
 
-    // Deny-by-default is off. The server says so about itself; the banner is
-    // that fact, not an inference from a failed request.
-    updateFailOpenBanner(health.private_routes_protected);
-
-    $('stat-nodes').textContent = nodes.count;
-    $('stat-tasks').textContent = health.tasks_pending;
-    $('stat-models').textContent = health.models.length;
-    const ok = health.ollama === 'connected';
-    // Status lives in the shell as well as on Overview: whichever view you are
-    // on, "is the swarm alive" has to be answerable without navigating.
-    [['stat-status', health.ollama], ['nav-status', ok ? 'connected' : health.ollama]]
-      .forEach(([id, text]) => {
-        const el = $(id);
-        if (!el) return;
-        el.className = 'stat-status ' + (ok ? 'is-ok' : 'is-down');
-        el.innerHTML = '<i aria-hidden="true"></i>' + escHtml(text);
-      });
-    const navModel = $('nav-model');
-    if (navModel) navModel.textContent = (health.models && health.models[0]) || 'no model';
     const navCount = $('nav-node-count');
     if (navCount) {
       // An empty pill reads as a rendering bug. Show the badge only once
@@ -384,24 +688,14 @@ async function refresh() {
       navCount.textContent = n;
       navCount.hidden = n === 0;
     }
-    if (met) {
-      const latEl = $('stat-latency');
-      if (latEl) latEl.textContent = met.avg_task_latency_seconds != null ? met.avg_task_latency_seconds + 's' : '-';
-      const doneEl = $('stat-done');
-      if (doneEl) doneEl.textContent = met.tasks_completed_total;
-      // Name whose balance this is — anyone can open this dashboard
-      const hostEl = $('credit-host');
-      if (hostEl && met.orchestrator_id) hostEl.textContent = met.orchestrator_id;
-      const credEl = $('credit-value');
-      if (credEl) credEl.textContent = met.orchestrator_credits ?? 0;
-    }
 
     renderNodes(nodes);
   } catch (e) {
-    ['stat-status', 'nav-status'].forEach(id => {
-      const el = $(id);
-      if (el) { el.className = 'stat-status is-down'; el.innerHTML = '<i aria-hidden="true"></i>offline'; }
-    });
+    // Deliberately silent. This used to paint "offline" on the shell from
+    // here, which meant a request this browser was not authorised to make —
+    // or a single dropped packet — reported the coordinator as down. Whether
+    // the coordinator answered is the status model's question, and it asks it
+    // of /health, which is public and cannot 401.
   }
 }
 
@@ -839,7 +1133,7 @@ function _showCompletedCard(pipelineId, task, result) {
   const failed = result.status === 'failed';
   const statusClass = failed ? 'status-pending' : 'status-complete';
   const statusText = failed ? 'FAILED' : (result.mode === 'distributed' ? 'DISTRIBUTED' : 'COMPLETE');
-  const badge = failed ? '' : ratingBadge(result.rating);
+  const badge = failed ? '' : verdictChip(result.rating, result.code_precheck_error);
 
   let subtasksHtml = '<div class="subtask-list">';
   (result.plan || []).forEach(st => {
@@ -907,7 +1201,8 @@ async function viewRun(timestamp) {
     const data = await apiJson(`/history/${encodeURIComponent(timestamp)}`);
 
     $('modal-title').innerHTML =
-      escHtml(data.task) + ' ' + ratingBadge(data.rating) + distBadge(data.mode);
+      escHtml(data.task) + ' '
+      + verdictChip(data.rating, data.code_precheck_error) + distBadge(data.mode);
 
     $('modal-permalink').href = `/run/${encodeURIComponent(timestamp)}`;
 
@@ -917,12 +1212,32 @@ async function viewRun(timestamp) {
         <span class="plan-title">${escHtml(st.title)}</span>
       </div>`).join('');
 
+    /* Files, then whichever of the two channels applies — never both, because
+       a record cannot carry both. routes_run.py:304 already renders this
+       distinction in prose on the run page; this is the same distinction in
+       the modal, which until now showed neither. */
     const filesEl = $('modal-files');
+    const problems = data.code_problems || [];
+    const precheckError = data.code_precheck_error;
     if (data.code_files && data.code_files.length) {
       filesEl.hidden = false;
-      filesEl.innerHTML =
+      let html =
         `<div class="files-label">Extracted files</div>
          <div class="file-chips">${data.code_files.map(f => `<span class="file-chip">${escHtml(f)}</span>`).join('')}</div>`;
+      if (precheckError) {
+        // Said before anything else about these files, and never alongside a
+        // problem list: an empty list here would otherwise read as "clean".
+        html += `<p class="precheck-note">The mechanical check did not run to a verdict on
+          this run (${escHtml(String(precheckError))}), so these files are unchecked rather
+          than known good.</p>`;
+      } else if (problems.length) {
+        html += '<p class="precheck-note">The mechanical check flagged these, and they are '
+             + 'published rather than hidden:</p>'
+             + `<div class="problem-chips">${problems.slice(0, 8).map(
+                  pr => `<span class="problem-chip">${escHtml(
+                    typeof pr === 'string' ? pr : JSON.stringify(pr))}</span>`).join('')}</div>`;
+      }
+      filesEl.innerHTML = html;
     } else {
       filesEl.hidden = true;
     }
@@ -1140,7 +1455,7 @@ async function loadHistory() {
         <span class="history-task">${escHtml(r.task)}</span>
         <span class="history-meta">
           ${distBadge(r.mode)}
-          ${ratingBadge(r.rating)}
+          ${verdictChip(r.rating, r.code_precheck_error)}
           <span class="mono-dim">${r.subtask_count} tasks</span>
           <span class="mono-dim">${relativeTime(r.timestamp)}</span>
           <span class="history-view">view &#8594;</span>
@@ -1254,7 +1569,7 @@ async function loadGallery() {
         <div class="gallery-card">
           <a class="gallery-task" href="/run/${ts}">${escHtml(c.task)}</a>
           <div class="gallery-meta">
-            ${distBadge(c.mode)}${ratingBadge(c.rating)}
+            ${distBadge(c.mode)}${verdictChip(c.rating, c.code_precheck_error)}
             <span class="mono-dim">${c.subtask_count} tasks</span>
             ${nodesHtml}
             <span class="mono-dim">${relativeTime(c.timestamp)}</span>
@@ -1389,6 +1704,9 @@ document.addEventListener('click', (e) => {
   $(id).addEventListener('click', (e) => { if (e.target === $(id)) closeModal(id); });
 });
 
+$('statuspill').addEventListener('click', toggleStatusBar);
+$('statusbar-collapse').addEventListener('click', toggleStatusBar);
+
 $('nav-toggle').addEventListener('click', toggleNav);
 $('theme-toggle').addEventListener('click', toggleTheme);
 $('focus-pitch').addEventListener('click', focusPitch);
@@ -1432,12 +1750,32 @@ wireLockedScreen();
   if (TABS.indexOf(name) !== -1) showTab(name, {pushHash: false});
 })();
 
+/* The bar opens in whichever form it was left in. */
+try {
+  if (localStorage.getItem('mycelium-statusbar') === 'collapsed') toggleStatusBar();
+} catch (e) {}
+
+/* Paint before the first poll rather than after it. On load the state is
+   not-heard-back, never ok — there is nothing to be confident about before
+   the coordinator has answered once, and a lamp that starts green is a lamp
+   that has already lied. */
+renderStatus();
+
 connectWebSocket();
+pollStatus();
+pollOperator();
 refresh();
 loadHistory();
 loadStandings();
 loadProjects();
 
+setInterval(pollStatus, STATUS_POLL_MS);
+setInterval(pollOperator, OPERATOR_POLL_MS);
+/* The age has to keep moving between polls. A still age on a dead coordinator
+   is how the old dashboard read as a live one, and it is also what makes the
+   15s and 60s thresholds fire when a request hangs rather than fails: no miss
+   is ever recorded for a poll that simply never comes back. */
+setInterval(renderStatus, 1000);
 setInterval(refresh, 3000);
 setInterval(pollEvents, 3000);   // fallback only — no-ops when WS is connected
 setInterval(loadHistory, 15000);

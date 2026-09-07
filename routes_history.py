@@ -68,6 +68,12 @@ async def history(search: str = "", limit: int = 50):
                     "task": task,
                     "subtask_count": len(log.get("plan", [])),
                     "rating": rating,
+                    # Carried so a list card can tell PASS from UNCHECKED. Without
+                    # it the list would render PASS - "the reviewer passed it and
+                    # the mechanical check found no defects" - over a run whose
+                    # check never reached a verdict, while the run's own modal
+                    # said UNCHECKED for the same run.
+                    "code_precheck_error": log.get("code_precheck_error"),
                     "project_id": log.get("project_id") or None,
                     "mode": log.get("mode", "local"),
                     "dir": str(d),
@@ -336,6 +342,9 @@ async def gallery(limit: int = 30):
                     "timestamp": log.get("timestamp", d.name),
                     "task": log.get("task", "Unknown"),
                     "rating": rating,
+                    # Same reason as /history: an empty problem list beside a
+                    # precheck error means "not checked", not "checked clean".
+                    "code_precheck_error": log.get("code_precheck_error"),
                     "subtask_count": len(log.get("plan", [])),
                     "preview": preview.strip(),
                     "code_files": code_files,

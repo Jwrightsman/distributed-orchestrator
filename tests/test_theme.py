@@ -27,7 +27,7 @@ ROUTES = {"/": "index.html", "/dashboard": "dashboard.html", "/try": "try.html"}
 # Partials carry most of the dashboard's styling now, so the no-hardcoded-colour
 # rule has to follow the CSS out of the page it came from. Without this, the
 # split would have quietly created a hole in the rule it was meant to preserve.
-STYLED = PAGES + ("_dashboard.css", "_dashboard.js")
+STYLED = PAGES + ("_dashboard.css", "_dashboard.js", "_status_model.js")
 
 # Entities like &#9654; are not colours.
 COLOR = re.compile(r"(?<![&\w])#[0-9A-Fa-f]{6}\b|rgba?\([0-9,. ]+\)")
