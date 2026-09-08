@@ -1036,3 +1036,39 @@ def test_a_unit_that_did_not_complete_says_so_in_a_word(client):
         assert "rd-unit-state" not in first, (
             f"{surface}: a word on every card is noise"
         )
+
+
+def test_a_cut_preview_says_it_was_cut(client):
+    """A silent 14 lines of a 500-line file says "this file is 14 lines".
+
+    The panel is a preview and the whole file is one authenticated download
+    away, which is right — but the reader has to be able to tell the two apart,
+    and the size beside the filename is not enough on its own.
+    """
+    from routes_run import PREVIEW_LINES
+
+    long_file = "\n".join(f"line_{i} = {i}" for i in range(PREVIEW_LINES * 3))
+    _write_log()
+    (Path("output") / RUN / "code" / "summary.py").write_text(long_file, encoding="utf-8")
+
+    html = client.get(f"/run/{RUN}").text
+    bar = html[html.index('class="rd-file-bar"'):html.index('class="rd-file-body"')]
+    assert f"first {PREVIEW_LINES} of {PREVIEW_LINES * 3} lines" in bar, bar[:400]
+
+    body = html[html.index('class="rd-file-body"'):]
+    body = body[: body.index("</pre>")]
+    assert body.count("line_") == PREVIEW_LINES
+
+
+def test_a_short_preview_says_nothing_about_being_cut(client):
+    """The notice is a finding, not furniture."""
+    from routes_run import PREVIEW_LINES
+
+    _write_log()
+    (Path("output") / RUN / "code" / "summary.py").write_text(
+        "\n".join(f"line_{i} = {i}" for i in range(PREVIEW_LINES - 2)),
+        encoding="utf-8",
+    )
+    html = client.get(f"/run/{RUN}").text
+    bar = html[html.index('class="rd-file-bar"'):html.index('class="rd-file-body"')]
+    assert "lines" not in bar, bar[:400]

@@ -240,6 +240,9 @@ def _output(log: dict) -> str:
 
 # ── Run detail ───────────────────────────────────────────────────────
 
+# How much of a deliverable the panel shows before it starts saying so.
+PREVIEW_LINES = 14
+
 def durable_record(publication) -> object | None:
     """The canonical execution record behind this run directory, if there is one.
 
@@ -308,11 +311,18 @@ def _preview(log: dict, publication, durable) -> dict | None:
         checks.append("not checked")
     elif durable is not None:
         checks.extend(durable.validation_summary.checks_passed)
+    # A preview, not the file: the whole thing is one authenticated download
+    # away and a page is not a code viewer. But a silent 14 lines of a
+    # 500-line file says "this file is 14 lines", so a cut preview says it was
+    # cut and how much of the file it is showing.
+    lines = text.splitlines()
+    shown = lines[:PREVIEW_LINES]
+    if len(lines) > PREVIEW_LINES:
+        checks.append(f"first {PREVIEW_LINES} of {len(lines)} lines")
+
     return {
         "name": name,
-        # A preview, not the file: the whole thing is one authenticated
-        # download away and a page is not a code viewer.
-        "text": "\n".join(text.splitlines()[:14]),
+        "text": "\n".join(shown),
         "checks": [c for c in checks if c],
     }
 
