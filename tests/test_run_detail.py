@@ -997,3 +997,42 @@ def test_the_audit_scope_is_only_offered_where_it_exists(client):
     assert "Audit bundle" in served
     assert f"/v1/executions/{EXECUTION}/audit-download" in served
     assert f"/v1/executions/{EXECUTION}/download" in served
+
+
+def test_a_unit_that_did_not_complete_says_so_in_a_word(client):
+    """Colour is never the only signal, and here it nearly was.
+
+    The marker beside the unit title is the card's only state signal, and three
+    of its four tones are filled — so in greyscale a failed unit and a
+    completed one are a 6px square a few grey levels apart. Measured in the
+    browser: `is-ok` 100, `is-bad` 72, `is-neutral` 115 in the light theme.
+    That is not a distinction anyone should have to make, so a unit that did
+    not complete carries the word.
+
+    `completed` stays marker-only on purpose: a word on every card is noise
+    that would make the one that matters harder to find.
+    """
+    run = _published(result_overrides={"execution_units": [
+        {"unit_id": "dag-1", "kind": "dag_subtask", "title": "Parse --since",
+         "depends_on": [], "status": "completed", "placement": "distributed",
+         "node_id": "node-7c22"},
+        {"unit_id": "dag-2", "kind": "dag_subtask", "title": "Filter rows",
+         "depends_on": ["dag-1"], "status": "failed", "placement": "distributed",
+         "node_id": "node-a1f3"},
+        {"unit_id": "dag-3", "kind": "dag_subtask", "title": "Update summary",
+         "depends_on": ["dag-1"], "status": "cancelled", "placement": "local",
+         "node_id": None},
+    ]})
+    for surface, html in _surfaces(client, run).items():
+        panel = _panel(html, "HOW IT WAS SPLIT")
+        assert panel.count("rd-unit-state") == 2, (
+            f"{surface}: expected the failed and cancelled units to say so, and "
+            "the completed one not to"
+        )
+        flat = _flat(panel)
+        assert "failed" in flat and "cancelled" in flat, f"{surface}: {flat[:200]}"
+        # The completed unit is the unmarked case.
+        first = panel[panel.index("Parse --since"):panel.index("Filter rows")]
+        assert "rd-unit-state" not in first, (
+            f"{surface}: a word on every card is noise"
+        )

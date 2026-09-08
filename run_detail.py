@@ -447,6 +447,22 @@ def _unit_card(unit: dict) -> str:
         machine = "machine not recorded"
         machine_cls = "rd-unit-machine is-absent"
 
+    # The marker is the only state signal on this card, and three of its four
+    # tones are filled -- so in greyscale a failed unit and a completed one are
+    # a 6px square 28 grey levels apart, which is not a distinction anyone
+    # should have to make. Measured in the browser: is-ok 100, is-bad 72,
+    # is-neutral 115 in light; 151 / 113 / 131 in dark.
+    #
+    # So a unit that did not complete says so in a word. `completed` is the
+    # unmarked case and stays marker-only, because a word on every card is
+    # noise that would make the one that matters harder to see. The design's
+    # own sample cards are all completed, which is how this got past it.
+    state_word = (
+        f'<span class="rd-unit-state">{esc(status or "state not recorded")}</span>'
+        if status != "completed"
+        else ""
+    )
+
     return f"""
               <div class="rd-unit">
                 <div class="rd-unit-head">
@@ -455,7 +471,10 @@ def _unit_card(unit: dict) -> str:
                   {_marker(tone, "is-6")}
                 </div>
                 <div class="rd-unit-prompt">{esc(unit.get("prompt") or "No unit prompt recorded.")}</div>
-                <div class="{machine_cls}">{esc(machine)}</div>
+                <div class="rd-unit-foot">
+                  <span class="{machine_cls}">{esc(machine)}</span>
+                  {state_word}
+                </div>
               </div>"""
 
 

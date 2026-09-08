@@ -285,10 +285,20 @@
   font-size: 11.5px; color: var(--text-muted);
   line-height: 1.55; margin-top: 5px; text-wrap: pretty;
 }
-.rd-unit-machine {
-  font-family: var(--mono); font-size: 11px; color: var(--text-dim); margin-top: 7px;
+.rd-unit-foot {
+  display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap; margin-top: 7px;
 }
+.rd-unit-machine { font-family: var(--mono); font-size: 11px; color: var(--text-dim); }
 .rd-unit-machine.is-absent { color: var(--text-muted); }
+/* A unit that did not complete says so in a word, because the marker beside
+   the title is the only other signal and three of its four tones are filled --
+   so in greyscale a failed unit and a completed one are a 6px square a few
+   grey levels apart. `completed` stays marker-only: a word on every card is
+   noise that would make the one that matters harder to find. */
+.rd-unit-state {
+  margin-left: auto; font-family: var(--mono); font-size: 11px;
+  color: var(--text-muted); letter-spacing: 0.06em;
+}
 
 /* ── Manifest ──────────────────────────────────────────────────────
    This panel gets a chip, because its state genuinely varies. The envelope
