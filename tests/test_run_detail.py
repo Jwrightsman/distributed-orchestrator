@@ -948,3 +948,52 @@ def test_a_rendering_failure_costs_the_panel_and_not_the_endpoint(client, monkey
     assert "This run\u2019s detail could not be built" in JS, (
         "the console opens a blank modal when the fragment is empty"
     )
+
+
+def test_the_replay_line_is_not_drawn_from_a_field_nothing_writes():
+    """`replayed` is a property of the POST response, not of the run.
+
+    It is `SubmittedExecution.replayed` -- the `Idempotency-Replayed` header --
+    and it never reaches `ExecutionResultV1`, which has no idempotency field at
+    all. Reading it off a plausible-looking log key would render a line that is
+    always absent, look like it worked, and start lying the moment someone
+    wrote that key for another reason. See HANDOFF-DELTA §8.11.
+    """
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "run_detail.py").read_text(encoding="utf-8")
+    code = "\n".join(
+        line for line in source.splitlines() if not line.strip().startswith("#")
+    )
+    for invented in ('"idempotency"', '"replayed"', "'replayed'"):
+        assert invented not in code, (
+            f"run_detail.py reads {invented}, which no record carries"
+        )
+    contract = (root / "execution" / "contracts.py").read_text(encoding="utf-8")
+    body = contract[contract.index("class ExecutionResultV1"):]
+    body = body[: body.index("\n\n\n")] if "\n\n\n" in body else body
+    assert "replay" not in body.lower(), (
+        "ExecutionResultV1 now carries a replay field -- the line can be drawn, "
+        "and HANDOFF-DELTA §8.11 should be closed"
+    )
+
+
+def test_the_audit_scope_is_only_offered_where_it_exists(client):
+    """Two scopes, or one, never one URL wearing two labels.
+
+    A legacy run with no execution record has a single `/history/{id}/download`
+    bundle. Offering "Audit bundle" beside "Download deliverables" there would
+    point both at it and imply a split this run does not have.
+    """
+    _write_log("20260101_000000")
+    legacy = client.get("/history/20260101_000000").json()["detail_html"]
+    assert "Download deliverables" in legacy
+    assert "Audit bundle" not in legacy, (
+        "the legacy download is one bundle, so there is no audit scope to offer"
+    )
+    assert "audit-download" not in legacy
+
+    run = _published()
+    served = _surfaces(client, run)["console"]
+    assert "Audit bundle" in served
+    assert f"/v1/executions/{EXECUTION}/audit-download" in served
+    assert f"/v1/executions/{EXECUTION}/download" in served

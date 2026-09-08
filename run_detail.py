@@ -597,6 +597,11 @@ def _manifest_panel(ctx: dict) -> str:
         ("DELIVERABLE", ctx["download_href"], ("deliverable",)),
         ("AUDIT", ctx["audit_href"], _AUDIT_ROLES),
     ):
+        # A group is named after the endpoint that serves it. No endpoint, no
+        # group -- a list of files under a heading that cannot be fetched is
+        # worse than no list.
+        if not endpoint:
+            continue
         rows = ""
         for entry in manifest.entries:
             if str(entry.role) not in roles:
@@ -795,17 +800,15 @@ def _timeline_rows(durable: Any, manifest: Any) -> list[tuple[str, str, str]]:
 
 
 # ── replay ───────────────────────────────────────────────────────────
-
-def _replay(ctx: dict) -> str:
-    if not ctx["replayed"]:
-        return ""
-    return f"""
-    <div class="rd-replay">
-      {_marker("is-info")}
-      <span>Returned, not re-run: this task was pitched again under the same idempotency key,
-        so nothing was built twice. The same key with a changed task is refused instead.</span>
-    </div>"""
-
+# The design has a line for a run that was returned rather than re-run, and
+# ADR 0008 is its citation. It is not drawn, because nothing serves it at read
+# time: `replayed` is a property of the POST response
+# (`SubmittedExecution.replayed`, the `Idempotency-Replayed` header) and never
+# reaches `ExecutionResultV1` -- the contract has no idempotency field at all
+# -- while `execution_submissions` stores digests keyed by requester scope and
+# is not reachable from an execution id. Reading it off an invented log key
+# would render a line that is always absent and look like it worked. See
+# `docs/design/HANDOFF-DELTA.md` 8.11 for what to add to serve it.
 
 # ── assembly ─────────────────────────────────────────────────────────
 
@@ -895,9 +898,12 @@ def build_view(
         f"/v1/executions/{execution_id}/download" if execution_id
         else f"/history/{run_id}/download"
     )
+    # None when there is no execution record: the legacy download is one bundle
+    # rather than two scopes, so offering "Audit bundle" beside "Download
+    # deliverables" would point both at the same URL and imply a split that
+    # this run does not have.
     audit_href = (
-        f"/v1/executions/{execution_id}/audit-download" if execution_id
-        else f"/history/{run_id}/download"
+        f"/v1/executions/{execution_id}/audit-download" if execution_id else None
     )
 
     # 44px on the server-rendered page, because most visitors arrive on a phone
@@ -910,11 +916,10 @@ def build_view(
             ("See what else was built", "/dashboard#gallery", False),
         ]
     else:
-        actions = [
-            ("Download deliverables", download_href, True),
-            ("Audit bundle", audit_href, False),
-            ("Open run page ↗", f"/run/{run_id}", False),
-        ]
+        actions = [("Download deliverables", download_href, True)]
+        if audit_href:
+            actions.append(("Audit bundle", audit_href, False))
+        actions.append(("Open run page ↗", f"/run/{run_id}", False))
 
     return {
         "log": log,
@@ -944,7 +949,6 @@ def build_view(
             for p in (log.get("code_problems") or [])
         ],
         "precheck_error": log.get("code_precheck_error"),
-        "replayed": bool((log.get("idempotency") or {}).get("replayed")),
         "timeline": _timeline_rows(durable, manifest),
         "metrics": {
             "units": sum(len(w) for w in waves),
@@ -960,7 +964,6 @@ def render(ctx: dict) -> str:
     label, body = _FOOTER.get(ctx["surface"], _FOOTER["console"])
     return f"""<div class="rd" id="view-run" data-surface="{esc(ctx["surface"])}">
   {_header(ctx)}
-  {_replay(ctx)}
   {_triad(ctx)}
   {_placement(ctx)}
   {_metrics(ctx)}

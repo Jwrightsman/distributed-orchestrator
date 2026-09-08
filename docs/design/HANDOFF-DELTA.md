@@ -417,3 +417,34 @@ browser, and never off that table.** The archive's header says so at the top of
 the file where the table is.
 
 No token was added, changed or removed in this pass.
+
+### 8.11 — new. The replay line has no source at read time.
+
+The design draws a line for a run that was *returned rather than re-run* —
+"pitched again under the same idempotency key, so nothing was built twice" —
+and §13.7 cites ADR 0008 and `execution/idempotency.py` for it.
+
+Nothing serves it to a reader. `replayed` is a property of the **POST
+response**: `SubmittedExecution.replayed`, surfaced as the
+`Idempotency-Replayed` header and then gone. It never reaches
+`ExecutionResultV1`, which has no idempotency field of any kind. The durable
+`execution_submissions` table stores digest-only rows keyed by
+`(requester_scope_hash, idempotency_key_hash)` and is not reachable from an
+execution id, and it records the *mapping* rather than the fact that a later
+pitch replayed it.
+
+So the line is **not drawn**. This is the gap most likely to be closed by
+accident: reading it off a plausible-looking log key renders a line that is
+always absent, looks like it works, and would start lying the moment someone
+wrote that key for another reason.
+
+*Extend:* add `replayed_at` (or a counter) to `ExecutionResultV1` and set it on
+the replay branch of `ExecutionService.submit_idempotent`, which already knows.
+Terminal state is monotonic under ADR 0009, so this has to be written as a
+separate durable fact about the *submission* rather than as a mutation of the
+returned execution — the same shape the provenance envelope uses to reference an
+execution without living on one.
+
+*Or drop:* leave it undrawn. A person who pitched the same task twice under one
+key already knows; the reader who was handed a link does not need to be told
+that the run they are looking at was cheap to produce.
