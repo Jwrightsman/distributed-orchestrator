@@ -293,8 +293,127 @@ for. This is not a pending decision.
 
 ## 7. API gaps that still bind the Nodes view
 
+> **Superseded in part by §8.2 below.** Per-unit node assignment *is* served —
+> `ExecutionUnitSummaryV1.node_id`, populated from the accepted receipt. The
+> paragraph below stands for the node **map**, which draws live machine state
+> rather than a finished run's placement, and the rule it ends on stands
+> everywhere: degrade, do not invent an assignment.
+
 Handoff §8.2 is still open: **per-unit node assignment is not served.**
 `observed_placements` (`execution/contracts.py:483`, `max_length=2`) and per-unit
 `depends_on` (`:388`) are. The node map therefore draws dependency structure and
 declines to draw machine-to-machine lines, because the datum that would place a
 unit on a machine does not exist. Degrade; do not invent an assignment.
+
+---
+
+## 8. The handoff's §8 gap list, corrected and extended
+
+Written while porting §13 (run detail) against
+[`run-detail-2026-09-07/`](run-detail-2026-09-07/). Two of the gaps that list
+records as open are closed in source; two are new. The rule the archive header
+states applies here too: **where source and either document disagree, source
+wins, and it gets written down here.**
+
+### 8.1 — closed. Per-run duration is served.
+
+The list says per-run wall-clock duration is unserved and the `WALL` column
+should be dropped or the payload extended. `ExecutionResultV1.duration_ms`
+exists (`execution/contracts.py`) and `execution/service.py` sets it on every
+completion path, alongside `created_at`, `started_at` and `completed_at`.
+Measured on a real strategy run: `duration_ms=249`, with all three timestamps
+populated.
+
+Run detail still shows **no wall clock in the metric strip**, and that is now a
+design decision rather than a gap: the strip is four counts, and the duration
+belongs in the timeline where it is a timestamp rather than a headline figure.
+The `WALL` column in Runs stays dropped for the same reason and can be
+reinstated whenever someone wants it — the number is there.
+
+**The speed multiplier is still not computable**, and that has not changed: it
+needs a serial baseline, and nothing records what a task would have taken on one
+machine. Its absence is a different kind of absence from the duration's and the
+two should not be reported together.
+
+### 8.2 — closed for the node half. Per-unit machine assignment is served.
+
+Both the handoff's §8.2 and this document's own §7 say per-unit node assignment
+is not served, and the design draws `machine not recorded` on every unit card
+because of it. That is stale.
+
+`ExecutionUnitSummaryV1.node_id` (`execution/contracts.py`) is populated by
+`_unit_summary` in `execution/strategies.py` from `DispatchResult.node_id`,
+which `Dispatcher._distributed` sets from `receipt.assigned_node_id`. It
+survives `ExecutionStore`'s `result_json` round trip and is served by
+`GET /v1/executions/{id}`. Verified by instrumenting
+`tests/test_execution_strategies.py`, which already asserts the sibling fields
+`enrollment_id` and `capability_descriptor_hash` arrive by the same path:
+`node_id` came through as `"worker"` in the served JSON.
+
+Per-unit **duration** is served too, on the same object.
+
+So run detail renders what is there: a distributed unit names its machine, a
+local unit says `this machine`, and only a unit with neither says
+`machine not recorded`. Printing "not recorded" over a run whose machine *is*
+recorded would be a false statement on the surface whose whole discipline is not
+making them. It is read off the unit and **never** borrowed from `/nodes`, which
+is the part of the original rule that still binds — `/nodes` says what a machine
+is doing now, not what it did on a finished run.
+
+The Nodes view's node map is unaffected by this note and is not redrawn here.
+
+### 8.9 — new. The run-detail timeline.
+
+**Decision: render it from `/v1/executions/{id}`, and say `+—` with a reason for
+the rest. Nothing fetches the audit bundle.**
+
+The design sources the timeline from `full_log.json`, which ships inside the
+**audit** bundle. That bundle is deliberately a separate download scope, asked
+for by name so a handoff never carries the run's own paperwork by accident.
+Auto-fetching it to draw a panel would undo that separation quietly and on every
+page view, which is worse than the separation never existing — a reader who
+clicked nothing would still have caused the transfer.
+
+What the execution record does timestamp is drawn: `created_at` as `+0.0s`,
+`started_at`, `completed_at`, and the manifest's `sealed_at`. What it does not
+is one row reading `+—` and naming the absence: per-unit start and finish times
+are not timestamped, only each unit's own duration is.
+
+`/run/{id}` reads the run directory's own `full_log.json` off disk, as it always
+has — that is how it loads the run at all. The distinction is the *bundle*, not
+the file: no surface reaches for the packaged artifact, by HTTP or by opening the
+zip. `tests/test_run_detail.py::test_nothing_fetches_the_audit_bundle_to_render_run_detail`
+holds that.
+
+*Extend:* add per-unit `started_at` / `completed_at` to `ExecutionUnitSummaryV1`.
+The dispatcher already measures the interval it reports as `duration_ms`, so
+this is recording two numbers it has rather than deriving a new one, and the
+timeline then draws per-unit rows with no new endpoint and no bundle fetch.
+
+*Or drop:* remove the panel. Four timestamps and one stated absence is a thin
+timeline, and a panel that is mostly `+—` may be worth less than the space. The
+argument against dropping is that the four it does carry — submission committed,
+started, terminal state committed, manifest sealed — are exactly the four
+moments the durability story turns on, and nothing else on the surface shows
+that the terminal state was committed *before* the manifest was sealed.
+
+### 8.10 — new. The archived README's colour table is not the shipped palette.
+
+`run-detail-2026-09-07/README.md` carries a "Design tokens" table, and its
+values are not the ones in `templates/_theme.html` — nor the ones in its own
+`spec/_theme.html`, which is token-for-token identical to the shipped file (same
+54 names, same values in both themes, differing only in one comment and its line
+endings).
+
+Eleven of the table's entries disagree with what renders, including `--bg`
+(`#030405` against the shipped `#08090A`), `--border` (`#262A30` against
+`#1E2126`), `--text-muted` (`#949BA3` against `#868C95`), `--slate` (`#949AA2`
+against `#7D848D`) and light `--bg` (`#F1F3F5` against `#FFFFFF`).
+
+This is harmless to the port, which only ever writes `var(--token)`. It is not
+harmless to anyone checking contrast: measuring against that table measures a
+palette that is not on screen. **Read contrast off the shipped theme, or off the
+browser, and never off that table.** The archive's header says so at the top of
+the file where the table is.
+
+No token was added, changed or removed in this pass.
