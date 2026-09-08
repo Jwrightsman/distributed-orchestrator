@@ -1,0 +1,254 @@
+<!-- Shared theme layer — drop-in replacement for templates/_theme.html.
+     Injected into every page by dashboard.py at the `<!-- THEME -->` marker.
+
+     This is a SUPERSET of the previous token set: every name the existing
+     pages already reference is still defined, so index.html, dashboard.html
+     and try.html keep working unchanged and immediately pick up the new
+     palette. The additions (--mark, --text-faint, --on-accent, --warn-text,
+     --warn-body, --warn-wash, --warn-line, --accent-strong, --violet,
+     --slate, --lift) are what the console markup uses.
+
+     Two deliberate changes from the old file:
+
+     1. --mark is the brand colour and is NEUTRAL, not green. Green used to
+        mean both "Mycelium" and "PASS", which is a collision on a page whose
+        whole job is reporting state. Green is now reserved for status.
+     2. --radius drops from 8px to 5px (and 6px/12px to 4px/6px). Hairline
+        tables at this density read as toy-like at 8px corners.
+
+     FONTS: the stacks name IBM Plex first and fall back to system UI fonts.
+     No webfont is loaded here on purpose — this project makes a point of not
+     phoning home, and a Google Fonts <link> on every page would be a request
+     per visitor. To actually get Plex, self-host the woff2 files under
+     static/ and add an @font-face block below. Without that the pages render
+     in system fonts, which is a graceful and honest default. -->
+<script>
+  // Runs before paint: a theme applied after first render flashes the wrong
+  // colours, which is the tell of a bolted-on dark mode.
+  (function () {
+    try {
+      var saved = localStorage.getItem('mycelium-theme');
+      var system = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', saved || system);
+    } catch (e) {
+      document.documentElement.setAttribute('data-theme', 'dark');
+    }
+  })();
+</script>
+<style>
+  /* ── Design tokens ───────────────────────────────────────────────────
+     Dark is the default because this is a monitoring surface people leave
+     open; light ships alongside it rather than as an afterthought.
+
+     Colour is reserved for state that means something. Structure comes from
+     typography, hairlines and spacing — a developer audience reads saturated
+     decoration as a toy. */
+  :root {
+    color-scheme: dark;
+
+    --bg:             #08090A;
+    --bg-elevated:    #0B0C0E;
+    --surface:        #0C0D0F;
+    --surface-hover:  #101215;
+    --surface-sunken: #050607;
+
+    /* Hairlines. --border-subtle is the row divider and is deliberately
+       almost invisible; --border outlines a panel; --border-strong is for a
+       control that must read as interactive. */
+    --border-subtle:  #131518;
+    --border:         #1E2126;
+    --border-strong:  #2A2E34;
+
+    /* --text-muted and --text-faint hold every uppercase column header, the
+       nav section labels and the activity-log timestamps, all at 11px. They
+       are tuned to clear 4.5:1 against --bg AND --surface; the older, darker
+       values measured 4.0:1 and 2.6:1. Do not darken them again. */
+    --text:           #E8E9EB;
+    --text-dim:       #9CA1A8;
+    --text-muted:     #868C95;
+    --text-faint:     #7E848C;
+
+    /* Brand. Neutral on purpose — see the note at the top of this file. */
+    --mark:           #E8E9EB;
+
+    /* Status green. Never used for branding or decoration. */
+    --accent:         #3FB950;
+    --accent-dim:     #2C8C3C;
+    --accent-text:    #3FB950;
+    --accent-strong:  #4ACB5D;
+    --accent-wash:      rgba(63,185,80,0.08);
+    --accent-wash-mid:  rgba(63,185,80,0.14);
+    --accent-border:    rgba(63,185,80,0.24);
+    --accent-line:      rgba(63,185,80,0.35);
+    --accent-glow:      rgba(63,185,80,0.45);
+    --on-accent:      #06210C;
+
+    --warn:           #C9922B;
+    --warn-text:      #E8C88A;
+    --warn-body:      #9A8B6B;
+    --warn-wash:      #14100A;
+    --warn-line:      #3B3222;
+
+    --danger:         #E5534B;
+    --danger-text:    #F0938C;
+    --danger-body:    #C29691;
+    --danger-wash:    rgba(229,83,75,0.10);
+    --danger-line:    rgba(229,83,75,0.28);
+
+    --highlight:      #E8FF47;
+    --highlight-line: rgba(232,255,71,0.50);
+    --highlight-wash: rgba(232,255,71,0.18);
+
+    --info:           #5B8DEF;
+    --info-wash:      rgba(91,141,239,0.08);
+    --info-line:      rgba(91,141,239,0.30);
+    --violet:         #9A7BE0;
+    --slate:          #7D848D;
+
+    --overlay:        rgba(4,5,6,0.72);
+    --scrim:          rgba(8,9,10,0.95);
+    --shadow:         rgba(0,0,0,0.30);
+    --lift:           0 24px 64px rgba(0,0,0,0.60);
+
+    /* Pipeline stages — distinguishable but low-chroma; these labels repeat
+       on every line of the activity log. */
+    --stage-pitch:  #7D848D;
+    --stage-plan:   #5B8DEF;
+    --stage-build:  #3FB950;
+    --stage-review: #9A7BE0;
+
+    --radius:    5px;
+    --radius-sm: 4px;
+    --radius-lg: 6px;
+
+    --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, 'SF Mono', 'Cascadia Code', Consolas, monospace;
+    --sans: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, system-ui, sans-serif;
+  }
+
+  /* Light theme. Not an inversion — a green that reads well on black is too
+     bright on white, so the accent darkens to hold >=4.5:1 for text use. */
+  :root[data-theme="light"] {
+    color-scheme: light;
+
+    --bg:             #FFFFFF;
+    --bg-elevated:    #FCFCFD;
+    --surface:        #F7F8F9;
+    --surface-hover:  #F0F2F4;
+    --surface-sunken: #EEF0F2;
+
+    --border-subtle:  #EBEDEF;
+    --border:         #DDE0E4;
+    --border-strong:  #C4C9CE;
+
+    --text:           #16181D;
+    --text-dim:       #4A5057;
+    --text-muted:     #656C74;
+    --text-faint:     #6E747C;
+
+    --mark:           #16181D;
+
+    --accent:         #1A7F37;
+    --accent-dim:     #157030;
+    --accent-text:    #12692E;
+    --accent-strong:  #12692E;
+    --accent-wash:      rgba(26,127,55,0.07);
+    --accent-wash-mid:  rgba(26,127,55,0.13);
+    --accent-border:    rgba(26,127,55,0.28);
+    --accent-line:      rgba(26,127,55,0.40);
+    --accent-glow:      rgba(26,127,55,0.30);
+    --on-accent:      #FFFFFF;
+
+    --warn:           #9A6700;
+    --warn-text:      #6B4A00;
+    --warn-body:      #7A6430;
+    --warn-wash:      #FFF8E6;
+    --warn-line:      #E8D9A8;
+
+    --danger:         #CF222E;
+    --danger-text:    #A0111B;
+    --danger-body:    #7A2E33;
+    --danger-wash:    rgba(207,34,46,0.08);
+    --danger-line:    rgba(207,34,46,0.30);
+
+    --highlight:      #6B7A00;
+    --highlight-line: rgba(107,122,0,0.45);
+    --highlight-wash: rgba(107,122,0,0.14);
+
+    --info:           #0969DA;
+    --info-wash:      rgba(9,105,218,0.07);
+    --info-line:      rgba(9,105,218,0.28);
+    --violet:         #8250DF;
+    --slate:          #57606A;
+
+    --overlay:        rgba(20,24,31,0.42);
+    --scrim:          rgba(255,255,255,0.96);
+    --shadow:         rgba(16,22,26,0.14);
+    --lift:           0 20px 52px rgba(16,22,26,0.18);
+
+    --stage-pitch:  #57606A;
+    --stage-plan:   #0969DA;
+    --stage-build:  #1A7F37;
+    --stage-review: #8250DF;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0s !important; animation-iteration-count: 1 !important; }
+  }
+</style>
+
+<script>
+// Every page must be able to switch theme. The console has a designed slot in
+// its sidebar footer; pages without one get a floating control here, so adding
+// a new page never means remembering to wire the toggle by hand.
+(function () {
+  function label(el, theme) {
+    var i = el.querySelector('[data-theme-icon]'), l = el.querySelector('[data-theme-label]');
+    if (i) i.textContent = theme === 'dark' ? '\u2600' : '\u263e';
+    if (l) l.textContent = theme === 'dark' ? 'Light' : 'Dark';
+  }
+  function current() { return document.documentElement.getAttribute('data-theme') || 'dark'; }
+
+  document.addEventListener('DOMContentLoaded', function () {
+    if (document.getElementById('theme-toggle')) return;  // page supplies its own
+
+    var btn = document.createElement('button');
+    btn.id = 'theme-toggle-floating';
+    btn.type = 'button';
+    btn.setAttribute('aria-label', 'Switch colour theme');
+    btn.innerHTML = '<span data-theme-icon aria-hidden="true"></span><span data-theme-label></span>';
+    btn.style.cssText = [
+      'position:fixed', 'top:12px', 'right:12px', 'z-index:60',
+      'display:inline-flex', 'align-items:center', 'gap:6px',
+      'padding:4px 9px', 'cursor:pointer',
+      'font-family:var(--mono)', 'font-size:11px',
+      'color:var(--text-muted)', 'background:none',
+      'border:1px solid var(--border)', 'border-radius:var(--radius-sm,4px)',
+      'transition:color .12s ease,border-color .12s ease'
+    ].join(';');
+    btn.addEventListener('mouseenter', function () {
+      btn.style.borderColor = 'var(--border-strong)'; btn.style.color = 'var(--text)';
+    });
+    btn.addEventListener('mouseleave', function () {
+      btn.style.borderColor = 'var(--border)'; btn.style.color = 'var(--text-muted)';
+    });
+    btn.addEventListener('click', function () {
+      var next = current() === 'dark' ? 'light' : 'dark';
+      try { localStorage.setItem('mycelium-theme', next); } catch (e) {}
+      document.documentElement.setAttribute('data-theme', next);
+      label(btn, next);
+    });
+    document.body.appendChild(btn);
+    label(btn, current());
+  });
+
+  // Follow the OS only while the user has not chosen for themselves.
+  try {
+    window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', function (e) {
+      try { if (localStorage.getItem('mycelium-theme')) return; } catch (_) {}
+      document.documentElement.setAttribute('data-theme', e.matches ? 'light' : 'dark');
+      var b = document.getElementById('theme-toggle-floating');
+      if (b) label(b, e.matches ? 'light' : 'dark');
+    });
+  } catch (e) { /* older browsers */ }
+})();
+</script>
