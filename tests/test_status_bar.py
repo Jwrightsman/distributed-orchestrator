@@ -567,15 +567,24 @@ def test_a_count_that_stops_being_current_is_held_and_greyed_not_blanked():
     assert ".statusbar-cell.is-stale .statusbar-v { color: var(--text-faint); }" in css
 
 
-def test_the_modal_never_shows_a_problem_list_beside_a_precheck_error():
+def test_run_detail_never_shows_a_problem_list_beside_a_precheck_error():
     """execution/validators.py refuses to construct a record carrying both a
     runner failure and code problems. The UI is where that separation could be
-    quietly re-merged, so the branch is exclusive rather than additive."""
-    js = DASHBOARD_JS.read_text(encoding="utf-8")
-    block = js[js.index("const precheckError = data.code_precheck_error;"):]
-    block = block[: block.index("filesEl.innerHTML = html;")]
-    assert "if (precheckError) {" in block
-    assert "} else if (problems.length) {" in block, (
+    quietly re-merged, so the branch is exclusive rather than additive.
+
+    The rule moved with the markup: the modal no longer builds its own layout,
+    and run_detail.py now renders the deliverable panel for the console and
+    /run/{id} alike. Same rule, one place instead of two.
+    """
+    source = (
+        Path(__file__).resolve().parent.parent / "run_detail.py"
+    ).read_text(encoding="utf-8")
+    block = source[source.index('if ctx["precheck_error"]:'):]
+    block = block[: block.index("prose_html =")]
+    assert 'elif ctx["problems"]:' in block, (
         "problems and the precheck error are rendered independently, so a record "
         "could show both"
+    )
+    assert block.index('if ctx["precheck_error"]:') < block.index('elif ctx["problems"]:'), (
+        "an empty problem list printed first would read as 'checked, clean'"
     )

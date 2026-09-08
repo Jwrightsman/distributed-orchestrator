@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+import dashboard
 import run_detail
 from execution.contracts import ExecutionRequestV1, ExecutionResultV1
 from server import app
@@ -94,8 +95,8 @@ def test_the_action_row_shrinks_so_it_can_wrap():
 
 def test_both_modals_share_the_header_rule():
     """The node modal is fixed by the same four declarations, not a copy."""
-    dashboard = (TEMPLATES / "dashboard.html").read_text(encoding="utf-8")
-    heads = dashboard.count('class="modal-head"')
+    page = (TEMPLATES / "dashboard.html").read_text(encoding="utf-8")
+    heads = page.count('class="modal-head"')
     assert heads == 2, f"expected the run and node modals to share the class, found {heads}"
 
 
@@ -872,3 +873,53 @@ def test_every_state_survives_greyscale():
     )
     for filled in ("is-ok", "is-bad", "is-neutral"):
         assert "background:" in _rule(RUN_DETAIL_CSS, f".rd-marker.{filled}")
+
+
+# ── Overview's two stale citations ───────────────────────────────────
+
+
+def test_overview_and_the_status_bar_never_put_one_word_over_two_numbers(client):
+    """The archived handoff had Overview read "running now" and "queued" off
+    `/health`. It has no running count at all, and its `tasks_pending` is the
+    *subtask* queue rather than the job queue — so ported as written, one
+    screen would have carried QUEUED over two different numbers with no way
+    for a reader to tell which one was the queue they meant.
+
+    RUNNING and QUEUED are the status bar's, both from `/metrics`, and there
+    is exactly one of each on the page. Overview's cell is named after the
+    number it actually holds.
+    """
+    page = dashboard._page("dashboard.html")
+    body = page[page.index("<body"):]
+    labels = re.findall(r'class="stat-label">([^<]*)<', body)
+    cells = re.findall(r'class="statusbar-k">([^<]*)<', body)
+
+    assert "Subtasks pending" in labels, (
+        "Overview's subtask queue is not named after the number it holds"
+    )
+    assert "Tasks pending" not in labels, (
+        "a cell called 'Tasks pending' beside a bar cell called QUEUED is two "
+        "labels a reader takes for one thing, over two different numbers"
+    )
+    for word in ("RUNNING", "QUEUED"):
+        assert cells.count(word) == 1, f"{word} appears {cells.count(word)} times"
+        assert not any(word.lower() in label.lower() for label in labels), (
+            f"Overview also carries {word}, so the page has two of them"
+        )
+
+
+def test_running_and_queued_come_from_the_same_source_as_the_status_bar():
+    """`/health` has no running count, and its `tasks_pending` is a different
+    number from `/metrics.jobs_queued`. Reading both cells off `/metrics` is
+    what makes it impossible for the two to disagree.
+    """
+    block = JS[JS.index("const met = await apiJson('/metrics');"):]
+    block = block[: block.index("} catch (e) {")]
+    assert "statusText.running = String(met.jobs_running);" in block
+    assert "statusText.queued = String(met.jobs_queued);" in block
+
+    health = JS[JS.index("if (health) {"):JS.index("const met = await apiJson")]
+    for wrong in ("statusText.running", "statusText.queued"):
+        assert wrong not in health, (
+            f"{wrong} is set from /health, which does not serve that number"
+        )

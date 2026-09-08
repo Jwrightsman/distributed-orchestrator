@@ -460,6 +460,12 @@ async function pollStatus() {
     statusFresh.inference = true;
     statusFresh.nodes = true;
     setText('stat-nodes', health.nodes_online);
+    /* The subtask queue, under a label that says so. The archived handoff had
+       Overview read "running now" and "queued" off /health: it has no running
+       count at all, and its tasks_pending is this number rather than the job
+       queue. Ported as written, one screen would have carried QUEUED over two
+       different numbers. RUNNING and QUEUED are the status bar's, from
+       /metrics, and there is exactly one of each. */
     setText('stat-tasks', health.tasks_pending);
     setText('stat-models', (health.models || []).length);
   } else {

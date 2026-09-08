@@ -123,9 +123,15 @@
             <span class="stat-value" id="stat-nodes">0</span>
             <span class="stat-label">Nodes online</span>
           </div>
+          <!-- This is /health.tasks_pending, the SUBTASK queue. The status bar
+               30px away carries QUEUED, which is /metrics.jobs_queued, the JOB
+               queue -- a different number. Under two labels a reader could take
+               for the same thing, one of them is always wrong, and the reader
+               has no way to tell which. So the cell is named after the number
+               it actually holds. Not both under one word. -->
           <div class="stat">
             <span class="stat-value" id="stat-tasks">0</span>
-            <span class="stat-label">Tasks pending</span>
+            <span class="stat-label">Subtasks pending</span>
           </div>
           <div class="stat">
             <span class="stat-value" id="stat-models">-</span>
