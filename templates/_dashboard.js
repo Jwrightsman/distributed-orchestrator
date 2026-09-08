@@ -1196,7 +1196,13 @@ async function viewRun(timestamp) {
     // layout this port exists to remove.
     $('modal-title').textContent = data.task || 'Run detail';
 
-    panel.innerHTML = data.detail_html || '';
+    // An empty fragment means the server could not build it. That costs the
+    // panel and nothing else -- /history/{timestamp} still answers, because
+    // it has other consumers -- so the modal says so rather than opening blank.
+    panel.innerHTML = data.detail_html || (
+      '<div class="empty-state"><p>This run’s detail could not be built.<br>'
+      + 'The run itself is still there; open its page for the server-rendered view.</p></div>'
+    );
     openModal('output-modal');
   } catch (e) {
     console.error('Failed to load run:', e);

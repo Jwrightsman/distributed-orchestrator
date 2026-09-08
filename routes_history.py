@@ -5,6 +5,7 @@ out of the output/ directory.
 
 import io
 import json
+import logging
 import zipfile
 from datetime import datetime, timezone
 
@@ -22,6 +23,7 @@ from execution.publication import (
 )
 from server_state import OUTPUT_DIR
 
+logger = logging.getLogger("mycelium.history")
 router = APIRouter()
 
 
@@ -119,7 +121,14 @@ def _detail_html(
     review: str = "",
     final_output: str = "",
 ) -> str:
-    """The console's run detail, from the same builder /run/{id} uses."""
+    """The console's run detail, from the same builder /run/{id} uses.
+
+    This is one added field on an endpoint that already had consumers --
+    `evals/run_evals.py` reads its JSON on every completed remote run. A
+    rendering bug must not be able to take that away, so a failure here costs
+    the console its panel and nothing else. The console renders its own
+    could-not-load state when the fragment comes back empty.
+    """
     from routes_run import durable_record, provenance_envelope
 
     log = dict(log)
@@ -136,19 +145,23 @@ def _detail_html(
     except (LegacyRunNotPublished, OSError):
         preview, prose = None, ""
 
-    return run_detail.render(
-        run_detail.build_view(
-            log,
-            publication=publication,
-            durable=durable,
-            envelope=provenance_envelope(publication),
-            surface="console",
-            run_id=timestamp,
-            relative_age=_relative(str(log.get("timestamp") or timestamp)),
-            preview=preview,
-            prose=prose,
+    try:
+        return run_detail.render(
+            run_detail.build_view(
+                log,
+                publication=publication,
+                durable=durable,
+                envelope=provenance_envelope(publication),
+                surface="console",
+                run_id=timestamp,
+                relative_age=_relative(str(log.get("timestamp") or timestamp)),
+                preview=preview,
+                prose=prose,
+            )
         )
-    )
+    except Exception:
+        logger.warning("run detail could not be rendered for %s", timestamp, exc_info=True)
+        return ""
 
 
 @router.get("/history/{timestamp}")

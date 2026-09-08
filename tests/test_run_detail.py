@@ -923,3 +923,28 @@ def test_running_and_queued_come_from_the_same_source_as_the_status_bar():
         assert wrong not in health, (
             f"{wrong} is set from /health, which does not serve that number"
         )
+
+
+def test_a_rendering_failure_costs_the_panel_and_not_the_endpoint(client, monkeypatch):
+    """`/history/{timestamp}` had consumers before this pass.
+
+    `evals/run_evals.py` reads its JSON on every completed remote run, so a
+    bug in the run-detail renderer must not be able to take that away. The
+    console shows its own could-not-build state instead.
+    """
+    run = _published()
+    import run_detail as module
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("a rendering bug")
+
+    monkeypatch.setattr(module, "render", boom)
+    body = client.get(f"/history/{run}")
+    assert body.status_code == 200, "a rendering bug took down the endpoint"
+    payload = body.json()
+    assert payload["detail_html"] == ""
+    for field in ("task", "plan", "rating", "code_files", "final_output"):
+        assert field in payload, f"{field} was lost with the fragment"
+    assert "This run\u2019s detail could not be built" in JS, (
+        "the console opens a blank modal when the fragment is empty"
+    )
