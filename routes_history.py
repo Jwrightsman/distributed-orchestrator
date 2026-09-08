@@ -6,11 +6,13 @@ out of the output/ directory.
 import io
 import json
 import zipfile
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from starlette.background import BackgroundTask
 
+import run_detail
 from execution.artifacts import ArtifactError
 from execution.publication import (
     LegacyRunNotPublished,
@@ -85,6 +87,70 @@ async def history(search: str = "", limit: int = 50):
     return {"runs": runs, "count": len(runs)}
 
 
+def _relative(timestamp: str) -> str:
+    """An age, for the console only.
+
+    The console polls and re-renders, so an age it can correct is honest
+    there. `/run/{id}` never gets one: it is a snapshot with no client, and
+    "2h 14m ago" on a page nothing refreshes is a sentence that stops being
+    true the moment it is written.
+    """
+    try:
+        moment = datetime.strptime(timestamp, "%Y%m%d_%H%M%S").replace(
+            tzinfo=timezone.utc
+        )
+    except (TypeError, ValueError):
+        return ""
+    delta = int(datetime.now(timezone.utc).timestamp() - moment.timestamp())
+    if delta < 60:
+        return "just now"
+    if delta < 3600:
+        return f"{delta // 60}m ago"
+    if delta < 86400:
+        return f"{delta // 3600}h ago"
+    return f"{delta // 86400}d ago"
+
+
+def _detail_html(
+    log: dict,
+    timestamp: str,
+    publication,
+    *,
+    review: str = "",
+    final_output: str = "",
+) -> str:
+    """The console's run detail, from the same builder /run/{id} uses."""
+    from routes_run import durable_record, provenance_envelope
+
+    log = dict(log)
+    log["_publication"] = publication
+    # Both live beside the log rather than in it, and the deliverable panel's
+    # prose is drawn from them.
+    log["review"] = review
+    log["final_output"] = final_output
+    durable = durable_record(publication)
+    try:
+        from routes_run import _preview, _prose
+
+        preview, prose = _preview(log, publication, durable), _prose(log)
+    except (LegacyRunNotPublished, OSError):
+        preview, prose = None, ""
+
+    return run_detail.render(
+        run_detail.build_view(
+            log,
+            publication=publication,
+            durable=durable,
+            envelope=provenance_envelope(publication),
+            surface="console",
+            run_id=timestamp,
+            relative_age=_relative(str(log.get("timestamp") or timestamp)),
+            preview=preview,
+            prose=prose,
+        )
+    )
+
+
 @router.get("/history/{timestamp}")
 async def history_detail(timestamp: str):
     """Get full details of a past pipeline run."""
@@ -136,6 +202,20 @@ async def history_detail(timestamp: str):
         "code_precheck_error": log.get("code_precheck_error"),
         "mode": log.get("mode", "local"),
         "project_id": log.get("project_id") or None,
+        # Run detail is one structure on three surfaces, so the console gets
+        # the structure rather than the parts to rebuild it from. Built by
+        # run_detail.py, the same call /run/{id} makes, which is what stops
+        # the two from drifting -- and what lets the console read lifecycle,
+        # validation and assurance separately without a new route: the
+        # publication this route already had to establish carries the
+        # execution id, and the server reads its own store from there.
+        "detail_html": _detail_html(
+            log,
+            timestamp,
+            publication,
+            review=review_content,
+            final_output=final_output,
+        ),
     }
 
 

@@ -1160,96 +1160,43 @@ function _showCompletedCard(pipelineId, task, result) {
   `;
 }
 
-// ── Output viewer ────────────────────────────────────────────────
-function renderOutput(text) {
-  if (!text) return '<div class="prose-text">No review output.</div>';
-
-  const parts = [];
-  // This pattern used to be written with doubled backslashes, which made it
-  // match a literal "\w" — so no fenced block ever matched and every review
-  // rendered as one undifferentiated wall of prose, fences and all.
-  const codeRe = /```(\w*)\n([\s\S]*?)```/g;
-  let last = 0, m;
-
-  while ((m = codeRe.exec(text)) !== null) {
-    if (m.index > last) {
-      parts.push(`<div class="prose-text">${escHtml(text.slice(last, m.index))}</div>`);
-    }
-    parts.push(`
-      <div class="code-block">
-        <div class="code-block-header">
-          <span>${escHtml(m[1] || 'text')}</span>
-          <button type="button" class="code-block-copy">copy</button>
-        </div>
-        <pre>${escHtml(m[2])}</pre>
-      </div>`);
-    last = m.index + m[0].length;
-  }
-
-  if (last < text.length) {
-    parts.push(`<div class="prose-text">${escHtml(text.slice(last))}</div>`);
-  }
-
-  return parts.join('') || `<div class="prose-text">${escHtml(text)}</div>`;
-}
-
 let _currentModalTimestamp = null;
 
+/* Run detail in the console.
+
+   The modal used to build its own layout out of the pieces: a plan list, a
+   file-chip row and the review blob. That layout and templates/run.html were
+   two drawings of one structure, and they had already drifted -- the modal
+   showed no defects and no not-checked state, and neither showed the three
+   axes at all.
+
+   Now the server builds the structure once in run_detail.py and both surfaces
+   render the same markup. This function fetches it and puts it in the panel.
+   Everything the console shows about a run -- the verdict, the three axes read
+   separately, the waves from depends_on, the manifest, the envelope sentence
+   -- comes down in that fragment, so there is nothing here that can disagree
+   with the run page.
+
+   The fragment is escaped where it is built, and it arrives from this
+   origin's own viewer-gated route. */
 async function viewRun(timestamp) {
+  const panel = $('modal-run-detail');
   try {
     _currentModalTimestamp = timestamp;
     const data = await apiJson(`/history/${encodeURIComponent(timestamp)}`);
 
-    $('modal-title').innerHTML =
-      escHtml(data.task) + ' '
-      + verdictChip(data.rating, data.code_precheck_error) + distBadge(data.mode);
+    // The dialog's accessible name. Visually hidden -- the surface below
+    // states the title, and a dialog that says it twice is the parallel
+    // layout this port exists to remove.
+    $('modal-title').textContent = data.task || 'Run detail';
 
-    $('modal-permalink').href = `/run/${encodeURIComponent(timestamp)}`;
-
-    $('modal-plan').innerHTML = (data.plan || []).map(st => `
-      <div class="plan-row">
-        <span class="plan-id">${escHtml(String(st.id))}</span>
-        <span class="plan-title">${escHtml(st.title)}</span>
-      </div>`).join('');
-
-    /* Files, then whichever of the two channels applies — never both, because
-       a record cannot carry both. routes_run.py:304 already renders this
-       distinction in prose on the run page; this is the same distinction in
-       the modal, which until now showed neither. */
-    const filesEl = $('modal-files');
-    const problems = data.code_problems || [];
-    const precheckError = data.code_precheck_error;
-    if (data.code_files && data.code_files.length) {
-      filesEl.hidden = false;
-      let html =
-        `<div class="files-label">Extracted files</div>
-         <div class="file-chips">${data.code_files.map(f => `<span class="file-chip">${escHtml(f)}</span>`).join('')}</div>`;
-      if (precheckError) {
-        // Said before anything else about these files, and never alongside a
-        // problem list: an empty list here would otherwise read as "clean".
-        html += `<p class="precheck-note">The mechanical check did not run to a verdict on
-          this run (${escHtml(String(precheckError))}), so these files are unchecked rather
-          than known good.</p>`;
-      } else if (problems.length) {
-        html += '<p class="precheck-note">The mechanical check flagged these, and they are '
-             + 'published rather than hidden:</p>'
-             + `<div class="problem-chips">${problems.slice(0, 8).map(
-                  pr => `<span class="problem-chip">${escHtml(
-                    typeof pr === 'string' ? pr : JSON.stringify(pr))}</span>`).join('')}</div>`;
-      }
-      filesEl.innerHTML = html;
-    } else {
-      filesEl.hidden = true;
-    }
-
-    // Prefer the clean final output over the full review blob
-    const outputContent = (data.final_output && data.final_output.trim())
-      ? data.final_output
-      : data.review;
-    $('modal-review').innerHTML = renderOutput(outputContent);
+    panel.innerHTML = data.detail_html || '';
     openModal('output-modal');
   } catch (e) {
     console.error('Failed to load run:', e);
+    panel.innerHTML = '<div class="empty-state"><p>This run could not be loaded.<br>'
+      + 'It may have been pruned, or the coordinator may be unreachable.</p></div>';
+    openModal('output-modal');
   }
 }
 
@@ -1641,14 +1588,6 @@ function renderTemplates() {
 }
 
 // ── Download / share ─────────────────────────────────────────────
-function downloadOutput() {
-  if (!_currentModalTimestamp) return;
-  const a = document.createElement('a');
-  a.href = `/history/${encodeURIComponent(_currentModalTimestamp)}/download`;
-  a.download = `output_${_currentModalTimestamp}.zip`;
-  a.click();
-}
-
 function copyShareLink() {
   if (!_currentModalTimestamp) return;
   const url = `${location.origin}/run/${encodeURIComponent(_currentModalTimestamp)}`;
@@ -1669,7 +1608,7 @@ function copyShareLink() {
 // because they are all real <button> and <a> elements now.
 document.addEventListener('click', (e) => {
   const t = e.target.closest('[data-tab], [data-close-modal], [data-node], [data-template], ' +
-                             '[data-fork], [data-share], [data-continue-project], .code-block-copy');
+                             '[data-fork], [data-share], [data-continue-project]');
   if (!t) return;
 
   if (t.dataset.tab) { showTab(t.dataset.tab); return; }
@@ -1690,13 +1629,6 @@ document.addEventListener('click', (e) => {
     continueProject(t.dataset.continueProject, t.dataset.projectName);
     return;
   }
-  if (t.classList.contains('code-block-copy')) {
-    const code = t.closest('.code-block').querySelector('pre').textContent;
-    navigator.clipboard?.writeText(code).then(() => {
-      t.textContent = 'copied!';
-      setTimeout(() => t.textContent = 'copy', 1500);
-    });
-  }
 });
 
 // Clicking the backdrop closes a dialog — but only the backdrop itself.
@@ -1713,7 +1645,6 @@ $('focus-pitch').addEventListener('click', focusPitch);
 $('pitch-btn').addEventListener('click', pitchTask);
 $('clear-project').addEventListener('click', clearProjectContext);
 $('new-project').addEventListener('click', promptNewProject);
-$('modal-download-btn').addEventListener('click', downloadOutput);
 $('modal-share-btn').addEventListener('click', copyShareLink);
 
 $('pitch-input').addEventListener('keydown', e => {
