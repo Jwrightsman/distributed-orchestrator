@@ -6,9 +6,12 @@ so there was nowhere to point when someone said "show me something the swarm
 built". This is that page: one run, one address, server-rendered so it
 previews correctly when pasted into Discord, Reddit or a comment.
 
-It answers, in order: what was asked for, how the planner split it, which
-machine built each piece and how long that took, what the reviewer said, what
-the reviser changed, what files came out, and what the ledger settled.
+The page leads with the deliverable and the plan follows, because plan is
+process and the code is the product. That structure is built by `run_detail.py`
+and is the same markup the console's run modal renders — one structure, two
+shells, so neither can drift from the other. What stays here is what the
+surface does not carry: the reviewer's own verdict, the reviser, settlement,
+and the full assembled output.
 
 Where a run predates a field, the page says so. The alternative — deriving a
 plausible number — is how this project once published a figure that was true
