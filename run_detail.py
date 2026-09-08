@@ -126,7 +126,9 @@ def _offset(start: datetime | None, moment: datetime | None) -> str:
         return "+—"
     if delta < 60:
         return f"+{delta:.1f}s"
-    return f"+{int(delta // 60)}m {int(delta % 60):02d}s"
+    if delta < 3600:
+        return f"+{int(delta // 60)}m {int(delta % 60):02d}s"
+    return f"+{int(delta // 3600)}h {int(delta % 3600 // 60):02d}m"
 
 
 def _stamp(value: Any) -> str:
@@ -922,7 +924,14 @@ def build_view(
         "surface": surface,
         "run_id": run_id,
         "relative_age": relative_age,
-        "execution_label": f"exec {execution_id}" if execution_id else f"run {run_id}",
+        # The id, whole. It is the thing someone pastes into an issue, so it is
+        # never shortened -- and never prefixed with a word it already starts
+        # with, which read as "exec exec_9f4c...".
+        "execution_label": (
+            str(execution_id)
+            if execution_id
+            else f"run {run_id}"
+        ),
         "waves": waves,
         "deliverables": deliverables,
         "preview": preview,

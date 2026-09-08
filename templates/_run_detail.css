@@ -29,7 +29,27 @@
   text-align: left;
 }
 
-/* ── Markers ───────────────────────────────────────────────────────
+/* A note on --text-faint and --text-muted.
+
+   They are one step apart in the ink hierarchy and nearly the same colour, but
+   only one of them clears AA on a panel. In the light theme --surface,
+   --surface-hover and --surface-sunken all sit below --bg, and --text-faint on
+   them measures 4.13 to 4.44:1 at the 11px these labels render at -- under the
+   4.5 the rest of this app holds. Measured in Chromium, composited over real
+   ancestors, in both themes.
+
+   (The ratios are the finding; the hex values are deliberately not written
+   here. test_no_page_hardcodes_a_colour scans comments too, and it is right
+   to: a colour written down in a comment is the first step to one written
+   down in a rule.)
+
+   So --text-faint stays for text on --bg and --bg-elevated (the header meta,
+   the age, a unit id on its own card ground) and --text-muted carries
+   everything inside a panel. Dark passes either way; light is the one that
+   fails, which is the failure mode tests/test_theme.py exists to prevent and
+   the reason every state is checked in both.
+
+── Markers ───────────────────────────────────────────────────────
    A styled span, never an icon font and never an SVG: the shape is the
    accessible signal, so it has to be something CSS can make hollow. */
 .rd-marker {
@@ -198,7 +218,7 @@
 }
 .rd-panel-meta {
   margin-left: auto; font-family: var(--mono); font-size: 11px;
-  color: var(--text-faint); min-width: 0; overflow-wrap: anywhere;
+  color: var(--text-muted); min-width: 0; overflow-wrap: anywhere;
 }
 .rd-panel-note {
   padding: 10px 13px; font-size: 11.5px; color: var(--text-muted);
@@ -225,7 +245,7 @@
 }
 .rd-file-name { font-family: var(--mono); font-size: 11.5px; color: var(--text-dim); }
 .rd-file-meta {
-  margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text-faint);
+  margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text-muted);
 }
 .rd-file-body {
   margin: 0; padding: 12px;
@@ -281,7 +301,7 @@
 .rd-unit-machine {
   font-family: var(--mono); font-size: 11px; color: var(--text-dim); margin-top: 7px;
 }
-.rd-unit-machine.is-absent { color: var(--text-faint); }
+.rd-unit-machine.is-absent { color: var(--text-muted); }
 
 /* ── Manifest ──────────────────────────────────────────────────────
    This panel gets a chip, because its state genuinely varies. The envelope
@@ -293,7 +313,7 @@
 }
 .rd-chip.is-sealed { color: var(--accent); border-color: var(--accent-dim); }
 .rd-hash {
-  font-family: var(--mono); font-size: 11px; color: var(--text-faint);
+  font-family: var(--mono); font-size: 11px; color: var(--text-muted);
   line-height: 1.55; overflow-wrap: anywhere;
 }
 .rd-group-bar {
@@ -305,7 +325,10 @@
   font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; color: var(--text-dim);
 }
 .rd-group-meta {
-  margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text-faint);
+  margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text-muted);
+  /* An execution id has no break opportunity, so at 330px this endpoint ran
+     68px past the panel edge. Found by opening it, not by reading it. */
+  min-width: 0; overflow-wrap: anywhere;
 }
 .rd-artifact {
   display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px;
@@ -315,13 +338,13 @@
   font-family: var(--mono); font-size: 11.5px; color: var(--text-dim);
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.rd-artifact-size { font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
+.rd-artifact-size { font-family: var(--mono); font-size: 11px; color: var(--text-muted); }
 .rd-artifact-sub {
   grid-column: 1 / -1; display: flex; gap: 9px; flex-wrap: wrap;
   font-family: var(--mono); font-size: 11px; line-height: 1.5;
 }
 .rd-artifact-role { color: var(--text-muted); }
-.rd-artifact-hash { color: var(--text-faint); }
+.rd-artifact-hash { color: var(--text-muted); }
 
 /* ── The provenance envelope ───────────────────────────────────────
    A sentence, not a chip. Deliberately no state colour anywhere in this
@@ -358,12 +381,12 @@
   border-bottom: 1px solid var(--border-subtle);
   font-family: var(--mono); font-size: 11px; line-height: 1.5;
 }
-.rd-tl-at { color: var(--text-faint); }
+.rd-tl-at { color: var(--text-muted); }
 .rd-tl-what { overflow-wrap: anywhere; color: var(--text-dim); }
 .rd-tl-what.is-dim    { color: var(--text-dim); }
 .rd-tl-what.is-info   { color: var(--info); }
 .rd-tl-what.is-ok     { color: var(--accent); }
-.rd-tl-what.is-absent { color: var(--text-faint); }
+.rd-tl-what.is-absent { color: var(--text-muted); }
 
 /* ── Footer ────────────────────────────────────────────────────────── */
 .rd-foot {
@@ -374,7 +397,7 @@
 }
 .rd-foot .rd-marker { margin-top: 4px; }
 .rd-foot-label {
-  font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-muted);
 }
 .rd-foot-note {
   font-size: 12px; color: var(--text-muted); line-height: 1.65;
