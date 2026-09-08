@@ -32,6 +32,7 @@ the normative source for the first two:
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
@@ -47,16 +48,24 @@ TEMPLATES = Path(__file__).resolve().parent.parent / "templates"
 # partial injection the server uses.
 STANDALONE = ("index.html", "dashboard.html", "try.html", "locked.html")
 
-# Every template and partial, checked as raw source.
+# Every template and partial, checked as raw source. `_run_detail.css` styles
+# the run-detail surface on both the console and the public run page, so the
+# rules follow it there rather than leaving a hole where it sits.
 SOURCES = STANDALONE + ("run.html", "status.html", "_dashboard.css", "_dashboard.js",
-           "_status_model.js")
+           "_status_model.js", "_run_detail.css")
 
 # The modules that build user-visible HTML in Python. Every phrase this suite
 # caught on its first run was in one of these rather than in a template, which
 # is exactly the mistake docs/design/HANDOFF-DELTA.md §4.3 records: the design
 # handoff sent the reader to status.html for two phrases that live in
 # routes_status.py.
-RENDERING_MODULES = ("routes_status.py", "routes_run.py", "routes_try.py")
+# `run_detail.py` builds the run-detail markup for both surfaces, so every
+# sentence on either of them is written there. It is the single most important
+# file in this list: the surface it renders is the one carrying the manifest
+# and the envelope, which are exactly the two records the prohibited words
+# would overstate.
+RENDERING_MODULES = ("routes_status.py", "routes_run.py", "routes_try.py",
+                     "run_detail.py")
 
 _SCRIPT_OR_STYLE = re.compile(r"<(script|style)\b.*?</\1>", re.S | re.I)
 _TAG = re.compile(r"<[^>]+>")
@@ -86,6 +95,23 @@ BANNED_PHRASES = (
     "permissionless",
     "no cloud, no api keys",
 )
+
+# Words that are prohibited as claims but collide with identifiers, so they
+# are matched on whole words rather than as substrings. Each is a claim ADR
+# 0017 says this system cannot back:
+#
+#   verified     -- `unverified` is the assurance level's own value and is the
+#                   opposite claim, so the boundary matters in both directions
+#   signature    -- the envelope's slot is reserved and empty: no key, no key
+#                   management, no transparency log, no third party
+#   signed       -- collides with `assigned_node_id` and friends
+#   attestation  -- an envelope binds identity; it attests to nothing
+#   attested
+BANNED_WORDS = ("verified", "signature", "signed", "attestation", "attested")
+
+_WORD = {
+    word: re.compile(rf"(?<![a-z-]){word}(?![a-z])", re.I) for word in BANNED_WORDS
+}
 
 # Regexes for claims that need a shape rather than a literal.
 BANNED_PATTERNS = (
@@ -144,6 +170,72 @@ def test_no_template_source_contains_a_banned_phrase(page):
 
 
 @pytest.mark.parametrize("page", SOURCES)
+def test_no_template_source_uses_a_prohibited_word(page):
+    """Whole words, because these collide with identifiers.
+
+    Checked against rendered text rather than raw source for the templates
+    that carry script: a CSS class or a JS variable named `signed` would be a
+    poor name and is not a claim, while the same word in a sentence is.
+    """
+    text = visible_text((TEMPLATES / page).read_text(encoding="utf-8"))
+    for word, pattern in _WORD.items():
+        found = pattern.search(text)
+        assert not found, (
+            f"{page} says {found.group(0)!r} to the reader. See ADR 0017: the "
+            "envelope binds identity and the chain is tamper-evident; neither "
+            "is a signature and neither establishes correctness."
+        )
+
+
+def copy_strings(source: str) -> list[tuple[int, str]]:
+    """Every string literal in a module that is not a docstring.
+
+    The copy on these surfaces lives in Python, so the rules have to reach it
+    there. But a docstring saying "this is not a signature" is the rule being
+    written down, not the claim being made — and a scan that cannot tell those
+    apart would push the reasoning out of the file that needs it most. So the
+    module is parsed and only the strings that can become output are read.
+    """
+    tree = ast.parse(source)
+    docstrings = set()
+    for node in ast.walk(tree):
+        if isinstance(
+            node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+        ):
+            body = getattr(node, "body", None) or []
+            if (
+                body
+                and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)
+            ):
+                docstrings.add(id(body[0].value))
+    return [
+        (node.lineno, node.value)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and id(node) not in docstrings
+    ]
+
+
+@pytest.mark.parametrize("module", RENDERING_MODULES)
+def test_no_rendering_module_uses_a_prohibited_word(module):
+    """The copy on these surfaces lives in Python, not in a template."""
+    root = Path(__file__).resolve().parent.parent
+    source = (root / module).read_text(encoding="utf-8")
+    for lineno, text in copy_strings(source):
+        for pattern in _WORD.values():
+            found = pattern.search(text)
+            assert not found, (
+                f"{module}:{lineno} says {found.group(0)!r} to the reader. See "
+                "ADR 0017: the envelope binds identity and the chain is "
+                "tamper-evident; neither is a signature and neither "
+                "establishes correctness."
+            )
+
+
+@pytest.mark.parametrize("page", SOURCES)
 def test_no_template_source_makes_a_prohibited_claim(page):
     text = (TEMPLATES / page).read_text(encoding="utf-8")
     for pattern, description in BANNED_PATTERNS:
@@ -176,6 +268,9 @@ def test_served_pages_carry_no_prohibited_language(client, route):
     lowered = body.lower()
     for phrase in BANNED_PHRASES:
         assert phrase not in lowered, f"{route} served the prohibited phrase {phrase!r}"
+    for word, pattern in _WORD.items():
+        found = pattern.search(body)
+        assert not found, f"{route} served the prohibited word {found.group(0)!r}"
     assert not CREDITS_AS_A_UNIT.search(body), f"{route} served 'credits' as a unit"
     assert not QUALITY_PERCENTAGE.search(body), f"{route} served a quality percentage"
 

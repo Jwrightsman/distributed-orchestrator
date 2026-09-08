@@ -27,7 +27,16 @@ ROUTES = {"/": "index.html", "/dashboard": "dashboard.html", "/try": "try.html"}
 # Partials carry most of the dashboard's styling now, so the no-hardcoded-colour
 # rule has to follow the CSS out of the page it came from. Without this, the
 # split would have quietly created a hole in the rule it was meant to preserve.
-STYLED = PAGES + ("_dashboard.css", "_dashboard.js", "_status_model.js")
+# `_run_detail.css` is the same move again: run detail is one structure on two
+# surfaces, so it is one stylesheet on both, and the rule follows it there.
+STYLED = PAGES + ("_dashboard.css", "_dashboard.js", "_status_model.js",
+                  "_run_detail.css")
+
+# The rule also has to follow markup that is built in Python. run_detail.py
+# assembles the run-detail surface for both surfaces, so a literal colour
+# written there would be just as invisible in dark mode and just as broken in
+# light as one written in a template -- and no template test would see it.
+RENDERING_MODULES = ("run_detail.py", "routes_run.py", "routes_status.py")
 
 # Entities like &#9654; are not colours.
 COLOR = re.compile(r"(?<![&\w])#[0-9A-Fa-f]{6}\b|rgba?\([0-9,. ]+\)")
@@ -53,6 +62,18 @@ def test_no_page_hardcodes_a_colour(page):
         f"{page} hardcodes {len(found)} colour(s) ({sorted(set(found))[:4]}). "
         "Use a token from templates/_theme.html — a hardcoded colour looks fine "
         "in dark mode and breaks in light."
+    )
+
+
+@pytest.mark.parametrize("module", RENDERING_MODULES)
+def test_no_rendering_module_hardcodes_a_colour(module):
+    """A colour written in Python is a colour no template test would catch."""
+    root = Path(__file__).resolve().parent.parent
+    found = COLOR.findall((root / module).read_text(encoding="utf-8"))
+    assert not found, (
+        f"{module} hardcodes {len(found)} colour(s) ({sorted(set(found))[:4]}). "
+        "Build the markup with a class and put the colour in a stylesheet, "
+        "where the token layer can reach it."
     )
 
 
