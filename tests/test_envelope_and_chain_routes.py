@@ -250,6 +250,54 @@ def test_the_chain_route_returns_the_verdict_plus_the_age_of_its_walk(client):
     assert "walked_at" in body
 
 
+def test_the_chain_handler_refuses_on_its_own_and_not_only_via_middleware(monkeypatch):
+    """Defence in depth, and the route's docstring claims it, so it is checked.
+
+    Poisoning found this gap: removing `require_viewer` from the handler left
+    the suite green, because the middleware refuses the request first. The
+    claim being made is that the handler refuses too — so the handler is called
+    directly, with no middleware in front of it.
+    """
+    import asyncio
+
+    import config
+    from fastapi import HTTPException
+
+    from routes_events import ledger_chain
+
+    monkeypatch.setitem(config.get(), "viewer_key", "k" * 32)
+
+    class _Uncredentialed:
+        headers: dict[str, str] = {}
+        cookies: dict[str, str] = {}
+
+    with pytest.raises(HTTPException) as raised:
+        asyncio.run(ledger_chain(_Uncredentialed(), fresh=False))
+    assert raised.value.status_code == 401
+    assert raised.value.headers.get("WWW-Authenticate") == "Bearer"
+
+
+def test_the_age_served_is_the_age_of_the_walk_that_produced_it():
+    """Poisoning found this gap too.
+
+    Hardcoding the age to zero left every assertion green, because in a test
+    that runs in milliseconds a real age is zero as well. So the arithmetic is
+    checked against a walk whose timestamp is fixed, rather than against a walk
+    that just happened.
+    """
+    _seed_chain(2)
+    walk = ledger.LedgerChainWalk(
+        verification=ledger.verify_ledger_chain(ledger.LEDGER_DB_FILE),
+        walked_at=1000.0,
+        ttl_seconds=30.0,
+    )
+    assert walk.as_dict(now=1042.5)["walk_age_seconds"] == 42.5
+    assert walk.as_dict(now=1000.0)["walk_age_seconds"] == 0.0
+    # And the walk behind it is still the whole thing.
+    assert walk.as_dict(now=1042.5)["walk_is_complete"] is True
+    assert walk.as_dict(now=1042.5)["chained_entries"] == 2
+
+
 def test_the_chain_route_is_operator_gated(client, monkeypatch):
     """Under `/v1/operator/`, which `deploy/Caddyfile.public` refuses at the
     edge. The handler also calls `require_viewer` itself, so the route is
