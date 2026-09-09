@@ -1362,6 +1362,12 @@ def chain_view(chain: dict) -> dict:
             ("break", _CHAIN_BREAK),
             ("not walked", _CHAIN_UNWALKED),
         ]
+        # A break and a genesis head are not exclusive: a ledger that predates
+        # the chain can also have one. The head is drawn either way, so when it
+        # is there the legend has to name it -- an undrawn hollow cell beside a
+        # break is exactly the pair a reader would otherwise conflate.
+        if genesis:
+            legend.append(("no link recorded", _CHAIN_PRECHAIN))
     else:
         cells += _chain_cells([f"{i:02d}" for i in range(chained)], _CHAIN_LINKED)
         walked = (

@@ -1879,3 +1879,40 @@ def test_a_field_name_is_never_broken_across_lines():
     assert "overflow-wrap: anywhere" in value, (
         "values are hashes and must wrap, or they run off the panel"
     )
+
+
+def test_a_break_and_a_genesis_head_can_both_be_on_screen(client):
+    """They are not exclusive, and the legend has to name whatever is drawn.
+
+    A ledger that predates the chain can also be broken. The head is drawn in
+    either case, so a hollow pre-chain cell would otherwise sit beside a break
+    with nothing saying which is which -- and those are exactly the two a
+    reader must not conflate: one entry has no link to walk, the other has a
+    link that did not match.
+    """
+    import ledger
+
+    _seed_unchained(3)
+    _seed_chain(6)
+    _break_chain(3)
+    ledger.reset_ledger_chain_cache()
+
+    run = _published()
+    panel = _chain_panel(_surfaces(client, run)["console"])
+
+    assert "LINK BROKEN AT 3" in panel
+    tones = {
+        label: tone
+        for tone, label in re.findall(r'class="rd-chain-box (is-[a-z]+)">([^<]*)<', panel)
+    }
+    assert tones.get("—") == "is-prechain", tones
+    assert tones.get("03") == "is-break", tones
+
+    legend = re.findall(r'class="rd-chain-key">.*?</span>\s*([^<]*)<', panel)
+    legend = [item.strip() for item in legend]
+    assert "break" in legend, legend
+    assert "not walked" in legend, legend
+    assert "no link recorded" in legend, (
+        f"the strip draws a pre-chain head and the legend is {legend}, which "
+        "does not name it"
+    )
