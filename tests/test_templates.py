@@ -268,6 +268,90 @@ def test_a_run_page_can_reach_the_rest_of_the_site(client):
         assert link in body, f"the run page cannot reach {link}"
 
 
+# -- The narrowest window we claim to support -------------------------------
+
+# A 330px-wide viewport: narrower than any phone in portrait, and the width the
+# console overflowed at. The number is the floor, not a device.
+NARROW = 330
+
+# The title changes per view, and it is the longest thing in the top bar.
+VIEWS = ("overview", "runs", "gallery", "nodes", "projects", "guild")
+
+
+def _has_playwright() -> bool:
+    try:
+        import playwright.sync_api  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def test_the_top_bar_has_something_that_can_give_up_its_width():
+    """Every other control in that row is a fixed size, so the title is the
+    only thing that can absorb a narrow window.
+
+    Without this the row was a sum of fixed widths — hamburger, title, Home,
+    "Pitch a task", the theme toggle — and at 330px that sum was 368px, so the
+    *page* grew to fit it and every view scrolled sideways. The browser check
+    below is the real one and it measures 26px of overflow, but CI installs no
+    playwright and skips it, so this is the assertion CI actually runs: it names
+    the declaration the fix rests on.
+    """
+    css = (TEMPLATES / "_dashboard.css").read_text(encoding="utf-8")
+    block = css[css.index(".topbar-title {"):]
+    block = block[: block.index("}")]
+    for decl, why in [
+        ("min-width: 0", "the title cannot shrink past its longest word"),
+        ("text-overflow: ellipsis", "the title shrinks by clipping mid-letter"),
+    ]:
+        assert decl in block, f"{decl} is gone from .topbar-title — {why}"
+
+    # The rung that made room for it: the toggle keeps its icon, drops its word.
+    assert "#theme-toggle-label { display: none; }" in css, (
+        "the theme toggle carries its label down to phone widths again"
+    )
+
+
+@pytest.mark.skipif(
+    not _has_playwright(),
+    reason="playwright is not installed — CI does not install it, so the "
+           "only measured narrow-width check is local",
+)
+@pytest.mark.parametrize("theme", ("dark", "light"))
+def test_the_dashboard_does_not_scroll_sideways_on_a_phone(client, theme):
+    """`scrollWidth == clientWidth`, measured, in every view and both themes.
+
+    Reading the CSS is not enough here: what overflowed was a *sum* of widths
+    no single rule owns, and the status bar looked guilty in the measurement
+    while being a passenger — it is `position: fixed`, so it takes the width the
+    page already has. Only the browser can tell those apart.
+    """
+    from playwright.sync_api import sync_playwright
+
+    html = client.get("/dashboard").text
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch()
+        try:
+            page = browser.new_page(viewport={"width": NARROW, "height": 760})
+            page.set_content(html)
+            page.evaluate(
+                "t => document.documentElement.setAttribute('data-theme', t)", theme
+            )
+            for view in VIEWS:
+                page.evaluate(f"document.getElementById('tab-{view}').click()")
+                widths = page.evaluate(
+                    "() => {const d = document.documentElement;"
+                    " return [d.clientWidth, d.scrollWidth];}"
+                )
+                client_w, scroll_w = widths
+                assert scroll_w == client_w, (
+                    f"{view} in {theme} overflows by {scroll_w - client_w}px at "
+                    f"{NARROW}px: the page is {scroll_w}px wide in a {client_w}px window"
+                )
+        finally:
+            browser.close()
+
+
 def test_try_page_is_usable_on_a_phone():
     """/try is the page most likely to be opened from a link in a post, and it
     shipped with zero media queries — a 640px form handed to a 380px screen."""

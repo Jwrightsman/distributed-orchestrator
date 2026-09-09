@@ -129,7 +129,13 @@ body {
   background: var(--bg);
   position: sticky; top: 0; z-index: 20;
 }
-.topbar-title { font-size: 15px; font-weight: 620; color: var(--text); letter-spacing: -0.2px; }
+/* The one item in the row that gives up space. Everything else here is a
+   fixed-size control, so without a shrinkable title a long view name ("Guild
+   standings") pushed the whole page wider than the window on a phone. */
+.topbar-title {
+  font-size: 15px; font-weight: 620; color: var(--text); letter-spacing: -0.2px;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
 
 .global-nav { display: flex; align-items: center; gap: 2px; margin-left: 6px; }
@@ -907,6 +913,11 @@ a.gallery-task:hover { color: var(--accent-text); }
   /* Global links collapse to the home mark only — the sidebar already
      carries in-app navigation, so this row is context, not the main path. */
   .global-link.is-secondary { display: none; }
+  /* The theme toggle drops to its icon. The word is the cheapest thing in the
+     row to lose: the button keeps its title and aria-label, and a 30px square
+     still clears the 28px console target. */
+  #theme-toggle-label { display: none; }
+  .theme-toggle { width: 30px; height: 30px; padding: 0; gap: 0; justify-content: center; }
   .pitch-form { flex-direction: column; }
   .pitch-btn { width: 100%; padding: 12px 20px; }
   .history-card { flex-direction: column; align-items: flex-start; gap: 8px; }
@@ -915,6 +926,15 @@ a.gallery-task:hover { color: var(--accent-text); }
   .search-input { width: 100%; }
   .stats-bar { gap: 10px 16px; }
   .content h2 { letter-spacing: 1.4px; }
+}
+
+/* The last rung, and the only one taken from a measurement rather than a
+   device: furniture plus the longest view name ("Guild standings") plus "Home"
+   needs 381px, so below that the row cannot hold both the name and a second
+   navigation. The name wins — the drawer's brand mark is still the way home,
+   at two taps instead of one. */
+@media (max-width: 430px) {
+  .global-nav { display: none; }
 }
 
 /* ── Locked screen and server-state banners ──────────────────────────────
