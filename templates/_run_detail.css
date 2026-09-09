@@ -446,7 +446,13 @@
 
    A field name is never broken across lines in either arrangement -- that is
    what the missing `overflow-wrap` on `.rd-envelope-field` is for -- so a name
-   stays greppable against the record. */
+   stays greppable against the record.
+
+   Where @container is not understood the block is skipped and the three-column
+   rule stands, which is the cramped layout this replaces rather than a broken
+   one: `minmax(0, 172px)` still shrinks, so nothing overflows and nothing is
+   hidden. Chromium is what this was measured in; Firefox and Safari were not
+   exercised. */
 .rd-envelope-more { container-type: inline-size; }
 
 @container (max-width: 420px) {
