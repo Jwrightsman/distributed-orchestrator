@@ -4,14 +4,40 @@
     {
       "name": "orchestrator",
       "runtimeExecutable": "py",
-      "runtimeArgs": ["-m", "uvicorn", "server:app", "--port", "8000"],
+      "runtimeArgs": [
+        "-m",
+        "uvicorn",
+        "server:app",
+        "--port",
+        "8000"
+      ],
       "port": 8000
     },
     {
       "name": "showcase-output",
       "runtimeExecutable": "py",
-      "runtimeArgs": ["-m", "http.server", "8899", "--directory", "output"],
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8899",
+        "--directory",
+        "output"
+      ],
       "port": 8899
+    },
+    {
+      "name": "design-refs",
+      "runtimeExecutable": "py",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8901",
+        "--bind",
+        "127.0.0.1",
+        "--directory",
+        "docs/design/run-detail-2026-09-07/design"
+      ],
+      "port": 8901
     }
   ]
 }

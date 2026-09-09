@@ -253,6 +253,104 @@ def verify_ledger_chain(db_path: str | Path | None = None) -> LedgerChainVerific
     )
 
 
+# ── Bounding how often the walk runs, without ever shortening it ─────
+#
+# The walk itself is never trimmed. It always starts at the genesis constant
+# and re-reads every chained row, because the failure mode it exists to detect
+# is a rewrite of entries that were already walked once. A checkpoint, a
+# "verified up to index N" marker, or any skipped prefix would make the check
+# blind to exactly the case it exists for, so none of those appear here.
+#
+# What is bounded is the *frequency*. The whole verdict of one complete walk is
+# cached for a short TTL and served with the age of the walk that produced it,
+# so a reader always knows how stale the answer is, and an operator can force a
+# fresh walk. The panel says "walked 12s ago" because that is a fact about this
+# cache, not a decoration.
+#
+# The cache holds a finished verdict or nothing. There is no partial state it
+# could resume from.
+LEDGER_CHAIN_WALK_TTL_SECONDS = 30.0
+
+_walk_cache: dict[str, "LedgerChainWalk"] = {}
+_walk_cache_lock = threading.Lock()
+
+
+@dataclass(frozen=True)
+class LedgerChainWalk:
+    """One complete walk, and when it happened."""
+
+    verification: LedgerChainVerification
+    walked_at: float
+    ttl_seconds: float
+
+    def age_seconds(self, *, now: float | None = None) -> float:
+        moment = time.time() if now is None else float(now)
+        return max(0.0, moment - self.walked_at)
+
+    def as_dict(self, *, now: float | None = None) -> dict[str, Any]:
+        """The verdict, plus how old the walk that produced it is.
+
+        Everything here is content-free: an index, an entry ID, two digests and
+        three numbers. None of the chained columns carry a prompt, an output, a
+        credential or an artifact's contents, so none of them can appear.
+        """
+        payload = self.verification.as_dict()
+        payload.update(
+            {
+                "chain_version": LEDGER_CHAIN_VERSION,
+                "walked_at": self.walked_at,
+                "walk_age_seconds": round(self.age_seconds(now=now), 3),
+                "walk_ttl_seconds": self.ttl_seconds,
+                "walk_is_complete": True,
+            }
+        )
+        return payload
+
+
+def reset_ledger_chain_cache() -> None:
+    """Drop every cached verdict. The next read walks."""
+    with _walk_cache_lock:
+        _walk_cache.clear()
+
+
+def walk_ledger_chain(
+    db_path: str | Path | None = None,
+    *,
+    fresh: bool = False,
+    ttl_seconds: float | None = None,
+    now: float | None = None,
+) -> LedgerChainWalk:
+    """A complete chain walk, at most once per TTL unless `fresh` is asked for.
+
+    `fresh=True` always walks. Otherwise a cached verdict is returned while it
+    is younger than the TTL. Either way the walk behind the verdict covered
+    every entry: this function has no way to produce a partial one.
+    """
+    path = LEDGER_DB_FILE if db_path is None else Path(db_path)
+    # Absolute, always. `LEDGER_DB_FILE` is relative, and a cache keyed on the
+    # relative name would serve one directory's verdict for another's ledger --
+    # which is how a test suite that chdirs per test would have shared one
+    # answer between every one of them.
+    key = os.path.abspath(path)
+    ttl = LEDGER_CHAIN_WALK_TTL_SECONDS if ttl_seconds is None else float(ttl_seconds)
+    moment = time.time() if now is None else float(now)
+
+    if not fresh:
+        with _walk_cache_lock:
+            cached = _walk_cache.get(key)
+        if cached is not None and cached.age_seconds(now=moment) < ttl:
+            return cached
+
+    walk = LedgerChainWalk(
+        verification=verify_ledger_chain(path),
+        walked_at=time.time() if now is None else moment,
+        ttl_seconds=ttl,
+    )
+    with _walk_cache_lock:
+        _walk_cache[key] = walk
+    return walk
+
+
 
 def compute_contribution_points(*, output: str | None, error: str | None) -> int:
     """Points for one accepted compute contribution.

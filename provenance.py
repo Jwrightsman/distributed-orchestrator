@@ -81,6 +81,19 @@ UNKNOWN_SAMPLING = "sampling_parameters"
 UNKNOWN_SEED_HONOURED = "sampling_seed_honoured"
 UNKNOWN_PRODUCER_SAMPLING = "producer_sampling"
 
+# The reserved slot's key in `as_export()`. It is named here, in the module
+# that declares the column, because it is a schema name rather than copy: a
+# surface that opens the envelope renders the record's own field names, and
+# reading this one out of the record is the record speaking rather than the
+# surface making a claim. The slot is always NULL, is never populated by this
+# code, and exists so that adding it later is not a schema break for anyone
+# already reading these bundles. See ADR 0017.
+RESERVED_SLOT_FIELD = "signature"
+
+# What a reader is told the slot is. A slot, and nothing else: no key, no key
+# management, no transparency log, no third party.
+RESERVED_SLOT_VALUE = "reserved · empty"
+
 # The scope of the envelope's sampling block, said in the envelope itself.
 # A distributed producer reads its own configuration and the worker protocol
 # does not carry it back, so the coordinator knows what *it* was configured

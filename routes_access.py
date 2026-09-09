@@ -306,6 +306,45 @@ async def download_execution_audit(execution_id: str):
     )
 
 
+@router.get("/executions/{execution_id}/provenance")
+async def execution_provenance(execution_id: str):
+    """The envelope for one execution, in the shape the audit bundle carries.
+
+    `as_export()` is the same object written into `mycelium-provenance.json`
+    inside the audit zip, so this is not a new contract and the offline checker
+    keeps working unchanged against either copy. Until now the only way to see
+    an envelope was to download the audit bundle and open the file inside it.
+
+    Viewer-gated by the same middleware that gates every other route on this
+    execution, and reachable wherever `/run/{id}` is: the envelope's whole
+    purpose is to travel with the artifacts to whoever was handed the link.
+
+    An execution with no envelope is a 404, not an empty object. A legacy run
+    that predates envelopes has no envelope, and an empty object would say
+    "there is one and it records nothing", which is a different and false
+    statement.
+
+    Content-free of the work itself by construction: the envelope binds
+    identity — who produced these files, under which enrolment, with which
+    model, which validators ran — and no prompt, output, credential or artifact
+    content is among the facts it stores.
+    """
+    from server_state import provenance_envelope_store
+
+    record = provenance_envelope_store.get(execution_id)
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "provenance_envelope_not_found",
+                "message": (
+                    "No provenance envelope was recorded for this execution."
+                ),
+            },
+        )
+    return record.as_export()
+
+
 @router.post(
     "/executions/{execution_id}/shares",
     response_model=CreatedExecutionShareV1,

@@ -29,6 +29,10 @@ def isolated_cwd(tmp_path, monkeypatch):
     # ledger caches parsed JSON keyed on mtime — reset between tests
     ledger._cache = None
     ledger._cache_mtime = 0.0
+    # The chain walk caches one complete verdict per database for a short TTL.
+    # Each test gets its own directory, so a verdict must not survive into the
+    # next one.
+    ledger.reset_ledger_chain_cache()
     # config.get caches the loaded dict on the function object
     if hasattr(config.get, "_cache"):
         del config.get._cache
@@ -40,6 +44,7 @@ def isolated_cwd(tmp_path, monkeypatch):
         del config.get._cache
     ledger._cache = None
     ledger._cache_mtime = 0.0
+    ledger.reset_ledger_chain_cache()
     artifact_module._ARTIFACT_STORE = None
     sharing_module._SHARE_STORE = None
     service_module._SERVICE = None

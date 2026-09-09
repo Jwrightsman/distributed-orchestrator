@@ -775,6 +775,28 @@ BANNED = (
     "attestation", "attested",
 )
 
+# The one position where a prohibited word may appear, and it is the opposite
+# of the claim the rule forbids.
+#
+# `signature` is a real, always-NULL column that ADR 0017 requires the export
+# to carry so that filling it later is not a schema break. The opened envelope
+# renders the record's own field names, and this row exists precisely to show
+# that the slot is empty. Banning the word here would mean the one surface that
+# could tell a reader nothing is signed is the one surface that may not.
+#
+# So the exception is a position, not a permission: the field-name cell of a
+# row whose marker is hollow and whose value is `reserved · empty`. Everywhere
+# else on both surfaces the blanket ban still holds, and
+# `test_the_reserved_slot_is_a_slot_and_the_only_place_the_word_appears` is
+# stricter than the ban was -- it checks the position, the value, the marker
+# and the count rather than only the absence.
+RESERVED_ROW = re.compile(
+    r'<div class="rd-envelope-row">\s*'
+    r'<i class="rd-marker is-7 is-absent"[^>]*>\s*</i>\s*'
+    r'<span class="rd-envelope-field">signature</span>\s*'
+    r'<span class="rd-envelope-value">reserved · empty</span>'
+)
+
 
 def test_no_surface_uses_a_prohibited_word(client):
     """The words are prohibited as claims, so this reads the rendered text.
@@ -784,11 +806,44 @@ def test_no_surface_uses_a_prohibited_word(client):
     """
     run = _published()
     for surface, html in _surfaces(client, run).items():
-        text = re.sub(r"<[^>]+>", " ", html).lower()
+        text = re.sub(r"<[^>]+>", " ", RESERVED_ROW.sub(" ", html)).lower()
         for word in BANNED:
             assert not re.search(rf"(?<![a-z-]){re.escape(word)}(?![a-z])", text), (
                 f"{surface}: renders the prohibited word {word!r}"
             )
+
+
+def test_the_reserved_slot_is_a_slot_and_the_only_place_the_word_appears(client):
+    """The carve-out above, checked from the other side.
+
+    Once, in the reserved row, hollow, beside an empty value, and described as
+    a slot and nothing else. If the word ever reaches any other position on
+    either surface this fails -- which is a stricter rule than the blanket ban
+    it replaces, because the blanket ban could not have said where.
+    """
+    run = _published()
+    for surface, html in _surfaces(client, run).items():
+        matches = list(RESERVED_ROW.finditer(html))
+        assert len(matches) == 1, (
+            f"{surface}: expected exactly one reserved row, found {len(matches)}"
+        )
+
+        elsewhere = re.sub(r"<[^>]+>", " ", RESERVED_ROW.sub(" ", html)).lower()
+        assert "signature" not in elsewhere, (
+            f"{surface}: the word reaches a second position, outside the "
+            "reserved row"
+        )
+
+        panel = _panel(html, "PRODUCED BY")
+        assert "RESERVED" in panel, f"{surface}: the reserved group lost its label"
+        assert "A slot, not a feature" in panel, (
+            f"{surface}: the reserved row does not say it is a slot"
+        )
+        # Named as absent, one by one, so the row cannot be read as a feature
+        # that merely has not run yet.
+        for absent in ("no key", "no key management", "no transparency log",
+                       "no third party"):
+            assert absent in panel, f"{surface}: the slot does not say {absent!r}"
 
 
 # ── The server-rendered page's three differences ─────────────────────
@@ -1072,3 +1127,631 @@ def test_a_short_preview_says_nothing_about_being_cut(client):
     html = client.get(f"/run/{RUN}").text
     bar = html[html.index('class="rd-file-bar"'):html.index('class="rd-file-body"')]
     assert "lines" not in bar, bar[:400]
+
+
+# ── The opened envelope ──────────────────────────────────────────────
+# Phase 3b. Opening the envelope puts eight field groups beside a manifest
+# chip, which is when the two-claims rule is most likely to break by accident.
+# The colour rules above already reach the opened state, because the groups
+# render inside the same `.rd-envelope` section and under the same
+# `.rd-envelope-*` class prefix — the first test here is what holds that true.
+
+ENVELOPE_GROUPS = (
+    "EXECUTION",
+    "PRODUCER IDENTITY",
+    "CAPABILITY AND EXECUTOR",
+    "MODEL",
+    "VALIDATORS · IN ORDER",
+    "ARTIFACTS",
+    "SAMPLING",
+    "RESERVED",
+)
+
+
+def _opened(html: str) -> str:
+    """The disclosure's contents, which must sit inside the envelope panel."""
+    panel = _panel(html, "PRODUCED BY")
+    return panel[panel.index("<details"):]
+
+
+def test_the_opened_envelope_is_inside_the_panel_the_colour_rules_guard(client):
+    """The reason the colour tests above still bite once it is opened.
+
+    If the groups were rendered as a sibling section, or under a class prefix
+    of their own, every rule holding "no chip, no lamp, no colour" would stop
+    covering the state where breaking it matters most. So the structural fact
+    is asserted directly rather than assumed.
+    """
+    run = _published()
+    for surface, html in _surfaces(client, run).items():
+        panel = _panel(html, "PRODUCED BY")
+        assert "<details" in panel, f"{surface}: the envelope has no opened state"
+        opened = _opened(html)
+        assert "rd-envelope-group" in opened, (
+            f"{surface}: the field groups are not inside the envelope panel"
+        )
+        # Every element the disclosure adds takes the prefix the stylesheet
+        # rule scans, so growing the panel grows what that rule covers.
+        classes = set(re.findall(r'class="(rd-[a-z-]+)', opened))
+        stray = {
+            name for name in classes
+            if not name.startswith("rd-envelope") and name != "rd-marker"
+        }
+        assert not stray, (
+            f"{surface}: the opened envelope renders {sorted(stray)}, which the "
+            "no-colour rule over `.rd-envelope*` does not reach"
+        )
+
+
+def test_the_opened_envelope_carries_no_chip_lamp_or_state_colour(client):
+    """The same rule as the summary mode, asserted against the opened one."""
+    run = _published()
+    for surface, html in _surfaces(client, run).items():
+        opened = _opened(html)
+        assert "rd-chip" not in opened, f"{surface}: the opened envelope renders a chip"
+        assert "lamp" not in opened, f"{surface}: the opened envelope renders a lamp"
+        for tone in ("is-ok", "is-bad", "is-pass", "is-sealed", "is-info",
+                     "is-warn", "is-danger", "is-break", "is-linked"):
+            assert tone not in opened, (
+                f"{surface}: the opened envelope renders the state class {tone!r}"
+            )
+
+
+def test_the_eight_field_groups_render_in_order(client):
+    """Eight, in this order. `PRODUCER IDENTITY` carries its own entry count,
+    which is the plural case announcing itself, so the labels are compared by
+    prefix rather than exactly."""
+    run = _published()
+    for surface, html in _surfaces(client, run).items():
+        found = re.findall(r'class="rd-envelope-group-label">([^<]*)<', _opened(html))
+        assert len(found) == len(ENVELOPE_GROUPS), f"{surface}: the groups are {found}"
+        for label, expected in zip(found, ENVELOPE_GROUPS):
+            assert label.startswith(expected), (
+                f"{surface}: expected a {expected!r} group here, found {label!r}"
+            )
+
+
+def test_absence_is_a_value_and_never_a_blank(client):
+    """Every row has a marker and something to read.
+
+    A blank cell and a dash both say "there is nothing here" without saying
+    whether it was never recorded or recorded as empty. The shape carries that
+    difference — filled for a recorded fact, hollow for one that was not — so
+    every row must have exactly one marker, and no row may fall back to a dash.
+    """
+    run = _published(receipts=3, legacy_last=True)
+    for surface, html in _surfaces(client, run).items():
+        opened = _opened(html)
+        rows = re.findall(
+            r'<div class="rd-envelope-row">(.*?)\n          </div>', opened, re.S
+        )
+        assert rows, f"{surface}: no field rows rendered"
+        for row in rows:
+            markers = re.findall(r"rd-marker is-7 (is-neutral|is-absent)", row)
+            assert len(markers) == 1, (
+                f"{surface}: a row carries {len(markers)} markers, not one: {row[:200]}"
+            )
+            value = re.search(r'class="rd-envelope-value">([^<]*)<', row)
+            assert value and value.group(1).strip(), (
+                f"{surface}: a row renders a blank value: {row[:200]}"
+            )
+            assert value.group(1).strip() not in ("—", "-", "--", "n/a", "?"), (
+                f"{surface}: a row renders a dash instead of naming the absence"
+            )
+        # Not writing something down is neither a fault nor fine.
+        assert "is-warn" not in opened, f"{surface}: an absence is drawn as a warning"
+        assert "is-danger" not in opened, f"{surface}: an absence is drawn as a fault"
+
+
+def test_the_three_sampling_absences_stay_distinct(client):
+    """Three different facts, so three named rows, never one word for all.
+
+    `sampling_parameters` is nothing pinned at all. `sampling_seed_honoured` is
+    a seed that was set and is not shown to have been applied.
+    `producer_sampling` is about a different machine entirely — the worker
+    protocol does not carry it back. Collapsing them to "unknown" would be a
+    fourth claim nobody made.
+    """
+    from provenance import (
+        UNKNOWN_PRODUCER_SAMPLING,
+        UNKNOWN_SAMPLING,
+        UNKNOWN_SEED_HONOURED,
+    )
+
+    run = _published()
+    for surface, html in _surfaces(client, run).items():
+        opened = _opened(html)
+        sampling = opened[opened.index("SAMPLING"):opened.index("RESERVED")]
+        names = re.findall(r'class="rd-envelope-field">([^<]*)<', sampling)
+        # This run pins nothing and has a producer, so two of the three are
+        # live, and each has to be named on its own row.
+        assert UNKNOWN_SAMPLING in names, f"{surface}: {names}"
+        assert UNKNOWN_PRODUCER_SAMPLING in names, f"{surface}: {names}"
+
+        notes = " ".join(re.findall(r'class="rd-envelope-note">([^<]*)<', sampling))
+        assert "absence of a setting" in notes, (
+            f"{surface}: sampling_parameters does not say which absence it is"
+        )
+        assert "different machine" in notes, (
+            f"{surface}: producer_sampling does not say it is about another machine"
+        )
+
+    # The third lives on a different branch of the record, so it is exercised
+    # directly rather than by contriving a run that produces all three at once.
+    rows = run_detail._sampling_group(
+        {
+            "sampling": {"temperature": 0.7, "seed": 11, "pinned": False},
+            "unknown_facts": [UNKNOWN_SEED_HONOURED],
+        }
+    )["rows"]
+    named = {row["name"]: row for row in rows}
+    assert UNKNOWN_SEED_HONOURED in named, sorted(named)
+    assert named[UNKNOWN_SEED_HONOURED]["recorded"] is False
+    assert "assumed" in named[UNKNOWN_SEED_HONOURED]["note"], (
+        "the seed-honouring absence does not say it is assumed rather than checked"
+    )
+    assert UNKNOWN_SAMPLING not in named, (
+        "a seed was set, so 'nothing pinned' is not the absence in play here — "
+        "rendering both would collapse two different facts into one"
+    )
+
+
+def test_producers_is_always_a_list_and_one_producer_is_a_list_of_one(client):
+    run = _published(receipts=1)
+    for surface, html in _surfaces(client, run).items():
+        opened = _opened(html)
+        assert "1 accepted receipt" in opened, f"{surface}: {opened[:400]}"
+        assert "PRODUCER IDENTITY · 1 ENTRY" in opened, surface
+
+
+def test_plural_producers_leave_the_singular_fields_not_applicable(client):
+    """The primary case, not an edge.
+
+    The ensemble path settles several accepted receipts and leaves the singular
+    fields null rather than electing a winner, because no rule for choosing
+    between receipts exists. So they render `not applicable` with a hollow
+    marker — never blank, and never one of the three picked arbitrarily.
+    """
+    run = _published(receipts=3)
+    for surface, html in _surfaces(client, run).items():
+        opened = _opened(html)
+        assert "3 accepted receipts" in opened, surface
+        assert "PRODUCER IDENTITY · 3 ENTRIES" in opened, surface
+
+        execution = opened[opened.index("EXECUTION"):opened.index("PRODUCER IDENTITY")]
+        rows = re.findall(
+            r'<div class="rd-envelope-row">(.*?)\n          </div>', execution, re.S
+        )
+        by_field = {
+            re.search(r'class="rd-envelope-field">([^<]*)<', row).group(1): row
+            for row in rows
+        }
+        for field in ("attempt_id", "receipt_id", "unit_id"):
+            assert field in by_field, f"{surface}: no row for {field}"
+            row = by_field[field]
+            value = re.search(r'class="rd-envelope-value">([^<]*)<', row).group(1)
+            assert value == "not applicable", (
+                f"{surface}: {field} renders {value!r} rather than `not "
+                "applicable` — with three receipts there is no single attempt "
+                "to name, and electing one would be a choice the record did "
+                "not make"
+            )
+            assert "is-absent" in row, (
+                f"{surface}: {field} is not applicable but carries a filled marker"
+            )
+        # All three producers are listed and none is elected.
+        assert "01 · enrollment_id" in opened, surface
+        assert "03 · enrollment_id" in opened, surface
+
+
+def test_no_heading_spans_the_manifest_the_envelope_and_the_chain(client):
+    """The 3a rule, extended to the panel Phase 3b adds.
+
+    3a's version of this test failed its own poisoning because it looked only
+    *between* the two panels and missed a heading above the pair. This one
+    reads the whole side column, from the column element to the footer, so a
+    heading anywhere over the three is a finding — and so is a shared label.
+    """
+    run = _published()
+    for surface, html in _surfaces(client, run).items():
+        column = html[html.index('class="rd-side"'):]
+        column = column[: column.index('class="rd-foot"')]
+
+        assert not re.search(r"<h[1-6][\s>]", column), (
+            f"{surface}: a heading sits over the manifest, the envelope and the "
+            "chain. There is no INTEGRITY panel and no TRUST section in this "
+            "design: a shared header is what invites a reader to add them up."
+        )
+        # Read off the label positions rather than the raw text. The rule is
+        # about a *heading* that spans the records, and `integrity_mode` is a
+        # field name inside one of them -- a blunter check fails on the
+        # envelope faithfully naming the manifest's own column.
+        headings = (
+            re.findall(r'class="rd-panel-label">\s*([^<]*?)\s*<', column)
+            + re.findall(r'class="rd-envelope-group-label">\s*([^<]*?)\s*<', column)
+            + re.findall(r'class="rd-group-label">\s*([^<]*?)\s*<', column)
+            + re.findall(r"<h[1-6][^>]*>\s*([^<]*?)\s*<", column)
+        )
+        for banned in ("INTEGRITY", "TRUST"):
+            offenders = [h for h in headings if banned in h.upper()]
+            assert not offenders, (
+                f"{surface}: the column carries the heading(s) {offenders}, and "
+                f"there is no {banned} panel in this design"
+            )
+        labels = re.findall(r'class="rd-panel-label">\s*([^<]*?)\s*<', column)
+        expected = (
+            ["MANIFEST", "PRODUCED BY", "LEDGER CHAIN", "TIMELINE"]
+            if surface == "console"
+            else ["MANIFEST", "PRODUCED BY", "TIMELINE"]
+        )
+        assert labels == expected, (
+            f"{surface}: the labels in the side column are {labels}, which is "
+            "not one label per record"
+        )
+
+
+# ── The ledger chain panel ───────────────────────────────────────────
+# Three states, and two rules that are easy to get backwards. Entries after a
+# break render `not walked`, because verification returns at the first break
+# and nothing past it was read. The genesis boundary is not a break: entries
+# written before the chain existed have no link, are never retrofitted with
+# one, and are counted separately at the head.
+#
+# And the rule the whole panel turns on: **intact is not green.** `--accent`
+# means PASS / connected / ok. "No entry changed without every link after it
+# also being recomputed" is none of those, because a full rewrite satisfies it.
+
+
+def _seed_chain(count: int) -> None:
+    """Real chained entries, written the way settlement writes them."""
+    from ledger import log_contribution
+
+    for index in range(count):
+        log_contribution(
+            f"node-{index:02d}",
+            "compute",
+            5,
+            task="compute_contribution",
+            contribution_id=f"contribution:{index:016d}",
+            attempt_id=f"attempt-{index:04d}",
+        )
+
+
+def _seed_unchained(count: int) -> None:
+    """Entries from before the chain existed: NULL in all three columns.
+
+    Written directly, because there is no code path that produces one any more
+    — which is the point. They are history, and history is not rewritten to
+    fabricate links it never had.
+    """
+    from ledger import LEDGER_DB_FILE, ensure_contribution_schema
+
+    with sqlite3.connect(LEDGER_DB_FILE) as con:
+        ensure_contribution_schema(con)
+        con.executemany(
+            "INSERT INTO contributions (contribution_id, contributor, "
+            "contribution_type, points, task, details, basis, "
+            "points_are_monetary, created_at, entry_index, previous_digest, "
+            "entry_digest) "
+            "VALUES (?, ?, 'compute', 5, 'compute_contribution', '', "
+            "'pre_chain', 0, ?, NULL, NULL, NULL)",
+            [(f"legacy:{i:016d}", f"old-{i:02d}", 100.0 + i) for i in range(count)],
+        )
+        con.commit()
+
+
+def _break_chain(index: int) -> None:
+    """A real break, made by editing a chained column rather than mocking a verdict.
+
+    `contributor` is one of the digested columns, so changing it makes the
+    stored digest stop matching the recomputed one — which is exactly the
+    accidental corruption and casual edit the chain exists to detect.
+    """
+    from ledger import LEDGER_DB_FILE
+
+    with sqlite3.connect(LEDGER_DB_FILE) as con:
+        con.execute(
+            "UPDATE contributions SET contributor = ? WHERE entry_index = ?",
+            ("edited-after-the-fact", index),
+        )
+        con.commit()
+
+
+def _chain_panel(html: str) -> str:
+    start = html.index("LEDGER CHAIN")
+    rest = html[start:]
+    return rest[: rest.index("</section>")]
+
+
+def test_the_chain_panel_renders_in_the_console_and_not_on_the_run_page(client):
+    """Placement follows gating, and the gate here is the prefix.
+
+    `/v1/operator/ledger-chain` sits under a prefix `deploy/Caddyfile.public`
+    refuses at the edge, next to `/dashboard` and `/metrics` — so a valid
+    viewer key is not enough to reach it from the public Internet. `/run/{id}`
+    is reachable with one. Drawing an operator-gated verdict on the shareable
+    page would put it in front of a reader the route itself refuses.
+    """
+    _seed_chain(4)
+    run = _published()
+    surfaces = _surfaces(client, run)
+    assert "LEDGER CHAIN" in surfaces["console"], (
+        "the console does not render the chain panel"
+    )
+    assert "LEDGER CHAIN" not in surfaces["server"], (
+        "the shareable run page renders an operator-gated verdict"
+    )
+    # The markup, not the page: one stylesheet serves both surfaces by design,
+    # so the chain's rules are present on the public page and its elements
+    # must not be.
+    assert 'class="rd-panel rd-chain"' not in surfaces["server"]
+    assert 'class="rd-chain-verdict"' not in surfaces["server"]
+
+
+def test_an_intact_chain_is_never_drawn_in_accent(client):
+    """Ordinary ink, a filled marker and a walked count. Never a tick.
+
+    A green tick here would be the exact class of claim this repo refuses: an
+    intact chain means no entry changed without every link after it also being
+    recomputed, and a full rewrite satisfies that.
+    """
+    _seed_chain(5)
+    run = _published()
+    panel = _chain_panel(_surfaces(client, run)["console"])
+
+    assert "LINKS INTACT" in panel, panel[:400]
+    assert "5 walked · 0 unlinked" in panel, panel[:400]
+    for tone in ("is-ok", "is-pass", "is-sealed", "accent"):
+        assert tone not in panel, f"the intact chain renders {tone!r}"
+    # The marker is filled, so the state survives greyscale without the colour.
+    assert "rd-chain-verdict-marker is-linked" in panel
+
+
+def test_the_chain_stylesheet_never_reaches_for_accent():
+    """Checked against the stylesheet, not only the markup.
+
+    A class with no state name in it could still be handed `--accent`. Every
+    rule that styles something in the chain panel is read, and the only state
+    colour any of them may take is the danger family — because a break is the
+    one state on this panel that is a finding.
+    """
+    allowed = {
+        "--text", "--text-dim", "--text-muted", "--text-faint",
+        "--border", "--border-subtle", "--border-strong",
+        "--surface", "--surface-sunken", "--surface-hover", "--bg",
+        "--danger", "--danger-text", "--danger-body", "--danger-wash", "--danger-line",
+        "--mono", "--sans",
+    }
+    blocks = re.findall(r"\.rd-chain[^{}]*\{([^}]*)\}", RUN_DETAIL_CSS)
+    assert blocks, "the chain panel has no styles at all"
+    for block in blocks:
+        for token in re.findall(r"var\((--[a-z0-9-]+)\)", block):
+            assert token in allowed, (
+                f"the chain panel styles with {token}. Intact is not green: "
+                "--accent means PASS / connected / ok, and a walked chain is "
+                "none of those."
+            )
+    for block in blocks:
+        assert "--accent" not in block, "the chain panel reaches for --accent"
+
+
+def test_entries_after_a_break_render_not_walked_rather_than_broken(client):
+    """Verification returns at the first break, so nothing past it was read.
+
+    Drawing those entries broken claims more than the walk found; drawing them
+    intact claims the opposite. They are a third thing, and the legend says so.
+    """
+    _seed_chain(6)
+    _break_chain(3)
+    run = _published()
+    panel = _chain_panel(_surfaces(client, run)["console"])
+
+    assert "LINK BROKEN AT 3" in panel, panel[:400]
+    assert "walk stopped at the first break" in panel
+    assert "not walked" in panel, "the legend does not name the not-walked state"
+
+    tones = re.findall(r'class="rd-chain-box (is-[a-z]+)">([^<]*)<', panel)
+    states = {label: tone for tone, label in tones}
+    assert states.get("03") == "is-break", states
+    for after in ("04", "05"):
+        assert states.get(after) == "is-unwalked", (
+            f"entry {after} is past the break and renders {states.get(after)!r}, "
+            "which claims the walk reached it"
+        )
+    for before in ("00", "01"):
+        assert states.get(before) == "is-linked", states
+
+
+def test_the_genesis_head_is_distinguishable_from_a_break(client):
+    """Not a break, and never drawn as one.
+
+    Entries written before the chain existed have no link and are never
+    retrofitted with one. They are shown unlinked at the head, counted
+    separately in the verdict, and the chain is still reported intact.
+    """
+    _seed_unchained(3)
+    _seed_chain(4)
+    run = _published()
+    panel = _chain_panel(_surfaces(client, run)["console"])
+
+    assert "LINKS INTACT" in panel, panel[:500]
+    assert "3 ENTRIES PREDATE THE CHAIN" in panel, panel[:500]
+    assert "4 walked · 3 have no link to walk" in panel, panel[:500]
+    assert "no link recorded" in panel, "the legend does not name the unlinked head"
+
+    tones = [tone for tone, _ in re.findall(r'class="rd-chain-box (is-[a-z]+)">([^<]*)<', panel)]
+    assert "is-prechain" in tones, tones
+    assert "is-break" not in tones, "the genesis boundary is drawn as a break"
+    assert "is-unwalked" not in tones, (
+        "the genesis head is drawn as not walked, which is a different claim: "
+        "these entries have no link to walk, rather than a link nobody reached"
+    )
+    # And the break report is a broken-state element only.
+    assert "FIRST BREAK" not in panel
+
+
+def test_the_limitation_footer_appears_on_every_state_including_intact(client):
+    """Tamper evidence, not protection from tampering.
+
+    An operator with write access can rewrite every entry and every link and
+    this will then report intact. That limitation is asserted by a test in this
+    repo rather than admitted in a doc, so it belongs on screen where the
+    verdict is read — on the passing state most of all, which is the one a
+    reader is most likely to over-read.
+    """
+    import ledger
+
+    states = {}
+
+    _seed_chain(4)
+    run = _published()
+    states["intact"] = _chain_panel(_surfaces(client, run)["console"])
+
+    # The verdict is cached for a short TTL, so changing the ledger mid-test
+    # and reading again would serve the previous answer -- which is the
+    # behaviour, not a flaw, and is why the age is on screen and why there is
+    # a control that forces a walk. Here that control is stood in for.
+    _seed_unchained(2)
+    ledger.reset_ledger_chain_cache()
+    states["genesis"] = _chain_panel(_surfaces(client, run)["console"])
+
+    _break_chain(2)
+    ledger.reset_ledger_chain_cache()
+    states["broken"] = _chain_panel(_surfaces(client, run)["console"])
+
+    assert "LINKS INTACT" in states["intact"]
+    assert "PREDATE THE CHAIN" in states["genesis"]
+    assert "LINK BROKEN AT 2" in states["broken"]
+
+    for name, panel in states.items():
+        # Flattened: the copy wraps in source, and where a line breaks is not
+        # a difference a reader sees.
+        text = _flat(panel)
+        assert "WHAT THIS DOES NOT ESTABLISH" in text, (
+            f"the {name} state drops the limitation footer"
+        )
+        assert "can rewrite every entry" in text, name
+        assert "no external anchor" in text, name
+        assert "not proof that any recorded work happened" in text, name
+        assert "not protection from it" in text, name
+
+
+def test_the_break_report_is_index_id_reason_and_two_digests(client):
+    """Content-free by construction, so it is safe to paste into an issue."""
+    _seed_chain(5)
+    _break_chain(2)
+    run = _published()
+    panel = _chain_panel(_surfaces(client, run)["console"])
+
+    assert "FIRST BREAK" in panel
+    keys = re.findall(r'class="rd-chain-report-key">([^<]*)<', panel)
+    assert keys == [
+        "break_at_index",
+        "break_entry_id",
+        "reason",
+        "expected_digest",
+        "observed_digest",
+    ], keys
+    values = re.findall(r'class="rd-chain-report-value">([^<]*)<', panel)
+    assert values[0] == "2", values
+    assert values[1] == "contribution:0000000000000002", values
+    assert "does not match its recorded digest" in values[2], values
+    assert re.fullmatch(r"[0-9a-f]{64}", values[3]), values
+    assert re.fullmatch(r"[0-9a-f]{64}", values[4]), values
+
+
+def test_the_walk_age_is_on_screen_beside_the_verdict(client):
+    """The panel says how old its answer is, because the answer is cached.
+
+    A verdict with no age is a verdict a reader assumes is live. The walk that
+    produced it is complete every time, and how long ago it ran is the part
+    that varies, so it is drawn rather than implied.
+    """
+    _seed_chain(3)
+    run = _published()
+    panel = _chain_panel(_surfaces(client, run)["console"])
+    assert re.search(r"walked (just now|\d+[smh] ago)", panel), panel[:400]
+    assert "3 entries" in panel, panel[:400]
+    # And the control that forces a complete fresh walk sits in the same box.
+    assert "/v1/operator/ledger-chain?fresh=1" in panel
+
+
+def test_the_chain_panel_is_absent_rather_than_empty_when_it_cannot_be_read(
+    client, monkeypatch
+):
+    """A panel that cannot say anything says nothing, and costs nothing else."""
+    import ledger
+
+    def _explode(*args, **kwargs):
+        raise sqlite3.OperationalError("no such table: contributions")
+
+    monkeypatch.setattr(ledger, "walk_ledger_chain", _explode)
+    run = _published()
+    detail = client.get(f"/history/{run}")
+    assert detail.status_code == 200
+    html = detail.json()["detail_html"]
+    assert html, "a chain failure took the whole fragment with it"
+    assert "LEDGER CHAIN" not in html
+    assert "MANIFEST" in html and "PRODUCED BY" in html
+
+
+def test_the_three_panels_stack_as_three_different_things(client):
+    """The check the design asks for out loud: do they add up?
+
+    They must not. The manifest is a chip because its state genuinely varies;
+    the envelope is a sentence because presence says nothing and only contents
+    do; the chain is a verdict about a different record entirely. One chip
+    across all three, and nothing above them.
+    """
+    _seed_chain(4)
+    run = _published()
+    column = _surfaces(client, run)["console"]
+    column = column[column.index('class="rd-side"'):]
+    column = column[: column.index('class="rd-foot"')]
+
+    chips = re.findall(r'class="rd-chip ([a-z-]+)"', column)
+    assert chips == ["is-sealed"], (
+        f"the side column carries {len(chips)} chips ({chips}). Two chips side "
+        "by side is a row of ticks, and ticks get counted as one stronger claim."
+    )
+    # Three different grammatical classes: a chip, a sentence, a verdict line.
+    assert 'class="rd-envelope-line"' in column
+    assert 'class="rd-chain-verdict-text' in column
+    # And the chain's verdict is not a fourth badge: no chip markup in it.
+    panel = _chain_panel(column)
+    assert "rd-chip" not in panel
+    assert "rd-verdict" not in panel, (
+        "the chain reuses the run's verdict-chip class, which would put it in "
+        "the same visual vocabulary as the five run outcomes"
+    )
+
+
+def test_a_ledger_edited_after_the_walk_shows_the_age_of_the_walk_it_has(client):
+    """The cache is bounded in time, and the panel says how bounded.
+
+    A verdict served from cache is a complete walk that happened a moment ago,
+    not a partial walk that happened now. So a ledger broken after that walk
+    still reads intact until the TTL expires or someone forces a fresh one --
+    and the reader is told the age rather than left to assume it is live.
+    """
+    import ledger
+
+    _seed_chain(4)
+    run = _published()
+    first = _chain_panel(_surfaces(client, run)["console"])
+    assert "LINKS INTACT" in first
+
+    _break_chain(1)
+    stale = _chain_panel(_surfaces(client, run)["console"])
+    assert "LINKS INTACT" in stale, (
+        "the walk re-ran inside its own TTL, which is not what the cache is for"
+    )
+    assert re.search(r"walked (just now|\d+[smh] ago)", stale), (
+        "a cached verdict with no age on screen reads as a live one"
+    )
+
+    ledger.reset_ledger_chain_cache()
+    fresh = _chain_panel(_surfaces(client, run)["console"])
+    assert "LINK BROKEN AT 1" in fresh, (
+        "a fresh walk did not find a break that is really there"
+    )

@@ -113,6 +113,28 @@ def _relative(timestamp: str) -> str:
     return f"{delta // 86400}d ago"
 
 
+def _ledger_chain() -> dict | None:
+    """The chain verdict for the console panel, or None if it cannot be read.
+
+    Read here rather than fetched over HTTP: the console's own route already
+    runs inside the coordinator, and a second network hop would only add a way
+    for the panel to disagree with the endpoint. The gating still governs where
+    the panel appears — `/v1/operator/ledger-chain` is refused at the public
+    edge, so this is passed on the console surface and never on `/run/{id}`.
+
+    A complete walk every time it actually walks, bounded by the same short TTL
+    the endpoint serves, so opening ten runs does not walk the chain ten times.
+    """
+    try:
+        from ledger import walk_ledger_chain
+        import server_state
+
+        return walk_ledger_chain(server_state._DB_PATH).as_dict()
+    except Exception:
+        logger.warning("ledger chain could not be walked", exc_info=True)
+        return None
+
+
 def _detail_html(
     log: dict,
     timestamp: str,
@@ -152,6 +174,7 @@ def _detail_html(
                 publication=publication,
                 durable=durable,
                 envelope=provenance_envelope(publication),
+                chain=_ledger_chain(),
                 surface="console",
                 run_id=timestamp,
                 relative_age=_relative(str(log.get("timestamp") or timestamp)),
