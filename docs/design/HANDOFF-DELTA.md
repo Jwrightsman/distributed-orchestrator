@@ -362,6 +362,55 @@ is doing now, not what it did on a finished run.
 
 The Nodes view's node map is unaffected by this note and is not redrawn here.
 
+### 8.7 — closed. The provenance envelope has a route.
+
+`GET /v1/executions/{id}/provenance`, viewer-gated by the same middleware that
+gates every other route on an execution, returning `as_export()`. That is the
+same object `mycelium-provenance.json` already carries inside the audit bundle,
+so it is not a new contract and `check_envelope_against_files` keeps working
+unchanged against either copy.
+
+**An absent envelope is a 404, not an empty object.** A legacy run that predates
+envelopes has none, and `{}` would say "there is one and it records nothing" —
+a different and false statement. The panel renders absent on the strength of it.
+
+The panel is reachable wherever `/run/{id}` is, which is the point: the envelope
+travels with the artifacts to whoever was handed the link.
+
+### 8.8 — closed. Chain verification has a route, and it is operator-gated.
+
+`GET /v1/operator/ledger-chain`, returning `verify_ledger_chain().as_dict()`
+plus the age of the walk that produced it.
+
+**The prefix is the gate, and the panel's placement follows it.** The archived
+handoff and this document both said "viewer-gated" for this route. That is not
+what `/v1/operator/` means here: `deploy/Caddyfile.public` refuses that whole
+prefix at the edge alongside `/dashboard` and `/metrics`, so a valid viewer key
+is not enough to reach it from the public Internet. That is a stricter gate than
+`/run/{id}` has. So the chain panel renders in the console — itself behind the
+same edge refusal — and never on the shareable run page.
+`tests/test_envelope_and_chain_routes.py` reads that line out of the Caddyfile
+rather than asserting it in prose, so if the prefix is ever opened the placement
+argument fails loudly instead of silently.
+
+**The walk is never shortened.** No checkpoint, no "verified up to index N", no
+skipped prefix. The failure being detected is a rewrite of entries that were
+already walked once, so any of those would blind the check to exactly the case
+it exists for. `test_the_walk_reads_every_chained_entry_every_time_it_walks`
+counts the digest recomputations and requires every index from zero, on every
+walk.
+
+What is bounded is the *frequency*: one complete verdict is cached for
+`LEDGER_CHAIN_WALK_TTL_SECONDS` (30s) and served with `walk_age_seconds`, so the
+panel's "walked 12s ago" is a fact about the cache rather than decoration.
+`?fresh=1` forces a new walk and is what the panel's own control asks for. The
+consequence is stated rather than hidden: a ledger edited inside the TTL still
+reads intact until it expires, which is why the age is on screen.
+
+**`/ledger` is unchanged.** It still projects entries without `entry_index`,
+`previous_digest` or `entry_digest`. A second way to walk the chain is a second
+thing that can disagree with the first.
+
 ### 8.9 — new. The run-detail timeline.
 
 **Decision: render it from `/v1/executions/{id}`, and say `+—` with a reason for
