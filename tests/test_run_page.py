@@ -111,13 +111,49 @@ def test_a_long_pitch_does_not_blow_out_the_title(client):
     assert "…" in title
 
 
-def test_execution_names_the_machine_and_the_time(client):
-    """The point of the page: which machine built which piece."""
+def test_the_page_says_which_machine_built_each_piece_or_says_it_cannot(client):
+    """The point of the page: which machine built which piece.
+
+    The per-subtask table this used to assert on is gone. Run detail draws the
+    plan as waves grouped by dependency depth, because the waves are the
+    parallelism claim and a table of rows is not, and each unit card carries
+    its own machine line. `subtask_stats.executor` is a legacy-log field the
+    canonical unit summary does not read, so a run that has only the legacy
+    record says `machine not recorded` on every card rather than reaching back
+    into a log the execution API does not serve. That is the honest answer for
+    this fixture, and it is asserted here so a future change that starts
+    guessing a machine has to come through this test.
+    """
     _write_run("20260815_120004", **RECORDED)
     body = client.get("/run/20260815_120004").text
-    assert "jetts-laptop" in body and "spare-thinkpad" in body
-    assert "1m 28s" in body, "88.2s should render as 1m 28s"
-    assert "2m 21s" in body
+    waves = body[body.index("HOW IT WAS SPLIT"):body.index('class="rd-side"')]
+    assert waves.count("machine not recorded") >= 2, (
+        "each unit card must say so rather than leaving the line blank"
+    )
+    assert "jetts-laptop" not in waves, (
+        "subtask_stats.executor is a legacy-log field; borrowing it here would "
+        "put a machine on a unit the execution record does not place"
+    )
+    # It is still named where it was actually recorded: settlement is
+    # unchanged by this pass.
+    assert "jetts-laptop" in body[body.index('id="h-credits"'):]
+
+
+def test_the_page_states_no_wall_clock_and_no_speed_multiplier(client):
+    """Counts only in the metric strip.
+
+    A speed multiplier needs a serial baseline and nothing records one, so it
+    is not computable rather than merely absent. The per-run duration the
+    execution record does carry belongs in the timeline, where it is a
+    timestamp, not in the strip where it would read as a headline figure.
+    """
+    _write_run("20260815_120004b", **RECORDED)
+    body = client.get("/run/20260815_120004b").text
+    strip = body[body.index('class="rd-metrics"'):body.index('class="rd-body"')]
+    for label in ("UNITS", "WAVES", "DELIVERABLES", "AUDIT RECORDS"):
+        assert label in strip
+    for banned in ("WALL", "SPEEDUP", "faster", "×"):
+        assert banned not in strip, f"the metric strip renders {banned!r}"
 
 
 def test_credits_are_itemised_and_totalled(client):
@@ -176,7 +212,7 @@ def test_a_cleared_rating_is_not_reported_as_the_reviewer_s_verdict(client):
                   "stopped_because": "the reviewer's issues were gone"},
     )
     body = client.get("/run/20260815_120013").text
-    head = body[body.index('class="facts"'):body.index("</header>")]
+    head = body[body.index('class="rd-head"'):body.index('class="rd-triad"')]
     assert "PASS" in head and "NEEDS_WORK" not in head, "the headline shows a stale rating"
     review = body[body.index('id="h-review"'):body.index('id="h-reviser"')]
     assert "NEEDS_WORK" in review, "the reviewer's own verdict has been overwritten"

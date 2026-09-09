@@ -9,6 +9,7 @@ marker in a page is replaced by a partial:
 
     <!-- THEME -->            templates/_theme.html   (palette + theme toggle)
     <!-- DASHBOARD_CSS -->    templates/_dashboard.css
+    <!-- RUN_DETAIL_CSS -->   templates/_run_detail.css
     <!-- STATUS_MODEL_JS -->  templates/_status_model.js
     <!-- DASHBOARD_JS -->     templates/_dashboard.js
 
@@ -44,6 +45,11 @@ _THEME_MARKER = "<!-- THEME -->"
 # CSS/JS that an editor and a linter can both understand.
 _PARTIALS = {
     "<!-- DASHBOARD_CSS -->": ("_dashboard.css", "style"),
+    # Run detail is one structure on three surfaces, so it is one stylesheet
+    # on all of them. The dashboard and run.html both take this marker; a
+    # second copy of the rules is exactly the drift run_detail.py exists to
+    # prevent.
+    "<!-- RUN_DETAIL_CSS -->": ("_run_detail.css", "style"),
     # Before DASHBOARD_JS in every page that wants both: _dashboard.js reads
     # STATUS_MODEL at load. Dict order is insertion order, and a page that
     # carries only one of the two markers simply gets that one.

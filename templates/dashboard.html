@@ -7,6 +7,7 @@
 <meta name="description" content="Live view of the Mycelium swarm: connected machines, running pipelines, completed builds and the contribution ledger.">
 <!-- THEME -->
 <!-- DASHBOARD_CSS -->
+<!-- RUN_DETAIL_CSS -->
 </head>
 <body>
 
@@ -122,9 +123,15 @@
             <span class="stat-value" id="stat-nodes">0</span>
             <span class="stat-label">Nodes online</span>
           </div>
+          <!-- This is /health.tasks_pending, the SUBTASK queue. The status bar
+               30px away carries QUEUED, which is /metrics.jobs_queued, the JOB
+               queue -- a different number. Under two labels a reader could take
+               for the same thing, one of them is always wrong, and the reader
+               has no way to tell which. So the cell is named after the number
+               it actually holds. Not both under one word. -->
           <div class="stat">
             <span class="stat-value" id="stat-tasks">0</span>
-            <span class="stat-label">Tasks pending</span>
+            <span class="stat-label">Subtasks pending</span>
           </div>
           <div class="stat">
             <span class="stat-value" id="stat-models">-</span>
@@ -375,20 +382,23 @@
   </div>
 </div>
 
+<!-- Run detail in the console. The panel is chrome; the run-detail surface
+     inside it is the same markup templates/run.html renders, built once by
+     run_detail.py. The dialog's own heading carries the task text for its
+     accessible name and is not shown, because the surface below states it --
+     two copies of the title in one dialog is the parallel layout §13.1 says
+     not to write. Copy link stays beside Close: it acts on this dialog rather
+     than on the run, so it belongs to the shell. -->
 <div id="output-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" hidden>
-  <div class="modal-panel">
+  <div class="modal-panel is-detail">
     <div class="modal-head">
-      <h2 id="modal-title" class="modal-title"></h2>
+      <h2 id="modal-title" class="modal-title sr-only"></h2>
       <div class="modal-actions">
-        <a class="btn-accent" id="modal-permalink" href="#">Open run page ↗</a>
-        <button type="button" class="btn-quiet" id="modal-download-btn">Download</button>
         <button type="button" class="btn-quiet" id="modal-share-btn">Copy link</button>
         <button type="button" class="btn-quiet" data-close-modal="output-modal">Close</button>
       </div>
     </div>
-    <div id="modal-plan" class="modal-section"></div>
-    <div id="modal-files" class="modal-section" hidden></div>
-    <div id="modal-review" class="modal-scroll"></div>
+    <div id="modal-run-detail"></div>
   </div>
 </div>
 

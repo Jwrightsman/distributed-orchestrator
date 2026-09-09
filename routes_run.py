@@ -6,9 +6,12 @@ so there was nowhere to point when someone said "show me something the swarm
 built". This is that page: one run, one address, server-rendered so it
 previews correctly when pasted into Discord, Reddit or a comment.
 
-It answers, in order: what was asked for, how the planner split it, which
-machine built each piece and how long that took, what the reviewer said, what
-the reviser changed, what files came out, and what the ledger settled.
+The page leads with the deliverable and the plan follows, because plan is
+process and the code is the product. That structure is built by `run_detail.py`
+and is the same markup the console's run modal renders — one structure, two
+shells, so neither can drift from the other. What stays here is what the
+surface does not carry: the reviewer's own verdict, the reviser, settlement,
+and the full assembled output.
 
 Where a run predates a field, the page says so. The alternative — deriving a
 plausible number — is how this project once published a figure that was true
@@ -18,12 +21,12 @@ when recorded and had quietly stopped being reproducible.
 import html as _html
 import json
 import re
-from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
+import run_detail
 from dashboard import render
 from execution.publication import (
     LegacyRunNotPublished,
@@ -81,6 +84,11 @@ def load_run(run_id: str) -> dict:
 
     try:
         publication = require_legacy_run_publication(run_dir, log)
+        # Kept rather than discarded: it already carries the execution id, the
+        # sealed manifest and the integrity mode, so run detail reaches the
+        # canonical record through the authority this route had to establish
+        # anyway. No new route, and no second trip through the store.
+        log["_publication"] = publication
         review = published_file(publication, "review.md")
         log["review"] = (
             review.read_text(errors="ignore", encoding="utf-8")
@@ -106,21 +114,6 @@ def load_run(run_id: str) -> dict:
     return log
 
 
-def _relative(timestamp: str) -> str:
-    try:
-        dt = datetime.strptime(timestamp, "%Y%m%d_%H%M%S").replace(tzinfo=timezone.utc)
-    except ValueError:
-        return ""
-    delta = int(datetime.now(timezone.utc).timestamp() - dt.timestamp())
-    if delta < 60:
-        return "just now"
-    if delta < 3600:
-        return f"{delta // 60}m ago"
-    if delta < 86400:
-        return f"{delta // 3600}h ago"
-    return f"{delta // 86400}d ago"
-
-
 def _duration(seconds) -> str:
     if not seconds:
         return ""
@@ -134,89 +127,6 @@ def _duration(seconds) -> str:
 
 def _unrecorded(what: str, why: str) -> str:
     return f'<div class="unrecorded"><b>{esc(what)}</b> {esc(why)}</div>'
-
-
-def _facts(log: dict) -> str:
-    rating = log.get("rating") or "?"
-    parts = [
-        f'<span class="badge {_RATING_CLASS.get(rating, "is-unknown")}">{esc(rating)}</span>',
-        '<span class="badge is-dist">DISTRIBUTED</span>' if log.get("mode") == "distributed"
-        else '<span class="badge is-local">LOCAL</span>',
-        f'<span class="fact"><b>{len(log.get("plan", []))}</b> subtasks</span>',
-    ]
-    nodes_used = log.get("nodes_used")
-    if isinstance(nodes_used, list) and nodes_used:
-        parts.append(f'<span class="fact"><b>{len(nodes_used)}</b> machines</span>')
-    if log.get("duration_seconds"):
-        parts.append(f'<span class="fact"><b>{esc(_duration(log["duration_seconds"]))}</b> end to end</span>')
-    if log.get("model"):
-        parts.append(f'<span class="fact">{esc(log["model"])}</span>')
-    rel = _relative(log.get("timestamp", ""))
-    if rel:
-        parts.append(f'<span class="fact">{esc(rel)}</span>')
-    return "".join(parts)
-
-
-def _plan(log: dict) -> str:
-    plan = log.get("plan") or []
-    if not plan:
-        return _unrecorded("No plan was recorded.", "The planner did not produce a decomposition for this run.")
-    rows = []
-    for st in plan:
-        deps = st.get("depends_on") or []
-        dep_html = (f'<div class="deps">waits for subtask {esc(", ".join(str(d) for d in deps))}</div>'
-                    if deps else "")
-        desc = st.get("description") or ""
-        rows.append(
-            f'<div class="step"><span class="n">{esc(st.get("id", "?"))}</span>'
-            f'<div class="body"><div class="title">{esc(st.get("title", "Untitled"))}</div>'
-            f'{f"<div class=\"desc\">{esc(desc)}</div>" if desc else ""}{dep_html}</div></div>'
-        )
-    return "".join(rows)
-
-
-def _execution(log: dict) -> str:
-    plan = log.get("plan") or []
-    stats = log.get("subtask_stats") or {}
-    if not plan:
-        return _unrecorded("Nothing to show.", "This run has no recorded subtasks.")
-    if not stats:
-        where = ("across the machines listed above" if log.get("nodes_used")
-                 else "on the orchestrator itself")
-        return _unrecorded(
-            "Per-subtask timing was not recorded for this run.",
-            f"It ran before the pipeline started keeping it. The work happened {where}; "
-            "how long each piece took was not written down. Runs from here on record it.",
-        )
-
-    rows = []
-    for st in plan:
-        meta = stats.get(str(st.get("id"))) or {}
-        executor = meta.get("executor") or "—"
-        note = ' <span class="self">(fell back to the orchestrator)</span>' if meta.get("fell_back_to_local") else ""
-        seconds = meta.get("seconds")
-        chars = meta.get("chars")
-        rows.append(
-            f"<tr><td class=\"mono\">{esc(st.get('id', '?'))}</td>"
-            f"<td>{esc(st.get('title', 'Untitled'))}</td>"
-            f"<td class=\"who mono\">{esc(executor)}{note}</td>"
-            f"<td class=\"num mono\">{esc(_duration(seconds)) if seconds else '—'}</td>"
-            f"<td class=\"num mono\">{esc(f'{chars:,}') if chars else '—'}</td></tr>"
-        )
-    review_row = ""
-    if log.get("review_seconds"):
-        review_row = (
-            '<tr><td class="mono">—</td><td>Review and assembly</td>'
-            f'<td class="who mono">orchestrator</td>'
-            f'<td class="num mono">{esc(_duration(log["review_seconds"]))}</td>'
-            '<td class="num mono">—</td></tr>'
-        )
-    return (
-        '<div class="table-scroll"><table>'
-        "<thead><tr><th>#</th><th>Subtask</th><th>Machine</th>"
-        '<th class="num">Time</th><th class="num">Output</th></tr></thead>'
-        f"<tbody>{''.join(rows)}{review_row}</tbody></table></div>"
-    )
 
 
 def _review(log: dict) -> str:
@@ -281,37 +191,6 @@ def _reviser(log: dict) -> str:
     )
 
 
-def _files(log: dict) -> str:
-    files = [Path(f).name for f in (log.get("code_files") or [])]
-    problems = log.get("code_problems") or []
-    if not files:
-        return _unrecorded(
-            "No runnable files came out of this run.",
-            "The extractor pulls fenced code into real files when the output contains any; "
-            "this one produced prose, or nothing it could safely write to disk.",
-        )
-    out = f'<div class="chips">{"".join(f"<span class=\"chip\">{esc(f)}</span>" for f in files)}</div>'
-    if problems:
-        listed = "".join(
-            f'<span class="chip is-problem">{esc(p if isinstance(p, str) else json.dumps(p))}</span>'
-            for p in problems[:8]
-        )
-        out += (
-            '<p class="lede is-spaced">The mechanical check flagged these, '
-            'and they are published rather than hidden:</p>'
-            f'<div class="chips">{listed}</div>'
-        )
-    precheck_error = log.get("code_precheck_error")
-    if precheck_error:
-        # An empty problem list here would otherwise read as "checked, clean".
-        out += (
-            '<p class="lede is-spaced">The mechanical check did not run to a '
-            f'verdict on this run ({esc(str(precheck_error))}), so these files '
-            'are unchecked rather than known good.</p>'
-        )
-    return out
-
-
 def _credits(log: dict) -> str:
     credits = log.get("credits")
     if not credits:
@@ -359,23 +238,147 @@ def _output(log: dict) -> str:
     return "".join(parts) or f'<div class="prose">{esc(text)}</div>'
 
 
-def _actions(run: str, log: dict) -> str:
-    buttons = [
-        f'<a class="btn btn-primary" href="/history/{esc(run)}/fork-template">Fork this run</a>',
-        f'<a class="btn btn-ghost" href="/history/{esc(run)}/download">Download everything</a>',
-        '<a class="btn btn-ghost" href="/dashboard#gallery">See what else the swarm built</a>',
-    ]
-    return "".join(buttons)
+# ── Run detail ───────────────────────────────────────────────────────
+
+# How much of a deliverable the panel shows before it starts saying so.
+PREVIEW_LINES = 14
+
+def durable_record(publication) -> object | None:
+    """The canonical execution record behind this run directory, if there is one.
+
+    `require_legacy_run_publication` has already resolved the artifact-root
+    binding, so the execution id is in hand and this is a store read rather
+    than a lookup. Reading it here is not the provenance route §8.7 asks for:
+    the server is reading its own store to render its own page, and no new
+    HTTP endpoint appears.
+    """
+    execution_id = getattr(publication, "execution_id", None)
+    if not execution_id:
+        return None
+    try:
+        from execution.service import get_execution_service
+
+        return get_execution_service().store.get(execution_id)
+    except Exception:  # a page must not 500 because a store read failed
+        return None
 
 
-def _summary(log: dict) -> str:
-    """The one line a link preview shows. It has to carry the whole story."""
+def provenance_envelope(publication) -> object | None:
+    """The envelope for this run, or None when it has none.
+
+    A legacy execution that predates envelopes renders the panel absent — not
+    an empty panel and not an error — so this returning None is the whole of
+    that behaviour.
+    """
+    execution_id = getattr(publication, "execution_id", None)
+    if not execution_id:
+        return None
+    try:
+        import server_state
+
+        return server_state.provenance_envelope_store.get(execution_id)
+    except Exception:
+        return None
+
+
+def _preview(log: dict, publication, durable) -> dict | None:
+    """The first deliverable-role file, with its size and what checked it."""
+    manifest = getattr(publication, "manifest", None)
+    if manifest is not None:
+        entries = [e for e in manifest.entries if str(e.role) == "deliverable"]
+        name = entries[0].relative_path if entries else None
+        size = entries[0].size_bytes if entries else None
+    else:
+        files = log.get("code_files") or []
+        name = Path(files[0]).name if files else None
+        size = None
+        if name:
+            name = f"code/{name}"
+
+    if not name:
+        return None
+
+    try:
+        path = published_file(publication, name)
+        text = path.read_text(errors="ignore", encoding="utf-8") if path else ""
+        if size is None and path is not None:
+            size = path.stat().st_size
+    except (LegacyRunNotPublished, OSError):
+        return None
+
+    checks = [run_detail._bytes(size)] if size else []
+    if log.get("code_precheck_error"):
+        checks.append("not checked")
+    elif durable is not None:
+        checks.extend(durable.validation_summary.checks_passed)
+    # A preview, not the file: the whole thing is one authenticated download
+    # away and a page is not a code viewer. But a silent 14 lines of a
+    # 500-line file says "this file is 14 lines", so a cut preview says it was
+    # cut and how much of the file it is showing.
+    lines = text.splitlines()
+    shown = lines[:PREVIEW_LINES]
+    if len(lines) > PREVIEW_LINES:
+        checks.append(f"first {PREVIEW_LINES} of {len(lines)} lines")
+
+    return {
+        "name": name,
+        "text": "\n".join(shown),
+        "checks": [c for c in checks if c],
+    }
+
+
+def _prose(log: dict) -> str:
+    """The first paragraph of the assembled result, with no fenced code in it."""
+    text = (log.get("final_output") or "").strip() or (log.get("review") or "").strip()
+    without_code = _FENCE.sub(" ", text).strip()
+    for block in without_code.split("\n\n"):
+        cleaned = " ".join(block.split())
+        if len(cleaned) > 40 and not cleaned.startswith("#"):
+            return cleaned[:400]
+    return ""
+
+
+def run_surface(log: dict, run: str, surface: str = "server") -> str:
+    """The shared run-detail structure, built once in run_detail.py."""
+    publication = log.get("_publication")
+    durable = durable_record(publication)
+    return run_detail.render(
+        run_detail.build_view(
+            log,
+            publication=publication,
+            durable=durable,
+            envelope=provenance_envelope(publication),
+            surface=surface,
+            run_id=run,
+            preview=_preview(log, publication, durable),
+            prose=_prose(log),
+        )
+    )
+
+
+def _summary(log: dict, envelope=None) -> str:
+    """The one line a link preview shows.
+
+    This page is shareable, and the preview is all a reader gets before they
+    decide whether to open it — so when the run has an envelope, its sentence
+    leads. That sentence was written to survive being pasted with no page
+    around it: it names the producer, the model and the checking, and states
+    the limit in the same breath rather than in a tooltip. It is the reason
+    the envelope is a sentence at all rather than a field list.
+    """
     rating = log.get("rating") or "?"
     n = len(log.get("plan", []))
     verdict = {"PASS": "passed review", "NEEDS_WORK": "needed work",
                "FAIL": "failed review"}.get(rating, "was built")
     where = ("across invited machines" if log.get("mode") == "distributed"
              else "on one machine")
+
+    if envelope is not None:
+        return (
+            f"{run_detail.envelope_sentence(dict(envelope.payload))} "
+            f"Split into {n} units, built {where}, and {verdict}."
+        )
+
     duration = _duration(log.get("duration_seconds"))
     tail = f" in {duration}" if duration else ""
     return (f"Split into {n} subtasks and built {where} by local AI models{tail}, "
@@ -395,23 +398,17 @@ async def run_page(run_id: str, request: Request):
     # A pitch can be a paragraph; a <title> and an OG title cannot.
     short = task if len(task) <= 70 else task[:67].rstrip() + "…"
 
+    envelope = provenance_envelope(log.get("_publication"))
+
     return render(
         "run.html",
         TITLE=esc(f"{short} — Mycelium"),
         OG_TITLE=esc(short),
-        META_DESCRIPTION=esc(_summary(log)),
+        META_DESCRIPTION=esc(_summary(log, envelope)),
         OG_URL=esc(f"{origin}/run/{run}"),
-        HEADLINE=esc(task),
-        FACTS=_facts(log),
-        RUN_ID=esc(f"run {run}") + (
-            f' · project {esc(log["project_id"])}' if log.get("project_id") else ""
-        ),
-        PLAN=_plan(log),
-        EXECUTION=_execution(log),
+        RUN_DETAIL=run_surface(log, run, surface="server"),
         REVIEW=_review(log),
         REVISER=_reviser(log),
-        FILES=_files(log),
         CREDITS=_credits(log),
         OUTPUT=_output(log),
-        ACTIONS=_actions(run, log),
     )

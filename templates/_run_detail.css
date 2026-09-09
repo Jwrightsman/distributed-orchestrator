@@ -1,0 +1,411 @@
+/* Run detail — the one stylesheet, injected into both surfaces.
+
+   `run_detail.py` builds the markup once and the dashboard's run modal and
+   the server-rendered /run/{id} both render it. This file is injected into
+   both pages for the same reason: the design handoff's §9 notes that run.html
+   and status.html each carry their own <style> block, which is right for a
+   page that is not the app shell — but a *shared* structure styled twice is
+   two stylesheets that drift, and the whole point of §13.1 is that these
+   surfaces cannot drift. So the shared part lives here, once.
+
+   Every colour is a var(--token) from _theme.html; tests/test_theme.py fails
+   the build on a literal. Nothing renders below 11px — the dashboard appears
+   on camera during the demo recording. Filled versus hollow carries meaning
+   throughout, so every state survives greyscale and a reader who does not see
+   green; colour is never the only signal.
+
+   The one difference between the surfaces is hit-target size, and it is
+   driven by [data-surface] at the bottom of this file rather than by a second
+   copy of the rules: 44px on the public page, where most visitors arrive on a
+   phone from a link in a post, and 28px in the console, where the pointer is
+   a mouse and vertical space is the scarce thing. */
+
+.rd {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  overflow: hidden;
+  font-family: var(--sans);
+  text-align: left;
+}
+
+/* A note on --text-faint and --text-muted.
+
+   They are one step apart in the ink hierarchy and nearly the same colour, but
+   only one of them clears AA on a panel. In the light theme --surface,
+   --surface-hover and --surface-sunken all sit below --bg, and --text-faint on
+   them measures 4.13 to 4.44:1 at the 11px these labels render at -- under the
+   4.5 the rest of this app holds. Measured in Chromium, composited over real
+   ancestors, in both themes.
+
+   (The ratios are the finding; the hex values are deliberately not written
+   here. test_no_page_hardcodes_a_colour scans comments too, and it is right
+   to: a colour written down in a comment is the first step to one written
+   down in a rule.)
+
+   So --text-faint stays for text on --bg and --bg-elevated (the header meta,
+   the age, a unit id on its own card ground) and --text-muted carries
+   everything inside a panel. Dark passes either way; light is the one that
+   fails, which is the failure mode tests/test_theme.py exists to prevent and
+   the reason every state is checked in both.
+
+── Markers ───────────────────────────────────────────────────────
+   A styled span, never an icon font and never an SVG: the shape is the
+   accessible signal, so it has to be something CSS can make hollow. */
+.rd-marker {
+  display: inline-block; flex-shrink: 0;
+  width: 7px; height: 7px;
+  border: 1px solid transparent;
+}
+.rd-marker.is-6 { width: 6px; height: 6px; }
+.rd-marker.is-7 { width: 7px; height: 7px; }
+
+.rd-marker.is-ok      { background: var(--accent);     border-color: var(--accent); }
+.rd-marker.is-bad     { background: var(--danger);     border-color: var(--danger); }
+.rd-marker.is-slate   { background: var(--slate);      border-color: var(--slate); }
+/* Recorded, but saying nothing on its own — filled, in ordinary ink. */
+.rd-marker.is-neutral { background: var(--text-faint); border-color: var(--border-strong); }
+/* Not recorded. Hollow, and never --warn or --danger: not writing something
+   down is neither a fault nor fine, and the shape carries it. */
+.rd-marker.is-absent  { background: transparent;       border-color: var(--text-faint); }
+
+/* ── Header ────────────────────────────────────────────────────────── */
+.rd-head {
+  display: flex; align-items: flex-start; flex-wrap: wrap;
+  gap: 12px; padding: 12px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.rd-head-main { flex: 1 1 250px; min-width: 0; display: flex; flex-direction: column; gap: 7px; }
+.rd-chips { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+
+.rd-title {
+  font-size: 15px; font-weight: 600; line-height: 1.4;
+  color: var(--text); min-width: 0;
+  overflow-wrap: anywhere; text-wrap: pretty;
+  margin: 0;
+}
+.rd-meta,
+.rd-age {
+  font-family: var(--mono); font-size: 11px;
+  color: var(--text-faint); min-width: 0; overflow-wrap: anywhere;
+}
+.rd-hardware {
+  font-family: var(--mono); font-size: 11px; color: var(--text-dim);
+  border: 1px solid var(--border); border-radius: 3px; padding: 2px 7px;
+}
+
+/* Five values, no sixth and no percentage. The dot is filled for every one of
+   them and the chip's own ink is what separates them, so the vocabulary reads
+   in greyscale as five labels rather than five colours. */
+.rd-verdict {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em;
+  border-radius: 3px; padding: 3px 7px;
+  border: 1px solid transparent;
+}
+.rd-verdict.is-pass       { color: var(--accent);      background: var(--accent-wash); border-color: var(--accent-dim); }
+.rd-verdict.is-pass       .rd-marker { background: var(--accent); border-color: var(--accent); }
+.rd-verdict.is-needs-work { color: var(--warn-text);   background: var(--warn-wash);   border-color: var(--warn-line); }
+.rd-verdict.is-needs-work .rd-marker { background: var(--warn); border-color: var(--warn); }
+.rd-verdict.is-fail       { color: var(--danger-text); background: var(--danger-wash); border-color: var(--danger-line); }
+.rd-verdict.is-fail       .rd-marker { background: var(--danger); border-color: var(--danger); }
+/* UNCHECKED and NO VERDICT are deliberately identical: both mean "no verdict
+   was reached", and neither may read as a softer PASS. */
+.rd-verdict.is-unchecked,
+.rd-verdict.is-no-verdict { color: var(--text-muted);  background: transparent;        border-color: var(--border-strong); }
+.rd-verdict.is-unchecked  .rd-marker,
+.rd-verdict.is-no-verdict .rd-marker { background: var(--text-faint); border-color: var(--text-faint); }
+
+.rd-actions { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
+.rd-btn {
+  display: inline-flex; align-items: center;
+  background: transparent; color: var(--text-dim);
+  border: 1px solid var(--border); border-radius: 4px;
+  padding: 0 12px;
+  font-family: var(--sans); font-size: 12px;
+  text-decoration: none; cursor: pointer; white-space: nowrap;
+}
+.rd-btn.is-primary {
+  background: var(--surface-hover); color: var(--text);
+  border-color: var(--border-strong);
+}
+.rd-btn:hover { border-color: var(--border-strong); color: var(--text); }
+
+/* ── The three axes ────────────────────────────────────────────────
+   Never collapsed into one badge. A run can be complete without being
+   correct, and the compatibility `status` field already flattens exactly
+   the distinction these three cells exist to show. */
+.rd-triad { display: flex; flex-wrap: wrap; border-bottom: 1px solid var(--border-subtle); }
+.rd-axis {
+  flex: 1 1 180px; min-width: 0; padding: 12px 14px;
+  border-right: 1px solid var(--border-subtle);
+}
+.rd-axis:last-child { border-right: none; }
+.rd-axis-label {
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em;
+  color: var(--text-muted);
+}
+.rd-axis-value {
+  display: flex; align-items: center; gap: 8px; margin-top: 7px;
+  font-family: var(--mono); font-size: 13.5px; color: var(--text);
+}
+.rd-axis-note {
+  font-size: 11.5px; color: var(--text-muted);
+  line-height: 1.55; margin-top: 6px; text-wrap: pretty;
+}
+
+/* ── Placement ─────────────────────────────────────────────────────── */
+.rd-placement {
+  display: flex; align-items: center; gap: 10px 16px; flex-wrap: wrap;
+  padding: 10px 14px; border-bottom: 1px solid var(--border-subtle);
+  font-family: var(--mono); font-size: 11px; color: var(--text-faint);
+}
+.rd-place-label { letter-spacing: 0.11em; color: var(--text-muted); }
+.rd-place-flow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.rd-place-was { color: var(--text-dim); }
+.rd-place-now { color: var(--text); }
+.rd-arrow { color: var(--text-faint); }
+.rd-consent {
+  display: flex; align-items: center; gap: 7px; margin-left: auto;
+  color: var(--text-muted);
+}
+
+/* ── Metric strip — counts only ───────────────────────────────────── */
+.rd-metrics { display: flex; flex-wrap: wrap; border-bottom: 1px solid var(--border-subtle); }
+.rd-metric {
+  flex: 1 1 130px; min-width: 0; padding: 11px 14px;
+  border-right: 1px solid var(--border-subtle);
+}
+.rd-metric:last-child { border-right: none; }
+.rd-metric-v { font-family: var(--mono); font-size: 15px; color: var(--text); }
+.rd-metric-l {
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em;
+  color: var(--text-muted); margin-top: 5px;
+}
+
+/* ── Body ──────────────────────────────────────────────────────────
+   The main column outweighs the side column 100:1 so the side column takes
+   its 300px basis and no more, then wraps beneath on a narrow viewport. */
+.rd-body { display: flex; flex-wrap: wrap; gap: 16px; padding: 16px 14px; align-items: flex-start; }
+.rd-main { flex: 100 1 400px; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+.rd-side { flex: 1 1 300px; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+
+.rd-panel {
+  border: 1px solid var(--border); border-radius: 5px;
+  background: var(--surface); overflow: hidden;
+}
+.rd-panel-head {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  padding: 10px 13px; border-bottom: 1px solid var(--border-subtle);
+}
+.rd-panel-head.is-sunken { background: var(--surface-sunken); }
+.rd-panel-label {
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em;
+  color: var(--text-muted);
+}
+.rd-panel-meta {
+  margin-left: auto; font-family: var(--mono); font-size: 11px;
+  color: var(--text-muted); min-width: 0; overflow-wrap: anywhere;
+}
+.rd-panel-note {
+  padding: 10px 13px; font-size: 11.5px; color: var(--text-muted);
+  line-height: 1.65; text-wrap: pretty;
+}
+.rd-panel-sunken {
+  padding: 10px 13px 0; border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface-sunken);
+}
+.rd-panel-sunken .rd-panel-note { padding: 5px 0 10px; }
+.rd-code { font-family: var(--mono); font-size: 11px; }
+
+/* ── Deliverable ───────────────────────────────────────────────────── */
+.rd-prose {
+  padding: 12px 13px 0; margin: 0;
+  font-size: 12.5px; line-height: 1.7; color: var(--text-dim); text-wrap: pretty;
+}
+.rd-file { padding: 12px 13px; }
+.rd-file-bar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 7px 11px;
+  border: 1px solid var(--border); border-bottom: none; border-radius: 4px 4px 0 0;
+  background: var(--surface-hover);
+}
+.rd-file-name { font-family: var(--mono); font-size: 11.5px; color: var(--text-dim); }
+.rd-file-meta {
+  margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text-muted);
+}
+.rd-file-body {
+  margin: 0; padding: 12px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border); border-radius: 0 0 4px 4px;
+  font-family: var(--mono); font-size: 11.5px; line-height: 1.7;
+  color: var(--text-dim);
+  white-space: pre; overflow-x: auto;
+}
+
+/* The two defect channels. Never both at once -- a record cannot carry a
+   runner failure and a problem list together -- and the precheck note is said
+   first and alone, because an empty problem list beside it would read as
+   "checked, clean", which is exactly what it does not mean. */
+.rd-defects {
+  padding: 0 13px 12px; font-size: 11.5px; color: var(--text-muted);
+  line-height: 1.65; text-wrap: pretty;
+}
+.rd-problems { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 13px 12px; }
+.rd-problem {
+  font-family: var(--mono); font-size: 11px; color: var(--warn-text);
+  background: var(--warn-wash); border: 1px solid var(--warn-line);
+  border-radius: 3px; padding: 3px 8px;
+}
+
+/* ── Waves ─────────────────────────────────────────────────────────── */
+.rd-wave { border-bottom: 1px solid var(--border-subtle); }
+.rd-wave-bar {
+  display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap;
+  padding: 8px 13px; background: var(--surface-hover);
+}
+.rd-wave-label {
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; color: var(--text-dim);
+}
+.rd-wave-note { font-family: var(--mono); font-size: 11px; color: var(--text-muted); }
+.rd-wave-units { display: flex; flex-wrap: wrap; gap: 9px; padding: 11px 13px; }
+.rd-unit {
+  flex: 1 1 190px; min-width: 0;
+  border: 1px solid var(--border); border-radius: 4px;
+  padding: 9px 10px; background: var(--bg);
+}
+.rd-unit-head { display: flex; align-items: center; gap: 7px; }
+.rd-unit-id { font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
+.rd-unit-title {
+  font-size: 12px; color: var(--text); min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rd-unit-head .rd-marker { margin-left: auto; }
+.rd-unit-prompt {
+  font-size: 11.5px; color: var(--text-muted);
+  line-height: 1.55; margin-top: 5px; text-wrap: pretty;
+}
+.rd-unit-foot {
+  display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap; margin-top: 7px;
+}
+.rd-unit-machine { font-family: var(--mono); font-size: 11px; color: var(--text-dim); }
+.rd-unit-machine.is-absent { color: var(--text-muted); }
+/* A unit that did not complete says so in a word, because the marker beside
+   the title is the only other signal and three of its four tones are filled --
+   so in greyscale a failed unit and a completed one are a 6px square a few
+   grey levels apart. `completed` stays marker-only: a word on every card is
+   noise that would make the one that matters harder to find. */
+.rd-unit-state {
+  margin-left: auto; font-family: var(--mono); font-size: 11px;
+  color: var(--text-muted); letter-spacing: 0.06em;
+}
+
+/* ── Manifest ──────────────────────────────────────────────────────
+   This panel gets a chip, because its state genuinely varies. The envelope
+   panel below it does not, and no heading spans the two. */
+.rd-chip {
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em;
+  border-radius: 3px; padding: 2px 6px;
+  border: 1px solid var(--border-strong); color: var(--text-muted);
+}
+.rd-chip.is-sealed { color: var(--accent); border-color: var(--accent-dim); }
+.rd-hash {
+  font-family: var(--mono); font-size: 11px; color: var(--text-muted);
+  line-height: 1.55; overflow-wrap: anywhere;
+}
+.rd-group-bar {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  padding: 8px 13px; background: var(--surface-hover);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.rd-group-label {
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; color: var(--text-dim);
+}
+.rd-group-meta {
+  margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text-muted);
+  /* An execution id has no break opportunity, so at 330px this endpoint ran
+     68px past the panel edge. Found by opening it, not by reading it. */
+  min-width: 0; overflow-wrap: anywhere;
+}
+.rd-artifact {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px;
+  padding: 8px 13px; border-bottom: 1px solid var(--border-subtle);
+}
+.rd-artifact-name {
+  font-family: var(--mono); font-size: 11.5px; color: var(--text-dim);
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rd-artifact-size { font-family: var(--mono); font-size: 11px; color: var(--text-muted); }
+.rd-artifact-sub {
+  grid-column: 1 / -1; display: flex; gap: 9px; flex-wrap: wrap;
+  font-family: var(--mono); font-size: 11px; line-height: 1.5;
+}
+.rd-artifact-role { color: var(--text-muted); }
+.rd-artifact-hash { color: var(--text-muted); }
+
+/* ── The provenance envelope ───────────────────────────────────────
+   A sentence, not a chip. Deliberately no state colour anywhere in this
+   panel: a coloured badge here would sit beside the manifest's SEALED chip
+   and read as a second tick in a row of ticks, and ticks get counted as one
+   stronger claim. The two records establish different things and vary
+   independently, so they are given different grammatical classes rather than
+   a matching pair of badges. tests/test_run_detail.py enforces this. */
+.rd-envelope-body { padding: 12px 13px; display: flex; flex-direction: column; gap: 7px; }
+.rd-envelope-line {
+  font-size: 12.5px; color: var(--text-dim); line-height: 1.6; text-wrap: pretty;
+}
+.rd-envelope-limit {
+  font-size: 12px; color: var(--text-muted); line-height: 1.65; text-wrap: pretty;
+}
+.rd-envelope-foot {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 9px 13px; border-top: 1px solid var(--border-subtle);
+}
+.rd-envelope-open {
+  font-family: var(--mono); font-size: 11px; color: var(--text-dim);
+  text-decoration: none; border-bottom: 1px solid var(--border-strong);
+}
+.rd-envelope-open:hover { color: var(--text); }
+.rd-envelope-unknown {
+  display: flex; align-items: center; gap: 7px; margin-left: auto;
+  font-family: var(--mono); font-size: 11px; color: var(--text-muted);
+}
+
+/* ── Timeline ──────────────────────────────────────────────────────── */
+.rd-tl-row {
+  display: grid; grid-template-columns: 50px minmax(0, 1fr); gap: 10px;
+  align-items: start; padding: 7px 13px;
+  border-bottom: 1px solid var(--border-subtle);
+  font-family: var(--mono); font-size: 11px; line-height: 1.5;
+}
+.rd-tl-at { color: var(--text-muted); }
+.rd-tl-what { overflow-wrap: anywhere; color: var(--text-dim); }
+.rd-tl-what.is-dim    { color: var(--text-dim); }
+.rd-tl-what.is-info   { color: var(--info); }
+.rd-tl-what.is-ok     { color: var(--accent); }
+.rd-tl-what.is-absent { color: var(--text-muted); }
+
+/* ── Footer ────────────────────────────────────────────────────────── */
+.rd-foot {
+  display: grid; grid-template-columns: 7px minmax(0, 1fr); gap: 11px;
+  align-items: start; padding: 11px 14px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--surface-sunken);
+}
+.rd-foot .rd-marker { margin-top: 4px; }
+.rd-foot-label {
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-muted);
+}
+.rd-foot-note {
+  font-size: 12px; color: var(--text-muted); line-height: 1.65;
+  margin: 5px 0 0; text-wrap: pretty;
+}
+
+/* ── The one difference between the surfaces ──────────────────────── */
+.rd[data-surface="console"] .rd-btn { height: 28px; }
+.rd[data-surface="server"]  .rd-btn { height: 44px; font-size: 13px; padding: 0 14px; }
+
+/* The public page's own h1 is the run title inside the surface, so it is
+   sized here rather than inheriting whatever run.html would give a bare h1. */
+.rd[data-surface="server"] { margin: 24px 0 4px; }
+.rd[data-surface="server"] h1.rd-title { font-size: 17px; letter-spacing: -0.2px; }
