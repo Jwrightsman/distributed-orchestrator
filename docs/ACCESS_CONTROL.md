@@ -152,9 +152,18 @@ Every other method/path requires viewer authorization, including:
 - `/jobs*`, `/events`, and `/ws/events`;
 - `/nodes`, `/status`, `/node/*`, `/metrics`, `/ledger`, and `/standings`;
 - `/history*`, `/gallery`, `/run/*`, and legacy `/share/*` redirects;
-- `/projects*`, `/v1/operator/health`, and dashboard/operator pages.
+- `/projects*`, `/v1/operator/*`, and dashboard/operator pages.
 
 An unauthorized HTTP request returns `401` with `WWW-Authenticate: Bearer`.
+
+**`/v1/operator/*` is gated twice, and the second gate is not a viewer key.**
+`deploy/Caddyfile.public` refuses that whole prefix at the edge alongside
+`/dashboard` and `/metrics`, so a valid viewer key does not reach it from the
+public Internet on a deployment using that config. Anything a surface draws from
+an operator route inherits that reach: it belongs in the console, not on a page
+a viewer key alone can open. `GET /v1/operator/ledger-chain` and the chain panel
+that reads it are the worked example — the panel renders in the console's run
+detail and never on `/run/{id}`.
 An unauthorized event WebSocket is closed before acceptance with code `4401`.
 
 ## Node enrollment and registration sessions
