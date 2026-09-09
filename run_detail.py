@@ -1421,12 +1421,20 @@ def _chain_panel(ctx: dict) -> str:
 
     cells = ""
     for cell in view["cells"]:
+        # An elision gets no marker element at all. It stands for entries that
+        # were walked and are not drawn, so giving it a marker would put a
+        # fourth thing in a vocabulary of three states.
+        marker = (
+            ""
+            if cell["tone"] == "is-gap"
+            else f'<span class="rd-chain-marker {cell["tone"]}"></span>'
+        )
         cells += f"""
             <span class="rd-chain-cell">
               <span class="rd-chain-link {cell["tone"]}"></span>
               <span class="rd-chain-stack">
                 <span class="rd-chain-box {cell["tone"]}">{esc(cell["n"])}</span>
-                <span class="rd-chain-marker {cell["tone"]}"></span>
+                {marker}
               </span>
             </span>"""
 
@@ -1463,8 +1471,10 @@ def _chain_panel(ctx: dict) -> str:
           <span class="rd-panel-meta">{esc(view["meta"])}</span>
         </div>
         <div class="rd-chain-verdict">
-          <span class="rd-chain-verdict-marker {_CHAIN_BREAK if view["state"] == "broken" else _CHAIN_LINKED}"></span>
-          <span class="rd-chain-verdict-text is-{esc(view["state"])}">{esc(view["verdict"])}</span>
+          <span class="rd-chain-verdict-main">
+            <span class="rd-chain-verdict-marker {_CHAIN_BREAK if view["state"] == "broken" else _CHAIN_LINKED}"></span>
+            <span class="rd-chain-verdict-text is-{esc(view["state"])}">{esc(view["verdict"])}</span>
+          </span>
           <span class="rd-chain-walked">{esc(view["walked"])}</span>
         </div>
         <div class="rd-chain-strip">

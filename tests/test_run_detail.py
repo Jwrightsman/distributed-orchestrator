@@ -1755,3 +1755,127 @@ def test_a_ledger_edited_after_the_walk_shows_the_age_of_the_walk_it_has(client)
     assert "LINK BROKEN AT 1" in fresh, (
         "a fresh walk did not find a break that is really there"
     )
+
+
+# ── Two findings from opening it in a browser ────────────────────────
+# Neither was visible in the markup or the test suite. Both were found by
+# measuring the shipped theme in the console's run modal, and both are held
+# here so the next edit cannot quietly undo them.
+
+
+def _declarations(selector: str) -> str:
+    """Every declaration block whose selector contains `selector`."""
+    return "".join(
+        block
+        for head, block in re.findall(r"([^{}]*)\{([^}]*)\}", RUN_DETAIL_CSS)
+        if selector in head
+    )
+
+
+def test_a_hollow_marker_takes_ink_for_its_edge_and_never_a_hairline_token():
+    """A filled marker is a block of ink; a hollow one is its outline.
+
+    So the edge is the entire signal, and a hairline token is not enough to
+    carry it. Measured on the panel in the shipped theme, the chain's two
+    hollow markers were first drawn with --border and --border-subtle and came
+    out at 1.06:1 (dark) and 1.10:1 (light) against their own ground: not a
+    faint marker, no marker at all — and "every state survives greyscale" is
+    the rule that was silently failing.
+
+    `.rd-marker.is-absent` had this right already by reaching for --text-faint,
+    an ink token. This holds every hollow marker to the same rule.
+    """
+    hollow = re.findall(
+        r"\.(rd-marker|rd-chain-marker)\.is-[a-z]+\s*\{([^}]*)\}", RUN_DETAIL_CSS
+    )
+    assert hollow, "no marker rules found at all"
+    checked = 0
+    for _, block in hollow:
+        if "background: transparent" not in block:
+            continue
+        checked += 1
+        edge = re.search(r"border-color:\s*var\((--[a-z0-9-]+)\)", block)
+        assert edge, f"a hollow marker has no edge colour: {block.strip()!r}"
+        assert edge.group(1).startswith("--text"), (
+            f"a hollow marker takes its edge from {edge.group(1)}, a hairline "
+            "token. A hollow marker's outline is the whole of the signal, and "
+            "a hairline against the panel measures near 1:1 — the state stops "
+            "surviving greyscale. Use an ink token, as .rd-marker.is-absent does."
+        )
+    assert checked >= 3, f"expected several hollow markers, checked {checked}"
+
+
+def test_the_elision_cell_carries_no_marker_at_all(client):
+    """It stands for entries that *were* walked and are not drawn.
+
+    Giving it a marker would put a fourth thing into a vocabulary of three
+    states, and an invisible one would be a state nobody can see. It was the
+    second: a transparent square with a transparent edge, measuring 0:1.
+    """
+    _seed_chain(20)
+    run = _published()
+    panel = _chain_panel(_surfaces(client, run)["console"])
+
+    cells = re.findall(
+        r'<span class="rd-chain-cell">(.*?)</span>\s*</span>\s*</span>', panel, re.S
+    )
+    assert cells, "no chain cells rendered"
+    elisions = [c for c in cells if "is-gap" in c]
+    assert elisions, "a 20-entry chain drew every cell instead of eliding"
+    for cell in elisions:
+        assert "rd-chain-marker" not in cell, (
+            "the elision cell carries a marker. It stands for entries that were "
+            "walked and are not drawn, so a marker there is a fourth thing in a "
+            "vocabulary of three states."
+        )
+    walked = [c for c in cells if "is-linked" in c]
+    assert walked and all("rd-chain-marker" in c for c in walked), (
+        "a drawn entry lost its marker, which is the signal that survives greyscale"
+    )
+
+
+def test_the_field_rows_stack_when_the_panel_is_too_narrow_for_three_columns():
+    """A container query, because a viewport media query cannot see this.
+
+    The side column is `flex: 1 1 300px`, so the envelope panel is about 300px
+    wide on a 1280px screen — a media query would report 1280 and change
+    nothing. Measured in the run modal at that width, the design's 172px field
+    column left roughly 55px for the value and `3 accepted receipts` wrapped to
+    one word per line.
+
+    The design file previews this panel at 560px, where three columns are
+    right. The surface it ships on is narrower, so the row has to stack there.
+    """
+    assert "container-type: inline-size" in _declarations(".rd-envelope-more"), (
+        "the envelope disclosure is not a query container, so nothing can "
+        "respond to the width it is actually given"
+    )
+    assert "container-type: inline-size" in _declarations(".rd-chain"), (
+        "the chain panel is not a query container, so the break report cannot "
+        "stack — and the break report is the thing an operator pastes into an "
+        "issue"
+    )
+    containers = re.findall(r"@container\s*\(([^)]*)\)\s*\{(.*?)\n\}", RUN_DETAIL_CSS, re.S)
+    assert containers, "no container query in the stylesheet"
+    stacked = "".join(body for _, body in containers)
+    assert ".rd-envelope-row" in stacked, "the field rows never stack"
+    assert ".rd-chain-report-row" in stacked, "the break report never stacks"
+
+
+def test_a_field_name_is_never_broken_across_lines():
+    """In either arrangement.
+
+    A name broken mid-token stops being a name you can grep the record for,
+    which is most of what the opened envelope is for. Values are hashes and do
+    wrap; names do not.
+    """
+    field = _declarations(".rd-envelope-field")
+    assert field, "the field-name column has no rule"
+    assert "overflow-wrap" not in field, (
+        "the field name column was given overflow-wrap, so a long field name "
+        "can now break mid-token"
+    )
+    value = _declarations(".rd-envelope-value")
+    assert "overflow-wrap: anywhere" in value, (
+        "values are hashes and must wrap, or they run off the panel"
+    )

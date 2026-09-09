@@ -384,7 +384,7 @@
      it survives greyscale like every other state on this surface. */
   list-style-position: outside;
 }
-.rd-envelope-more > summary::-webkit-details-marker { color: var(--text-faint); }
+.rd-envelope-more > summary::-webkit-details-marker { color: var(--text-muted); }
 .rd-envelope-more > summary:hover .rd-envelope-open { color: var(--text); }
 
 .rd-envelope-group {
@@ -430,6 +430,31 @@
   font-family: var(--mono); color: var(--text-dim); overflow-wrap: anywhere;
 }
 
+/* Where the field name and its value stop fitting on one line.
+
+   This is a container question and not a viewport one, which is why it is the
+   only container query in the app. The side column is `flex: 1 1 300px`, so
+   this panel is about 300px wide on a 1280px screen and a viewport media query
+   cannot see that at all -- it would report 1280 and change nothing.
+
+   Measured in the console's run modal rather than reasoned: at that width the
+   design's three columns (15px marker, 172px field, the rest) left roughly
+   55px for the value, and `3 accepted receipts` came out one word per line
+   with the notes rendering as a ten-character ribbon. The design file previews
+   this panel at 560px, where the three columns are right; the surface it ships
+   on is narrower than that and the row has to stack there.
+
+   A field name is never broken across lines in either arrangement -- that is
+   what the missing `overflow-wrap` on `.rd-envelope-field` is for -- so a name
+   stays greppable against the record. */
+.rd-envelope-more { container-type: inline-size; }
+
+@container (max-width: 420px) {
+  .rd-envelope-row { grid-template-columns: 15px minmax(0, 1fr); }
+  .rd-envelope-value,
+  .rd-envelope-note { grid-column: 2; }
+}
+
 /* ── The ledger chain ──────────────────────────────────────────────
    Intact is NOT green. --accent means PASS / connected / ok, and "no entry
    changed without every link after it also being recomputed" is none of
@@ -445,8 +470,18 @@
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   padding: 11px 13px; border-bottom: 1px solid var(--border-subtle);
 }
+/* The marker and the verdict are one unit. The genesis verdict is long enough
+   to wrap in a 300px panel, and in a plain wrapping flex row that left the
+   marker stranded on a line of its own above the words it marks. A grid keeps
+   it beside the first line however many lines follow. */
+.rd-chain-verdict-main {
+  flex: 1 1 auto; min-width: 0;
+  display: grid; grid-template-columns: 8px minmax(0, 1fr); gap: 10px;
+  align-items: start;
+}
 .rd-chain-verdict-marker {
   display: inline-block; flex-shrink: 0; width: 8px; height: 8px;
+  margin-top: 5px;
   border: 1px solid transparent;
 }
 .rd-chain-verdict-text {
@@ -490,7 +525,7 @@
    not a break. Hollow, and counted separately at the head. */
 .rd-chain-box.is-prechain    { background: transparent; border-color: var(--border); color: var(--text-muted); }
 .rd-chain-link.is-prechain   { background: var(--border); }
-.rd-chain-marker.is-prechain { background: transparent; border-color: var(--border); }
+.rd-chain-marker.is-prechain { background: transparent; border-color: var(--text-muted); }
 /* The one finding on this panel, and the only place it may take a state colour. */
 .rd-chain-box.is-break    { background: var(--danger-wash); border-color: var(--danger-line); color: var(--danger-text); }
 .rd-chain-link.is-break   { background: var(--danger-line); }
@@ -498,14 +533,36 @@
 .rd-chain-verdict-marker.is-break { background: var(--danger); border-color: var(--danger); }
 /* Past the break. Verification returned, so these were never read: neither
    broken nor intact, because the walk found neither. */
-.rd-chain-box.is-unwalked    { background: transparent; border-color: var(--border-subtle); color: var(--text-faint); }
+.rd-chain-box.is-unwalked    { background: transparent; border-color: var(--border-subtle); color: var(--text-muted); }
 .rd-chain-link.is-unwalked   { background: var(--border-subtle); }
-.rd-chain-marker.is-unwalked { background: transparent; border-color: var(--border-subtle); }
-/* An elision, not an entry. No box and no marker: it stands for cells that
-   were walked and are not drawn, so it must not look like a state. */
-.rd-chain-box.is-gap    { background: transparent; border-color: transparent; color: var(--text-faint); }
+.rd-chain-marker.is-unwalked { background: transparent; border-color: var(--text-muted); }
+/* An elision, not an entry. It stands for cells that *were* walked and are
+   not drawn, so it must not look like a state: the box carries an ellipsis and
+   no marker element is emitted beneath it at all.
+
+   Its ink is --text-muted rather than --text-faint for the reason recorded at
+   the top of this file, and it was measured rather than reasoned: on --surface
+   in the light theme this cell rendered at 4.44:1, the same 4.13-4.44 band 3a
+   found and the same fix. The unwalked cell sits on the same ground and takes
+   the same ink.
+
+── A second measured finding, about the hollow markers ─────────────
+   A filled marker is a 7x7 block of ink and reads at ~5:1. A hollow one is a
+   1px outline, so its edge is the entire signal -- and the two hollow states
+   here were first drawn with --border and --border-subtle, which are hairline
+   tokens. Measured on the panel they came out at 1.06 and 1.10:1 in dark and
+   light: not a faint marker, no marker. `.rd-marker.is-absent` had this right
+   already by taking --text-faint, an ink token, for its edge.
+   So both hollow chain markers take ink too. That makes them look alike, and
+   nothing is lost by it: the edge distinction was never visible in either
+   theme, while the cell's own label (an em dash for an entry that predates the
+   chain, an index for one past the break) and the legend both still separate
+   them. */
+.rd-chain-box.is-gap    { background: transparent; border-color: transparent; color: var(--text-muted); }
 .rd-chain-link.is-gap   { background: var(--border-strong); }
-.rd-chain-marker.is-gap { background: transparent; border-color: transparent; }
+/* No `.rd-chain-marker.is-gap` rule, because no such element is emitted. An
+   invisible marker and no marker look identical and are not the same thing:
+   one is a state nobody can see, the other is the absence of a state. */
 
 .rd-chain-report { border-top: 1px solid var(--border-subtle); background: var(--danger-wash); }
 .rd-chain-report-head {
@@ -524,6 +581,17 @@
 .rd-chain-report-note {
   padding: 10px 13px; font-size: 11.5px; color: var(--danger-body);
   line-height: 1.65; text-wrap: pretty;
+}
+
+/* The break report is the thing an operator pastes into an issue, so it is
+   the last place on this surface that should be hard to read. Same container
+   question as the envelope's rows and the same threshold: measured at 330px,
+   the 132px key column left about 135px for a 64-character digest, which came
+   out seven lines tall. Below 420px the key sits above its value instead. */
+.rd-chain { container-type: inline-size; }
+
+@container (max-width: 420px) {
+  .rd-chain-report-row { grid-template-columns: minmax(0, 1fr); gap: 2px; }
 }
 
 /* On every state, including intact. Tamper evidence is worth having and is
