@@ -1141,6 +1141,7 @@ deferred to Theme 3B-2. See
 | `GET /v1/executions/{id}/artifacts/{path}` | Stream one authenticated artifact |
 | `GET /v1/executions/{id}/download` | Stream a temporary deliverable ZIP |
 | `GET /v1/executions/{id}/audit-download` | Stream a temporary non-deliverable audit ZIP |
+| `GET /v1/executions/{id}/provenance` | Read one execution's provenance envelope as `as_export()`, the same object the audit bundle carries; an execution with no envelope is a 404 rather than an empty object |
 | `POST /v1/executions/{id}/shares` | Create a public capability share |
 | `GET /v1/executions/{id}/shares` | List active share metadata without plaintext tokens |
 | `DELETE /v1/executions/{id}/shares/{share_id}` | Revoke a share |
@@ -1148,6 +1149,7 @@ deferred to Theme 3B-2. See
 | `GET /v1/shares/{token}` | Read one redacted public share |
 | `GET /v1/operator/health` | Read private deployment mode, instance, lock, and preflight state |
 | `GET /v1/operator/capability-evidence` | Read protected scoped aggregates, shadow-only decisions, identity blockers, and operational-health counts; never raw observations or events |
+| `GET /v1/operator/ledger-chain` | Walk the contribution ledger's hash chain and read the verdict. The walk is complete every time it runs - no checkpoint, no cached prefix - and the response carries `walk_age_seconds` for the cached verdict it served; `?fresh=1` forces a new walk. Content-free: an index, an entry ID, two digests and three counts |
 
 Read, artifact, cancellation, and share-management routes require viewer access
 when `viewer_key` is configured. Canonical submission uses the separate

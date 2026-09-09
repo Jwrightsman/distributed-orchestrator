@@ -398,6 +398,7 @@ See **[docs/DEPLOY.md](docs/DEPLOY.md)** for local, private-overlay, and reverse
 | `/v1/executions/{id}/cancel` | POST | Cancel queued/running execution (viewer) |
 | `/v1/executions/{id}/artifacts*` | GET | Sealed deliverable manifest/files and compatibility views (viewer) |
 | `/v1/executions/{id}/audit-download` | GET | Provenance/log/candidate audit bundle (viewer) |
+| `/v1/executions/{id}/provenance` | GET | One execution's envelope, the shape the audit bundle carries; 404 when it has none (viewer) |
 | `/v1/executions/{id}/shares` | POST | Create an explicit redacted share (viewer) |
 | `/v1/shares/{token}` | GET | Read one redacted execution capability |
 | `/pitch` | POST | Run pipeline, block until complete |
@@ -419,6 +420,7 @@ See **[docs/DEPLOY.md](docs/DEPLOY.md)** for local, private-overlay, and reverse
 | `/v1/operator/verification-evidence` | GET | Private bounded post-hoc verification evidence; not reputation, not correctness |
 | `/v1/worker-protocol` | GET | Public worker-protocol compatibility window and server version; versions only |
 | `/v1/operator/capability-evidence` | GET | Private scoped operational aggregates and shadow-policy counts |
+| `/v1/operator/ledger-chain` | GET | Private complete chain walk with the age of the walk behind it; `?fresh=1` forces a new one |
 | `/nodes/register` | POST | Worker node registration |
 | `/nodes/{id}/heartbeat`, `/drain` | POST | Session-bound worker liveness and drain control |
 | `/tasks/next` | GET | Session-bound worker poll (long-polls 25s) |
@@ -466,7 +468,12 @@ per-file hashes. Absent facts are recorded as unknown, never inferred. Artifact
 bundles carry it, so a recipient can recompute the digest and every file hash
 offline with no coordinator and no credential. Each ledger entry carries the
 digest of the one before it, written inside the same transaction as the
-settlement it records; `python scripts/ledger_chain_admin.py verify` walks it.
+settlement it records; `python scripts/ledger_chain_admin.py verify` walks it,
+and so does private `GET /v1/operator/ledger-chain`. That walk is never
+shortened - it re-reads every entry from the genesis constant on every walk,
+because the failure it detects is a rewrite of entries already walked once.
+What is bounded is how often it runs: one complete verdict is cached briefly
+and served with the age of the walk that produced it.
 
 **Neither establishes correctness, and neither is tamper-proof.** An envelope says
 how bytes were produced and by whom - an admitted worker returning plausible

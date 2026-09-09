@@ -81,6 +81,8 @@ ensemble execution over the same local or distributed dispatcher.
 - GET /history/{timestamp} — full details of a run
 - GET /standings — contributor rankings
 - GET /ledger — contribution history
+- GET /v1/executions/{id}/provenance — one run's provenance envelope (404 when it has none)
+- GET /v1/operator/ledger-chain — walk the ledger's hash chain; `?fresh=1` forces a fresh walk
 - POST /nodes/register — worker node registration
 - GET /nodes — connected nodes
 - GET /tasks/next — worker polls for work

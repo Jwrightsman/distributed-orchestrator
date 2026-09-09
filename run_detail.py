@@ -44,6 +44,17 @@ import html as _html
 from datetime import datetime, timezone
 from typing import Any
 
+# Field names, not copy. The opened envelope renders the record's own keys, so
+# they are imported from the module that declares the columns rather than
+# written again here.
+from provenance import (
+    RESERVED_SLOT_FIELD,
+    RESERVED_SLOT_VALUE,
+    UNKNOWN_PRODUCER_SAMPLING,
+    UNKNOWN_SAMPLING,
+    UNKNOWN_SEED_HONOURED,
+)
+
 # The five-value verdict vocabulary, worst-wins. Mirrors `runVerdict` in
 # `templates/_dashboard.js`, which renders the same five on the list cards;
 # `tests/test_run_detail.py` holds the two implementations to the same ladder.
@@ -722,6 +733,10 @@ def _envelope_panel(ctx: dict) -> str:
     as a second tick in a row of ticks, and a reader who counts ticks concludes
     something neither record says. A sentence cannot be added up. When there is
     no envelope the panel is absent — not an empty panel and not an error.
+
+    The rule holds in both modes. Opened, the panel grows eight groups of field
+    names and stays exactly as colourless: the disclosure changes how much is
+    on screen, never what is being claimed.
     """
     envelope = ctx["envelope"]
     if envelope is None:
@@ -739,6 +754,11 @@ def _envelope_panel(ctx: dict) -> str:
         else "every fact this envelope carries is recorded"
     )
 
+    # The disclosure, not a link out. Until this pass the only way to read an
+    # envelope was to download the audit bundle and open the file inside it, so
+    # "Open the envelope" pointed at a zip. It now opens the envelope, in
+    # place, on both surfaces -- <details> needs no client, which is what lets
+    # the server-rendered page carry it too.
     return f"""
       <section class="rd-panel rd-envelope">
         <div class="rd-panel-head is-sunken">
@@ -751,9 +771,732 @@ def _envelope_panel(ctx: dict) -> str:
             identity, with which model, and which validators ran. It does not establish that the
             output is correct, useful, or honest.</div>
         </div>
-        <div class="rd-envelope-foot">
-          <a class="rd-envelope-open" href="{esc(ctx["audit_href"])}">Open the envelope</a>
-          <span class="rd-envelope-unknown">{_marker("is-absent")}{esc(count)}</span>
+        <details class="rd-envelope-more">
+          <summary class="rd-envelope-foot">
+            <span class="rd-envelope-open">Open the envelope</span>
+            <span class="rd-envelope-unknown">{_marker("is-absent")}{esc(count)}</span>
+          </summary>
+          {_envelope_opened(payload, str(payload.get("execution_id") or ""))}
+        </details>
+      </section>"""
+
+
+# ── the opened envelope ──────────────────────────────────────────────
+# Eight groups of the record's own field names, and one rule governing all of
+# them: **absence is a value, never a blank.** A recorded fact takes a filled
+# marker and ordinary ink; a fact that was not written down takes a hollow
+# marker, is named, and says why. Never a dash, and never --warn or --danger:
+# not writing something down is neither a fault nor fine, and the shape carries
+# it so it survives greyscale.
+#
+# Still no chip, no lamp and no state colour. Opening the envelope puts eight
+# groups beside the manifest's SEALED chip, which is exactly when the rule in
+# this module's docstring is most likely to break by accident.
+
+_RECORDED = "is-neutral"
+_ABSENT = "is-absent"
+
+
+def _field(name: Any, value: Any, note: str = "", *, recorded: bool = True) -> dict:
+    return {"name": str(name), "value": str(value), "note": note, "recorded": recorded}
+
+
+def _absent(name: Any, value: Any, note: str = "") -> dict:
+    return _field(name, value, note, recorded=False)
+
+
+def _across(producers, read, name: str, note: str = "", absent_note: str = "") -> list[dict]:
+    """One row when every producer agrees, one row each when they do not.
+
+    Never an average, and never a winner. With several accepted receipts there
+    is no rule for choosing between them — that is the whole reason the
+    singular fields are left null — so a field whose value differs is shown
+    once per producer with its index, and a field they all agree on is shown
+    once.
+    """
+    values = [read(p) for p in producers]
+    if not values:
+        return []
+    if len(set(values)) == 1:
+        only = values[0]
+        if only is None:
+            return [_absent(name, "not recorded", absent_note)]
+        return [_field(name, only, note)]
+    rows: list[dict] = []
+    for index, value in enumerate(values, 1):
+        label = f"{index:02d} · {name}"
+        first = index == 1
+        if value is None:
+            rows.append(_absent(label, "not recorded", absent_note if first else ""))
+        else:
+            rows.append(_field(label, value, note if first else ""))
+    return rows
+
+
+def _execution_group(payload: dict, producers: list) -> dict:
+    count = len(producers)
+    if count:
+        rows = [
+            _field(
+                "producers",
+                f"{count} accepted receipt{'s' if count != 1 else ''}",
+                "Always a list. One producer is a list of one, because the "
+                "ensemble path settles several accepted receipts and a layout "
+                "built for the single case would need a rule for choosing "
+                "between them.",
+            )
+        ]
+    else:
+        rows = [
+            _absent(
+                "producers",
+                "0 accepted receipts",
+                "Executed on this coordinator, so no distributed attempt "
+                "produced these files. That is a fact about where it ran, and "
+                "the coordinator's own identity does not stand in for a "
+                "producer.",
+            )
+        ]
+
+    if count > 1:
+        why = (
+            "Left null deliberately. With several accepted receipts there is "
+            "no single attempt to name, and electing one would be a choice "
+            "the record did not make."
+        )
+    else:
+        why = (
+            "There was no distributed attempt on this execution, so there is "
+            "no attempt, receipt or unit to name."
+        )
+    for index, key in enumerate(("attempt_id", "receipt_id", "unit_id")):
+        value = payload.get(key)
+        if value:
+            rows.append(_field(key, value))
+        else:
+            rows.append(_absent(key, "not applicable", why if index == 0 else ""))
+    return {
+        "label": "EXECUTION",
+        "meta": str(payload.get("execution_id") or "no execution id recorded"),
+        "rows": rows,
+    }
+
+
+def _identity_group(producers: list) -> dict:
+    count = len(producers)
+    label = f"PRODUCER IDENTITY · {count} ENTR{'Y' if count == 1 else 'IES'}"
+    meta = "accepted_result_receipts"
+    legacy_note = (
+        "A session that predates enrolment. The label is display metadata and "
+        "is never a trust key, so it names the machine without establishing "
+        "who it is."
+    )
+    if not count:
+        return {
+            "label": label,
+            "meta": meta,
+            "rows": [
+                _absent(
+                    "producer_identity",
+                    "not recorded",
+                    "No accepted receipt carries an identity for this "
+                    "execution, and the coordinator's own identity is not "
+                    "written in as a substitute.",
+                )
+            ],
+        }
+
+    if count == 1:
+        identity = producers[0].get("identity") or {}
+        enrollment = identity.get("enrollment_id")
+        label_value = identity.get("node_id")
+        return {
+            "label": label,
+            "meta": meta,
+            "rows": [
+                _field(
+                    "enrollment_id",
+                    enrollment,
+                    "Immutable. Distinct from the label and from the session.",
+                )
+                if enrollment
+                else _absent("enrollment_id", "not recorded", legacy_note),
+                _field(
+                    "node_id",
+                    label_value or "not recorded",
+                    "The label as it was at settlement. Display metadata, "
+                    "never a trust key.",
+                    recorded=bool(label_value),
+                ),
+                _field(
+                    "identity_class",
+                    identity.get("identity_class") or "not recorded",
+                    recorded=bool(identity.get("identity_class")),
+                ),
+            ],
+        }
+
+    rows = []
+    for index, producer in enumerate(producers, 1):
+        identity = producer.get("identity") or {}
+        enrollment = identity.get("enrollment_id")
+        value = " · ".join(
+            str(part)
+            for part in (
+                enrollment or "not recorded",
+                identity.get("node_id") or "no label recorded",
+                identity.get("identity_class") or "unrecorded",
+            )
+        )
+        name = f"{index:02d} · enrollment_id"
+        rows.append(
+            _field(name, value) if enrollment else _absent(name, value, legacy_note)
+        )
+    return {"label": label, "meta": meta, "rows": rows}
+
+
+def _capability_group(producers: list) -> dict:
+    if not producers:
+        rows = [
+            _absent(
+                "capability_descriptor",
+                "not recorded",
+                "The descriptor is read from the immutable snapshot a producer "
+                "was admitted under, and there is no producer here.",
+            )
+        ]
+    else:
+        rows = (
+            _across(
+                producers,
+                lambda p: (p.get("capability") or {}).get("descriptor_version"),
+                "descriptor_version",
+            )
+            + _across(
+                producers,
+                lambda p: (p.get("capability") or {}).get("descriptor_hash"),
+                "descriptor_hash",
+                "The immutable snapshot the claim was read from.",
+                "No snapshot matched this receipt's enrolment and hash.",
+            )
+            + _across(
+                producers, lambda p: (p.get("executor") or {}).get("kind"), "executor.kind"
+            )
+            + _across(
+                producers,
+                lambda p: (p.get("executor") or {}).get("version"),
+                "executor.version",
+                "",
+                "The descriptor recorded no executor version.",
+            )
+            + _across(
+                producers,
+                lambda p: (p.get("executor") or {}).get("worker_protocol_version"),
+                "worker_protocol_version",
+                "",
+                "The descriptor recorded no worker protocol version.",
+            )
+        )
+    return {
+        "label": "CAPABILITY AND EXECUTOR",
+        "meta": "node_capability_snapshots",
+        "rows": rows,
+    }
+
+
+def _model_group(producers: list) -> dict:
+    if not producers:
+        rows = [
+            _absent(
+                "model",
+                "not recorded",
+                "The model is read off an accepted receipt, and there is no "
+                "receipt here.",
+            )
+        ]
+    else:
+        rows = (
+            _across(
+                producers, lambda p: (p.get("model") or {}).get("provider"), "model.provider"
+            )
+            + _across(producers, lambda p: (p.get("model") or {}).get("name"), "model.name")
+            + _across(
+                producers,
+                lambda p: (p.get("model") or {}).get("digest"),
+                "model.digest",
+                "",
+                "The receipt carried no digest, so which weights answered "
+                "cannot be established from this record.",
+            )
+            + _across(
+                producers,
+                lambda p: (p.get("model") or {}).get("variant"),
+                "model.variant",
+                "",
+                "Variant is a capability-evidence scope field resolved from "
+                "the descriptor's model list. Reading it back here would be a "
+                "guess.",
+            )
+        )
+    return {"label": "MODEL", "meta": "as recorded on the receipt", "rows": rows}
+
+
+def _validator_group(payload: dict) -> dict:
+    validators = payload.get("validators") or []
+    if not validators:
+        return {
+            "label": "VALIDATORS · IN ORDER",
+            "meta": "none ran",
+            "rows": [
+                _absent(
+                    "validators",
+                    "not recorded",
+                    "No validator is listed on this envelope, which is not the "
+                    "same as a validator running and finding nothing.",
+                )
+            ],
+        }
+    rows = []
+    for index, item in enumerate(validators):
+        version = item.get("version")
+        outcome = item.get("outcome") or "no outcome recorded"
+        rows.append(
+            _field(
+                item.get("name") or "unnamed validator",
+                f"v{version} · {outcome}" if version else str(outcome),
+                "An outcome of passed means a mechanical check ran and did not "
+                "fail. It is not a claim that the artifact does what its "
+                "requester wanted."
+                if index == 0
+                else "",
+            )
+        )
+    return {
+        "label": "VALIDATORS · IN ORDER",
+        "meta": f"{len(validators)} ran",
+        "rows": rows,
+    }
+
+
+def _artifact_group(payload: dict) -> dict:
+    artifacts = payload.get("artifacts") or {}
+    digest = artifacts.get("manifest_digest")
+    recorded_mode = artifacts.get("integrity_mode")
+    mode = recorded_mode or "not recorded"
+    count = artifacts.get("file_count")
+    rows = [
+        _field(
+            "manifest_digest",
+            digest,
+            "The same digest the manifest panel shows. Recorded here so the "
+            "envelope and the file list can be checked against each other "
+            "offline.",
+        )
+        if digest
+        else _absent(
+            "manifest_digest",
+            "not recorded",
+            "This envelope was sealed over a file list with no manifest hash.",
+        ),
+        _field("integrity_mode", mode, recorded=bool(recorded_mode)),
+        _field(
+            "file_count",
+            "not recorded" if count is None else count,
+            "Every entry carries its own sha256, size and role.",
+            recorded=count is not None,
+        ),
+    ]
+    return {
+        "label": "ARTIFACTS",
+        "meta": f"{count} files · {mode}" if count is not None else str(mode),
+        "rows": rows,
+    }
+
+
+def _sampling_group(payload: dict) -> dict:
+    """Three absences that mean three different things, kept apart.
+
+    Collapsing them to one word would be a fourth claim nobody made.
+    `sampling_parameters` is nothing pinned at all; `sampling_seed_honoured` is
+    a seed that was set and is not shown to have been applied; and
+    `producer_sampling` is about a different machine entirely. Each is named
+    with the record's own key, and each says which of the three it is.
+    """
+    sampling = payload.get("sampling") or {}
+    unknown = set(payload.get("unknown_facts") or [])
+
+    temperature = sampling.get("temperature")
+    seed = sampling.get("seed")
+    rows = [
+        _field("temperature", temperature)
+        if temperature is not None
+        else _absent("temperature", "not pinned"),
+        _field("seed", seed) if seed is not None else _absent("seed", "not pinned"),
+    ]
+    honouring = sampling.get("seed_honouring")
+    if honouring:
+        rows.append(_field("seed_honouring", honouring))
+    scope = sampling.get("scope")
+    if scope:
+        rows.append(_field("scope", "coordinator configuration at sealing", str(scope)))
+
+    if UNKNOWN_SAMPLING in unknown:
+        rows.append(
+            _absent(
+                UNKNOWN_SAMPLING,
+                "nothing pinned",
+                "Neither a temperature nor a seed was fixed, so the shipping "
+                "default applies and the runner chooses. This is the absence "
+                "of a setting.",
+            )
+        )
+    if UNKNOWN_SEED_HONOURED in unknown:
+        rows.append(
+            _absent(
+                UNKNOWN_SEED_HONOURED,
+                "not shown to have been applied",
+                "A different absence from the one above: a seed was set, and "
+                "whether the runner applied it for this model is assumed "
+                "rather than checked, so the generator is not established as "
+                "fixed.",
+            )
+        )
+    if UNKNOWN_PRODUCER_SAMPLING in unknown:
+        rows.append(
+            _absent(
+                UNKNOWN_PRODUCER_SAMPLING,
+                "not carried back",
+                "A third absence, and about a different machine: a "
+                "distributed producer reads its own configuration and the "
+                "worker protocol does not report it, so what that machine "
+                "sampled with is not in this record.",
+            )
+        )
+    return {"label": "SAMPLING", "meta": "coordinator scope", "rows": rows}
+
+
+def _reserved_group() -> dict:
+    """A slot, and described as nothing else.
+
+    The field name is the record's own key, imported from the module that
+    declares the column rather than written here: an opened envelope renders
+    the record's field names, and reading one out of the record is the record
+    speaking rather than this surface making a claim. The row exists to show
+    that the slot is empty, and it appears here and nowhere else on any
+    surface.
+    """
+    return {
+        "label": "RESERVED",
+        "meta": "not implemented",
+        "rows": [
+            _absent(
+                RESERVED_SLOT_FIELD,
+                RESERVED_SLOT_VALUE,
+                "A slot, not a feature. Nothing fills it: no key, no key "
+                "management, no transparency log, no third party. It is "
+                "carried into the export so that filling it later would not "
+                "be a schema break for anyone already reading these bundles.",
+            )
+        ],
+    }
+
+
+def envelope_groups(payload: dict) -> list[dict]:
+    """The eight groups, in order, built from the record and nothing else."""
+    producers = payload.get("producers") or []
+    return [
+        _execution_group(payload, producers),
+        _identity_group(producers),
+        _capability_group(producers),
+        _model_group(producers),
+        _validator_group(payload),
+        _artifact_group(payload),
+        _sampling_group(payload),
+        _reserved_group(),
+    ]
+
+
+def _envelope_row(row: dict) -> str:
+    note = (
+        f'<span class="rd-envelope-note">{esc(row["note"])}</span>' if row["note"] else ""
+    )
+    return f"""
+          <div class="rd-envelope-row">
+            {_marker(_RECORDED if row["recorded"] else _ABSENT)}
+            <span class="rd-envelope-field">{esc(row["name"])}</span>
+            <span class="rd-envelope-value">{esc(row["value"])}</span>
+            {note}
+          </div>"""
+
+
+def _envelope_opened(payload: dict, execution_id: str) -> str:
+    """The disclosure's contents: eight groups, then what they are and are not."""
+    groups = ""
+    for group in envelope_groups(payload):
+        rows = "".join(_envelope_row(row) for row in group["rows"])
+        groups += f"""
+        <div>
+          <div class="rd-envelope-group">
+            <span class="rd-envelope-group-label">{esc(group["label"])}</span>
+            <span class="rd-envelope-group-meta">{esc(group["meta"])}</span>
+          </div>
+          {rows}
+        </div>"""
+
+    producers = payload.get("producers") or []
+    if len(producers) > 1:
+        closing = (
+            f"{len(producers)} accepted receipts means {len(producers)} "
+            "producers, not one producer with footnotes. The singular fields "
+            "stay null rather than electing a winner, and single_producer is "
+            "listed as a fact not recorded — which is what it is."
+        )
+    else:
+        closing = (
+            "One producer is a list of one. The panel is built for several "
+            "because the ensemble path settles several accepted receipts, and "
+            "a layout that assumed one would have to invent a rule for "
+            "choosing between them."
+        )
+    served = (
+        f"GET /v1/executions/{execution_id}/provenance"
+        if execution_id
+        else "the audit bundle"
+    )
+    return f"""{groups}
+        <div class="rd-envelope-note-block">{esc(closing)}</div>
+        <div class="rd-envelope-note-block">Served by <span
+          class="rd-envelope-endpoint">{esc(served)}</span>, and recomputable offline from
+          the audit bundle with no coordinator, no network and no credential.</div>"""
+
+
+# ── the ledger chain ─────────────────────────────────────────────────
+# **Intact is not green.** `--accent` means PASS, connected, ok, and an intact
+# chain is none of those: it means no entry changed *without every link after
+# it also being recomputed*, which a full rewrite satisfies. A tick here would
+# be the exact class of claim this repo refuses, so the passing state is
+# ordinary ink, a filled marker and a walked count.
+#
+# Two rules that are easy to get backwards, and both are drawn rather than
+# described:
+#
+# * **Entries after a break are `not walked`, not broken.** Verification
+#   returns at the first break, so nothing past it was checked. Drawing them
+#   broken claims more than the walk found; drawing them intact claims the
+#   opposite.
+# * **The genesis boundary is not a break.** Entries written before the chain
+#   existed have no link, are never retrofitted with one, and are counted
+#   separately at the head.
+
+_CHAIN_LINKED = "is-linked"
+_CHAIN_PRECHAIN = "is-prechain"
+_CHAIN_BREAK = "is-break"
+_CHAIN_UNWALKED = "is-unwalked"
+
+
+def _walk_age(seconds: Any) -> str:
+    try:
+        value = float(seconds)
+    except (TypeError, ValueError):
+        return "just now"
+    if value < 1:
+        return "just now"
+    if value < 60:
+        return f"{int(value)}s ago"
+    if value < 3600:
+        return f"{int(value // 60)}m ago"
+    return f"{int(value // 3600)}h ago"
+
+
+def _chain_cells(labels: list[str], tone: str, head: int = 3, tail: int = 3) -> list[dict]:
+    """A bounded strip. A ledger of four hundred entries is not four hundred boxes.
+
+    The elision is a drawing decision and never a walking one: every entry was
+    read, and the cells that are not drawn are drawn as an ellipsis rather than
+    quietly dropped.
+    """
+    if len(labels) <= head + tail + 1:
+        return [{"n": label, "tone": tone} for label in labels]
+    return (
+        [{"n": label, "tone": tone} for label in labels[:head]]
+        + [{"n": "…", "tone": "is-gap"}]
+        + [{"n": label, "tone": tone} for label in labels[-tail:]]
+    )
+
+
+def chain_view(chain: dict) -> dict:
+    """Everything the panel draws, resolved from one walk's verdict.
+
+    Split out from the markup so the three states can be asserted as values
+    rather than by matching strings in HTML.
+    """
+    ok = bool(chain.get("ok"))
+    chained = int(chain.get("chained_entries") or 0)
+    genesis = int(chain.get("genesis_unchained_entries") or 0)
+    break_at = chain.get("break_at_index")
+
+    if not ok:
+        state = "broken"
+    elif genesis:
+        state = "genesis"
+    else:
+        state = "intact"
+
+    cells: list[dict] = []
+    if genesis:
+        cells += _chain_cells(["—"] * genesis, _CHAIN_PRECHAIN)
+
+    if state == "broken":
+        index = int(break_at or 0)
+        cells += _chain_cells([f"{i:02d}" for i in range(index)], _CHAIN_LINKED, 2, 2)
+        cells += [{"n": f"{index:02d}", "tone": _CHAIN_BREAK}]
+        # Everything past the first break was never read. It is drawn as
+        # neither broken nor intact, because the walk found neither.
+        cells += _chain_cells(
+            [f"{i:02d}" for i in range(index + 1, chained)], _CHAIN_UNWALKED, 2, 2
+        )
+        verdict = f"LINK BROKEN AT {index}"
+        walked = "walk stopped at the first break"
+        legend = [
+            ("link walked", _CHAIN_LINKED),
+            ("break", _CHAIN_BREAK),
+            ("not walked", _CHAIN_UNWALKED),
+        ]
+        # A break and a genesis head are not exclusive: a ledger that predates
+        # the chain can also have one. The head is drawn either way, so when it
+        # is there the legend has to name it -- an undrawn hollow cell beside a
+        # break is exactly the pair a reader would otherwise conflate.
+        if genesis:
+            legend.append(("no link recorded", _CHAIN_PRECHAIN))
+    else:
+        cells += _chain_cells([f"{i:02d}" for i in range(chained)], _CHAIN_LINKED)
+        walked = (
+            f"{chained} walked · {genesis} have no link to walk"
+            if genesis
+            else f"{chained} walked · 0 unlinked"
+        )
+        if genesis:
+            verdict = (
+                f"LINKS INTACT · {genesis} "
+                f"{'ENTRY PREDATES' if genesis == 1 else 'ENTRIES PREDATE'} THE CHAIN"
+            )
+            legend = [("link walked", _CHAIN_LINKED), ("no link recorded", _CHAIN_PRECHAIN)]
+        else:
+            verdict = "LINKS INTACT"
+            legend = [("link walked", _CHAIN_LINKED), ("genesis boundary", _CHAIN_PRECHAIN)]
+
+    report: list[tuple[str, str]] = []
+    if state == "broken":
+        for key in (
+            "break_at_index",
+            "break_entry_id",
+            "reason",
+            "expected_digest",
+            "observed_digest",
+        ):
+            value = chain.get(key)
+            report.append((key, "not recorded" if value in (None, "") else str(value)))
+
+    return {
+        "state": state,
+        "verdict": verdict,
+        "walked": walked,
+        "cells": cells,
+        "legend": legend,
+        "report": report,
+        "meta": (
+            f"chain v{chain.get('chain_version') or '1'} · "
+            f"{chained + genesis} entries · "
+            f"walked {_walk_age(chain.get('walk_age_seconds'))}"
+        ),
+    }
+
+
+def _chain_panel(ctx: dict) -> str:
+    """A third thing, and deliberately not a fourth badge in a row of ticks.
+
+    It renders in the console and nowhere else. The route behind it lives under
+    `/v1/operator/`, which `deploy/Caddyfile.public` refuses at the edge, so a
+    panel reading it belongs on an operator surface — not on the shareable
+    `/run/{id}` page, which a viewer key alone can reach.
+    """
+    chain = ctx.get("chain")
+    if not chain:
+        return ""
+    view = chain_view(chain)
+
+    cells = ""
+    for cell in view["cells"]:
+        # An elision gets no marker element at all. It stands for entries that
+        # were walked and are not drawn, so giving it a marker would put a
+        # fourth thing in a vocabulary of three states.
+        marker = (
+            ""
+            if cell["tone"] == "is-gap"
+            else f'<span class="rd-chain-marker {cell["tone"]}"></span>'
+        )
+        cells += f"""
+            <span class="rd-chain-cell">
+              <span class="rd-chain-link {cell["tone"]}"></span>
+              <span class="rd-chain-stack">
+                <span class="rd-chain-box {cell["tone"]}">{esc(cell["n"])}</span>
+                {marker}
+              </span>
+            </span>"""
+
+    legend = ""
+    for text, tone in view["legend"]:
+        legend += (
+            f'<span class="rd-chain-key"><span class="rd-chain-marker {tone}"></span>'
+            f"{esc(text)}</span>"
+        )
+
+    report = ""
+    if view["report"]:
+        rows = "".join(
+            f"""
+          <div class="rd-chain-report-row">
+            <span class="rd-chain-report-key">{esc(key)}</span>
+            <span class="rd-chain-report-value">{esc(value)}</span>
+          </div>"""
+            for key, value in view["report"]
+        )
+        report = f"""
+        <div class="rd-chain-report">
+          <div class="rd-chain-report-head">FIRST BREAK</div>
+          {rows}
+          <div class="rd-chain-report-note">Investigate before trusting any standings computed
+            from this ledger. A break means an entry changed after it was written — disk
+            corruption, a partial restore, or an edit. Which of those, this cannot tell you.</div>
+        </div>"""
+
+    return f"""
+      <section class="rd-panel rd-chain">
+        <div class="rd-panel-head is-sunken">
+          <span class="rd-panel-label">LEDGER CHAIN</span>
+          <span class="rd-panel-meta">{esc(view["meta"])}</span>
+        </div>
+        <div class="rd-chain-verdict">
+          <span class="rd-chain-verdict-main">
+            <span class="rd-chain-verdict-marker {_CHAIN_BREAK if view["state"] == "broken" else _CHAIN_LINKED}"></span>
+            <span class="rd-chain-verdict-text is-{esc(view["state"])}">{esc(view["verdict"])}</span>
+          </span>
+          <span class="rd-chain-walked">{esc(view["walked"])}</span>
+        </div>
+        <div class="rd-chain-strip">
+          <div class="rd-chain-track">{cells}</div>
+          <div class="rd-chain-legend">{legend}</div>
+        </div>
+        {report}
+        <div class="rd-chain-limit">
+          <div class="rd-chain-limit-label">WHAT THIS DOES NOT ESTABLISH</div>
+          <p class="rd-chain-limit-note">Evidence of tampering, not protection from it. An
+            operator with write access to this database can rewrite every entry <em>and</em>
+            every link, and this will then report intact. There is no consensus here, no
+            external anchor, and nobody outside this machine attesting to anything. A walked
+            chain is not proof that any recorded work happened, was correct, or is owed
+            anything.</p>
+          <a class="rd-chain-refresh" href="/v1/operator/ledger-chain?fresh=1">Walk it again now</a>
         </div>
       </section>"""
 
@@ -857,6 +1600,7 @@ def build_view(
     publication: Any = None,
     durable: Any = None,
     envelope: Any = None,
+    chain: dict | None = None,
     surface: str = "console",
     run_id: str = "",
     relative_age: str = "",
@@ -944,6 +1688,10 @@ def build_view(
         "log": log,
         "durable": durable,
         "envelope": envelope,
+        # The chain is global rather than per-run, and its route is
+        # operator-gated, so only the console passes one. The server-rendered
+        # page leaves it None and the panel does not render there.
+        "chain": chain,
         "manifest": manifest,
         "surface": surface,
         "run_id": run_id,
@@ -994,6 +1742,7 @@ def render(ctx: dict) -> str:
     <div class="rd-side">
       {_manifest_panel(ctx)}
       {_envelope_panel(ctx)}
+      {_chain_panel(ctx)}
       {_timeline_panel(ctx)}
     </div>
   </div>

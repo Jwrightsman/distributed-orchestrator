@@ -7,10 +7,14 @@ import platform
 import time
 
 import httpx
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
 
-from access_control import authorize_viewer_websocket, viewer_health_fields
-from ledger import get_history, get_standings
+from access_control import (
+    authorize_viewer_websocket,
+    require_viewer,
+    viewer_health_fields,
+)
+from ledger import get_history, get_standings, walk_ledger_chain
 from ollama_client import OLLAMA_URL
 import server_state as state
 from build_info import BUILD
@@ -200,3 +204,36 @@ async def metrics():
 async def ledger(contributor: str | None = None, limit: int = 50):
     """Get recent ledger entries."""
     return {"entries": get_history(contributor, limit)}
+
+
+@router.get("/v1/operator/ledger-chain")
+async def ledger_chain(request: Request, fresh: bool = False):
+    """Walk the contribution ledger's hash chain and report what it found.
+
+    **Operator-gated, not viewer-gated.** It lives under `/v1/operator/`, and
+    `deploy/Caddyfile.public` refuses that whole prefix at the edge alongside
+    `/dashboard` and `/metrics` — so a valid viewer key is not enough to reach
+    it from the public Internet, which is the point of the prefix. That is a
+    stricter gate than `/run/{id}` has, and the panel that reads this follows
+    it: the chain renders in the console and never on the shareable run page.
+    `require_viewer` is called here as well, so the route is refused by its own
+    handler and not only by the middleware.
+
+    **The walk is never shortened.** Every request that actually walks starts
+    at the genesis constant and re-reads every chained entry. Nothing is
+    checkpointed, nothing is cached as "verified up to index N", and no prefix
+    is skipped — the failure this detects is a rewrite of entries that were
+    already walked once, so any of those would blind it to its own case.
+
+    What is bounded is how often the walk runs: one complete verdict is cached
+    for `walk_ttl_seconds` and served with `walk_age_seconds`, the age of the
+    walk that produced it, so the reader always knows how stale the answer is.
+    `?fresh=1` forces a new walk and is what the panel's own control asks for.
+
+    Content-free by construction. An index, an entry ID, two digests and three
+    numbers; no prompt, output, credential or artifact content lives in the
+    chained columns, so none can appear here.
+    """
+    require_viewer(request)
+    walk = walk_ledger_chain(state._DB_PATH, fresh=fresh)
+    return walk.as_dict()
