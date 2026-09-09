@@ -341,9 +341,13 @@ def walk_ledger_chain(
         if cached is not None and cached.age_seconds(now=moment) < ttl:
             return cached
 
+    verification = verify_ledger_chain(path)
     walk = LedgerChainWalk(
-        verification=verify_ledger_chain(path),
-        walked_at=time.time() if now is None else moment,
+        verification=verification,
+        # Stamped after the walk finishes, so the age a reader is shown is the
+        # age of a completed verdict rather than of the moment one was asked
+        # for. An injected `now` is a test's clock and is used as given.
+        walked_at=moment if now is not None else time.time(),
         ttl_seconds=ttl,
     )
     with _walk_cache_lock:
