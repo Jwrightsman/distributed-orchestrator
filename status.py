@@ -70,13 +70,12 @@ async def main():
     else:
         console.print("  Viewer auth: [dim]off (private reads are unprotected)[/dim]")
 
-    # Agent specialization
+    # role_model_map no longer routes anything (see its comment in config.py).
+    # Shown only when set, so an operator who set it learns it does nothing.
     role_map = config.get("role_model_map", {})
     if role_map:
         parts = ", ".join(f"{k}→{v}" for k, v in role_map.items())
-        console.print(f"  Role routing: [cyan]{parts}[/cyan]")
-    else:
-        console.print("  Role routing: [dim]any node[/dim]")
+        console.print(f"  Role map:    [yellow]{parts} (ignored: nothing routes by model)[/yellow]")
 
     # External provider
     provider = config.get("provider")
