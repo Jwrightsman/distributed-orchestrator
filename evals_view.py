@@ -449,12 +449,14 @@ def _pair_panel(pair: dict, labels: dict[str, str], index: int, count: int) -> s
         </div>
         <dl class="ev-facts">
           <dt>paired</dt><dd>{pair['n']} tasks</dd>
-          <dt>flipped</dt><dd>{pair['discordant']} of {pair['n']} · rate {_proportion(pair['discordant_rate'])},
-            interval {_proportion(low)}–{_proportion(high)}</dd>
-          <dt>moved</dt><dd>{pair['b_only']} up · {pair['a_only']} down ·
-            net {pair['b_only'] - pair['a_only']:+d}</dd>
-          <dt>McNemar exact</dt><dd>one-sided p {_p(pair['p_one_sided'])} ·
-            two-sided p {_p(pair['p_two_sided'])}</dd>
+          <dt>flipped</dt><dd><span class="ev-nowrap">{pair['discordant']} of {pair['n']}</span> ·
+            <span class="ev-nowrap">rate {_proportion(pair['discordant_rate'])}</span> ·
+            <span class="ev-nowrap">interval {_proportion(low)}–{_proportion(high)}</span></dd>
+          <dt>moved</dt><dd><span class="ev-nowrap">{pair['b_only']} up</span> ·
+            <span class="ev-nowrap">{pair['a_only']} down</span> ·
+            <span class="ev-nowrap">net {pair['b_only'] - pair['a_only']:+d}</span></dd>
+          <dt>McNemar exact</dt><dd><span class="ev-nowrap">one-sided p {_p(pair['p_one_sided'])}</span> ·
+            <span class="ev-nowrap">two-sided p {_p(pair['p_two_sided'])}</span></dd>
           <dt>to clear {pair['alpha']}</dt><dd>{threshold}</dd>
         </dl>
         <div class="rd-panel-note">Nothing differed between these runs but chance, so a

@@ -1582,4 +1582,7 @@ a.gallery-task:hover { color: var(--accent-text); }
   margin: 0; min-width: 0; overflow-wrap: anywhere;
   font-family: var(--mono); font-size: 11.5px; color: var(--text-dim);
 }
+/* A figure and its label stay on one line. Unheld, the side column broke
+   "two-sided" at its own hyphen, and a reader saw "two-" end one line. */
+.ev-nowrap { white-space: nowrap; }
 

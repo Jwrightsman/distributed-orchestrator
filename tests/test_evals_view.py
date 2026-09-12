@@ -599,6 +599,19 @@ def test_the_task_column_stays_put_when_the_grid_scrolls():
     assert "display: inline-block" in _css_rule(".ev-group-name")
 
 
+def test_no_hyphenated_figure_in_the_facts_can_break_at_its_hyphen(committed):
+    """At 1440px the side column ended a line with "two-" and began the next
+    with "sided". Every hyphen or dash inside a paired-result figure sits in a
+    span that does not wrap; a rule for the span is what holds it there."""
+    fragment = _fragment(committed)
+    section = fragment[fragment.index('data-pair="' + ":".join(NOISE_FLOOR_PAIR)):]
+    facts = section[section.index('<dl class="ev-facts">'): section.index("</dl>")]
+    for dd in re.findall(r"<dd>(.*?)</dd>", facts, re.S):
+        outside = re.sub(r'<span class="ev-nowrap">[^<]*</span>', "", dd)
+        assert not re.search(r"\S[-–]\S", outside), f"a breakable hyphen: {outside.strip()!r}"
+    assert "white-space: nowrap" in _css_rule(".ev-nowrap")
+
+
 def test_the_strip_labels_fit_one_line_at_tablet_width(committed):
     """At 1024px the three strip cells are about 250px wide, which holds 30
     characters of 11px spaced mono only by wrapping: "FLIPPED BETWEEN IDENTICAL
