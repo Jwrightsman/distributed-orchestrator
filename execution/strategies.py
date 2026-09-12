@@ -100,6 +100,8 @@ def _unit_summary(result: DispatchResult) -> dict[str, Any]:
         "selected_model_digest": result.selected_model_digest,
         "evidence_role": result.evidence_role,
         "attempt_count": result.attempt_count,
+        "started_at": result.started_at,
+        "completed_at": result.completed_at,
         "duration_ms": result.duration_ms,
         "fallback_reason": result.fallback_reason,
     }

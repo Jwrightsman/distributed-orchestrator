@@ -411,10 +411,13 @@ reads intact until it expires, which is why the age is on screen.
 `previous_digest` or `entry_digest`. A second way to walk the chain is a second
 thing that can disagree with the first.
 
-### 8.9 — new. The run-detail timeline.
+### 8.9 — the extend was taken. The run-detail timeline draws its units.
 
 **Decision: render it from `/v1/executions/{id}`, and say `+—` with a reason for
-the rest. Nothing fetches the audit bundle.**
+the rest. Nothing fetches the audit bundle.** The *extend* below was taken:
+`ExecutionUnitSummaryV1` now carries `started_at` and `completed_at`, so the
+`+—` row that stood for the units is a per-unit row each. The rest of this
+section stands as written.
 
 The design sources the timeline from `full_log.json`, which ships inside the
 **audit** bundle. That bundle is deliberately a separate download scope, asked
@@ -423,10 +426,19 @@ Auto-fetching it to draw a panel would undo that separation quietly and on every
 page view, which is worse than the separation never existing — a reader who
 clicked nothing would still have caused the transfer.
 
-What the execution record does timestamp is drawn: `created_at` as `+0.0s`,
-`started_at`, `completed_at`, and the manifest's `sealed_at`. What it does not
-is one row reading `+—` and naming the absence: per-unit start and finish times
-are not timestamped, only each unit's own duration is.
+What the execution record timestamps is drawn: `created_at` as `+0.0s`,
+`started_at`, `completed_at`, the manifest's `sealed_at`, and now one row per
+unit — `unit 01 ran to +1m 30s` — off the two ends the unit summary carries.
+A unit that did not complete says the word rather than changing colour, the
+same rule the unit cards follow.
+
+A record that has neither end for any unit keeps the `+—` row and the sentence
+that named the absence; a record that has them for some says how many it is
+missing, because "not recorded" printed under three drawn rows reads as
+applying to all of them. A unit with one end and not the other is counted in
+that line rather than placed: one end is not an interval, and a row drawn from
+it would sit on the timeline looking like every other row while meaning
+something weaker.
 
 `/run/{id}` reads the run directory's own `full_log.json` off disk, as it always
 has — that is how it loads the run at all. The distinction is the *bundle*, not
@@ -434,17 +446,40 @@ the file: no surface reaches for the packaged artifact, by HTTP or by opening th
 zip. `tests/test_run_detail.py::test_nothing_fetches_the_audit_bundle_to_render_run_detail`
 holds that.
 
-*Extend:* add per-unit `started_at` / `completed_at` to `ExecutionUnitSummaryV1`.
-The dispatcher already measures the interval it reports as `duration_ms`, so
-this is recording two numbers it has rather than deriving a new one, and the
-timeline then draws per-unit rows with no new endpoint and no bundle fetch.
+*Extend — taken.* `ExecutionUnitSummaryV1.started_at` / `.completed_at`, wall-clock
+UTC, stamped the same way `execution/service.py` stamps the execution's own
+moments so a unit's start is comparable to the run's `created_at`. No new
+endpoint and no bundle fetch: the dispatcher had both moments at every return
+and was not writing them down.
 
-*Or drop:* remove the panel. Four timestamps and one stated absence is a thin
-timeline, and a panel that is mostly `+—` may be worth less than the space. The
-argument against dropping is that the four it does carry — submission committed,
-started, terminal state committed, manifest sealed — are exactly the four
-moments the durability story turns on, and nothing else on the surface shows
+**They are recorded, never derived.** Nothing adds `duration_ms` to a start to
+invent a finish, and nothing subtracts one timestamp from the other to restate
+a duration — `duration_ms` stays a monotonic-clock reading, so a host clock
+that steps mid-unit cannot change the length a unit reports. The two therefore
+disagree by a fraction of a millisecond by design, and by more than that under
+a clock step, which is the reason for the split rather than an argument
+against it.
+
+On a unit that fell back to local execution the pair brackets the local leg,
+the same leg `duration_ms` covers, and not the whole time the unit was
+outstanding. `Dispatcher.execute` sums the attempt counts across both legs and
+does not widen the interval: a reader who subtracts the two must not get a
+number that contradicts the duration beside them. The failed remote attempt
+stays visible as `fallback_reason` and in the counts.
+
+*The panel was not dropped.* The four run-level moments it already carried —
+submission committed, started, terminal state committed, manifest sealed — are
+the four the durability story turns on, and nothing else on the surface shows
 that the terminal state was committed *before* the manifest was sealed.
+
+**One thing opening the page found that no test had.** The gutter was `50px`,
+which holds seven mono characters at 11px. `_offset` prints eight from ten
+minutes onward, so every run past ten minutes had already been wrapping its own
+`terminal state committed` row onto two lines at double height — and per-unit
+rows multiply that by the unit count. It is `60px` now, sized for the nine
+characters the formatter can reach (`+123h 45m`, 58.0px measured in Chromium),
+and `test_the_timeline_gutter_fits_the_longest_offset_it_can_print` ties the
+column to what the formatter prints rather than to a remembered number.
 
 ### 8.10 — new. The archived README's colour table is not the shipped palette.
 

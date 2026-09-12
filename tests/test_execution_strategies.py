@@ -794,3 +794,171 @@ async def test_artifact_root_stays_active_through_manifest_hashing(tmp_path, mon
     # cleanup, but it must observe an already sealed (therefore inactive) row.
     assert active_during_seal[0] is True
     assert execution_service.artifacts.active_root_paths() == set()
+
+
+# ── Per-unit timestamps ──────────────────────────────────────────────
+# `ExecutionUnitSummaryV1` carried a `duration_ms` and neither end of the
+# interval it measured, so the run-detail timeline could name a unit's length
+# and not place it. The dispatcher had both moments; it was not writing them
+# down. See `docs/design/HANDOFF-DELTA.md` §8.9.
+
+
+def _moment(value):
+    from datetime import datetime
+
+    assert value is not None, "the unit carries no timestamp at all"
+    parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    assert parsed.tzinfo is not None, f"{value!r} is not an absolute instant"
+    return parsed
+
+
+@pytest.mark.asyncio
+async def test_a_unit_records_both_ends_of_the_interval_it_measures(tmp_path, monkeypatch):
+    async def local_build(*args, **kwargs):
+        await asyncio.sleep(0.05)
+        return "local unit output"
+
+    async def runner(task, build_fn, **kwargs):
+        output = await build_fn({"id": 1, "title": "Build", "prompt": "p", "depends_on": []}, "")
+        return dag_result(tmp_path, output)
+
+    monkeypatch.setattr(strategies.orchestrator, "build", local_build)
+    run = await service(tmp_path).execute(
+        ExecutionRequestV1(task="Build it", strategy="dag", placement="local"),
+        dag_runner=runner,
+    )
+
+    unit = run.result.execution_units[0]
+    began, ended = _moment(unit.started_at), _moment(unit.completed_at)
+    assert began <= ended
+
+    # The point of the field: the unit can be placed on the execution's own
+    # timeline. Borrowing the execution's moments would satisfy "not None" and
+    # nothing else, so the window has to be strictly inside and its own.
+    assert _moment(run.result.started_at) <= began
+    assert ended <= _moment(run.result.completed_at)
+    assert unit.started_at != run.result.created_at
+
+    # Two clocks, so they are close rather than equal -- but a pair taken from
+    # the wrong leg, or from the strategy rather than the dispatch, would be
+    # out by far more than this.
+    span_ms = (ended - began).total_seconds() * 1000
+    assert abs(span_ms - unit.duration_ms) < 1000, (
+        f"the recorded window ({span_ms:.0f}ms) does not bracket the measured "
+        f"duration ({unit.duration_ms}ms)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_unit_window_survives_the_store(tmp_path, monkeypatch):
+    """A field the surfaces read has to come back out of SQLite."""
+    async def local_build(*args, **kwargs):
+        return "local unit output"
+
+    async def runner(task, build_fn, **kwargs):
+        output = await build_fn({"id": 1, "title": "Build", "prompt": "p", "depends_on": []}, "")
+        return dag_result(tmp_path, output)
+
+    monkeypatch.setattr(strategies.orchestrator, "build", local_build)
+    execution_service = service(tmp_path)
+    run = await execution_service.execute(
+        ExecutionRequestV1(task="Build it", strategy="dag", placement="local"),
+        dag_runner=runner,
+    )
+
+    stored = execution_service.store.get(run.result.execution_id)
+    assert stored is not None
+    assert stored.execution_units[0].started_at == run.result.execution_units[0].started_at
+    assert stored.execution_units[0].completed_at == run.result.execution_units[0].completed_at
+    assert stored.execution_units[0].started_at is not None
+
+
+@pytest.mark.asyncio
+async def test_a_fallback_unit_brackets_the_leg_its_duration_measures(tmp_path, monkeypatch):
+    """Not the whole time the unit was outstanding.
+
+    `Dispatcher.execute` sums the attempt counts across both legs and returns
+    the local result, whose `duration_ms` covers the local leg alone. If the
+    window were widened to the failed remote attempt's start, subtracting one
+    timestamp from the other would contradict the duration on the same object.
+    The remote leg stays visible as `fallback_reason` and in the counts.
+    """
+    state.nodes["worker"] = {"capabilities": [], "last_seen": 0}
+    remote_leg = 0.4
+
+    async def remote_failure(self, unit, request, execution_id, strategy, decision, **kwargs):
+        await asyncio.sleep(remote_leg)
+        return DispatchResult(
+            unit=unit,
+            status="failed",
+            placement="distributed",
+            error="worker failed",
+            attempt_count=1,
+            observed_placements=("distributed",),
+        )
+
+    async def local_build(*args, **kwargs):
+        return "local fallback output"
+
+    async def runner(task, build_fn, **kwargs):
+        output = await build_fn({"id": 1, "title": "Build", "prompt": "p", "depends_on": []}, "")
+        return dag_result(tmp_path, output)
+
+    monkeypatch.setattr(Dispatcher, "_distributed", remote_failure)
+    monkeypatch.setattr(strategies.orchestrator, "build", local_build)
+    run = await service(tmp_path).execute(
+        ExecutionRequestV1(
+            task="Build it",
+            strategy="dag",
+            placement="distributed",
+            confidentiality="trusted_guild",
+            remote_dispatch_consent=True,
+        ),
+        dag_runner=runner,
+    )
+
+    unit = run.result.execution_units[0]
+    assert unit.fallback_reason, "this is not the fallback path"
+    span = (_moment(unit.completed_at) - _moment(unit.started_at)).total_seconds()
+    assert span < remote_leg / 2, (
+        f"the unit window ({span:.2f}s) reaches back into the {remote_leg}s "
+        "remote leg its duration does not cover"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_queue_full_unit_is_still_timestamped(tmp_path, monkeypatch):
+    """Every path out of the dispatcher, not only the one that succeeds.
+
+    A failure with no window is a unit the timeline cannot draw at all, which
+    is the state the run-detail panel most needs to show.
+    """
+    state.nodes["worker"] = {"capabilities": [], "last_seen": 0}
+    monkeypatch.setattr(state, "enqueue_task", lambda task: False)
+
+    async def local_build(*args, **kwargs):
+        return "local fallback output"
+
+    async def runner(task, build_fn, **kwargs):
+        output = await build_fn({"id": 1, "title": "Build", "prompt": "p", "depends_on": []}, "")
+        return dag_result(tmp_path, output)
+
+    monkeypatch.setattr(strategies.orchestrator, "build", local_build)
+    dispatcher = Dispatcher()
+    unit = ExecutionUnit(unit_id="dag-1", kind="dag_subtask", title="Build", prompt="p", system="s")
+    result = await dispatcher._distributed(
+        unit,
+        ExecutionRequestV1(
+            task="Build it",
+            strategy="dag",
+            placement="distributed",
+            confidentiality="trusted_guild",
+            remote_dispatch_consent=True,
+        ),
+        "exec_queue_full",
+        "dag",
+        PlacementDecision("distributed", "one node", qualifying_nodes=("worker",)),
+    )
+
+    assert result.status == "failed" and result.error == "task queue is full"
+    assert _moment(result.started_at) <= _moment(result.completed_at)

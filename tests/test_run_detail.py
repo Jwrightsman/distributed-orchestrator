@@ -23,6 +23,8 @@ from fastapi.testclient import TestClient
 
 import dashboard
 import run_detail
+from datetime import datetime, timezone
+
 from execution.contracts import ExecutionRequestV1, ExecutionResultV1
 from server import app
 
@@ -688,6 +690,29 @@ def test_the_run_page_og_description_carries_the_envelope_sentence(client):
 # ── The timeline, and the audit bundle it does not fetch ─────────────
 
 
+# A record whose units carry their own moments, which is what every run
+# written since `ExecutionUnitSummaryV1` grew them looks like. The fixture's
+# default record predates them on purpose, so both states stay exercised.
+TIMED_UNITS = [
+    {"unit_id": "dag-1", "kind": "dag_subtask", "title": "Parse --since",
+     "depends_on": [], "status": "completed", "placement": "distributed",
+     "node_id": "node-7c22", "duration_ms": 88200,
+     "started_at": "2026-09-08T12:00:02Z", "completed_at": "2026-09-08T12:01:30Z"},
+    {"unit_id": "dag-2", "kind": "dag_subtask", "title": "Filter rows",
+     "depends_on": ["dag-1"], "status": "completed", "placement": "distributed",
+     "node_id": "node-a1f3", "duration_ms": 41000,
+     "started_at": "2026-09-08T12:01:31Z", "completed_at": "2026-09-08T12:02:12Z"},
+    {"unit_id": "dag-3", "kind": "dag_subtask", "title": "Update summary",
+     "depends_on": ["dag-1"], "status": "failed", "placement": "distributed",
+     "node_id": "node-legacy-1", "duration_ms": 39000,
+     "started_at": "2026-09-08T12:01:31Z", "completed_at": "2026-09-08T12:02:10Z"},
+    {"unit_id": "dag-4", "kind": "dag_subtask", "title": "Cover the parser",
+     "depends_on": ["dag-1"], "status": "completed", "placement": "local",
+     "node_id": None, "duration_ms": 12000,
+     "started_at": "2026-09-08T12:02:12Z", "completed_at": "2026-09-08T12:02:24Z"},
+]
+
+
 def test_the_timeline_is_drawn_from_the_execution_record(client):
     run = _published()
     for surface, html in _surfaces(client, run).items():
@@ -695,9 +720,156 @@ def test_the_timeline_is_drawn_from_the_execution_record(client):
         assert "GET /v1/executions/{id}" in panel, f"{surface}: the source is not named"
         assert "+0.0s" in panel and "submission committed to disk" in panel
         assert "terminal state committed" in panel
-        assert "+—" in panel, (
-            f"{surface}: what is not timestamped has to say so rather than be dropped"
+
+
+def test_a_record_without_per_unit_moments_says_so(client):
+    """The absence this panel has always named, and still has to.
+
+    A record written before the unit summary carried the two timestamps has no
+    per-unit moments. Dropping its units from the timeline would draw a run
+    whose units took no time, which is a different statement from one that did
+    not write them down.
+    """
+    run = _published()
+    for surface, html in _surfaces(client, run).items():
+        panel = _flat(_panel(html, "TIMELINE"))
+        assert "+—" in panel, f"{surface}: the absence is dropped rather than named"
+        assert "per-unit start and finish times are not recorded" in panel, (
+            f"{surface}: the absence does not say which absence it is"
         )
+        assert "ran to" not in panel, (
+            f"{surface}: a unit row is drawn for a record that timestamps none"
+        )
+
+
+def test_a_unit_that_carries_its_moments_gets_a_row(client):
+    run = _published(result_overrides={"execution_units": TIMED_UNITS})
+    for surface, html in _surfaces(client, run).items():
+        panel = _flat(_panel(html, "TIMELINE"))
+        for label in ("unit 01 ran to", "unit 02 ran to", "unit 03 ran to",
+                      "unit 04 ran to"):
+            assert label in panel, f"{surface}: {label!r} is missing"
+        # Both ends, off the record: +2.0s from `created_at` to the first
+        # unit's start, and 88 seconds later to its finish -- which crosses a
+        # minute, so it reads in the same units the run-level rows do.
+        assert "+2.0s unit 01 ran to +1m 30s" in panel, (
+            f"{surface}: the row does not carry both ends of the interval"
+        )
+        # A run that recorded everything draws no absence at all -- not the
+        # blanket sentence, and not a count that happens to be zero. Poisoning
+        # found that one: `0 of 4 units did not record both ends` reads as a
+        # defect, ships silently, and passes a test that only bans the other
+        # sentence.
+        assert "not recorded" not in panel and "did not record" not in panel, (
+            f"{surface}: an absence is claimed over units that recorded both"
+        )
+        assert "+—" not in panel, (
+            f"{surface}: a run with every moment on the record still draws a "
+            "gap somewhere"
+        )
+
+
+def test_a_unit_row_says_its_state_rather_than_colouring_it(client):
+    """The rule the unit cards already follow.
+
+    A timeline where the only difference between a finished unit and a failed
+    one is a grey level is a distinction nobody should have to make, and it
+    disappears entirely in greyscale.
+    """
+    run = _published(result_overrides={"execution_units": TIMED_UNITS})
+    for surface, html in _surfaces(client, run).items():
+        panel = _panel(html, "TIMELINE")
+        assert "and failed" in _flat(panel), (
+            f"{surface}: the failed unit does not say so in a word"
+        )
+        rows = re.findall(r'<span class="rd-tl-what([^"]*)">([^<]*)</span>', panel)
+        unit_rows = [(cls, text) for cls, text in rows if "ran to" in text]
+        assert len(unit_rows) == 4, f"{surface}: expected four unit rows, got {unit_rows}"
+        assert {cls.strip() for cls, _ in unit_rows} == {"is-dim"}, (
+            f"{surface}: a unit row carries a state colour: {unit_rows}"
+        )
+
+
+def test_the_unit_rows_sit_between_the_run_level_moments(client):
+    """A timeline out of order is not a timeline."""
+    run = _published(result_overrides={"execution_units": TIMED_UNITS})
+    for surface, html in _surfaces(client, run).items():
+        panel = _flat(_panel(html, "TIMELINE"))
+        order = [
+            panel.index("submission committed to disk"),
+            panel.index("execution started"),
+            panel.index("unit 01 ran to"),
+            panel.index("unit 04 ran to"),
+            panel.index("terminal state committed"),
+        ]
+        assert order == sorted(order), f"{surface}: the rows are out of order: {order}"
+
+
+def test_a_half_timestamped_unit_is_counted_rather_than_placed(client):
+    """One end is not an interval.
+
+    A row drawn from a start with no finish sits on the timeline looking like
+    every other row and means something weaker. And an absence sentence that
+    reads "not recorded" over a panel that just drew three rows would be read
+    as applying to all of them, so the one that stays says how many.
+    """
+    half = [dict(u) for u in TIMED_UNITS]
+    half[2]["completed_at"] = None
+    half[3]["started_at"] = None
+    half[3]["completed_at"] = None
+    run = _published(result_overrides={"execution_units": half})
+    for surface, html in _surfaces(client, run).items():
+        panel = _flat(_panel(html, "TIMELINE"))
+        assert "unit 01 ran to" in panel and "unit 02 ran to" in panel
+        assert "unit 03 ran to" not in panel, (
+            f"{surface}: a unit with one end is placed as though it had two"
+        )
+        assert "unit 04 ran to" not in panel
+        assert "2 of 4 units did not record both ends" in panel, (
+            f"{surface}: the count is wrong or missing: {panel[:400]}"
+        )
+        assert "per-unit start and finish times are not recorded" not in panel, (
+            f"{surface}: a blanket absence is claimed over units that recorded both"
+        )
+
+
+def test_the_timeline_gutter_fits_the_longest_offset_it_can_print():
+    """Found by opening the page rather than by a test.
+
+    The column was 50px, which holds seven mono characters at 11px. `_offset`
+    prints eight from ten minutes onward, so every run past ten minutes wrapped
+    its own `terminal state committed` row onto two lines at double height --
+    and the per-unit rows multiply that by the unit count. Measured in
+    Chromium: one character is 6.44px, so nine characters is 58.0px and the
+    column is 60px.
+
+    Nine is the ceiling for any run shorter than six weeks. Past that the cell
+    wraps again, which is the right way for a number nobody will see to fail.
+    """
+    from datetime import timedelta
+
+    start = datetime(2026, 9, 8, 12, 0, tzinfo=timezone.utc)
+    spans = (0, 0.4, 9.9, 59.9, 60, 599, 600, 3599, 3600, 35999, 359999, 444600)
+    printed = [run_detail._offset(start, start + timedelta(seconds=s)) for s in spans]
+    longest = max(len(text) for text in printed)
+    assert longest == 9, f"the formatter's width changed: {printed}"
+
+    declared = re.search(
+        r"grid-template-columns:\s*(\d+)px", _rule(RUN_DETAIL_CSS, ".rd-tl-row")
+    )
+    assert declared, "the timeline gutter is no longer a fixed column"
+    assert int(declared.group(1)) >= 58, (
+        f"a {longest}-character offset needs 58.0px and the column is "
+        f"{declared.group(1)}px, so it wraps"
+    )
+
+
+def test_two_units_that_started_together_keep_a_stable_order(client):
+    """`dag-2` and `dag-3` share a start instant, and a set iteration order is
+    not a thing a reader should see change between two loads of one run."""
+    run = _published(result_overrides={"execution_units": TIMED_UNITS})
+    panel = _flat(_panel(_surfaces(client, run)["server"], "TIMELINE"))
+    assert panel.index("unit 02 ran to") < panel.index("unit 03 ran to")
 
 
 def test_nothing_fetches_the_audit_bundle_to_render_run_detail():
