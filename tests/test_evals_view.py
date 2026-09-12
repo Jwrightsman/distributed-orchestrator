@@ -523,11 +523,20 @@ def test_the_route_serves_the_record_and_its_fragment():
 
 
 def test_the_route_is_neither_public_nor_operator_prefixed():
-    """Delta §9.4: viewer-gated by default, and not under /v1/operator/."""
+    """Delta §9.4: viewer-gated by default, and not under /v1/operator/.
+
+    Asked of the running app by request, never by walking `app.routes`. That
+    list stopped flattening included routers between FastAPI 0.135 and 0.141,
+    so a walk that saw `/evals` locally saw nothing in CI, which installs the
+    newest release. A request goes through whatever the router does now.
+    """
     assert ("GET", "/evals") not in _PUBLIC_EXACT
-    paths = {getattr(r, "path", "") for r in app.routes}
-    assert "/evals" in paths
-    assert not any(p.startswith("/v1/operator/") and "eval" in p for p in paths)
+    import routes_evals
+
+    assert [route.path for route in routes_evals.router.routes] == ["/evals"]
+    with TestClient(app) as client:
+        assert client.get("/evals").status_code == 200
+        assert client.get("/v1/operator/evals").status_code == 404
 
 
 def test_the_deployed_image_carries_no_eval_record():
