@@ -10,6 +10,7 @@ The implementation lives in focused modules:
   routes_nodes.py     — /nodes*, /tasks* (worker protocol + circuit breaker)
   routes_history.py   — /history*, /share/*, /gallery
   routes_projects.py  — /projects*
+  routes_evals.py     — /evals (the console's Evals view)
   routes_events.py    — /health, /events, /ws/events, /standings, /metrics, /ledger
   dashboard.py        — /dashboard (HTML in templates/dashboard.html)
 
@@ -29,6 +30,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+import routes_evals
 import routes_events
 import routes_executions
 import routes_access
@@ -236,6 +238,7 @@ async def unhandled_exception_handler(request, exc):
 
 app.include_router(dashboard_router)
 app.include_router(routes_events.router)
+app.include_router(routes_evals.router)
 app.include_router(routes_executions.router)
 app.include_router(routes_access.router)
 app.include_router(routes_pitch.router)

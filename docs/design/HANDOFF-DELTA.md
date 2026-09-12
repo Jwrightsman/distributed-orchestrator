@@ -582,3 +582,155 @@ sits on `--surface-sunken` rather than on the panel, where every other faint
 use on this page sits. One token stronger reads 4.65:1 light and 5.99:1 dark;
 the endpoint is still distinguished from the sentence, by being mono and
 smaller.
+
+---
+
+## 9. The Evals view — what it shows instead of a score
+
+The archived design builds this view around `~57%` (`Mycelium Console.dc.html`,
+the `isEvals` block and the `evalCategories` / `evalRuns` / `showcases` data).
+§4.1 retires that figure, so the view needed a design pass before any markup:
+not a restyle of the old one with the number removed, but an answer to what a
+reader should see in its place. This section is that answer and the contract
+the view is held to.
+
+### 9.1 Decision: what was measured, and what the instrument can resolve
+
+The view shows **each task's recorded outcome in each committed run, and what
+the instrument can and cannot tell apart**, and declines to summarise either
+into a pass rate. Four parts, in this order:
+
+1. **A strip of three counts.** Tasks that flipped between the
+   identical-configuration pair (`18 of 28`); the smallest net change the
+   instrument would notice four runs in five (`11 of 28`); runs recorded.
+2. **The noise floor.** The identical pair's paired table, in the order
+   `evals/stats.py::render_paired` sanctions: the 2×2 table, n, the discordant
+   count with its interval, improved / regressed / net, the p-value, then the
+   significance threshold. Never the p-value first, never alone.
+3. **Every task, every run.** A grid of the 28 legacy tasks against the five
+   committed runs. **No row and no column is totalled.** A column total is a
+   pass rate with the percent sign removed.
+4. **The corpus.** What has *not* been measured: 100 items, the
+   development / confirmatory split and whether its lock still holds, the band
+   distribution, and how many confirmatory items have ever run (none).
+
+**No `%` sign renders on this surface at all.** That is stronger than §4.1's
+rule, and it is the version a test can hold without a list of exceptions:
+interval bounds print as proportions (`0.46–0.79`) and power as "four runs in
+five". A bare regex for a quality percentage would have to decide whether
+"95% interval" is one; a rule against the character does not.
+
+**Why not the legitimate alternatives.** The discordant rate alone as the
+headline is right about which number matters and too abstract on its own — two
+adjacent v3 columns disagreeing on eighteen rows says it without the
+statistic, so the grid carries it and the strip names it. An aggregate with its
+interval does not survive §1.1 of `docs/eval-methodology.md`: the check under
+the number was weaker than the claim, and a narrower interval around the wrong
+quantity is still the wrong quantity. Per-category rates are dropped
+outright — at four to six tasks a category cannot reach significance in any
+split, which `evals/compare.py` already prints.
+
+### 9.2 What each cell says
+
+- **The pass decision is `evals/scoring.py::is_success(record,
+  require_judge=False)`** — the mechanical grade `eval-methodology.md` §4 makes
+  primary, called rather than re-implemented, so the view cannot disagree with
+  the harness about what passed. The model judge's score is recorded and gates
+  nothing on this view. The noise floor is 18 of 28 under either grade
+  (`eval-methodology.md` §1.4),
+  and the cells come out 8 / 10 / 8 / 2 under this one against 7 / 10 / 8 / 3
+  under the judged `success` field.
+- **A pass whose run check was `browser_ok` says `loaded`, not `pass`.** That
+  is §1.1 at cell resolution: the word states what was checked. It is not
+  rare — **31 of the 75 mechanical passes** across the five committed runs rest
+  on "no uncaught JS error and a non-empty body", and `web-snake` reads
+  `loaded` in all five columns.
+- **A record whose grade could not be decided says `ungraded`**, never `fail`
+  (`eval-methodology.md` §4, rule 6), and a pair holding one computes no
+  statistic. The committed records contain none; the branch exists so that a
+  future record with a missing field is not scored as a failure it never had.
+- **A task a run did not include says `not in run`.**
+
+### 9.3 "Identical configuration" means one thing
+
+Same `prompt_set` — the definition `evals/compare.py` and
+`scripts/eval_power.py` use. The view does not introduce a stricter or looser
+one, because a second definition is a second thing that can disagree with the
+published noise floor.
+
+Every identical pair gets its own table. With more than one, **the strip neither
+picks one nor pools them**: `stats.MEASURED_DISCORDANT_RATE` is documented as
+"the one measured value", and averaging a new pair into it is a decision for
+`eval-methodology.md`, not a side effect of opening a view. With none, the two
+cells that depend on a pair say the floor is not estimable, and say why.
+
+### 9.4 The route, and absent against empty
+
+`GET /evals`, viewer-gated by default — not in `_PUBLIC_EXACT`, and not under
+`/v1/operator/`. The operator prefix exists for facts that should not reach the
+edge (§8.8, §8.11); every byte this route reads is committed to a public
+repository. It returns the record plus `evals_html`, the fragment built once in
+`evals_view.py`, the same shape `/history/{timestamp}` uses for `detail_html`.
+
+**Absent is not empty.** The Docker image copies neither `evals/` nor its
+results, so a deployed coordinator has no eval record, and the view says the
+server carries none — not "no runs yet", which would claim the harness had
+never been run. `tests/test_evals_view.py` reads the Dockerfile's `COPY` lines
+rather than asserting this in prose, so copying `evals/` in fails loudly.
+
+### 9.4.1 Four things opening the page found that no test had
+
+Measured in Chromium at 1440, 1024, 768 and 375px in both themes, against the
+assembled console page with the real fragment in it. Each is now held by a
+test, and each test was poisoned.
+
+- **The paired table scrolled sideways at desktop width.** Every column
+  header carried a date and a word (`Aug 11 pass`), which made the 2×2 table
+  318px in a 302px side column. The run names sit in a spanning header now.
+- **On a phone the task names scrolled away.** The grid is 592px inside a
+  311px panel at 375px and scrolls inside it, which is allowed; the page
+  itself never overflows. Unpinned, a scrolled row was outcomes with no name.
+  The task column and category names are sticky.
+- **"two-sided" broke at its own hyphen**, the date fault of §8.11 in a new
+  place. Checked by walking every hyphenated word in the view and asking
+  whether its range spans more than one line: none do at any width, and with
+  the rule switched off in the page the walk finds `two-sided` split at 1440.
+- **Two strip labels wrapped at 1024px** beside one that did not. Shortened,
+  with the notes beneath carrying the rest. At 375px the cells stack two
+  across and `SMALLEST VISIBLE CHANGE` takes two lines; that is left.
+
+Lowest contrast anywhere in the view is **4.74:1**, light theme, muted words
+on the shaded identical-pair columns (`--text-muted` on `--surface-hover`);
+5.54:1 dark. Computed against each element's composited ground rather than
+against the panel, which is the mistake §8.11 recorded. Nothing renders below
+11px.
+
+### 9.5 What the archived design states that source contradicts
+
+Checked against `evals/results/*/summary.json` and `results.jsonl`, not by eye.
+
+| The design says | Source says |
+|---|---|
+| `20260809_0533` — "Re-run of v3 — disagrees with the above on 18 prompts" | Prompt set **v4**. It is a comparison, not a re-run. |
+| `20260810_0414` — "Third v3 run. Spread is the instrument, not the model." | Prompt set **v5**. Only two v3 runs exist. |
+| The identical runs "differ by 2 points" | They differ by **two tasks** (net −2), about seven points. |
+| "cannot resolve a change smaller than about six prompts" | Retracted by `eval-methodology.md` §1.2. At 80% power n = 28 needs 10.8 tasks. |
+| `20260811_0523` scored `55%` | 15 of 28 under the judged grade. |
+| Category `api`: `—` → `fixed` | 2 of 4 → 3 of 4 under the judged grade. |
+| Showcase reliability: Snake `2/10` | The committed record, `scripts/showcase_results/showcase_20260808_162106.jsonl`, has `playable: false` on **all ten** rows. `docs/showcase-ceiling.md` states both numbers correctly — 0/10 met the strict bar, 2/10 were playable once someone pressed start — but the 2 were found by hand and no committed field holds them. |
+| Showcase reliability: chart `10/10` | 4 of 4 and 6 of 6 across two committed logs. Holds. |
+| Showcase reliability: expense tracker `2/3` | Not in `scripts/showcase_results/`. `SPRINT_PHASE2.md` already withdrew it as n = 3 and re-measured 6/8. |
+
+**The showcase panel is not ported, and not because its data is missing** — the
+three logs are committed and a view could read them. It is not ported because
+it is a different instrument over different
+prompts, and faithfully rendering it needs its own design pass: the record
+serves 0 of 10 for the game, the prose everywhere else, including §4.1 above
+and `eval-methodology.md` §1.1, says 2 of 10, and a panel printing either one
+without the other states half a finding. Within the eval instrument the same
+point is carried by the `loaded` cells. **Open.**
+
+**Also dropped, all under §4.1:** the `~57%` card, the `+25pts` v1 → v3 card
+(two percentages and an across-prompt-set comparison), the category bars, the
+eval-history `SCORE` column, and the 80% target, which the design already kept
+out of the metric cards and which has nothing left to sit beside.

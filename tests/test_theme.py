@@ -36,7 +36,8 @@ STYLED = PAGES + ("_dashboard.css", "_dashboard.js", "_status_model.js",
 # assembles the run-detail surface for both surfaces, so a literal colour
 # written there would be just as invisible in dark mode and just as broken in
 # light as one written in a template -- and no template test would see it.
-RENDERING_MODULES = ("run_detail.py", "routes_run.py", "routes_status.py")
+RENDERING_MODULES = ("run_detail.py", "routes_run.py", "routes_status.py",
+                     "evals_view.py")
 
 # Entities like &#9654; are not colours.
 COLOR = re.compile(r"(?<![&\w])#[0-9A-Fa-f]{6}\b|rgba?\([0-9,. ]+\)")
