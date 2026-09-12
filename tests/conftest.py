@@ -51,7 +51,7 @@ def pytest_terminal_summary(terminalreporter):
         for line in drift:
             terminalreporter.write_line(line)
         terminalreporter.write_line(
-            "Match CI in a virtualenv with: pip install -r requirements.txt -r requirements-dev.txt -c constraints.txt"
+            "To match CI, install with -c constraints.txt (CONTRIBUTING.md, \"Setup\" and \"Dependencies\")."
         )
 
 
