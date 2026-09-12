@@ -622,11 +622,18 @@
 
 /* ── Timeline ──────────────────────────────────────────────────────── */
 /* The gutter is sized for the longest offset `_offset` produces, which is
-   nine mono characters (`+123h 45m`) -- 58.0px at 11px, measured in Chromium.
-   It was 50px, which fits seven: every run past ten minutes wrapped
-   `+10m 00s` onto two lines and stood its row at double height. One fixed
-   width rather than `auto`, because each row is its own grid and `auto` would
-   give each a gutter of its own, so the column would stop being a column. */
+   nine mono characters -- 58.0px at 11px, measured in Chromium. It was 50px,
+   which fits seven: from ten minutes onward the formatter prints eight, so
+   every longer run wrapped its own terminal-state row onto two lines and stood
+   it at double height. One fixed width rather than `auto`, because each row is
+   its own grid and `auto` would give each a gutter of its own, so the column
+   would stop being a column.
+
+   This comment is served inside the page, so it does not spell out an example
+   offset: `tests/test_run_page.py` scans the whole body for a fabricated
+   duration, and a comment is indistinguishable from a rendered one to a check
+   that blunt. The check is right to be blunt; the example belongs in the test
+   that owns the number. */
 .rd-tl-row {
   display: grid; grid-template-columns: 60px minmax(0, 1fr); gap: 10px;
   align-items: start; padding: 7px 13px;
