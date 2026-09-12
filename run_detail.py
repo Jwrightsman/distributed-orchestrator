@@ -1555,26 +1555,19 @@ def _unit_rows(
     difference between a finished unit and a failed one is a grey level is a
     distinction nobody should have to make.
     """
-    timed = [
-        (began, ended, unit)
-        for unit in units
-        for began in [_parse_iso(unit.get("started_at"))]
-        for ended in [_parse_iso(unit.get("completed_at"))]
-        if began is not None and ended is not None
-    ]
-    if not timed:
-        if not units:
-            return []
-        # The absence this panel has always named. A record written before the
-        # unit summary carried these has no per-unit moments, and a timeline
-        # that simply omitted its units would read as a run whose units took no
-        # time rather than one that did not write them down.
-        return [(
-            "+—",
-            "per-unit start and finish times are not recorded on this execution "
-            "record; only each unit's own duration is",
-            "is-absent",
-        )]
+    timed: list[tuple[datetime, datetime, dict]] = []
+    untimed = 0
+    for unit in units:
+        began = _parse_iso(unit.get("started_at"))
+        ended = _parse_iso(unit.get("completed_at"))
+        # One end is not an interval. A row drawn from it would sit on the
+        # timeline looking like every other row and mean something weaker, so
+        # the unit is counted in the absence below instead.
+        if began is None or ended is None:
+            untimed += 1
+            continue
+        timed.append((began, ended, unit))
+
     timed.sort(key=lambda item: (item[0], _unit_label(item[2].get("unit_id"))))
     rows: list[tuple[str, str, str]] = []
     for began, ended, unit in timed:
@@ -1586,6 +1579,23 @@ def _unit_rows(
             f"unit {label} ran to {_offset(start, ended)}{tail}",
             "is-dim",
         ))
+
+    if untimed:
+        # The absence this panel has always named. A record written before the
+        # unit summary carried these has no per-unit moments, and a timeline
+        # that simply omitted its units would read as a run whose units took no
+        # time rather than one that did not write them down. A record that has
+        # them for some units says how many it is missing, because "not
+        # recorded" over a panel that just drew three of them is the sentence a
+        # reader would read as applying to all of them.
+        scope = (
+            "per-unit start and finish times are not recorded on this execution "
+            "record; only each unit's own duration is"
+            if not timed
+            else f"{untimed} of {len(units)} units did not record both ends of "
+            "their interval; only their durations are on this record"
+        )
+        rows.append(("+—", scope, "is-absent"))
     return rows
 
 

@@ -621,8 +621,14 @@
 .rd-chain-refresh:hover { color: var(--text); }
 
 /* ── Timeline ──────────────────────────────────────────────────────── */
+/* The gutter is sized for the longest offset `_offset` produces, which is
+   nine mono characters (`+123h 45m`) -- 58.0px at 11px, measured in Chromium.
+   It was 50px, which fits seven: every run past ten minutes wrapped
+   `+10m 00s` onto two lines and stood its row at double height. One fixed
+   width rather than `auto`, because each row is its own grid and `auto` would
+   give each a gutter of its own, so the column would stop being a column. */
 .rd-tl-row {
-  display: grid; grid-template-columns: 50px minmax(0, 1fr); gap: 10px;
+  display: grid; grid-template-columns: 60px minmax(0, 1fr); gap: 10px;
   align-items: start; padding: 7px 13px;
   border-bottom: 1px solid var(--border-subtle);
   font-family: var(--mono); font-size: 11px; line-height: 1.5;
