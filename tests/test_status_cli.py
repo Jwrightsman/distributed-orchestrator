@@ -51,3 +51,41 @@ def test_status_reports_three_authorities_without_secret_fragments(monkeypatch):
     assert "node-" not in rendered
     assert "pitch-" not in rendered
     assert "viewer-" not in rendered
+
+
+def _render_status(monkeypatch, overrides):
+    base = {
+        "model": "test-model",
+        "timeout": 30,
+        "planner_retries": 1,
+        "ollama_url": "http://127.0.0.1:11434",
+        "port": 8000,
+    }
+    monkeypatch.setattr(status, "get_config", lambda: {**base, **overrides})
+
+    async def ollama_down():
+        return {"ok": False, "error": "not running", "models": []}
+
+    monkeypatch.setattr(status, "check_ollama", ollama_down)
+    monkeypatch.setattr(status.sys, "argv", ["status.py"])
+    output = StringIO()
+    monkeypatch.setattr(
+        status,
+        "console",
+        Console(file=output, force_terminal=False, color_system=None, width=120),
+    )
+    asyncio.run(status.main())
+    return output.getvalue()
+
+
+def test_status_does_not_claim_model_routing_that_nothing_performs(monkeypatch):
+    """Nothing has read role_model_map since 6483696, so no line may say work
+    is routed by it: a set value is shown as ignored, and an empty one not at all."""
+    unset = _render_status(monkeypatch, {"role_model_map": {}})
+    assert "Role routing" not in unset
+    assert "Role map" not in unset
+    assert "Provider:" in unset  # the Config block did render past this point
+
+    set_ = _render_status(monkeypatch, {"role_model_map": {"builder": "gemma3:4b"}})
+    assert "Role routing" not in set_
+    assert "Role map:    builder→gemma3:4b (ignored: nothing routes by model)" in set_

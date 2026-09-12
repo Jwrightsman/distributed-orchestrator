@@ -153,6 +153,8 @@ DEFAULTS = {
     "provider_roles": ["planner", "reviewer"],
 
     # ── Server ───────────────────────────────────────────────────────
+    # Read only by status.py, to find the server. The coordinator listens
+    # wherever uvicorn's --port puts it, whatever this says.
     "port": 8000,
 
     # "local" preserves the original single-machine development behavior.
@@ -229,16 +231,12 @@ DEFAULTS = {
     "public_pitch": False,
     "public_pitch_acknowledged": False,
 
-    # ── Agent specialization (optional) ──────────────────────────────
-    # Route builder tasks to nodes running a specific model.
-    # The dispatcher will prefer nodes whose model matches the value set here.
-    # If no node has the preferred model, any node can pick up the task (soft routing).
-    #
-    # Example — route builders to fast 4b nodes, leave planner/reviewer on the
-    # local machine where a larger model can run:
-    #   "role_model_map": {"builder": "gemma3:4b"}
-    #
-    # Leave empty {} to route tasks to any available node (default).
+    # ── Agent specialization (no effect) ─────────────────────────────
+    # Nothing reads this key, so its value changes nothing about where work
+    # goes. It used to make distributed builder dispatch prefer nodes running
+    # the named model; that reader was removed in 6483696 ("route execution
+    # through canonical service") and nothing replaced it. status.py prints a
+    # set value and says it is ignored.
     "role_model_map": {},
 
     # Capability evidence is observational only. "shadow" may compute a
@@ -259,7 +257,12 @@ DEFAULTS = {
     # nothing, exporting their machine's spans is telemetry. Requires the
     # optional `opentelemetry` extra; without it this stays a no-op.
     "tracing_export": False,
-    # OTLP collector endpoint, used only when tracing_export is true.
+    # Nothing reads this key. It is validated as a string of at most 512
+    # characters and then ignored: tracing.export_enabled() checks only the two
+    # flags above and whether the OpenTelemetry SDK imports, and spans go to
+    # whatever tracer provider the process already has. This project
+    # configures no provider or exporter, so setting an address here sends
+    # nothing to it.
     "tracing_endpoint": "",
 
     # Parser-heavy built-in validators run out of process in the recommended
