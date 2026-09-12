@@ -1178,13 +1178,22 @@ def test_a_rendering_failure_costs_the_panel_and_not_the_endpoint(client, monkey
 
 
 def test_the_replay_line_is_not_drawn_from_a_field_nothing_writes():
-    """`replayed` is a property of the POST response, not of the run.
+    """The line is drawn, and still not from either place it must not come from.
 
-    It is `SubmittedExecution.replayed` -- the `Idempotency-Replayed` header --
-    and it never reaches `ExecutionResultV1`, which has no idempotency field at
-    all. Reading it off a plausible-looking log key would render a line that is
-    always absent, look like it worked, and start lying the moment someone
-    wrote that key for another reason. See HANDOFF-DELTA §8.11.
+    §8.11 is closed by a durable fact about the *submission*
+    (`execution_submissions.replay_count`, served under `/v1/operator/`), so
+    the two rules that made it a gap are permanent now rather than pending:
+
+    The POST response is not a source. `SubmittedExecution.replayed` -- the
+    `Idempotency-Replayed` header -- is gone the moment the response is read,
+    and reading the fact off a plausible-looking log key instead renders a line
+    that is always absent, looks like it worked, and starts lying the moment
+    someone writes that key for another reason.
+
+    The execution is not a source either. Terminal state is monotonic under ADR
+    0009 and a replay can arrive long after the run reached it, so a replay
+    field on `ExecutionResultV1` would mutate a settled record. If one ever
+    appears here, the fix is to take it off, not to read it.
     """
     root = Path(__file__).resolve().parent.parent
     source = (root / "run_detail.py").read_text(encoding="utf-8")
@@ -1199,10 +1208,10 @@ def test_the_replay_line_is_not_drawn_from_a_field_nothing_writes():
     body = contract[contract.index("class ExecutionResultV1"):]
     body = body[: body.index("\n\n\n")] if "\n\n\n" in body else body
     assert "replay" not in body.lower(), (
-        "ExecutionResultV1 now carries a replay field -- the line can be drawn, "
-        "and HANDOFF-DELTA §8.11 should be closed"
+        "ExecutionResultV1 carries a replay field. Terminal state is monotonic "
+        "under ADR 0009 -- the fact belongs beside the execution, which is "
+        "where the submission mapping already keeps it"
     )
-
 
 def test_the_audit_scope_is_only_offered_where_it_exists(client):
     """Two scopes, or one, never one URL wearing two labels.
@@ -2088,3 +2097,197 @@ def test_a_break_and_a_genesis_head_can_both_be_on_screen(client):
         f"the strip draws a pre-chain head and the legend is {legend}, which "
         "does not name it"
     )
+
+
+# -- the replay line (delta 8.11) -------------------------------------
+
+
+def _replay(times: int) -> None:
+    """Replay the published run's keyed submission `times` times, for real.
+
+    The mapping row is written by the same call that would answer a later
+    pitch, and the count is incremented by that call rather than by this
+    helper, so what the panel reads is what a real replay leaves behind.
+    """
+    import sqlite3 as _sqlite3
+    import uuid
+
+    from execution.idempotency import submission_identity
+    from execution.service import get_execution_service
+
+    service = get_execution_service()
+    request = ExecutionRequestV1(task=_result().task, strategy="dag", placement="auto")
+    identity = submission_identity(
+        request,
+        idempotency_key="run-detail-replay-key",
+        requester_scope_kind="pitch-key",
+        requester_scope_value="run-detail-requester",
+    )
+    with _sqlite3.connect(service.store.path) as con:
+        con.execute(
+            """
+            INSERT INTO execution_submissions (
+                requester_scope_hash, idempotency_key_hash, request_hash,
+                request_hash_version, execution_id, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                identity.requester_scope_hash,
+                identity.idempotency_key_hash,
+                identity.request_hash,
+                identity.request_hash_version,
+                EXECUTION,
+                "2026-09-08T12:00:00+00:00",
+            ),
+        )
+    for _ in range(times):
+        record = service.store.create_or_replay_submission(
+            request,
+            identity,
+            lambda: service._new_result(request, uuid.uuid4().hex, None, "queued"),
+        )
+        assert record.replayed, "the fixture did not take the replay branch"
+
+
+def test_a_run_with_no_keyed_submission_draws_no_replay_line(client):
+    """The absent case: this run was never pitched under a key at all.
+
+    There is no mapping row, the route would answer 404, and the question the
+    line answers does not arise. A sentence about idempotency here would be
+    about a mechanism this submission never used.
+    """
+    run = _published()
+    panel = _panel(_surfaces(client, run)["console"], "TIMELINE")
+
+    # The attribute, not the bare class name: `dashboard.py` inlines
+    # `_run_detail.css` into the page, so the selector that styles this line is
+    # in the body of every run whether or not an element uses it.
+    assert 'class="rd-tl-replay"' not in panel, "a run with no replay drew the line"
+    assert "idempotency" not in _flat(panel).lower()
+
+
+def test_a_keyed_submission_never_replayed_draws_no_replay_line(client):
+    """The recorded-zero case, which is not the absent case.
+
+    This run *was* pitched under an idempotency key and nothing has replayed
+    it, so the record exists and says zero. Printing "never replayed" on it
+    would put a line on almost every keyed run to report that nothing happened.
+
+    Kept separate from the test above because the absent case never reaches the
+    count: poisoning the zero guard left that one green, since there was no
+    record to guard.
+    """
+    run = _published()
+    _replay(0)
+    panel = _panel(_surfaces(client, run)["console"], "TIMELINE")
+
+    from execution.service import get_execution_service
+
+    record = get_execution_service().store.submission_replays(EXECUTION)
+    assert record is not None, "the fixture did not write a mapping row"
+    assert record.replay_count == 0
+
+    assert 'class="rd-tl-replay"' not in panel, "a recorded zero drew the line"
+    assert "later pitch" not in _flat(panel)
+
+
+def test_a_replayed_run_says_so_with_the_count_and_the_moment(client):
+    run = _published()
+    _replay(3)
+    panel = _panel(_surfaces(client, run)["console"], "TIMELINE")
+    text = _flat(panel)
+
+    assert 'class="rd-tl-replay"' in panel, "the replay line is not drawn"
+    assert "3 later pitches" in text, text[-400:]
+    assert "under the same idempotency key" in text
+    assert "No further execution was started" in text
+
+
+def test_one_replay_is_not_described_in_the_plural(client):
+    """Grammar is not decoration on a surface whose discipline is precision."""
+    run = _published()
+    _replay(1)
+    text = _flat(_panel(_surfaces(client, run)["console"], "TIMELINE"))
+
+    assert "One later pitch under the same idempotency key was answered" in text
+    assert "pitches" not in text
+    assert "the last of them" not in text, "one replay has no last of them"
+
+
+def test_the_replay_line_carries_an_absolute_stamp_and_never_an_offset(client):
+    """The two clocks are printed differently because they are different.
+
+    Every row above the line is inside the run, and the offset gutter is sized
+    for what the formatter prints across a run's own length. A replay has no
+    such ceiling -- the same task pitched again next month is one row whose
+    offset would overflow that column -- so the replay line is not a row and
+    does not carry an offset.
+    """
+    run = _published()
+    _replay(2)
+    panel = _panel(_surfaces(client, run)["console"], "TIMELINE")
+    line = panel[panel.index('class="rd-tl-replay"'):]
+
+    assert "UTC" in _flat(line), "the replay moment is not an absolute stamp"
+    assert "rd-tl-at" not in line, "the replay line took a seat in the offset grid"
+    assert "rd-tl-row" not in line, "the replay line is a timeline row"
+
+
+def test_the_replay_line_names_its_own_endpoint(client):
+    """It does not borrow the panel head's label.
+
+    The head says `GET /v1/executions/{id}`, and this is not from there. A
+    reader who wants to check the number has to be told where it came from,
+    and the two sources sit under different gates.
+    """
+    run = _published()
+    _replay(2)
+    panel = _panel(_surfaces(client, run)["console"], "TIMELINE")
+
+    assert "GET /v1/operator/executions/{id}/submission" in _flat(panel)
+    assert "GET /v1/executions/{id}" in _flat(panel), "the head lost its source"
+
+
+def test_the_replay_line_never_reaches_the_shareable_page(client):
+    """Placement follows the gate, and the gate is the operator prefix.
+
+    `/v1/operator/*` is refused at the public edge, so the fact behind this
+    line is not reachable from the Internet with a viewer key alone. The page
+    that travels with a link does not draw it -- who re-pitched a task is not a
+    fact about the deliverable somebody was handed.
+    """
+    run = _published()
+    _replay(4)
+    surfaces = _surfaces(client, run)
+
+    assert 'class="rd-tl-replay"' in surfaces["console"], "the console lost the line"
+    # The inlined stylesheet puts the selector in the served body either way,
+    # which is why this reads the attribute and not the name.
+    assert 'class="rd-tl-replay"' not in surfaces["server"], (
+        "the shareable run page draws the replay line"
+    )
+    assert "4 later pitches" not in _flat(surfaces["server"])
+    assert "idempotency" not in _flat(surfaces["server"]).lower()
+
+
+def test_a_replay_with_no_recorded_moment_still_reports_the_count(client):
+    """Degrade to the fact that is there, rather than to silence.
+
+    A row migrated from before the counter existed could carry a count with no
+    moment. The count is the load-bearing half; a sentence that drops it
+    because the stamp is missing would lose the fact to protect the decoration.
+    """
+    panel = run_detail._timeline_panel({
+        "timeline": [("+0.0s", "submission committed to disk", "is-dim")],
+        "submission": {
+            "execution_id": EXECUTION,
+            "submitted_at": "2026-09-08T12:00:00+00:00",
+            "replay_count": 2,
+            "last_replayed_at": None,
+        },
+    })
+    text = _flat(panel)
+
+    assert "2 later pitches" in text
+    assert "UTC" not in text, "a moment was invented for a row that has none"
+    assert " on ." not in text and "on  ." not in text, "a dangling clause"

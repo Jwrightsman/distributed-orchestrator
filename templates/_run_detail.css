@@ -647,6 +647,28 @@
 .rd-tl-what.is-ok     { color: var(--accent); }
 .rd-tl-what.is-absent { color: var(--text-muted); }
 
+/* The replay line sits below the rows and outside their grid, because it is
+   not on their clock. Every row above is inside the run, so the gutter is
+   sized for what the offset formatter prints across a run's own length; a
+   replay has no such ceiling, and a relative figure for one would either
+   overflow that column or force it to a width no real row needs. So it is an
+   absolute stamp in a sentence, and it names its own endpoint rather than
+   borrowing the head's -- it comes from a different route under a stricter
+   gate. */
+.rd-tl-replay {
+  display: flex; gap: 9px; align-items: flex-start; padding: 11px 13px;
+  background: var(--surface-sunken);
+}
+.rd-tl-replay .rd-marker { margin-top: 5px; flex-shrink: 0; }
+.rd-tl-replay-note {
+  margin: 0 0 5px; font-size: 11.5px; color: var(--text-muted);
+  line-height: 1.65; text-wrap: pretty;
+}
+.rd-tl-replay-endpoint {
+  font-family: var(--mono); font-size: 11px; color: var(--text-faint);
+  overflow-wrap: anywhere;
+}
+
 /* ── Footer ────────────────────────────────────────────────────────── */
 .rd-foot {
   display: grid; grid-template-columns: 7px minmax(0, 1fr); gap: 11px;

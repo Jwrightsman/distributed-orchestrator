@@ -1515,6 +1515,10 @@ def _timeline_panel(ctx: dict) -> str:
     That is now four run-level moments and one row per unit, because
     `ExecutionUnitSummaryV1` carries the two ends of the interval it already
     measured. A record written before it did keeps the named absence instead.
+
+    One thing below the rows comes from elsewhere, and says so rather than
+    borrowing the head's label: the replay line is a fact about the submission,
+    served under a stricter gate, and printed on a different clock.
     """
     rows = ctx["timeline"]
     if not rows:
@@ -1530,7 +1534,7 @@ def _timeline_panel(ctx: dict) -> str:
           <span class="rd-panel-label">TIMELINE</span>
           <span class="rd-panel-meta">GET /v1/executions/{{id}}</span>
         </div>
-        {body}
+        {body}{_replay_line(ctx)}
       </section>"""
 
 
@@ -1628,15 +1632,56 @@ def _timeline_rows(
 
 
 # ── replay ───────────────────────────────────────────────────────────
-# The design has a line for a run that was returned rather than re-run, and
-# ADR 0008 is its citation. It is not drawn, because nothing serves it at read
-# time: `replayed` is a property of the POST response
-# (`SubmittedExecution.replayed`, the `Idempotency-Replayed` header) and never
-# reaches `ExecutionResultV1` -- the contract has no idempotency field at all
-# -- while `execution_submissions` stores digests keyed by requester scope and
-# is not reachable from an execution id. Reading it off an invented log key
-# would render a line that is always absent and look like it worked. See
-# `docs/design/HANDOFF-DELTA.md` 8.11 for what to add to serve it.
+
+def _replay_line(ctx: dict) -> str:
+    """The line for a run that was returned rather than re-run (delta 8.11).
+
+    Drawn from the durable submission mapping and from nothing else. The POST
+    response's `replayed` is not a source: it is gone the moment the response
+    is read, and reading the fact off a plausible-looking log key instead would
+    render a line that is always absent, look like it worked, and start lying
+    the moment someone wrote that key for another reason.
+
+    Nor does it come off the execution. Terminal state is monotonic under ADR
+    0009 and a replay can arrive long after the run reached it, so the fact
+    lives beside the execution rather than on it -- the shape the provenance
+    envelope already uses.
+
+    **An absolute stamp, not an offset.** Every other row on this panel is
+    inside the run, so the offset gutter is sized for what the formatter can
+    print across a run's own length. A replay is not bounded that way: the same
+    task pitched again next month is one row whose offset would overflow the
+    column, and widening the gutter for a value that has no ceiling is not a
+    fix. The two clocks are different, so they are printed differently.
+
+    Nothing is drawn when the count is zero, and nothing when the run carries
+    no mapping at all. A zero is a recorded fact, but printing "never replayed"
+    on every run says nothing a reader needed; an absent mapping is a run that
+    was never pitched under a key, where the question does not arise.
+    """
+    record = ctx.get("submission")
+    if not record:
+        return ""
+    count = int(record.get("replay_count") or 0)
+    if count < 1:
+        return ""
+
+    moment = _stamp(record.get("last_replayed_at"))
+    when = f", the last of them on {moment}" if count > 1 and moment else (
+        f", on {moment}" if moment else ""
+    )
+    pitches = "one later pitch" if count == 1 else f"{count} later pitches"
+    was = "was" if count == 1 else "were"
+    return f"""
+        <div class="rd-tl-replay">
+          {_marker("is-slate", "is-6")}
+          <div>
+            <p class="rd-tl-replay-note">{esc(pitches.capitalize())} under the same
+              idempotency key {was} answered with this run{esc(when)}. No further
+              execution was started, which is the whole of what this records.</p>
+            <span class="rd-tl-replay-endpoint">GET /v1/operator/executions/{{id}}/submission</span>
+          </div>
+        </div>"""
 
 # ── assembly ─────────────────────────────────────────────────────────
 
@@ -1667,6 +1712,7 @@ def build_view(
     durable: Any = None,
     envelope: Any = None,
     chain: dict | None = None,
+    submission: dict | None = None,
     surface: str = "console",
     run_id: str = "",
     relative_age: str = "",
@@ -1789,6 +1835,10 @@ def build_view(
         ],
         "precheck_error": log.get("code_precheck_error"),
         "timeline": _timeline_rows(durable, manifest, units),
+        # Absent on the shareable page by design, not by omission: the route
+        # that serves it is refused at the public edge, and the panel follows
+        # its gate. `routes_run.py` never passes it.
+        "submission": submission,
         "metrics": {
             "units": sum(len(w) for w in waves),
             "waves": len(waves),
