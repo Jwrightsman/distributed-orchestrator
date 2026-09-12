@@ -306,14 +306,27 @@ def test_the_lock_row_keeps_its_date_on_one_line():
     assert re.search(r"\.cf-nowrap\s*\{\s*white-space:\s*nowrap;", css)
 
 
-def test_the_runtime_rows_read_what_startup_recorded():
+def test_the_runtime_rows_read_what_startup_recorded(monkeypatch):
+    """Against what startup actually did, not against the attributes it left.
+
+    Comparing a row to `app.state` compares the relay to itself: when the
+    poison wrote a wrong directory there, and when it dropped the bind host,
+    this test stayed green. So the directory is checked against the lock file
+    the process really holds, and the host is forced through the launch path
+    and looked for in the row.
+    """
+    from coordinator_lock import default_state_dir
+
+    monkeypatch.setenv("MYCELIUM_BIND_HOST", "0.0.0.0")
     with TestClient(app) as client:
         body = client.get(ROUTE).json()
         state = client.app.state
         rows = {row["key"]: row for g in body["groups"] for row in g["rows"]}
         assert rows["coordinator lock"]["value"] == "held"
         assert state.coordinator_identity.instance_id in rows["coordinator lock"]["note"]
-        assert rows["state directory"]["value"] == state.state_dir
+        assert rows["state directory"]["value"] == str(default_state_dir())
+        assert (Path(rows["state directory"]["value"]) / ".mycelium-coordinator.lock").is_file()
+        assert "0.0.0.0" in rows["bind_host"]["note"], rows["bind_host"]
         assert rows["preflight"]["value"] in (
             "no warnings", f"{len(state.preflight_warnings)} warning",
             f"{len(state.preflight_warnings)} warnings",
