@@ -15,6 +15,7 @@ from starlette.background import BackgroundTask
 from access_control import (
     VIEWER_COOKIE_NAME,
     issue_viewer_session,
+    require_viewer,
     viewer_auth_configured,
     viewer_key_matches,
 )
@@ -343,6 +344,51 @@ async def execution_provenance(execution_id: str):
             },
         )
     return record.as_export()
+
+
+@router.get("/operator/executions/{execution_id}/submission")
+async def execution_submission(request: Request, execution_id: str):
+    """What one execution's keyed submission durably records about being replayed.
+
+    **Operator-gated, not viewer-gated**, and the prefix is the reason. It
+    lives under `/v1/operator/`, which `deploy/Caddyfile.public` refuses whole
+    at the edge alongside `/dashboard` and `/metrics`, so a valid viewer key is
+    not enough to reach it from the public Internet. That is the gate the
+    ledger chain has and a stricter one than `/run/{id}`, and the surface that
+    reads this follows it: the replay line renders in the console and never on
+    the shareable run page. Who re-pitched a task, and how often, is not a fact
+    about the deliverable that travelled with the link.
+
+    `require_viewer` is called here too, so the route is refused by its own
+    handler and not only by the middleware.
+
+    **An execution with no keyed submission is a 404, not a zero.** A run
+    pitched without an idempotency key -- `/pitch`, or a direct service call --
+    has no mapping row at all, and `replay_count: 0` would state that it was
+    submitted under a key and never replayed, which is a different and false
+    statement. Same rule the provenance envelope's 404 follows above.
+
+    Content-free by construction, and digest-free on purpose. The mapping's
+    keys are irreversible but they are correlatable -- two executions sharing a
+    `requester_scope_hash` came from one requester, and an
+    `idempotency_key_hash` over a low-entropy key is guessable -- so no digest
+    is among the four fields served.
+    """
+    require_viewer(request)
+
+    record = get_execution_service().store.submission_replays(execution_id)
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "keyed_submission_not_found",
+                "message": (
+                    "This execution was not submitted under an idempotency key, "
+                    "so nothing records it being replayed."
+                ),
+            },
+        )
+    return record.as_dict()
 
 
 @router.post(

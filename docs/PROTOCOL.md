@@ -1426,9 +1426,29 @@ in-flight coroutines, node sessions, and breaker state remain process-local.
 
 `execution_submissions` is an additive, indefinitely retained trusted-alpha
 table containing only requester-scope, idempotency-key, and canonical-request
-digests, request-hash version, execution identity, and creation time. An immediate transaction
+digests, request-hash version, execution identity, creation time, and a replay
+count with the moment of the last replay. An immediate transaction
 creates its mapping and the queued execution together. The table is included in
 ordinary SQLite backup/restore; it does not make queued work resumable.
+
+The replay count is incremented inside the same immediate transaction that
+resolves a submission to an existing execution, so it cannot disagree with the
+`Idempotency-Replayed` header that call returns. A recovered creation does not
+increment it: that outcome proves the caller's own first commit landed rather
+than returning work to a later pitch, and it answers
+`Idempotency-Replayed: false`.
+
+The count is a durable fact about the **submission** and is deliberately absent
+from `ExecutionResultV1`. Terminal state is monotonic, and a replay may arrive
+after the execution it returns is terminal, so recording it on the execution
+would mutate a settled record.
+
+`GET /v1/operator/executions/{execution_id}/submission` serves it as
+`execution_id`, `submitted_at`, `replay_count`, and `last_replayed_at`, and
+carries no digest. An execution with no keyed submission answers `404` with
+code `keyed_submission_not_found`: it was never submitted under a key, which is
+a different fact from a count of zero. The route is under `/v1/operator/`,
+which `deploy/Caddyfile.public` refuses at the public edge.
 
 ## Compatibility and errors
 

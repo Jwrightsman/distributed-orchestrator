@@ -36,7 +36,7 @@ coordinator on a local filesystem serving a small private trusted alpha.
 | State | Durable | Restart behavior |
 | --- | --- | --- |
 | Canonical executions, lifecycle, validation, telemetry | SQLite | Retained; queued/running become `interrupted` and retryable |
-| Scoped canonical submission mappings | SQLite | Retained indefinitely; replay resolves to the same execution, including after interruption |
+| Scoped canonical submission mappings | SQLite | Retained indefinitely; replay resolves to the same execution, including after interruption, and is counted on the mapping with the moment of the last one |
 | Attempt authority, nonce digests, settlement receipts, quarantine | SQLite | Retained; active attempts become `interrupted`; exact settled replay remains durable |
 | Node enrollment IDs, credential digests, status, rotation/revocation | SQLite | Retained; sessions are reacquired after restart |
 | Enrolled capability descriptor snapshots | SQLite | Immutable canonical claim JSON retained by enrollment/hash; attempts keep version/hash references |

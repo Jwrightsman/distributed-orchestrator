@@ -78,6 +78,31 @@ class SubmissionRecord:
         return self.disposition is SubmissionDisposition.RECOVERED_CREATION
 
 
+@dataclass(frozen=True)
+class SubmissionReplayRecord:
+    """What the durable submission mapping records about being replayed.
+
+    Carries no digest. The mapping's keys are irreversible but they are
+    correlatable -- two executions sharing a `requester_scope_hash` came from
+    one requester, and an `idempotency_key_hash` over a low-entropy key is
+    guessable -- so neither leaves the table. The reader is being told what
+    happened to this submission, not who made it.
+    """
+
+    execution_id: str
+    submitted_at: str
+    replay_count: int
+    last_replayed_at: str | None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "execution_id": self.execution_id,
+            "submitted_at": self.submitted_at,
+            "replay_count": self.replay_count,
+            "last_replayed_at": self.last_replayed_at,
+        }
+
+
 _EXECUTION_COLUMNS = (
     "execution_id",
     "job_id",
@@ -204,6 +229,27 @@ class ExecutionStore:
                 con.execute(
                     "ALTER TABLE execution_submissions "
                     "ADD COLUMN request_hash_version TEXT NOT NULL DEFAULT '1'"
+                )
+            # How many later pitches this mapping answered by return instead of
+            # by starting new work, and when it last did. A fact about the
+            # submission, deliberately not a field on the execution: terminal
+            # state is monotonic under ADR 0009, and a replay can arrive long
+            # after the run it returns reached it.
+            #
+            # The default is 0 rather than NULL because a mapping row that
+            # exists has been replayed a knowable number of times, and on a
+            # pre-existing row that number is 0 -- there was no earlier counter
+            # to have missed a replay. An absent *row* is the unknown case, and
+            # that is distinguishable by the row not being there.
+            if "replay_count" not in submission_columns:
+                con.execute(
+                    "ALTER TABLE execution_submissions "
+                    "ADD COLUMN replay_count INTEGER NOT NULL DEFAULT 0"
+                )
+            if "last_replayed_at" not in submission_columns:
+                con.execute(
+                    "ALTER TABLE execution_submissions "
+                    "ADD COLUMN last_replayed_at TEXT"
                 )
             con.execute(
                 """
@@ -533,6 +579,23 @@ class ExecutionStore:
                     # The identity collision is not this call's recoverable
                     # initial snapshot. It remains an ordinary replay of the
                     # valid mapped execution in its current lifecycle state.
+                # Count the replay in the transaction that decided it was one,
+                # so the counter cannot disagree with the answer this call
+                # returns. A recovered creation is deliberately not counted: it
+                # proves this caller's own first commit landed, which is not a
+                # later pitch being handed finished work.
+                con.execute(
+                    """
+                    UPDATE execution_submissions
+                    SET replay_count = replay_count + 1, last_replayed_at = ?
+                    WHERE requester_scope_hash = ? AND idempotency_key_hash = ?
+                    """,
+                    (
+                        self._now(),
+                        identity.requester_scope_hash,
+                        identity.idempotency_key_hash,
+                    ),
+                )
                 return SubmissionRecord(
                     result=result,
                     disposition=SubmissionDisposition.REPLAYED,
@@ -729,3 +792,42 @@ class ExecutionStore:
                 (requester_scope_hash, idempotency_key_hash),
             ).fetchone()
         return dict(row) if row else None
+
+    def submission_replays(self, execution_id: str) -> SubmissionReplayRecord | None:
+        """What one execution's keyed submission records, or None if it has none.
+
+        `None` and a zero count are different answers and the caller must be
+        able to tell them apart. An execution submitted without an idempotency
+        key -- `/pitch`, or a direct service call -- has no mapping row at all,
+        and reporting `replay_count: 0` for it would state that it was
+        submitted under a key and never replayed. So the absence of the row is
+        returned as the absence of the fact.
+
+        Reached by `idx_execution_submissions_execution_id`, which has existed
+        since the table did; `EXPLAIN QUERY PLAN` confirms the search uses it
+        rather than scanning. The mapping is one row per execution because the
+        only path that writes one also creates the execution it names.
+        """
+
+        self.migrate()
+        with self._lock, connection(self.path, row_factory=sqlite3.Row) as con:
+            row = con.execute(
+                """
+                SELECT execution_id, created_at, replay_count, last_replayed_at
+                FROM execution_submissions
+                WHERE execution_id = ?
+                """,
+                (execution_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return SubmissionReplayRecord(
+            execution_id=str(row["execution_id"]),
+            submitted_at=str(row["created_at"]),
+            replay_count=int(row["replay_count"] or 0),
+            last_replayed_at=(
+                str(row["last_replayed_at"])
+                if row["last_replayed_at"] is not None
+                else None
+            ),
+        )

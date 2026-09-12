@@ -135,6 +135,31 @@ def _ledger_chain() -> dict | None:
         return None
 
 
+def _submission_replays(execution_id: str | None) -> dict | None:
+    """The submission's replay count for the console panel, or None.
+
+    Read here rather than fetched over HTTP, the same way the chain verdict is:
+    the console's own route already runs inside the coordinator, and a second
+    network hop would only add a way for the panel to disagree with the
+    endpoint. The gating still governs where the panel appears --
+    `/v1/operator/executions/{id}/submission` is refused at the public edge, so
+    this is passed on the console surface and never on `/run/{id}`.
+
+    `None` for a run with no keyed submission, which is the same answer the
+    route's 404 gives and a different answer from a count of zero.
+    """
+    if not execution_id:
+        return None
+    try:
+        from execution.service import get_execution_service
+
+        record = get_execution_service().store.submission_replays(execution_id)
+    except Exception:
+        logger.warning("submission replays could not be read", exc_info=True)
+        return None
+    return record.as_dict() if record is not None else None
+
+
 def _detail_html(
     log: dict,
     timestamp: str,
@@ -175,6 +200,10 @@ def _detail_html(
                 durable=durable,
                 envelope=provenance_envelope(publication),
                 chain=_ledger_chain(),
+                submission=_submission_replays(
+                    getattr(publication, "execution_id", None)
+                    or log.get("execution_id")
+                ),
                 surface="console",
                 run_id=timestamp,
                 relative_age=_relative(str(log.get("timestamp") or timestamp)),
