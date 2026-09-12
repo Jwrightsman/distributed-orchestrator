@@ -1667,9 +1667,14 @@ def _replay_line(ctx: dict) -> str:
         return ""
 
     moment = _stamp(record.get("last_replayed_at"))
-    when = f", the last of them on {moment}" if count > 1 and moment else (
-        f", on {moment}" if moment else ""
-    )
+    # The stamp is one value and is kept on one line. Opening the page found it
+    # breaking at its own hyphen -- "2026-11-" above "14 22:05 UTC" -- which
+    # reads as two numbers rather than one date, and a reader checking a run
+    # against a clock should not have to reassemble it.
+    when = ""
+    if moment:
+        lead = ", the last of them on " if count > 1 else ", on "
+        when = f'{lead}<span class="rd-tl-replay-at">{esc(moment)}</span>'
     pitches = "one later pitch" if count == 1 else f"{count} later pitches"
     was = "was" if count == 1 else "were"
     return f"""
@@ -1677,7 +1682,7 @@ def _replay_line(ctx: dict) -> str:
           {_marker("is-slate", "is-6")}
           <div>
             <p class="rd-tl-replay-note">{esc(pitches.capitalize())} under the same
-              idempotency key {was} answered with this run{esc(when)}. No further
+              idempotency key {was} answered with this run{when}. No further
               execution was started, which is the whole of what this records.</p>
             <span class="rd-tl-replay-endpoint">GET /v1/operator/executions/{{id}}/submission</span>
           </div>

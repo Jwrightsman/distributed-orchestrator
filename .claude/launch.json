@@ -10,7 +10,11 @@
     {
       "name": "showcase-output",
       "runtimeExecutable": "py",
-      "runtimeArgs": ["-m", "http.server", "8899", "--directory", "output"],
+      "runtimeArgs": [
+        "-m", "http.server", "8899",
+        "--bind", "127.0.0.1",
+        "--directory", "output"
+      ],
       "port": 8899
     }
   ]

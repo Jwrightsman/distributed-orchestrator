@@ -2291,3 +2291,65 @@ def test_a_replay_with_no_recorded_moment_still_reports_the_count(client):
     assert "2 later pitches" in text
     assert "UTC" not in text, "a moment was invented for a row that has none"
     assert " on ." not in text and "on  ." not in text, "a dangling clause"
+
+
+def test_the_replay_stamp_is_one_line(client):
+    """Found by opening the page, not by a test.
+
+    The sentence wraps, and the stamp inside it was breaking at its own hyphen
+    -- the year and month above the day and time -- which reads as two numbers
+    rather than one date. It is one value, so it is held on one line, and the
+    span that does it is asserted in both the markup and the stylesheet
+    because either half alone is inert.
+
+    Measured in Chromium at 375px, the narrowest width the console is built
+    for: the stamp is 112.9px inside a 262px column, so holding it together
+    costs no overflow.
+    """
+    run = _published()
+    _replay(2)
+    panel = _panel(_surfaces(client, run)["console"], "TIMELINE")
+
+    assert 'class="rd-tl-replay-at"' in panel, (
+        "the replay stamp is no longer held on one line, so it can break at "
+        "its own hyphen"
+    )
+    assert "nowrap" in _rule(RUN_DETAIL_CSS, ".rd-tl-replay-at"), (
+        "the markup holds the stamp but the rule that makes it hold is gone"
+    )
+
+
+def test_the_replay_line_reads_against_the_surface_it_sits_on():
+    """Contrast, measured in a browser and pinned to the token here.
+
+    The line sits on `--surface-sunken`, not on the panel, and that is what
+    makes the difference: the faint token clears 4.5:1 against the panel in the
+    light theme and falls below it against the sunken surface, where every
+    other faint use on this page does not sit. Measured in Chromium, light
+    theme: the sentence and the endpoint both read 4.65:1 on the token below,
+    against 4.13:1 for faint. Dark reads 5.99:1.
+
+    So the endpoint is separated from the sentence by being mono and smaller
+    rather than by being paler -- which is the page's rule anyway, that colour
+    is never the only signal.
+    """
+    endpoint = _rule(RUN_DETAIL_CSS, ".rd-tl-replay-endpoint")
+    assert "var(--text-muted)" in endpoint, (
+        "the replay endpoint's colour changed; re-measure it against "
+        "--surface-sunken in the light theme before accepting a fainter token"
+    )
+    assert "var(--text-faint)" not in endpoint, (
+        "faint falls below 4.5:1 on the sunken surface in the light theme"
+    )
+    assert "var(--mono)" in endpoint, (
+        "the endpoint lost the mono family that distinguishes it without colour"
+    )
+    # 11px is the floor for this project, and both halves sit on it or above.
+    for selector, floor in (
+        (".rd-tl-replay-endpoint", 11.0),
+        (".rd-tl-replay-note", 11.0),
+    ):
+        size = re.search(r"font-size:\s*([\d.]+)px", _rule(RUN_DETAIL_CSS, selector))
+        assert size and float(size.group(1)) >= floor, (
+            f"{selector} prints below {floor}px"
+        )

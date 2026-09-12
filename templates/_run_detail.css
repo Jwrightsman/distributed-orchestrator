@@ -664,8 +664,15 @@
   margin: 0 0 5px; font-size: 11.5px; color: var(--text-muted);
   line-height: 1.65; text-wrap: pretty;
 }
+.rd-tl-replay-at { white-space: nowrap; }
+/* Muted rather than faint, because this sits on the sunken surface rather
+   than on the panel. Measured in Chromium in the light theme: faint on this
+   background falls below the 4.5:1 that normal text needs, while the same
+   token one step stronger clears it. The mono family is what separates this
+   from the sentence above it -- a machine string reads as one whether or not
+   it is also paler. */
 .rd-tl-replay-endpoint {
-  font-family: var(--mono); font-size: 11px; color: var(--text-faint);
+  font-family: var(--mono); font-size: 11px; color: var(--text-muted);
   overflow-wrap: anywhere;
 }
 
