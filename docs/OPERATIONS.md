@@ -728,15 +728,14 @@ incident reads as one thing rather than as two event streams on two clocks.
 | --- | --- | --- |
 | `off` | `tracing_enabled` false (default) | no header read or written, no span built |
 | `propagating` | `tracing_enabled` true, no SDK | context accepted, validated, minted, propagated; spans in-process only |
-| `exporting` | `tracing_enabled` and `tracing_export` true, SDK installed | spans also reach the operator's collector |
+| `exporting` | `tracing_enabled` and `tracing_export` true, SDK installed | spans also go to the process's OpenTelemetry tracer provider |
 
 In `config.json`:
 
 ```json
 {
   "tracing_enabled": true,
-  "tracing_export": true,
-  "tracing_endpoint": "http://collector.internal:4318"
+  "tracing_export": true
 }
 ```
 
@@ -751,9 +750,11 @@ tracer that records nothing, so an API-only install would report that it was
 exporting while sending nothing anywhere. `tracing_export` reports false in that
 case rather than pretending.
 
-No collector, backend, or dashboard is shipped or configured. Choosing one and
-pointing `tracing_endpoint` at it is your decision; a default endpoint would be
-a network destination picked on your behalf.
+No collector, backend, dashboard, tracer provider, or exporter is shipped or
+configured, and nothing reads `tracing_endpoint`: an address there sends
+nothing to it. Where exported spans go is decided by whatever OpenTelemetry
+setup the process already has. Choosing that is your decision; a default would
+be a network destination picked on your behalf.
 
 **Two switches, not one.** `tracing_enabled` lets the coordinator accept and
 mint trace IDs, which costs a contributor nothing. `tracing_export` sends spans
