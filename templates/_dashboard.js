@@ -278,10 +278,11 @@ try {
 } catch (e) {}
 
 // ── Views ────────────────────────────────────────────────────────
-const TABS = ['overview', 'runs', 'gallery', 'nodes', 'projects', 'guild'];
+const TABS = ['overview', 'runs', 'gallery', 'nodes', 'projects', 'guild', 'evals'];
 const TAB_TITLES = {
   overview: 'Overview', runs: 'Runs', gallery: 'Gallery',
   nodes: 'Network nodes', projects: 'Projects', guild: 'Guild standings',
+  evals: 'Evals',
 };
 
 function showTab(name, opts) {
@@ -311,6 +312,7 @@ function showTab(name, opts) {
   if (name === 'gallery') loadGallery();
   if (name === 'guild') loadStandings();
   if (name === 'runs') loadHistory();
+  if (name === 'evals') loadEvals();
   // Evidence is only fetched while this view is open, so opening it has to ask
   // rather than waiting up to 3s for the next tick to notice.
   if (name === 'nodes') refresh();
@@ -1448,6 +1450,27 @@ async function loadStandings() {
         </div>
       </div>`).join('');
   } catch (e) {}
+}
+
+// ── Evals ────────────────────────────────────────────────────────
+/* The server builds the whole view in evals_view.py and this puts it in the
+   panel, the same arrangement run detail uses. Nothing here formats a number,
+   so nothing here can print the pass rate the view exists not to print.
+
+   Asked for when the view opens and never on a timer: the record is committed
+   files, and it does not change while someone is reading it. */
+async function loadEvals() {
+  const el = $('evals-body');
+  try {
+    const data = await apiJson('/evals');
+    el.innerHTML = data.evals_html || (
+      '<div class="empty-state"><p>The eval record was read but its view could not be built.</p></div>'
+    );
+  } catch (e) {
+    if (e instanceof ViewerLocked) return;
+    el.innerHTML = '<div class="empty-state"><p>The eval record could not be loaded.<br>'
+      + 'The coordinator may be unreachable.</p></div>';
+  }
 }
 
 // ── Projects ─────────────────────────────────────────────────────

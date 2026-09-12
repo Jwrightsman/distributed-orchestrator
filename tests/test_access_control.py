@@ -67,6 +67,7 @@ def test_server_installs_viewer_middleware():
         "/projects/private-project",
         "/ledger",
         "/standings",
+        "/evals",
         "/metrics",
         "/dashboard",
         "/status",
