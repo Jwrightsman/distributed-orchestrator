@@ -1586,3 +1586,81 @@ a.gallery-task:hover { color: var(--accent-text); }
    "two-sided" at its own hyphen, and a reader saw "two-" end one line. */
 .ev-nowrap { white-space: nowrap; }
 
+/* ── Config view ─────────────────────────────────────────────────────────
+   Built in config_view.py on the same run-detail panel primitives as Evals.
+   One row per setting: the key, the value, and a note only where the value
+   has a consequence.
+
+   The value's word carries its state and its tint only repeats it, so a
+   reader who does not see colour loses nothing. Keys wrap after an
+   underscore and nowhere else; the longest is 39 characters of mono. */
+.cf-banner { border-bottom: 1px solid var(--border-subtle); }
+
+.cf-lede {
+  margin: 0; padding: 11px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 12.5px; line-height: 1.65; color: var(--text-dim);
+  text-wrap: pretty;
+}
+
+.cf-group-note { border-bottom: 1px solid var(--border-subtle); }
+
+.cf-row {
+  display: grid;
+  grid-template-columns: minmax(0, 15rem) minmax(0, 11rem) minmax(0, 1fr);
+  gap: 4px 16px; align-items: baseline;
+  padding: 8px 13px;
+  border-top: 1px solid var(--border-subtle);
+}
+.rd-panel-head + .cf-row,
+.cf-group-note + .cf-row { border-top: none; }
+
+.cf-key {
+  min-width: 0;
+  font-family: var(--mono); font-size: 12px; color: var(--text-dim);
+}
+/* What this process recorded about itself rather than a key in config.json,
+   so it is set in the reading face: a reader copying key names out of this
+   view must be able to tell which labels are not keys. */
+.cf-key.is-runtime { font-family: var(--sans); font-size: 12.5px; color: var(--text); }
+
+.cf-val { min-width: 0; overflow-wrap: anywhere; }
+.cf-v { font-family: var(--mono); font-size: 12px; color: var(--text); }
+.cf-v.is-ok    { color: var(--accent-text); }
+.cf-v.is-warn  { color: var(--warn-text); }
+.cf-v.is-muted { color: var(--text-muted); }
+.cf-hint {
+  margin-left: 6px;
+  font-family: var(--mono); font-size: 11px; color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.cf-note {
+  min-width: 0;
+  font-size: 12px; line-height: 1.55; color: var(--text-muted);
+  text-wrap: pretty;
+}
+.cf-note .rd-code { color: var(--text-dim); overflow-wrap: anywhere; }
+.cf-list { margin: 0 0 4px; padding-left: 16px; }
+.cf-list li { font-family: var(--mono); font-size: 11.5px; color: var(--text-dim); }
+.cf-nowrap { white-space: nowrap; }
+
+.cf-mark { width: 7px; height: 7px; flex-shrink: 0; align-self: center; }
+.cf-mark.is-ok   { background: var(--accent); }
+.cf-mark.is-warn { background: var(--warn); }
+
+.cf-durable-list {
+  margin: 0; padding: 10px 13px 10px 30px;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 12px; line-height: 1.65; color: var(--text-dim);
+}
+.cf-durable-list .cf-key { color: var(--text-dim); }
+
+/* Below the width where three columns leave the note room to read, the note
+   takes its own line under the key and the value. */
+@media (max-width: 900px) {
+  .cf-row { grid-template-columns: minmax(0, 1fr) minmax(0, auto); }
+  .cf-val { text-align: right; }
+  .cf-note { grid-column: 1 / -1; }
+}
+

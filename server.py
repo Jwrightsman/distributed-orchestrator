@@ -11,6 +11,7 @@ The implementation lives in focused modules:
   routes_history.py   — /history*, /share/*, /gallery
   routes_projects.py  — /projects*
   routes_evals.py     — /evals (the console's Evals view)
+  routes_config.py    — /v1/operator/config (the console's Config view)
   routes_events.py    — /health, /events, /ws/events, /standings, /metrics, /ledger
   dashboard.py        — /dashboard (HTML in templates/dashboard.html)
 
@@ -30,6 +31,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+import routes_config
 import routes_evals
 import routes_events
 import routes_executions
@@ -125,11 +127,12 @@ async def _lifespan(app: FastAPI):
     try:
         # The OS lock is deliberately held before any migration, reconciliation,
         # or background task can mutate shared state.
+        bind_host = _runtime_bind_host(settings)
         preflight = run_preflight(
             CONFIG_FILE,
             state_dir=coordinator_lock.state_dir,
             requested_mode=deployment_mode,
-            bind_host=_runtime_bind_host(settings),
+            bind_host=bind_host,
             check_lock=False,
         )
         errors = [check for check in preflight.checks if check.status == "error"]
@@ -147,6 +150,10 @@ async def _lifespan(app: FastAPI):
         app.state.coordinator_identity = identity
         app.state.deployment_mode = deployment_mode
         app.state.preflight_warnings = tuple(check.message for check in warnings)
+        # What preflight was run against, kept so the Config view can say which
+        # host and directory were checked rather than repeating config.json.
+        app.state.bind_host = bind_host
+        app.state.state_dir = str(coordinator_lock.state_dir)
         _LOG.info(
             "Coordinator instance %s started in %s mode with the single-process lock held",
             identity.instance_id,
@@ -239,6 +246,7 @@ async def unhandled_exception_handler(request, exc):
 app.include_router(dashboard_router)
 app.include_router(routes_events.router)
 app.include_router(routes_evals.router)
+app.include_router(routes_config.router)
 app.include_router(routes_executions.router)
 app.include_router(routes_access.router)
 app.include_router(routes_pitch.router)
