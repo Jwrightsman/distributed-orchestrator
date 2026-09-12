@@ -327,13 +327,13 @@ def _strip(record: dict) -> str:
         pair = computed[0]
         flipped = _metric(
             f"{pair['discordant']} of {pair['n']}",
-            "FLIPPED BETWEEN IDENTICAL RUNS",
-            f"prompt set {pair['prompt_set']} · nothing else changed",
+            "TASKS THAT FLIPPED",
+            f"between two identical runs · prompt set {pair['prompt_set']}",
         )
         visible = pair["smallest_visible_change"]
         change = _metric(
             f"{visible} of {pair['n']}" if visible is not None else "none",
-            "SMALLEST CHANGE IT WOULD SEE",
+            "SMALLEST VISIBLE CHANGE",
             f"net tasks, noticed {POWER_WORDS}"
             if visible is not None
             else f"no change is noticed {POWER_WORDS} at this churn",
@@ -344,12 +344,12 @@ def _strip(record: dict) -> str:
         # decision, not something a view does on load.
         flipped = _metric(
             _plural(len(pairs), "identical pair"),
-            "FLIPPED BETWEEN IDENTICAL RUNS",
+            "TASKS THAT FLIPPED",
             "each pair has its own table · none is pooled",
         )
         change = _metric(
             "per pair",
-            "SMALLEST CHANGE IT WOULD SEE",
+            "SMALLEST VISIBLE CHANGE",
             "read it off each pair's table",
         )
     else:
@@ -359,8 +359,8 @@ def _strip(record: dict) -> str:
             reason = "the identical pair holds an ungraded task"
         else:
             reason = "the identical pair shares no task"
-        flipped = _metric("not estimable", "FLIPPED BETWEEN IDENTICAL RUNS", reason)
-        change = _metric("not estimable", "SMALLEST CHANGE IT WOULD SEE", reason)
+        flipped = _metric("not estimable", "TASKS THAT FLIPPED", reason)
+        change = _metric("not estimable", "SMALLEST VISIBLE CHANGE", reason)
 
     recorded = _metric(
         str(len(runs)),
@@ -437,11 +437,13 @@ def _pair_panel(pair: dict, labels: dict[str, str], index: int, count: int) -> s
           <table class="ev-table">
             <caption class="sr-only">Outcomes of the {pair['n']} tasks both runs graded</caption>
             <thead>
-              <tr><td></td><th scope="col">{esc(b)} pass</th><th scope="col">{esc(b)} fail</th></tr>
+              <tr><td rowspan="2" colspan="2"></td><th scope="colgroup" colspan="2">{esc(b)}</th></tr>
+              <tr><th scope="col">pass</th><th scope="col">fail</th></tr>
             </thead>
             <tbody>
-              <tr><th scope="row">{esc(a)} pass</th><td>{pair['both_pass']}</td><td>{pair['a_only']}</td></tr>
-              <tr><th scope="row">{esc(a)} fail</th><td>{pair['b_only']}</td><td>{pair['both_fail']}</td></tr>
+              <tr><th scope="rowgroup" rowspan="2">{esc(a)}</th><th scope="row">pass</th>
+                <td>{pair['both_pass']}</td><td>{pair['a_only']}</td></tr>
+              <tr><th scope="row">fail</th><td>{pair['b_only']}</td><td>{pair['both_fail']}</td></tr>
             </tbody>
           </table>
         </div>
@@ -497,7 +499,7 @@ def _grid_panel(record: dict, labels: dict[str, str]) -> str:
             category = task["category"]
             body += (
                 f'<tr class="ev-group"><th scope="colgroup" colspan="{width}">'
-                f"{esc(category or 'uncategorised')}</th></tr>"
+                f'<span class="ev-group-name">{esc(category or "uncategorised")}</span></th></tr>'
             )
         row = f'<th scope="row" class="ev-task">{esc(task["id"])}</th>'
         for run in runs:

@@ -1513,6 +1513,16 @@ a.gallery-task:hover { color: var(--accent-text); }
    columns a reader should compare are findable without reading every header. */
 .ev-grid .is-pair { background: var(--surface-hover); }
 .ev-grid .ev-task { font-weight: 400; color: var(--text-dim); }
+/* On a phone the grid is about twice the width of its panel and scrolls
+   inside it. Without a pinned first column the task names scroll away with
+   the cells, and a row of outcomes with no name is a row nobody can read. */
+.ev-grid .ev-task,
+.ev-grid .ev-task-col {
+  position: sticky; left: 0; z-index: 1;
+  background: var(--surface);
+  box-shadow: 1px 0 0 var(--border-subtle);
+}
+.ev-group-name { display: inline-block; position: sticky; left: 10px; }
 .ev-group th {
   padding-top: 12px;
   font-size: 11px; font-weight: 400; letter-spacing: 0.08em;
@@ -1542,12 +1552,16 @@ a.gallery-task:hover { color: var(--accent-text); }
   border-collapse: collapse;
   font-family: var(--mono); font-size: 11.5px;
 }
+/* Two-level headers, run above outcome, so a column is as wide as its count
+   rather than as wide as a date and a word. With one-level labels the table
+   was wider than the side column at desktop width and scrolled sideways. */
 .ev-table th,
 .ev-table td {
-  padding: 6px 12px; text-align: right; white-space: nowrap;
+  padding: 6px 10px; text-align: right; white-space: nowrap;
   border: 1px solid var(--border-subtle);
 }
 .ev-table th { font-weight: 400; color: var(--text-muted); }
+.ev-table th[scope="colgroup"] { text-align: center; }
 .ev-table tbody th { text-align: left; }
 .ev-table td { color: var(--text); }
 .ev-table thead td { border-top-color: transparent; border-left-color: transparent; }

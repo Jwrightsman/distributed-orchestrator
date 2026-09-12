@@ -398,7 +398,7 @@ def test_no_identical_pair_is_not_estimable_rather_than_zero(tmp_path):
     text = visible_text(_fragment(record))
     assert text.count("not estimable") == 2
     assert "Not estimable" in text
-    assert "flipped" not in text.lower().replace("flipped between identical runs", "")
+    assert "flipped" not in text.lower().replace("tasks that flipped", "")
 
 
 def test_several_pairs_are_neither_picked_nor_pooled(every_state):
@@ -455,7 +455,7 @@ def test_a_pair_too_small_to_see_anything_says_so(tmp_path):
         r'<div class="rd-metric-v">([^<]*)</div>\s*<div class="rd-metric-l">([^<]*)</div>',
         fragment,
     )
-    assert dict((label, value) for value, label in cells)["SMALLEST CHANGE IT WOULD SEE"] == "none"
+    assert dict((label, value) for value, label in cells)["SMALLEST VISIBLE CHANGE"] == "none"
 
 
 class _FakeStats:
@@ -558,3 +558,53 @@ def test_the_console_has_an_evals_view_that_asks_when_opened():
     # the rate the view exists not to print.
     assert "%" not in loader and "toFixed" not in loader
     assert "setInterval(loadEvals" not in js
+
+
+# ── what opening the page found ──────────────────────────────────────
+# Three layout faults measured in Chromium against the served stylesheet, none
+# of which any assertion above could see. Each is held here by the shape of
+# its cause rather than by a pixel count that would drift with the font stack.
+
+DASHBOARD_CSS = (TEMPLATES / "_dashboard.css").read_text(encoding="utf-8")
+
+
+def _css_rule(selector: str) -> str:
+    match = re.search(r"(?:^|[\n}])\s*" + re.escape(selector) + r"\s*\{([^}]*)\}", DASHBOARD_CSS)
+    return match.group(1) if match else ""
+
+
+def test_the_paired_table_labels_its_runs_once_not_per_column(committed):
+    """At 1440px a one-level header ("Aug 11 pass") made the 2x2 table 318px
+    wide in a 302px side column, so it scrolled sideways at desktop width. The
+    run names sit in a spanning header now and each column is as wide as a
+    count and a word."""
+    fragment = _fragment(committed)
+    section = fragment[fragment.index('data-pair="' + ":".join(NOISE_FLOOR_PAIR)):]
+    table = section[section.index("<table"): section.index("</table>")]
+    assert 'scope="colgroup" colspan="2">Aug 11</th>' in table
+    assert 'scope="rowgroup" rowspan="2">Aug 8</th>' in table
+    assert not re.search(r">\s*Aug \d+ (pass|fail)\s*<", table)
+
+
+def test_the_task_column_stays_put_when_the_grid_scrolls():
+    """At 375px the grid is 592px inside a 311px panel. Unpinned, the task
+    names scrolled away with the cells and left rows of outcomes with no name."""
+    for selector in (".ev-grid .ev-task,\n.ev-grid .ev-task-col", ".ev-group-name"):
+        rule = _css_rule(selector)
+        assert "position: sticky" in rule, f"{selector!r} is not pinned"
+        assert re.search(r"left:\s*\d+(px)?\s*;", rule), f"{selector!r} has no left offset to stick at"
+    # A pinned cell with no ground of its own shows the cells sliding under it.
+    assert "background: var(--surface)" in _css_rule(".ev-grid .ev-task,\n.ev-grid .ev-task-col")
+    # A sticky inline element does not stick.
+    assert "display: inline-block" in _css_rule(".ev-group-name")
+
+
+def test_the_strip_labels_fit_one_line_at_tablet_width(committed):
+    """At 1024px the three strip cells are about 250px wide, which holds 30
+    characters of 11px spaced mono only by wrapping: "FLIPPED BETWEEN IDENTICAL
+    RUNS" and "SMALLEST CHANGE IT WOULD SEE" both broke onto a second line
+    beside a label that did not. 24 is what one line holds with margin."""
+    labels = re.findall(r'<div class="rd-metric-l">([^<]*)</div>', _fragment(committed))
+    assert len(labels) == 3
+    too_long = [label for label in labels if len(label) > 24]
+    assert not too_long, too_long
