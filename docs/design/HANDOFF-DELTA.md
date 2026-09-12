@@ -675,7 +675,35 @@ repository. It returns the record plus `evals_html`, the fragment built once in
 **Absent is not empty.** The Docker image copies neither `evals/` nor its
 results, so a deployed coordinator has no eval record, and the view says the
 server carries none — not "no runs yet", which would claim the harness had
-never been run.
+never been run. `tests/test_evals_view.py` reads the Dockerfile's `COPY` lines
+rather than asserting this in prose, so copying `evals/` in fails loudly.
+
+### 9.4.1 Four things opening the page found that no test had
+
+Measured in Chromium at 1440, 1024, 768 and 375px in both themes, against the
+assembled console page with the real fragment in it. Each is now held by a
+test, and each test was poisoned.
+
+- **The paired table scrolled sideways at desktop width.** Every column
+  header carried a date and a word (`Aug 11 pass`), which made the 2×2 table
+  318px in a 302px side column. The run names sit in a spanning header now.
+- **On a phone the task names scrolled away.** The grid is 592px inside a
+  311px panel at 375px and scrolls inside it, which is allowed; the page
+  itself never overflows. Unpinned, a scrolled row was outcomes with no name.
+  The task column and category names are sticky.
+- **"two-sided" broke at its own hyphen**, the date fault of §8.11 in a new
+  place. Checked by walking every hyphenated word in the view and asking
+  whether its range spans more than one line: none do at any width, and with
+  the rule switched off in the page the walk finds `two-sided` split at 1440.
+- **Two strip labels wrapped at 1024px** beside one that did not. Shortened,
+  with the notes beneath carrying the rest. At 375px the cells stack two
+  across and `SMALLEST VISIBLE CHANGE` takes two lines; that is left.
+
+Lowest contrast anywhere in the view is **4.74:1**, light theme, muted words
+on the shaded identical-pair columns (`--text-muted` on `--surface-hover`);
+5.54:1 dark. Computed against each element's composited ground rather than
+against the panel, which is the mistake §8.11 recorded. Nothing renders below
+11px.
 
 ### 9.5 What the archived design states that source contradicts
 
