@@ -445,9 +445,17 @@ def test_a_pair_too_small_to_see_anything_says_so(tmp_path):
     (pair,) = record["pairs"]
     assert pair["needed_one_way"] is None
     assert pair["smallest_visible_change"] is None
-    text = visible_text(_fragment(record))
+    fragment = _fragment(record)
+    text = visible_text(fragment)
     assert "no change is noticed four runs in five" in text
     assert "cannot clear 0.05 in any split" in text
+    # The value, not only its note. A count printed above that note -- "0 of
+    # 2" -- would claim a resolution the arithmetic says does not exist.
+    cells = re.findall(
+        r'<div class="rd-metric-v">([^<]*)</div>\s*<div class="rd-metric-l">([^<]*)</div>',
+        fragment,
+    )
+    assert dict((label, value) for value, label in cells)["SMALLEST CHANGE IT WOULD SEE"] == "none"
 
 
 class _FakeStats:
