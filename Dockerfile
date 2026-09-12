@@ -10,8 +10,10 @@
 FROM python:3.14-slim
 
 WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# constraints.txt holds the exact versions CI tested; without it every build
+# would install whatever FastAPI and Starlette released that day.
+COPY requirements.txt constraints.txt ./
+RUN pip install --no-cache-dir -r requirements.txt -c constraints.txt
 
 COPY *.py ./
 COPY templates/ templates/

@@ -1,0 +1,59 @@
+name: Dependency Canary
+
+# Every other job installs the exact versions in constraints.txt, so a new
+# FastAPI or Starlette release cannot fail a pull request that never touched
+# them. This workflow is the other half of that bargain: it deliberately
+# installs the NEWEST releases requirements.txt allows, runs lint and the full
+# suite against them, and uploads the resulting version set.
+#
+#   green -> replace constraints.txt with the uploaded candidate-constraints.txt
+#   red   -> the failure is the upgrade work; the pins keep CI honest meanwhile
+#
+# The test summary ends with a "dependency drift" section naming each package
+# that differs from constraints.txt, so the log says what moved.
+
+on:
+  schedule:
+    - cron: "41 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  newest-releases:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install the newest allowed releases (deliberately without constraints.txt)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Record the candidate pin set
+        run: |
+          pip freeze > candidate-constraints.txt
+          {
+            echo "### Changes against constraints.txt"
+            echo '```diff'
+            diff -u <(grep -E '^[A-Za-z0-9]' constraints.txt | tr 'A-Z_' 'a-z-' | sort) \
+                    <(tr 'A-Z_' 'a-z-' < candidate-constraints.txt | sort) || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: candidate-constraints
+          path: candidate-constraints.txt
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Tests (pytest, no Ollama needed)
+        run: pytest -q

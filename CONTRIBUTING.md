@@ -29,6 +29,12 @@ python status.py             # confirms Ollama and your model
 
 Python 3.12+ (CI runs 3.14). No virtualenv is enforced; use one if you like.
 
+To get exactly the versions CI tests, install inside a virtualenv with the pins
+added: `pip install -r requirements.txt -r requirements-dev.txt -c constraints.txt`.
+Without them you get the newest releases the requirements allow, which is fine
+for running a node, but a passing suite then is not proof against CI. The end of
+every `pytest` run lists any package that differs from the pins.
+
 ## Before you open a pull request
 
 ```bash
@@ -67,6 +73,33 @@ python evals/run_evals.py --only web_app --prompt-set yours   # yours
 Include both numbers in the pull request. See [`evals/README.md`](evals/README.md)
 for what is scored and how long a run takes. A change that does not move the
 score does not get merged, however nice it looks.
+
+## Dependencies
+
+There are two files, and they answer different questions:
+
+- **`requirements.txt`** (and `requirements-dev.txt`) — which versions the code
+  supports. Minimums, mostly. This is what someone joining a node installs.
+- **`constraints.txt`** — which exact versions were tested. Every CI job and the
+  Docker image install with `-c constraints.txt`, so a FastAPI or Starlette
+  release cannot fail a pull request that never touched them. The whole
+  installed tree is pinned, transitive packages included.
+
+**Upgrading.** The *Dependency Canary* workflow runs every Monday, and on demand
+from the Actions tab. It installs the newest releases the requirements allow,
+without the pins, runs lint and the full suite, and uploads
+`candidate-constraints.txt`; its run summary shows the diff against the pins.
+
+1. If the canary is green, replace the pins in `constraints.txt` with the
+   candidate file (keep the header comment) and open a pull request. CI then
+   runs the new pins on Linux, macOS, and in the image.
+2. If it is red, the failure is the upgrade work. Fix the code so it passes on
+   both the pinned and the new versions, then do step 1.
+3. A security release does not wait for Monday: run the canary by hand.
+
+Adding a dependency means adding it to `requirements.txt` *and* pinning it in
+`constraints.txt`; `tests/test_runtime_deps.py` fails if a declared package has
+no pin, or a pin falls outside the declared range.
 
 ## Before you propose a feature
 
