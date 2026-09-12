@@ -1506,11 +1506,15 @@ def _chain_panel(ctx: dict) -> str:
 def _timeline_panel(ctx: dict) -> str:
     """Rendered from the execution record, and from nothing else.
 
-    Per-unit start and finish times live in `full_log.json`, which ships inside
-    the audit bundle. The bundle is deliberately a separate scope that has to
-    be asked for by name, so fetching it to draw a panel would quietly undo the
-    separation the two downloads exist to keep. The rows the execution record
-    does timestamp are drawn; the rest render `+—` and say why.
+    `full_log.json` ships inside the audit bundle, and that bundle is
+    deliberately a separate scope that has to be asked for by name, so fetching
+    it to draw a panel would quietly undo the separation the two downloads
+    exist to keep -- on every page view, for a reader who clicked nothing. So
+    the panel draws only what `GET /v1/executions/{id}` serves.
+
+    That is now four run-level moments and one row per unit, because
+    `ExecutionUnitSummaryV1` carries the two ends of the interval it already
+    measured. A record written before it did keeps the named absence instead.
     """
     rows = ctx["timeline"]
     if not rows:
@@ -1530,7 +1534,64 @@ def _timeline_panel(ctx: dict) -> str:
       </section>"""
 
 
-def _timeline_rows(durable: Any, manifest: Any) -> list[tuple[str, str, str]]:
+_UNIT_STATE = {
+    "completed": "",
+    "failed": " and failed",
+    "cancelled": " and was cancelled",
+}
+
+
+def _unit_rows(
+    start: datetime | None, units: list[dict]
+) -> list[tuple[str, str, str]]:
+    """One row per unit, off the two ends of the interval the record measures.
+
+    Nothing here is derived: a unit with only one of the two timestamps is not
+    completed by adding its duration to the end it has, because a row invented
+    that way is indistinguishable on screen from one that was recorded.
+
+    No unit row carries a state colour. A unit that did not complete says the
+    word, the same rule the unit cards follow -- a timeline where the only
+    difference between a finished unit and a failed one is a grey level is a
+    distinction nobody should have to make.
+    """
+    timed = [
+        (began, ended, unit)
+        for unit in units
+        for began in [_parse_iso(unit.get("started_at"))]
+        for ended in [_parse_iso(unit.get("completed_at"))]
+        if began is not None and ended is not None
+    ]
+    if not timed:
+        if not units:
+            return []
+        # The absence this panel has always named. A record written before the
+        # unit summary carried these has no per-unit moments, and a timeline
+        # that simply omitted its units would read as a run whose units took no
+        # time rather than one that did not write them down.
+        return [(
+            "+—",
+            "per-unit start and finish times are not recorded on this execution "
+            "record; only each unit's own duration is",
+            "is-absent",
+        )]
+    timed.sort(key=lambda item: (item[0], _unit_label(item[2].get("unit_id"))))
+    rows: list[tuple[str, str, str]] = []
+    for began, ended, unit in timed:
+        status = str(unit.get("status") or "")
+        tail = _UNIT_STATE.get(status, f", recorded as {status or 'no state'}")
+        label = _unit_label(unit.get("unit_id"))
+        rows.append((
+            _offset(start, began),
+            f"unit {label} ran to {_offset(start, ended)}{tail}",
+            "is-dim",
+        ))
+    return rows
+
+
+def _timeline_rows(
+    durable: Any, manifest: Any, units: list[dict]
+) -> list[tuple[str, str, str]]:
     if durable is None:
         return [(
             "+—",
@@ -1543,12 +1604,7 @@ def _timeline_rows(durable: Any, manifest: Any) -> list[tuple[str, str, str]]:
     ]
     if durable.started_at:
         rows.append((_offset(start, _parse_iso(durable.started_at)), "execution started", "is-info"))
-    rows.append((
-        "+—",
-        "per-unit start and finish times are not timestamped on the execution "
-        "record; only each unit's own duration is",
-        "is-absent",
-    ))
+    rows.extend(_unit_rows(start, units))
     if durable.completed_at:
         rows.append((
             _offset(start, _parse_iso(durable.completed_at)),
@@ -1623,6 +1679,8 @@ def build_view(
                 "status": u.status,
                 "placement": u.placement,
                 "node_id": u.node_id,
+                "started_at": u.started_at,
+                "completed_at": u.completed_at,
             }
             for u in durable.execution_units
         ]
@@ -1644,6 +1702,10 @@ def build_view(
                 "status": "completed",
                 "placement": log.get("mode"),
                 "node_id": None,
+                # A legacy plan step is not an execution unit and was never
+                # timestamped. The timeline names that rather than guessing.
+                "started_at": None,
+                "completed_at": None,
             }
             for step in (log.get("plan") or [])
         ]
@@ -1716,7 +1778,7 @@ def build_view(
             for p in (log.get("code_problems") or [])
         ],
         "precheck_error": log.get("code_precheck_error"),
-        "timeline": _timeline_rows(durable, manifest),
+        "timeline": _timeline_rows(durable, manifest, units),
         "metrics": {
             "units": sum(len(w) for w in waves),
             "waves": len(waves),

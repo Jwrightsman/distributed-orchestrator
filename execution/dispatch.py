@@ -7,6 +7,7 @@ from contextlib import suppress
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
 import node_capabilities
@@ -14,6 +15,18 @@ import server_state as state
 from execution.contracts import ExecutionRequestV1, SelectedPlacementV1
 from execution.attempts import ReceiptBindingError, TerminalCause
 from verification import SAMPLED_AGREEMENT_METHOD_VERSION, verification_identity_key
+
+
+def _wall_now() -> str:
+    """A wall-clock UTC instant, in the format the execution record uses.
+
+    Separate from the `time.perf_counter()` readings beside every call: that
+    clock measures an interval and cannot be placed on a timeline, this one can
+    be placed and must not be subtracted. `execution/service.py` stamps the
+    execution's own moments the same way, which is what makes a unit's start
+    comparable to the run's `created_at`.
+    """
+    return datetime.now(timezone.utc).isoformat()
 
 
 class PlacementUnavailable(RuntimeError):
@@ -64,6 +77,11 @@ class DispatchResult:
     evidence_role: str | None = None
     fallback_reason: str | None = None
     error: str | None = None
+    # The two ends of the interval `duration_ms` measures. Recorded, never
+    # derived from each other -- see `ExecutionUnitSummaryV1`, which carries
+    # them out to the surfaces.
+    started_at: str | None = None
+    completed_at: str | None = None
     duration_ms: int = 0
     attempt_count: int = 0
     retry_count: int = 0
@@ -297,6 +315,12 @@ class Dispatcher:
             cancel_event=cancel_event,
         )
         local.fallback_reason = reason
+        # The counts are summed across both legs; the interval is not. The
+        # local result keeps its own `started_at` / `completed_at`, which
+        # bracket exactly the leg its `duration_ms` measures, so a reader who
+        # subtracts one from the other gets the number the record reports. The
+        # failed remote leg is visible as `fallback_reason` and in the attempt
+        # counts, not as a longer span.
         local.attempt_count += remote.attempt_count
         local.retry_count += remote.retry_count
         local.reassignment_count += remote.reassignment_count
@@ -426,6 +450,7 @@ class Dispatcher:
         cancel_event: asyncio.Event | None = None,
     ) -> DispatchResult:
         started = time.perf_counter()
+        started_wall = _wall_now()
         work: asyncio.Task | None = None
         cancellation: asyncio.Task | None = None
         self.emit("attempt_started", {"unit_id": unit.unit_id, "placement": "local"})
@@ -510,6 +535,7 @@ class Dispatcher:
                     pending.cancel()
                     with suppress(asyncio.CancelledError):
                         await pending
+        finished_wall = _wall_now()
         duration = max(0, int((time.perf_counter() - started) * 1000))
         self.emit(
             "attempt_completed",
@@ -522,6 +548,8 @@ class Dispatcher:
             placement="local",
             node_id=None,
             error=error,
+            started_at=started_wall,
+            completed_at=finished_wall,
             duration_ms=duration,
             attempt_count=1,
             observed_placements=("local",),
@@ -539,6 +567,7 @@ class Dispatcher:
         cancel_event: asyncio.Event | None = None,
     ) -> DispatchResult:
         started = time.perf_counter()
+        started_wall = _wall_now()
         deadline = deadline_monotonic or (time.monotonic() + request.timeout_seconds)
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -602,6 +631,8 @@ class Dispatcher:
                 status="failed",
                 placement="distributed",
                 error="task queue is full",
+                started_at=started_wall,
+                completed_at=_wall_now(),
                 duration_ms=max(0, int((time.perf_counter() - started) * 1000)),
                 attempt_count=0,
                 observed_placements=("distributed",),
@@ -639,6 +670,8 @@ class Dispatcher:
                         status="failed",
                         placement="distributed",
                         error=str(exc),
+                        started_at=started_wall,
+                        completed_at=_wall_now(),
                         duration_ms=max(0, int((time.perf_counter() - started) * 1000)),
                         attempt_count=attempts,
                         retry_count=max(0, attempts - 1),
@@ -688,6 +721,7 @@ class Dispatcher:
         # Remove only the compatibility mirror. The immutable receipt remains
         # durable and is the authority consumed above.
         state.task_results.pop(task_id, None)
+        finished_wall = _wall_now()
         duration = max(0, int((time.perf_counter() - started) * 1000))
         output = receipt.output or ""
         error = receipt.error
@@ -712,6 +746,8 @@ class Dispatcher:
             selected_model_digest=receipt.assigned_model_digest,
             evidence_role=receipt.evidence_role,
             error=str(error)[:500] if error else (None if output else "worker returned empty output"),
+            started_at=started_wall,
+            completed_at=finished_wall,
             duration_ms=duration,
             attempt_count=attempts,
             retry_count=max(0, attempts - 1),

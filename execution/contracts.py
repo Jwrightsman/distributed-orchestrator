@@ -404,6 +404,22 @@ class ExecutionUnitSummaryV1(ProtocolModel):
     )
     evidence_role: Literal["production", "sampled_comparison"] | None = None
     attempt_count: int = Field(default=0, ge=0, le=20)
+    # The two ends of the interval `duration_ms` measures, as wall-clock UTC,
+    # so a reader can place the unit on the same timeline as the execution's
+    # own `created_at` / `started_at` / `completed_at`. They are recorded
+    # rather than derived: nothing adds `duration_ms` to a start to invent a
+    # finish, and nothing subtracts one timestamp from the other to restate a
+    # duration. The two disagree by a fraction of a millisecond by design --
+    # `duration_ms` is read off a monotonic clock and these are wall-clock
+    # reads -- and by more than that if the host clock steps mid-unit, which is
+    # exactly why the duration is not computed from them.
+    #
+    # On a unit that fell back to local execution these bracket the local leg,
+    # the same leg `duration_ms` covers, not the whole time the unit was
+    # outstanding. A legacy record written before this field existed has
+    # neither, which is a different thing from a unit that took no time.
+    started_at: str | None = Field(default=None, max_length=64)
+    completed_at: str | None = Field(default=None, max_length=64)
     duration_ms: int = Field(default=0, ge=0)
     fallback_reason: str | None = Field(default=None, max_length=500)
 
