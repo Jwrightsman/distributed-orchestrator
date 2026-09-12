@@ -1641,6 +1641,11 @@ a.gallery-task:hover { color: var(--accent-text); }
   text-wrap: pretty;
 }
 .cf-note .rd-code { color: var(--text-dim); overflow-wrap: anywhere; }
+/* A value too long for its column takes the note's column as well, and the
+   note moves beneath it. Squeezed into 11rem, a state directory wrapped four
+   times and broke at its own hyphens. */
+.cf-row.is-wide .cf-val  { grid-column: 2 / -1; }
+.cf-row.is-wide .cf-note { grid-column: 2 / -1; }
 .cf-list { margin: 0 0 4px; padding-left: 16px; }
 .cf-list li { font-family: var(--mono); font-size: 11.5px; color: var(--text-dim); }
 .cf-nowrap { white-space: nowrap; }
@@ -1661,6 +1666,8 @@ a.gallery-task:hover { color: var(--accent-text); }
 @media (max-width: 900px) {
   .cf-row { grid-template-columns: minmax(0, 1fr) minmax(0, auto); }
   .cf-val { text-align: right; }
-  .cf-note { grid-column: 1 / -1; }
+  .cf-note,
+  .cf-row.is-wide .cf-note { grid-column: 1 / -1; }
+  .cf-row.is-wide .cf-val { grid-column: 1 / -1; text-align: left; }
 }
 

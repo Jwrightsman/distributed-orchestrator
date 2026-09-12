@@ -128,7 +128,7 @@ WRITTEN_DOWN = (
 # What a restart loses, each item with the phrases from `scripts/backup.py`'s
 # `not_included` list it covers. A test requires every phrase to be covered.
 GONE_ON_RESTART = (
-    ("The queue, and anything still mid-flight",
+    ("The queue, and anything still running",
      ("process-local scheduler queues", "in-flight work")),
     ("Worker sessions — every machine registers again",
      ("process-local node sessions",)),
@@ -148,6 +148,29 @@ def _code(name: str) -> str:
 def _breakable(name: str) -> str:
     """A key name that may wrap after an underscore and nowhere else."""
     return "_<wbr>".join(esc(part) for part in str(name).split("_"))
+
+
+# A value longer than this takes the value and note columns together. The value
+# column holds about 24 characters of 12px mono; past that a path or a model
+# name wrapped inside it, and broke at its own hyphens.
+WIDE_VALUE = 22
+_HELD_SEGMENT = 32
+
+
+def _breakable_value(value: str) -> str:
+    """A value that may wrap after a slash, and not inside a hyphenated segment.
+
+    A path like `state-directory/coordinator` wrapping at its hyphen reads as a
+    word hyphenated by the page rather than a character in the name. A segment
+    too long to hold is left breakable, because overflowing its row is worse.
+    """
+    pieces = []
+    for segment in str(value).split("/"):
+        text = esc(segment)
+        if "-" in segment and len(segment) <= _HELD_SEGMENT:
+            text = f'<span class="cf-nowrap">{text}</span>'
+        pieces.append(text)
+    return "/<wbr>".join(pieces)
 
 
 # ── classification ───────────────────────────────────────────────────
@@ -409,7 +432,7 @@ def config_row(key: str, settings: Mapping[str, Any], runtime: Mapping[str, Any]
     if key == "public_pitch_acknowledged":
         if settings.get("public_pitch") and not value:
             return _row(key, shown, tone="warn", note=(
-                "Public pitching is on without the abuse-risk acknowledgement. Preflight "
+                "Public pitching is on without acknowledging the risk of abuse. Preflight "
                 f"warns, and {_code('trusted_alpha')} refuses to start."
             ))
         return _row(key, shown, tone="muted")
@@ -495,7 +518,7 @@ def config_row(key: str, settings: Mapping[str, Any], runtime: Mapping[str, Any]
                 "Parsers run inside the coordinator. Preflight warns, and "
                 f"{_code('trusted_alpha')} refuses to start."
             ))
-        return _row(key, shown, note="Parser-heavy validators run in a separate process.")
+        return _row(key, shown, note="The validators that parse output run in a separate process.")
     if key == "verify_rate":
         rate = value if isinstance(value, (int, float)) and not isinstance(value, bool) else 0
         if trusted and rate:
@@ -655,10 +678,11 @@ def _row_html(row: dict) -> str:
     key_class = "cf-key is-runtime" if runtime else "cf-key"
     hint = f' <span class="cf-hint">{esc(row["hint"])}</span>' if row["hint"] else ""
     note = f'<div class="cf-note">{row["note"]}</div>' if row["note"] else ""
+    wide = " is-wide" if len(str(row["value"])) > WIDE_VALUE else ""
     return f"""
-          <div class="cf-row" data-key="{esc(row['key'])}">
+          <div class="cf-row{wide}" data-key="{esc(row['key'])}">
             <span class="{key_class}">{_breakable(row['key'])}</span>
-            <span class="cf-val"><span class="cf-v{_TONES[row['tone']]}">{esc(row['value'])}</span>{hint}</span>
+            <span class="cf-val"><span class="cf-v{_TONES[row['tone']]}">{_breakable_value(row['value'])}</span>{hint}</span>
             {note}
           </div>"""
 
@@ -727,7 +751,7 @@ def render(record: dict) -> str:
     return f"""
     <div class="rd cf" data-config>
       {_banner(record)}
-      <p class="cf-lede">Read-only, as this process loaded it when it started: a change to
+      <p class="cf-lede"><span class="cf-nowrap">Read-only</span>, as this process loaded it when it started: a change to
         {_code('config.json')} takes effect on restart. A key that authorises something shows
         only whether it is set — never its value, its length, or any part of it — and an
         address shows only its scheme, host and port.</p>

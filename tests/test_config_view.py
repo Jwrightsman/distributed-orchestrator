@@ -428,6 +428,33 @@ def test_key_names_wrap_only_after_an_underscore(any_fragment):
         assert "<wbr>" not in key_html.replace("_<wbr>", ""), key_html
 
 
+def test_a_long_value_takes_the_note_column_rather_than_wrapping_in_its_own():
+    """At 1440px a state directory squeezed into the 11rem value column wrapped
+    four times and broke at `state-`. A long value spans the value and note
+    columns, on a phone as well, and its hyphenated segments are held."""
+    record = _record({"state_dir": "/srv/mycelium/state-directory-with-a-long-name/coordinator"})
+    fragment = config_view.render(record)
+    row = fragment[fragment.index('data-key="state directory"') - 30:]
+    row = row[: row.index("</div>")]
+    assert 'class="cf-row is-wide"' in row
+    assert '<span class="cf-nowrap">state-directory-with-a-long-name</span>' in row
+    assert "srv/<wbr>mycelium/<wbr>" in row
+    short = fragment[fragment.index('data-key="port"') - 30:]
+    assert 'class="cf-row" data-key="port"' in short
+    css = (TEMPLATES / "_dashboard.css").read_text(encoding="utf-8")
+    assert re.search(r"\.cf-row\.is-wide \.cf-val\s*\{\s*grid-column: 2 / -1;", css)
+    phone = css[css.index("@media (max-width: 900px)", css.index("/* ── Config view")):]
+    assert re.search(r"\.cf-row\.is-wide \.cf-val \{ grid-column: 1 / -1;", phone)
+
+
+def test_no_hyphenated_word_in_a_note_or_value_is_left_breakable(any_fragment):
+    """At 1024px "abuse-risk" ended one line with "abuse-". Every hyphenated run
+    in visible text is either reworded away or held in a span that does not wrap."""
+    held = re.sub(r'<span class="cf-nowrap">[^<]*</span>', " ", any_fragment)
+    text = visible_text(held)
+    assert re.findall(r"\w+-\w[\w-]*", text) == []
+
+
 def test_nothing_in_the_config_styles_renders_below_11px():
     css = (TEMPLATES / "_dashboard.css").read_text(encoding="utf-8")
     block = css[css.index("/* ── Config view"):]
