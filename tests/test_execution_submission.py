@@ -7,6 +7,7 @@ import json
 import logging
 import sqlite3
 import string
+import uuid
 from asyncio import sleep
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier, Event, Lock, RLock
@@ -526,11 +527,22 @@ def test_fresh_schema_has_scoped_primary_key_index_and_foreign_key(tmp_path):
         "request_hash_version",
         "execution_id",
         "created_at",
+        "replay_count",
+        "last_replayed_at",
     }
     assert by_name["requester_scope_hash"][5] == 1
     assert by_name["idempotency_key_hash"][5] == 2
     assert by_name["request_hash_version"][3] == 1
     assert by_name["request_hash_version"][4] == "'1'"
+    # A row that exists has been replayed a knowable number of times, and on a
+    # row that predates the counter that number is zero -- there was no earlier
+    # counter to have missed a replay. So the count is NOT NULL DEFAULT 0 and
+    # the unknown case is the row not existing. The moment is nullable because
+    # "never replayed" has no moment to record.
+    assert by_name["replay_count"][3] == 1
+    assert by_name["replay_count"][4] == "0"
+    assert by_name["last_replayed_at"][3] == 0
+    assert by_name["last_replayed_at"][4] is None
     assert "idx_execution_submissions_execution_id" in indexes
     assert any(
         row[2] == "executions"
@@ -1338,6 +1350,13 @@ def test_keyed_commit_then_raise_recovers_owned_creation_and_activates_once(
     ]
     assert store.keyed_candidate_ids == [execution_id, execution_id]
     assert _counts(database) == (1, 1)
+    # A recovered creation proves this caller's own first commit landed. It is
+    # not a later pitch being handed finished work, so it must not appear in
+    # the durable replay count -- the header agrees, having said "false".
+    replays = ExecutionStore(database).submission_replays(execution_id)
+    assert replays is not None
+    assert replays.replay_count == 0
+    assert replays.last_replayed_at is None
 
 
 def test_concurrent_replay_during_ambiguous_commit_is_inert(
@@ -2162,3 +2181,175 @@ def test_restart_after_atomic_commit_replays_same_interrupted_execution(
     assert restarted._controls == {}
     assert restarted._background == {}
     assert _counts(database) == (1, 1)
+
+
+def _keyed(store: ExecutionStore, request: ExecutionRequestV1, key: str):
+    """One keyed submission through the store, with a fresh candidate each call."""
+
+    identity = submission_identity(
+        request,
+        idempotency_key=key,
+        requester_scope_kind="pitch-key",
+        requester_scope_value="replay-counter-requester",
+    )
+    service = ExecutionService(store=store)
+    return store.create_or_replay_submission(
+        request,
+        identity,
+        lambda: service._new_result(request, uuid.uuid4().hex, None, "queued"),
+    )
+
+
+def test_a_replay_is_counted_where_it_is_decided(tmp_path):
+    """The durable fact §8.11 asks for: this run answered later pitches.
+
+    Written in the same transaction that decides the disposition, so the count
+    cannot disagree with the answer the caller was given. Creation is not a
+    replay of itself, so the first pitch leaves the count at zero.
+    """
+    store = ExecutionStore(tmp_path / "events.db")
+    request = ExecutionRequestV1(task="Counted replay fixture", strategy="direct")
+
+    created = _keyed(store, request, "counted-key")
+    assert created.disposition is SubmissionDisposition.CREATED
+    execution_id = created.result.execution_id
+
+    fresh = store.submission_replays(execution_id)
+    assert fresh is not None
+    assert (fresh.replay_count, fresh.last_replayed_at) == (0, None)
+    assert fresh.submitted_at == created.result.created_at
+
+    for expected in (1, 2, 3):
+        replayed = _keyed(store, request, "counted-key")
+        assert replayed.disposition is SubmissionDisposition.REPLAYED
+        assert replayed.result.execution_id == execution_id
+        record = store.submission_replays(execution_id)
+        assert record.replay_count == expected, (
+            "the count does not follow the dispositions the store returned"
+        )
+        assert record.last_replayed_at is not None
+
+    # Three pitches answered by return, and still exactly one execution and one
+    # mapping -- the count is evidence the guarantee held, not a second copy.
+    assert _counts(tmp_path / "events.db") == (1, 1)
+
+
+def test_the_replay_moment_is_the_latest_replay_not_the_first(tmp_path, monkeypatch):
+    """`last_replayed_at` names the most recent replay.
+
+    The clock is stubbed rather than compared against itself: two replays in
+    one test can land inside one clock tick, so an assertion that the moment
+    did not go *backwards* passes just as happily on a column that never moves
+    off the first replay. Naming the expected stamp is what separates the two.
+
+    A run can be pitched again long after it finished, so this is a recorded
+    wall-clock stamp and never anything derived from the run.
+    """
+    store = ExecutionStore(tmp_path / "events.db")
+    request = ExecutionRequestV1(task="Advancing replay moment", strategy="direct")
+
+    stamps = iter([
+        "2026-09-12T10:00:00+00:00",
+        "2026-10-01T09:30:00+00:00",
+        "2026-11-14T22:05:00+00:00",
+    ])
+    monkeypatch.setattr(ExecutionStore, "_now", staticmethod(lambda: next(stamps)))
+
+    execution_id = _keyed(store, request, "moment-key").result.execution_id
+    record = store.submission_replays(execution_id)
+    assert record.last_replayed_at is None, "creation is not a replay of itself"
+
+    _keyed(store, request, "moment-key")
+    assert store.submission_replays(execution_id).last_replayed_at == (
+        "2026-09-12T10:00:00+00:00"
+    )
+
+    _keyed(store, request, "moment-key")
+    second = store.submission_replays(execution_id)
+    assert second.replay_count == 2
+    assert second.last_replayed_at == "2026-10-01T09:30:00+00:00", (
+        "the moment is still the first replay, so it is not the latest one"
+    )
+
+    _keyed(store, request, "moment-key")
+    third = store.submission_replays(execution_id)
+    assert third.replay_count == 3
+    assert third.last_replayed_at == "2026-11-14T22:05:00+00:00"
+
+
+def test_an_execution_with_no_key_has_no_submission_record(tmp_path):
+    """`None` and a zero count are different answers.
+
+    An execution submitted without an idempotency key has no mapping row at
+    all. Reporting `replay_count: 0` for it would state that it was submitted
+    under a key and never replayed, which is a different and false statement --
+    the same distinction the provenance envelope's 404 draws (§8.7).
+    """
+    database = tmp_path / "events.db"
+    store = ExecutionStore(database)
+    service = ExecutionService(store=store)
+    request = ExecutionRequestV1(task="Unkeyed submission", strategy="direct")
+    queued = service._new_result(request, uuid.uuid4().hex, None, "queued")
+    store.create(request, queued)
+
+    assert store.get(queued.execution_id) is not None, "the execution is stored"
+    assert store.submission_replays(queued.execution_id) is None, (
+        "an unkeyed execution reported a replay count it cannot have"
+    )
+    assert store.submission_replays("never-submitted-at-all") is None
+
+
+def test_the_replay_record_carries_no_digest(tmp_path):
+    """The mapping's keys are irreversible but they are correlatable.
+
+    Two executions sharing a `requester_scope_hash` came from one requester,
+    and an `idempotency_key_hash` over a low-entropy key is guessable. Neither
+    leaves the table, so neither can reach a surface.
+    """
+    store = ExecutionStore(tmp_path / "events.db")
+    request = ExecutionRequestV1(task="Digest-free replay record", strategy="direct")
+    created = _keyed(store, request, "digest-free-key")
+    record = store.submission_replays(created.result.execution_id)
+
+    served = record.as_dict()
+    assert set(served) == {
+        "execution_id",
+        "submitted_at",
+        "replay_count",
+        "last_replayed_at",
+    }
+    identity = submission_identity(
+        request,
+        idempotency_key="digest-free-key",
+        requester_scope_kind="pitch-key",
+        requester_scope_value="replay-counter-requester",
+    )
+    rendered = json.dumps(served)
+    for digest in (
+        identity.requester_scope_hash,
+        identity.idempotency_key_hash,
+        identity.request_hash,
+    ):
+        assert digest not in rendered, "a digest reached the served record"
+
+
+def test_a_mapping_that_predates_the_counter_migrates_to_zero(
+    pre_theme_2b_submission_database,
+):
+    """An older row has no missed replays to account for.
+
+    It was written before anything counted, so zero is not a guess about its
+    history -- there is no earlier counter whose absence could hide a replay.
+    The row existing is what says it was submitted under a key.
+    """
+    database, request, identity, execution_id = pre_theme_2b_submission_database
+    with sqlite3.connect(database) as con:
+        before = {
+            row[1] for row in con.execute("PRAGMA table_info(execution_submissions)")
+        }
+    assert "replay_count" not in before, "the fixture already has the counter"
+
+    store = ExecutionStore(database)
+    record = store.submission_replays(execution_id)
+    assert record is not None, "migration lost the mapping"
+    assert (record.replay_count, record.last_replayed_at) == (0, None)
