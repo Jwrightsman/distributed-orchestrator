@@ -502,33 +502,83 @@ the file where the table is.
 
 No token was added, changed or removed in this pass.
 
-### 8.11 — new. The replay line has no source at read time.
+### 8.11 — the extend was taken. The replay line is drawn.
 
-The design draws a line for a run that was *returned rather than re-run* —
-"pitched again under the same idempotency key, so nothing was built twice" —
-and §13.7 cites ADR 0008 and `execution/idempotency.py` for it.
+**Decision: extend.** The design draws a line for a run that was *returned
+rather than re-run* — "pitched again under the same idempotency key, so nothing
+was built twice" — and §13.7 cites ADR 0008 and `execution/idempotency.py` for
+it. Nothing served it to a reader, so it was this document's last explicit
+*extend or drop*. It is extended, and the line renders in the console.
 
-Nothing serves it to a reader. `replayed` is a property of the **POST
-response**: `SubmittedExecution.replayed`, surfaced as the
-`Idempotency-Replayed` header and then gone. It never reaches
-`ExecutionResultV1`, which has no idempotency field of any kind. The durable
-`execution_submissions` table stores digest-only rows keyed by
-`(requester_scope_hash, idempotency_key_hash)` and is not reachable from an
-execution id, and it records the *mapping* rather than the fact that a later
-pitch replayed it.
+**What tipped it.** The argument for dropping was that the pitcher already
+knows and the link recipient does not need to be told. That holds for the link
+recipient, and the placement below follows it. It does not hold for the
+operator: `replayed` was a property of the POST response only —
+`SubmittedExecution.replayed`, surfaced as the `Idempotency-Replayed` header
+and then gone — so nothing could answer whether retry-safety had ever saved a
+rebuild on this machine. In a system whose thesis is durable truth about
+execution, that was the one guarantee with no durable record.
 
-So the line is **not drawn**. This is the gap most likely to be closed by
-accident: reading it off a plausible-looking log key renders a line that is
-always absent, looks like it works, and would start lying the moment someone
-wrote that key for another reason.
+**One claim in the original section was wrong, and source won.** It said
+`execution_submissions` "is not reachable from an execution id."
+`idx_execution_submissions_execution_id` (`execution/persistence.py`) has
+existed since the table did, and `EXPLAIN QUERY PLAN` confirms a lookup by
+execution id searches that index rather than scanning. The mapping is one row
+per execution, because the only path that writes one also creates the execution
+it names. That is what made the extend cheap: no new table, and the read path
+was already indexed.
 
-*Extend:* add `replayed_at` (or a counter) to `ExecutionResultV1` and set it on
-the replay branch of `ExecutionService.submit_idempotent`, which already knows.
-Terminal state is monotonic under ADR 0009, so this has to be written as a
-separate durable fact about the *submission* rather than as a mutation of the
-returned execution — the same shape the provenance envelope uses to reference an
+**The durable fact.** `execution_submissions` grows `replay_count` (NOT NULL
+DEFAULT 0) and `last_replayed_at` (nullable), incremented inside the same
+`BEGIN IMMEDIATE` that resolves the submission, so the count cannot disagree
+with the header that call returns. A **recovered creation is not counted**: it
+proves the caller's own first commit landed rather than handing finished work
+to a later pitch, and it answers `Idempotency-Replayed: false`.
+
+It stays off `ExecutionResultV1`, as the original *extend* note said it must.
+Terminal state is monotonic under ADR 0009 and a replay can arrive after the
+run it returns is terminal, so this is a separate durable fact about the
+*submission* — the same shape the provenance envelope uses to reference an
 execution without living on one.
+`tests/test_run_detail.py::test_the_replay_line_is_not_drawn_from_a_field_nothing_writes`
+still holds both halves of that: the panel reads no invented log key, and a
+replay field appearing on `ExecutionResultV1` fails the test.
 
-*Or drop:* leave it undrawn. A person who pitched the same task twice under one
-key already knows; the reader who was handed a link does not need to be told
-that the run they are looking at was cheap to produce.
+**Absent, zero, and counted are three answers, not two.** A run pitched without
+an idempotency key has no mapping row; `replay_count: 0` for it would state
+that it was submitted under a key and never replayed. So the route answers
+`404 keyed_submission_not_found` there — the rule §8.7 set for the envelope —
+and the panel draws nothing for both the absent case and the recorded zero. The
+two are separately tested, because poisoning the zero guard left the absent
+test green: it never reaches the count.
+
+**The route, and why its gate places the panel.**
+`GET /v1/operator/executions/{id}/submission`, serving `execution_id`,
+`submitted_at`, `replay_count` and `last_replayed_at`, and **no digest** — the
+mapping's keys are irreversible but correlatable, since two executions sharing
+a `requester_scope_hash` came from one requester and an `idempotency_key_hash`
+over a low-entropy key is guessable.
+
+`deploy/Caddyfile.public` refuses `/v1/operator/*` whole at the edge, so this
+is the chain's gate rather than the envelope's, and the panel follows it the
+same way §8.8 argued: the line renders in the console and never on `/run/{id}`.
+`routes_history.py` passes the record and `routes_run.py` does not, and both
+halves are tested — the Caddyfile line is read out of the file rather than
+asserted in prose, so opening that prefix fails loudly instead of quietly
+ending the argument.
+
+**An absolute stamp, not an offset.** Every other row on the panel is inside
+the run, and the gutter is sized for what `_offset` can print across a run's
+own length — nine characters, six weeks (§8.9). A replay has no such ceiling:
+the same task pitched again months later would either overflow that column or
+force a width no real row needs. So the line is not a row, carries no offset,
+and sits outside the grid.
+
+**Two things opening the page found that no test had.** The stamp broke at its
+own hyphen, splitting one date across two lines; it is held on one line now,
+and at 375px it is 112.9px inside a 262px column, so holding it costs no
+overflow. And the endpoint label read 4.13:1 in the light theme, because it
+sits on `--surface-sunken` rather than on the panel, where every other faint
+use on this page sits. One token stronger reads 4.65:1 light and 5.99:1 dark;
+the endpoint is still distinguished from the sentence, by being mono and
+smaller.
