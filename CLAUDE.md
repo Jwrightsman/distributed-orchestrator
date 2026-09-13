@@ -34,6 +34,9 @@ ensemble execution over the same local or distributed dispatcher.
 8. **Ledger** — tracks contributions (compute, pitches, reviews) with credits
 
 ## Key files
+- `constraints.txt` — exact versions CI and the Docker image install (`-c constraints.txt`);
+  `requirements.txt` stays the supported range. Refresh from the weekly Dependency Canary
+  workflow — procedure in CONTRIBUTING.md, "Dependencies"
 - `config.py` / `config.json` — centralized settings (model, timeout, retries)
 - `ledger.py` / `ledger.json` — contribution ledger (guild economics seed)
 - `extract.py` — auto-extracts runnable code from pipeline output
@@ -138,6 +141,15 @@ enough — those changes are judged by measurement:
 **CI runs Python 3.14.** Passing locally on an older Python is not proof — `asyncio`
 in particular behaves differently (3.12+ raises where 3.11 quietly created an event loop).
 Check the actual run on GitHub rather than assuming the badge is current.
+
+**CI runs the versions in `constraints.txt`, not the global install here.** The
+"dependency drift" section at the end of a pytest run lists every package that
+differs. To test against CI's versions, `pip install --target <scratch dir> ... -c constraints.txt`
+and run with `PYTHONPATH=<scratch dir>`; never upgrade the global packages to chase a CI-only
+failure. **Not a venv on Windows:** its launcher python.exe spawns a second process, the
+validator sandbox's Job Object allows one, and ~62 validator tests fail with `validator_crash`
+whatever the versions. Never assert on FastAPI route internals (`app.routes` is a tree
+since 0.137) — ask the app by request through `TestClient`.
 
 ### Git workflow
 - Commit after each logical change with a descriptive message

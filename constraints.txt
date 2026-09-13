@@ -1,0 +1,73 @@
+# Exact versions that CI and the Docker image install.
+#
+#   pip install -r requirements.txt -r requirements-dev.txt -c constraints.txt
+#
+# requirements.txt says which versions the code supports; this file says which
+# versions were actually tested. Until 2026-09-12 there was no such file, so
+# every CI run and every image build installed whatever was newest that day.
+# FastAPI 0.137 (June 2026) turned `app.routes` from a flat list into a tree.
+# CI had it from its next run; the development machine kept FastAPI 0.135, so a
+# test written against the flat list in #88 passed locally and failed in CI.
+#
+# The whole installed tree is pinned, not only the direct dependencies. Starlette
+# arrives through FastAPI, which declares `starlette>=0.46.0` with no upper
+# bound, and Starlette's TestClient switches HTTP library depending on whether
+# `httpx2` is installed — both would drift under a direct-only pin.
+#
+# Versions come from a Linux Python 3.14 install. A package that is only pulled
+# in on another platform (colorama on Windows, for example) is not listed and
+# stays unpinned there; pip ignores constraints for packages it does not install.
+#
+# To upgrade: run the "Dependency Canary" workflow (it also runs weekly). It
+# installs the newest releases requirements.txt allows, runs the full suite
+# against them, and uploads `candidate-constraints.txt`. If it is green, replace
+# the pins below with that file's contents and open a pull request; if it is red,
+# the failure is the upgrade work. See CONTRIBUTING.md, "Dependencies".
+
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.15.1
+attrs==26.1.0
+certifi==2026.7.22
+cffi==2.1.1
+click==8.5.0
+cryptography==50.0.1
+fastapi==0.141.1
+h11==0.16.0
+httpcore==1.0.9
+httpcore2==2.12.0
+httpx==0.28.1
+httpx2==2.12.0
+hypothesis==6.168.0
+idna==3.19
+iniconfig==2.3.0
+jsonschema==4.26.0
+jsonschema-specifications==2025.9.1
+markdown-it-py==4.2.0
+mcp==2.2.0
+mcp-types==2.2.0
+mdurl==0.1.2
+opentelemetry-api==1.44.0
+packaging==26.3
+pluggy==1.6.0
+psutil==7.2.2
+pycparser==3.0
+pydantic==2.13.5
+pydantic-core==2.46.5
+pygments==2.21.0
+pyjwt==2.14.0
+pytest==9.1.1
+pytest-asyncio==1.4.0
+python-multipart==0.0.32
+referencing==0.37.0
+rich==15.0.0
+rpds-py==2026.6.3
+ruff==0.16.7
+sortedcontainers==2.4.0
+sse-starlette==3.4.11
+starlette==1.6.0
+truststore==0.10.4
+typing-extensions==4.16.0
+typing-inspection==0.4.4
+uvicorn==0.52.4
+websockets==17.1

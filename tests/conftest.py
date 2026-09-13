@@ -22,6 +22,39 @@ import execution.service as service_module  # noqa: E402
 import execution.sharing as sharing_module  # noqa: E402
 
 
+# ── Dependency drift report ──────────────────────────────────────────────
+# CI installs the exact versions in constraints.txt. A machine that installed
+# requirements.txt on its own keeps whatever was newest that day, and a suite
+# that passes on an older FastAPI is not proof against CI's: PR #88 passed here
+# on 0.135 and failed in CI on 0.141. This names the difference at the end of
+# every run, `-q` included. It never fails the run — an older install is normal,
+# it just is not evidence — and it prints nothing when versions match.
+
+def pytest_terminal_summary(terminalreporter):
+    from importlib import metadata
+
+    from tests.dependency_pins import read_pins
+
+    drift = []
+    for name, pinned in sorted(read_pins().items()):
+        try:
+            installed = metadata.version(name)
+        except metadata.PackageNotFoundError:
+            installed = "not installed"
+        if installed != pinned:
+            drift.append(f"  {name} {installed} (constraints.txt: {pinned})")
+    if drift:
+        terminalreporter.write_sep("-", "dependency drift")
+        terminalreporter.write_line(
+            "Installed versions differ from the ones CI tests, so a pass here is not proof against CI:"
+        )
+        for line in drift:
+            terminalreporter.write_line(line)
+        terminalreporter.write_line(
+            "To match CI, install with -c constraints.txt (CONTRIBUTING.md, \"Setup\" and \"Dependencies\")."
+        )
+
+
 @pytest.fixture(autouse=True)
 def isolated_cwd(tmp_path, monkeypatch):
     """Run each test in its own empty directory with fresh module caches."""

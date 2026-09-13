@@ -15,10 +15,13 @@ jobs:
         with:
           python-version: "3.14"
 
+      # constraints.txt pins the exact tested versions, so a new FastAPI or
+      # Starlette release cannot fail a pull request that did not touch them.
+      # Newest releases are tried weekly by dependency-canary.yml instead.
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt -r requirements-dev.txt
+          pip install -r requirements.txt -r requirements-dev.txt -c constraints.txt
 
       - name: Lint (ruff)
         run: ruff check .
@@ -50,7 +53,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt -r requirements-dev.txt
+          pip install -r requirements.txt -r requirements-dev.txt -c constraints.txt
 
       - name: Report what this runner actually is
         run: python -c "import platform, sys; print(platform.system(), platform.machine(), platform.mac_ver()[0], sys.version)"
@@ -69,7 +72,7 @@ jobs:
           tests/test_node_capabilities_worker.py
 
       - name: Server imports on macOS
-        run: python -c "from server import app; print('ok:', len(app.routes), 'routes')"
+        run: python -c "from server import app; print('server imports ok:', app.title)"
 
   trusted-alpha:
     runs-on: ubuntu-latest
@@ -84,7 +87,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt -r requirements-dev.txt
+          pip install -r requirements.txt -r requirements-dev.txt -c constraints.txt
 
       - name: Deployment and one-coordinator contracts
         run: >-
@@ -107,7 +110,7 @@ jobs:
         run: docker build -t distributed-orchestrator .
 
       - name: Server imports inside container
-        run: docker run --rm distributed-orchestrator python -c "from server import app; print('ok:', len(app.routes), 'routes')"
+        run: docker run --rm distributed-orchestrator python -c "from server import app; print('server imports ok:', app.title)"
 
       - name: Image starts one coordinator process
         shell: bash
