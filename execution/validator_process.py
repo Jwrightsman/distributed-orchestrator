@@ -215,6 +215,46 @@ def _containment_level() -> ValidatorContainmentLevel:
     return "posix_partial_resource_limits"
 
 
+def _windows_venv_launcher() -> str | None:
+    """Return the venv redirector this process was started through, if any.
+
+    A Windows venv's ``Scripts\\python.exe`` does not interpret anything: it
+    starts the base interpreter as a second process.  The runner's Job Object
+    admits exactly one process, so launching that redirector inside it always
+    fails with ``validator_crash``.  Everywhere else (POSIX, no venv) this
+    returns ``None`` and the launch is unchanged.
+    """
+
+    if os.name != "nt" or sys.prefix == sys.base_prefix:
+        return None
+    launcher = sys.executable
+    base = getattr(sys, "_base_executable", None)
+    if not launcher or not base or "\x00" in launcher or "\x00" in base:
+        return None
+    if os.path.normcase(launcher) == os.path.normcase(base):
+        return None
+    if not os.path.isfile(base):
+        return None
+    return launcher
+
+
+def validator_python_executable() -> str:
+    """The interpreter that starts a validator child as a single process.
+
+    Inside a Windows venv this is the base interpreter the redirector would
+    have started.  ``_sanitized_environment`` then names the venv through
+    ``__PYVENV_LAUNCHER__`` -- the variable the redirector itself sets -- so
+    the child reads the same ``pyvenv.cfg`` and gets the same ``sys.prefix``
+    and site-packages as the parent, with ``-I`` still in force and no
+    ``PYTHONPATH``.  The interpreter consumes and removes that variable during
+    startup, before any runner code executes.
+    """
+
+    if _windows_venv_launcher() is None:
+        return sys.executable
+    return sys._base_executable
+
+
 def _sanitized_environment(work_directory: Path) -> dict[str, str]:
     environment = {
         "PYTHONIOENCODING": "utf-8",
@@ -226,6 +266,11 @@ def _sanitized_environment(work_directory: Path) -> dict[str, str]:
         value = os.environ.get(name)
         if value and "\x00" not in value and len(value) <= 1024:
             environment[name] = value
+    venv_launcher = _windows_venv_launcher()
+    if venv_launcher is not None:
+        # Parent-derived (this process's own interpreter path), never worker-
+        # supplied.  See `validator_python_executable`.
+        environment["__PYVENV_LAUNCHER__"] = venv_launcher
     temporary = str(work_directory)
     if os.name == "nt":
         environment.update({"TEMP": temporary, "TMP": temporary})
@@ -505,7 +550,7 @@ class ValidatorProcessExecutor:
     @staticmethod
     def _default_command(_work_directory: Path) -> Sequence[str]:
         runner = Path(__file__).with_name("validator_runner.py").resolve()
-        return (sys.executable, "-I", "-B", str(runner))
+        return (validator_python_executable(), "-I", "-B", str(runner))
 
     def diagnostics(self) -> dict[str, Any]:
         return {

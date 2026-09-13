@@ -12,7 +12,6 @@ unearned revision, a demoted candidate, a defect published against a run.
 import asyncio
 import json
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -23,6 +22,7 @@ from execution.validator_process import (
     ValidatorProcessExecutor,
     ValidatorProcessOutcome,
     ValidatorProcessSettings,
+    validator_python_executable,
 )
 from execution.validators import (
     ParsePrecheckResult,
@@ -64,7 +64,11 @@ def _timing_out_executor(tmp_path: Path) -> ValidatorProcessExecutor:
     script.write_text(_SLEEP_RUNNER.strip() + "\n", encoding="utf-8")
     return ValidatorProcessExecutor(
         ValidatorProcessSettings(execution_mode="auto", timeout_seconds=1),
-        command_factory=lambda work_directory: (sys.executable, "-I", str(script)),
+        command_factory=lambda work_directory: (
+            validator_python_executable(),
+            "-I",
+            str(script),
+        ),
         popen_factory=subprocess.Popen,
     )
 

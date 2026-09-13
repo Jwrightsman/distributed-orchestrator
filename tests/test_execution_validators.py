@@ -19,6 +19,7 @@ from execution.contracts import ExecutionRequestV1, OutputContractV1
 from execution.validator_process import (
     ValidatorProcessExecutor,
     ValidatorProcessSettings,
+    validator_python_executable,
 )
 from execution.validator_protocol import (
     MAX_VALIDATOR_OUTPUT_BYTES_V2,
@@ -132,7 +133,7 @@ def _script_executor(
     def command(work_directory: Path):
         if work_directories is not None:
             work_directories.append(work_directory)
-        return (sys.executable, "-I", str(script))
+        return (validator_python_executable(), "-I", str(script))
 
     return ValidatorProcessExecutor(
         settings or _settings(response_max_bytes=1024),
@@ -778,7 +779,11 @@ json.dump(
 
     outcome = ValidatorProcessExecutor(
         _settings(mode="subprocess"),
-        command_factory=lambda _work_directory: (sys.executable, "-I", str(script)),
+        command_factory=lambda _work_directory: (
+            validator_python_executable(),
+            "-I",
+            str(script),
+        ),
     ).execute(
         validator_name="artifact_extraction",
         validator_version="2",
@@ -2106,7 +2111,7 @@ def test_one_validator_crash_does_not_poison_later_validation(tmp_path):
     selected = iter((crash, success))
 
     def command(_work_directory: Path):
-        return (sys.executable, "-I", str(next(selected)))
+        return (validator_python_executable(), "-I", str(next(selected)))
 
     registry = ValidatorRegistry.default(
         process_executor=ValidatorProcessExecutor(

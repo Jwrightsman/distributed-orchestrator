@@ -128,7 +128,13 @@ have closed built-in response shapes and exact ordinary failure reasons, so a
 child cannot echo output text, a digest, or the private reference through detail
 or `failure_reason`; an off-shape response is malformed protocol.
 
-The runner is launched with the current Python interpreter without a shell. It
+The runner is launched with the current Python interpreter without a shell.
+When the coordinator runs from a Windows venv, whose `Scripts\python.exe` is a
+redirector that starts the base interpreter as a second process, the runner is
+started as that base interpreter directly, with `__PYVENV_LAUNCHER__` naming the
+venv exactly as the redirector would; the child gets the venv's configuration and
+site-packages as one process under `ActiveProcessLimit=1`, still with `-I`, and
+the interpreter removes that variable during startup. The launch also
 uses a sanitized environment allowlist, a fresh working directory with private
 POSIX modes where supported, and controlled `TEMP`/`TMP` on Windows or `TMPDIR`
 on POSIX inside that directory. It closes inherited descriptors where
