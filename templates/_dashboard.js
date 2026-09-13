@@ -278,11 +278,11 @@ try {
 } catch (e) {}
 
 // ── Views ────────────────────────────────────────────────────────
-const TABS = ['overview', 'runs', 'gallery', 'nodes', 'projects', 'guild', 'evals'];
+const TABS = ['overview', 'runs', 'gallery', 'nodes', 'projects', 'guild', 'evals', 'config'];
 const TAB_TITLES = {
   overview: 'Overview', runs: 'Runs', gallery: 'Gallery',
   nodes: 'Network nodes', projects: 'Projects', guild: 'Guild standings',
-  evals: 'Evals',
+  evals: 'Evals', config: 'Config',
 };
 
 function showTab(name, opts) {
@@ -313,6 +313,7 @@ function showTab(name, opts) {
   if (name === 'guild') loadStandings();
   if (name === 'runs') loadHistory();
   if (name === 'evals') loadEvals();
+  if (name === 'config') loadConfig();
   // Evidence is only fetched while this view is open, so opening it has to ask
   // rather than waiting up to 3s for the next tick to notice.
   if (name === 'nodes') refresh();
@@ -374,8 +375,10 @@ const statusFresh = {inference: false, nodes: false, running: false, queued: fal
 
 /* The four states that earn words. Copy is the design's, verbatim.
    `scope` is the tab this banner is worth interrupting; null means every view.
-   `suppress` is where a more actionable version of the same warning lives —
-   Config does not exist yet, so that list is inert until it does. */
+   `suppress` is where a more actionable version of the same warning lives.
+   It applies only once that view has drawn its own version: a Config view
+   that failed to load carries no warning, and hiding this one there would
+   leave the page saying nothing at all. */
 const BANNER_SUPPRESSED_ON = ['config'];
 const BANNERS = {
   gate: {
@@ -582,7 +585,8 @@ function renderBanner(d) {
   const el = $('banner');
   if (!el) return;
   const spec = d.banner ? BANNERS[d.banner] : null;
-  const suppressed = spec && spec.suppress && spec.suppress.indexOf(currentTab) !== -1;
+  const suppressed = spec && spec.suppress && spec.suppress.indexOf(currentTab) !== -1
+    && !!document.querySelector('#' + currentTab + '-body [data-gate-open]');
   const outOfScope = spec && spec.scope && spec.scope !== currentTab;
   if (!spec || suppressed || outOfScope) {
     el.hidden = true;
@@ -1471,6 +1475,30 @@ async function loadEvals() {
     el.innerHTML = '<div class="empty-state"><p>The eval record could not be loaded.<br>'
       + 'The coordinator may be unreachable.</p></div>';
   }
+}
+
+// ── Config ───────────────────────────────────────────────────────
+/* Built in config_view.py, the same arrangement as Evals. The route reduces
+   every credential to a word before the fragment exists, so nothing here
+   handles a value that could be one.
+
+   Asked for when the view opens and never on a timer: configuration is read
+   once, at startup, and does not change until the process restarts. The
+   banner is re-evaluated afterwards, because whether the global warning is
+   suppressed here depends on this fragment having drawn its own. */
+async function loadConfig() {
+  const el = $('config-body');
+  try {
+    const data = await apiJson('/v1/operator/config');
+    el.innerHTML = data.config_html || (
+      '<div class="empty-state"><p>The settings were read but their view could not be built.</p></div>'
+    );
+  } catch (e) {
+    if (e instanceof ViewerLocked) return;
+    el.innerHTML = '<div class="empty-state"><p>This coordinator\'s settings could not be loaded.<br>'
+      + 'The coordinator may be unreachable.</p></div>';
+  }
+  renderStatus();
 }
 
 // ── Projects ─────────────────────────────────────────────────────

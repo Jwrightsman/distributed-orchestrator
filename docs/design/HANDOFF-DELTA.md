@@ -734,3 +734,155 @@ point is carried by the `loaded` cells. **Open.**
 (two percentages and an across-prompt-set comparison), the category bars, the
 eval-history `SCORE` column, and the 80% target, which the design already kept
 out of the metric cards and which has nothing left to sit beside.
+
+---
+
+## 10. The Config view — what it shows, and what it never sends
+
+The archived brief (`HANDOFF-UI.md` §3, "Config — new view") is four sentences:
+`config.load()`, never send secret values, `"set"` / `"off"` per key, and a list
+of names. Every name on that list resolves in `config.py`. What went stale is
+everything around the list: the design file's `configGroups` notes describe
+behaviour several keys no longer have, and two words for a credential hide a
+third state preflight already distinguishes. This section is the design pass
+and the contract `config_view.py` is held to.
+
+### 10.1 Decision: the route, and why its gate is the operator prefix
+
+`GET /v1/operator/config`, returning the record plus `config_html`, the same
+shape `/evals` uses. Read-only; the brief's §10 non-goal stands.
+
+**Not viewer-gated like `/evals`.** §9.4 put Evals outside the operator prefix
+because every byte it reads is committed to a public repository. Nothing here
+is. The route says which authorities are open, which addresses this machine
+talks to, where its state lives, and what preflight warned about. So it sits
+under `/v1/operator/`, which `deploy/Caddyfile.public` refuses at the edge, and
+the view renders in the console, which the same line refuses. The handler calls
+`require_viewer` itself, as §8.8's chain route does, so it is refused by its own
+code and not only by the middleware. Both halves are tested, and the Caddyfile
+line is read out of the file.
+
+**With `viewer_key` empty the route is readable by anyone who can reach the
+address**, like every other private route in that state. It was not given a
+stricter rule of its own. In that state `/v1/operator/health` already serves
+the preflight warnings that name the disabled authorities. What this route adds
+to it is the origins of the three configured addresses, the state directory,
+and the instance id. That is the exposure, stated rather than implied away, and
+it is the state the view's own banner exists to name.
+
+### 10.2 What never leaves the module
+
+- **A credential becomes one of three words.** `viewer_key`, `node_secret`,
+  `pitch_key` and `provider_api_key` render `off`, `set`, or `set · short`. No
+  length, prefix or mask. `off` means exactly "the gate is open", because
+  enforcement treats any non-empty value as a gate. `short` is below
+  `MIN_STATIC_CREDENTIAL_LENGTH` (32), the policy `trusted_alpha` refuses to
+  start under. The brief's two words would print `set` over a three-character
+  key that would stop a deployment.
+- **Two authorities sharing a value are named, not valued.** They are compared
+  stripped, the way preflight compares them. Naming them tells a key-holder
+  nothing a key-holder could not learn by trying the key at the other gate.
+- **An address shows its origin.** `ollama_url`, `provider_base_url` and
+  `tracing_endpoint` print scheme, host and port. Credentials, path, query and
+  fragment are dropped, and the row says `origin only` when something was.
+- **Keys `config.json` carries that this version does not read are named,
+  never valued.** A misspelt credential is exactly this case: it leaves its gate
+  open without a word.
+
+`tests/test_config_view.py` plants a fresh random value in every credential and
+in every credential-shaped place: URL userinfo, path, query and fragment, plus
+an unknown key. It then requires that no six-character piece of any of them
+appears in the response bytes. Separately, every key in `config.DEFAULTS` must
+be placed in exactly one group. A key whose name ends like a credential or an
+address must be classified as one, so a new setting cannot reach the page
+unclassified.
+
+### 10.3 What the archived design states that source contradicts
+
+Checked against the code that reads each key, not against `config.py`'s
+comments. Two of those comments are among the stale claims.
+
+A reader is `.get("key"` or `["key"]` in tracked Python outside `tests/`,
+`config.py`, the view, and `status.py`. `status.py` prints settings for a
+person, and the rows that mention it say so. A looser quoted-string match
+counted `"port"` in an unrelated diagnostic dict in
+`scripts/deploy_preflight.py`, which is why the pattern is a read. Under it,
+exactly three keys have no reader. The same scan finds at least one for each of
+the other 44, so a zero means something. The test repeats the scan and fails if
+the set and `INERT_KEYS` disagree in either direction.
+
+| The design says | Source says |
+|---|---|
+| `role_model_map` — "Soft routing — prefers matching models, never blocks work when none match." | **Nothing reads it.** `6483696` (2026-08-21, "route execution through canonical service") removed the only reader, the distributed builder dispatch in `routes_pitch.py`. `status.py` still prints it as "Role routing", and `config.py`'s comment still says the dispatcher prefers matching nodes. The row says the value changes nothing. |
+| (`config.py`) `tracing_endpoint` — "OTLP collector endpoint, used only when tracing_export is true." | **Nothing reads it.** `tracing.export_enabled()` checks the two flags and whether the OpenTelemetry SDK imports; spans go to whatever tracer provider the process already has. |
+| `port` — `8000`, no note | Read only by `status.py`, to find the server. The coordinator listens where the launch command's `--port` put it. |
+| `model` — "Auto-detects down a ladder if missing: gemma4 → phi4-mini → …" | `ollama_client.auto_detect_model` is called by `cli.py` only. The coordinator does not walk a ladder. Note dropped. |
+| `last_backup` — `never` | **Nothing records a backup.** `scripts/backup.py` refuses a destination inside the state directory and writes nothing there, so the server cannot know whether one exists. The row says `not recorded`; `never` would be a claim with nothing under it. |
+| `workers` — `1` | Not a setting. `validate_single_worker` refuses `WEB_CONCURRENCY`, `UVICORN_WORKERS` or `--workers` other than 1, and the lock refuses a second process. A runtime row that says `one`. |
+| `coordinator_lock` — "pid 18244 · since 6d ago. Read from /v1/operator/health" | Health serves the instance id and a boolean. `pid` and `started_at` are on `CoordinatorIdentity`, and this route serves them. |
+| `preflight` — "viewer_cookie_secure is false with no TLS in front" as a warning | That pair agrees, and preflight passes it. It warns when `viewer_cookie_secure` and `https_enabled` **disagree**. |
+| `deployment_mode` — trusted_alpha refuses to start unless "the paths agree with each other" | No preflight check compares paths. It probes that the state directory and its three subdirectories are writable and that an existing database passes `quick_check`. |
+| `verify_rate` — "The only mechanism that notices a node returning plausible-looking garbage." | Agreement is not correctness (`config.py`, ADR 0012), sampling never moves a task, and `trusted_alpha` forces it to 0 whatever it says. |
+| Written down — "Pitch keys, by hash, so a repeated pitch finds its run" | **Idempotency keys**, in `execution_submissions`. The pitch key is a credential and is stored nowhere. |
+| "A backup captures exactly this set" | It also copies `config.json`, so a backup holds all three keys. The panel says so. |
+| `artifact_retention_seconds` — "The run record and its share survive — artifact links then 404" | Not established by this pass. The note keeps only what `docs/ARTIFACTS.md` and `execution/artifacts.py` state: a terminal run's registered files may be deleted after this. |
+
+Both lists on the durability panel are tied to source. Every table a
+"written down" item names must be created somewhere, and every phrase in
+`scripts/backup.py`'s `not_included` list must be covered by a "gone on
+restart" item.
+
+**Out of scope and recorded:** `status.py`'s "Role routing" line and the two
+stale comments in `config.py`. Whether to delete the dead keys or wire them
+again is a decision for a sprint, not for a view.
+
+### 10.4 The fail-open banner on Config
+
+The design suppressed the global fail-open banner on Config, "where the more
+actionable version already lives", and `_dashboard.js` has carried
+`BANNER_SUPPRESSED_ON = ['config']` since phase 1, inert until the view existed.
+It is live now, **but only once the Config fragment has drawn its own
+warning** (`[data-gate-open]`). A Config view that failed to load carries none,
+and suppressing unconditionally would leave that page silent about an open
+server. The loader re-evaluates the banner after it fills the view.
+
+The view's banner names which of the three keys are off and what each leaves
+open: read, join, spend. It is `is-danger` when reading is open, which is the
+state the global banner covers. With only joining or spending open it is
+`is-warn` and carries no `data-gate-open`, because in that state there is no
+global banner for it to replace.
+
+### 10.5 Deliberately not done
+
+- **Writing.** The brief's non-goal holds; the one key that gates every private
+  read would be editable from the page it gates.
+- **A "changed from default" marker.** Useful, and a separate decision about
+  what the view is for.
+- **Any claim of live values.** `config.get()` caches for the life of the
+  process, so the lede says a change takes effect on restart.
+- **Group-level summaries.** No "3 of 7 set" count: the banner says what is
+  open, by name.
+
+### 10.6 Two things opening the page found that no test had
+
+Measured in Chromium at 1440, 1024, 768 and 375px in both themes. The page was
+the assembled console with the real fragment in two states: everything off,
+and a mixed configuration with long values, a shared key, a short key and
+unknown keys.
+
+- **A state directory broke at its own hyphen**, in the 11rem value column at
+  1440px: the date fault of §8.11 and §9.4.1 in a third place. A value longer
+  than the column now spans the value and note columns, on a phone too. A
+  hyphenated path segment is held together, and the slashes stay breakable.
+  With the fix switched off in the live page, the hyphen walk finds the split
+  again.
+- **"abuse-risk" ended a line at 1024px.** The view's hyphenated copy is
+  reworded or held, and a test requires that of every hyphenated run in the
+  visible text, with no allowlist.
+
+No page overflow, nothing clipped inside a panel and nothing escaping its row
+at any width. Nothing renders below 11px. Lowest contrast is **5.00:1**, light
+theme, panel labels (`--text-muted` on `--surface`); 5.67:1 dark, the banner
+body. Both were computed against each element's composited ground. The three
+longest keys (36–39 characters) wrap after an underscore at 1024px and above.
+That is left: widening the key column to hold them costs every note its width.

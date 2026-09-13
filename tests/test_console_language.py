@@ -64,8 +64,11 @@ SOURCES = STANDALONE + ("run.html", "status.html", "_dashboard.css", "_dashboard
 # file in this list: the surface it renders is the one carrying the manifest
 # and the envelope, which are exactly the two records the prohibited words
 # would overstate.
+# `config_view.py` writes a sentence about every setting, several of which sit
+# next to exactly the claims this list exists for: sampling, evidence, and what
+# a credential proves.
 RENDERING_MODULES = ("routes_status.py", "routes_run.py", "routes_try.py",
-                     "run_detail.py")
+                     "run_detail.py", "config_view.py")
 
 _SCRIPT_OR_STYLE = re.compile(r"<(script|style)\b.*?</\1>", re.S | re.I)
 _TAG = re.compile(r"<[^>]+>")
