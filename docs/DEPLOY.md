@@ -768,8 +768,7 @@ Off by default, and two switches rather than one.
 ```json
 {
   "tracing_enabled": true,
-  "tracing_export": false,
-  "tracing_endpoint": ""
+  "tracing_export": false
 }
 ```
 
@@ -777,10 +776,13 @@ Off by default, and two switches rather than one.
 mint one when none arrives, and hand it back — so one cross-machine incident
 reads as one thing. Nothing leaves the machine at this setting.
 
-`tracing_export` sends finished spans to `tracing_endpoint` and needs the
-optional extra (`pip install opentelemetry-sdk` — the SDK, not
-`opentelemetry-api`, which on its own records nothing and is reported as export
-being off). **No collector is shipped or configured.**
+`tracing_export` hands finished spans to the process's OpenTelemetry tracer
+provider and needs the optional extra (`pip install opentelemetry-sdk` — the
+SDK, not `opentelemetry-api`, which on its own records nothing and is reported
+as export being off). **No collector, tracer provider, or exporter is shipped
+or configured**, so where those spans go is whatever OpenTelemetry setup the
+process already has. Nothing reads `tracing_endpoint`; an address there sends
+nothing to it.
 
 On a worker, export is that contributor's decision and never a condition of
 joining. Turning it on for the coordinator does not turn it on for anyone's

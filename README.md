@@ -143,7 +143,6 @@ Config
   Bootstrap:   open (any node can enroll)
   Pitch auth:  off (anyone can pitch)
   Viewer auth: off (private reads are unprotected)
-  Role routing: any node
   Provider:    Ollama only
 ```
 
@@ -435,7 +434,7 @@ This is a **Phase 0 private trusted-alpha system**. Here's exactly what's durabl
 |---|---|---|
 | Pipeline output | Yes | Saved to `output/{timestamp}/` on disk after every run |
 | Event history | Yes | SQLite (`events.db`) — allowlisted structural telemetry only; survives restarts |
-| Distributed traces | No | Off by default. When on, spans are in-process and bounded unless an operator installs the optional OpenTelemetry SDK and points `tracing_endpoint` at their own collector; a restart forgets them |
+| Distributed traces | No | Off by default. When on, spans are in-process and bounded unless an operator installs the optional OpenTelemetry SDK and gives the process a tracer provider that exports them (this project configures none, and nothing reads `tracing_endpoint`); a restart forgets them |
 | Job status | Yes | SQLite (`events.db`) — `/jobs/{id}` works after restart |
 | Normalized execution metadata | Yes | SQLite `executions` table — strategy, placement, candidates, validation, errors |
 | Keyed canonical submission mappings | Yes | Digest-only SQLite rows retained during trusted alpha; matching retries return one execution ID |
