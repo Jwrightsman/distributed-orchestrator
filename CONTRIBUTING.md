@@ -35,14 +35,6 @@ Without them you get the newest releases the requirements allow, which is fine
 for running a node, but a passing suite then is not proof against CI. The end of
 every `pytest` run lists any package that differs from the pins.
 
-**Windows and virtualenvs:** a venv's `python.exe` is a launcher that starts the
-real interpreter as a second process, and the validator sandbox allows its child
-exactly one process, so every validator crashes (`validator_crash`, about 60
-failing tests). Until that is fixed, install the pins into a folder instead and
-point Python at it:
-`pip install --target ../mycelium-pins -r requirements.txt -r requirements-dev.txt -c constraints.txt`,
-then run with `PYTHONPATH=../mycelium-pins`.
-
 ## Before you open a pull request
 
 ```bash

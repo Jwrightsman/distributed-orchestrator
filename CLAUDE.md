@@ -146,9 +146,7 @@ Check the actual run on GitHub rather than assuming the badge is current.
 "dependency drift" section at the end of a pytest run lists every package that
 differs. To test against CI's versions, `pip install --target <scratch dir> ... -c constraints.txt`
 and run with `PYTHONPATH=<scratch dir>`; never upgrade the global packages to chase a CI-only
-failure. **Not a venv on Windows:** its launcher python.exe spawns a second process, the
-validator sandbox's Job Object allows one, and ~62 validator tests fail with `validator_crash`
-whatever the versions. Never assert on FastAPI route internals (`app.routes` is a tree
+failure. Never assert on FastAPI route internals (`app.routes` is a tree
 since 0.137) — ask the app by request through `TestClient`.
 
 ### Git workflow
