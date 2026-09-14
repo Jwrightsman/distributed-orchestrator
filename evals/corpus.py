@@ -40,6 +40,8 @@ from typing import Any, Iterable
 EVALS_DIR = Path(__file__).resolve().parent
 PROMPTS_FILE = EVALS_DIR / "prompts.json"
 SPLIT_LOCK_FILE = EVALS_DIR / "split.lock.json"
+CORPUS_IDENTITY_VERSION = "1"
+MEASUREMENT_IDENTITY_VERSION = "2"
 
 BANDS = ("floor", "discriminating", "ceiling")
 SPLITS = ("development", "confirmatory")
@@ -135,6 +137,44 @@ def corpus_digest(items: Iterable[CorpusItem]) -> str:
     """
     payload = "\n".join(f"{item.id}\x1f{item.task}" for item in sorted(items, key=lambda i: i.id))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def measurement_digest(
+    items: Iterable[CorpusItem], *, grader_version: str, fixtures_dir: Path | None = None,
+) -> str:
+    """Version 2: task, expectations, referenced bytes, and checker identity.
+
+    ``corpus_digest`` remains the historical id/task-only version 1. Its value
+    is not evidence that two rubrics match. Split membership is independent of
+    either identity. Missing or escaped references make identity unavailable,
+    never an apparently valid digest of a missing fixture.
+    """
+    root = (fixtures_dir or EVALS_DIR / "fixtures").resolve()
+    rows = []
+    for item in sorted(items, key=lambda row: row.id):
+        references = {}
+        for spec in item.checks:
+            names = [f"inputs/{name}" for name in spec.get("inputs", [])]
+            if spec.get("schema"):
+                names.append(f"schemas/{spec['schema']}.json")
+            names.extend(spec.get("fixtures", []))
+            for name in names:
+                path = (root / name).resolve()
+                if not path.is_relative_to(root) or not path.is_file():
+                    raise CorpusError(f"{item.id}: missing or escaped measurement fixture {name!r}")
+                references[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+        rows.append({"id": item.id, "task": item.task, "expect": item.expect,
+                     "references": references})
+    payload = {"version": MEASUREMENT_IDENTITY_VERSION, "grader_version": grader_version,
+               "items": rows}
+    return hashlib.sha256(json.dumps(
+        payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False,
+    ).encode("utf-8")).hexdigest()
+
+
+def measurement_series(path: Path | None = None) -> str:
+    data = json.loads(Path(path or PROMPTS_FILE).read_text(encoding="utf-8"))
+    return str(data.get("measurement_series", "historical-v1-unversioned-rubric"))
 
 
 def _validate(item: dict[str, Any], seen: set[str]) -> CorpusItem:

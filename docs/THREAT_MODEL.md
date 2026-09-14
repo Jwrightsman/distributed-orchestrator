@@ -212,6 +212,12 @@ sandbox. Neither makes the coordinator multi-tenant.
 
 ### Path A — private overlay (Tailscale)
 
+The template explicitly binds to the operator-supplied literal tailnet IPv4
+address; a literal tailnet IPv6 address can be added. Hostname/SNI matching is
+not interface isolation. The IPv4-only template opens no IPv6 listener and
+must never be changed to a wildcard bind for convenience. Address management,
+overlay ACLs, and deployed firewall/routing verification remain operator duties.
+
 **Protects against:** every unauthenticated party who is not on the tailnet.
 `POST /nodes/register` — which has no rate limit (§14) — cannot be reached at
 all without tailnet membership, so the unlimited guessing surface is removed
@@ -256,8 +262,12 @@ thing standing between a stranger and an enrollment is the entropy of
 `node_secret`, guessable without limit and without a log line an operator would
 notice (§14). The certificate authenticates the *server* to workers; nothing
 authenticates a worker to the server except a bearer credential. Caddy's
-access log records request paths, so share tokens are filtered out of it in the
-shipped configuration — an unfiltered proxy log is a credential store.
+access and runtime logs omit the complete request URI and all request/response
+headers in both shipped templates. This covers share path/query capabilities,
+Referer/Location, cookies, Authorization, Idempotency-Key, and custom Mycelium
+credential headers. Authentication headers still forward to the application.
+An unfiltered logging sink, debug/body logging, or retained historical logs can
+still disclose credentials; new filters do not sanitize previous logs/backups.
 
 ### What proxying changes about what the application sees
 

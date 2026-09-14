@@ -51,6 +51,7 @@ from typing import Any, Iterable, Sequence
 import sampling as sampling_mod
 
 RUNS_FILENAME = "runs.jsonl"
+MANIFEST_FILENAME = "manifest.json"
 
 UNKNOWN_MODEL_DIGEST = "model_digest"
 UNKNOWN_DESCRIPTOR_HASH = "descriptor_hash"
@@ -128,6 +129,12 @@ class RunRecord:
     unknown_facts: list[str] = field(default_factory=list)
     recorded_at: str = ""
     notes: str = ""
+    corpus_identity_version: str = "1"
+    measurement_identity_version: str = "1"
+    measurement_digest: str | None = None
+    measurement_series: str | None = None
+    unit_costs: list[dict[str, Any]] | None = None
+    cost_capture_complete: bool = False
 
     def as_record(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -226,6 +233,75 @@ def load_runs(study_dir: Path) -> list[dict[str, Any]]:
     return records
 
 
+def validate_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
+    """The supported preregistered design has one replicate per item/arm.
+
+    Repeated-item inference needs a separate endpoint; rejecting it is safer
+    than silently letting the final replicate stand in for the item.
+    """
+    if not isinstance(manifest, dict) or manifest.get("version") != "1":
+        raise ValueError("study manifest version must be '1'")
+    if not isinstance(manifest.get("study_id"), str) or not manifest["study_id"].strip():
+        raise ValueError("study manifest requires study_id")
+    for field_name in ("item_ids", "arms"):
+        values = manifest.get(field_name)
+        if (not isinstance(values, list) or not values
+                or any(not isinstance(v, str) or not v.strip() for v in values)
+                or len(values) != len(set(values))):
+            raise ValueError(f"manifest {field_name} must name unique planned values")
+    reps = manifest.get("replicates")
+    if (not isinstance(reps, list) or len(reps) != 1 or type(reps[0]) is not int
+            or reps[0] < 0 or manifest.get("aggregation") != "single_replicate"):
+        raise ValueError("multi-replicate summaries are unsupported; declare one replicate and single_replicate")
+    identity = manifest.get("identity", {})
+    if not isinstance(identity, dict):
+        raise ValueError("manifest identity must be an object")
+    for field_name in ("measurement_identity_version", "measurement_digest", "grader_version", "model_digest"):
+        if not isinstance(identity.get(field_name), str) or not identity[field_name]:
+            raise ValueError(f"manifest identity requires {field_name}")
+    if identity["measurement_identity_version"] != "2":
+        raise ValueError("confirmatory summaries require measurement identity version 2; historical runs are not upgraded")
+    policy = manifest.get("budget_policy", {})
+    if not isinstance(policy, dict):
+        raise ValueError("manifest budget_policy must be an object")
+    if policy.get("metric") not in ("descriptive_only", "homogeneous_hardware_seconds_v1"):
+        raise ValueError("manifest requires a declared budget comparison policy")
+    if policy["metric"] == "homogeneous_hardware_seconds_v1":
+        if not isinstance(policy.get("hardware_id"), str) or not policy["hardware_id"]:
+            raise ValueError("hardware-seconds policy requires one frozen hardware_id")
+        tolerance = policy.get("relative_tolerance")
+        if isinstance(tolerance, bool) or not isinstance(tolerance, (int, float)) or not 0 <= tolerance < 1:
+            raise ValueError("hardware-seconds policy requires relative_tolerance in [0, 1)")
+    return manifest
+
+
+def load_manifest(path: Path) -> dict[str, Any]:
+    path = Path(path)
+    if path.is_dir():
+        path /= MANIFEST_FILENAME
+    if not path.is_file():
+        raise FileNotFoundError(f"no planned study manifest at {path}")
+    return validate_manifest(json.loads(path.read_text(encoding="utf-8")))
+
+
+def write_manifest(study_dir: Path, manifest: dict[str, Any]) -> Path:
+    """Freeze a supplied plan, never infer it from runs or replace an old plan."""
+    validate_manifest(manifest)
+    directory = Path(study_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / MANIFEST_FILENAME
+    if path.exists():
+        if load_manifest(path) != manifest:
+            raise ValueError("study manifest is already frozen with different contents")
+        return path
+    if (directory / RUNS_FILENAME).exists():
+        raise ValueError("cannot preregister a study after its run log exists")
+    with path.open("x", encoding="utf-8") as handle:
+        json.dump(manifest, handle, indent=2, sort_keys=True, allow_nan=False)
+        handle.write("\n")
+    return path
+
+
 def latest_per_key(records: Iterable[dict[str, Any]]) -> dict[tuple[str, str, int], dict]:
     """The most recent record for each (item, arm, replicate).
 
@@ -235,7 +311,14 @@ def latest_per_key(records: Iterable[dict[str, Any]]) -> dict[tuple[str, str, in
     """
     latest: dict[tuple[str, str, int], dict] = {}
     for record in records:
-        key = (record["item_id"], record["arm"], int(record.get("replicate", 0)))
+        if not isinstance(record, dict):
+            raise ValueError("each study record must be an object")
+        replicate = record.get("replicate", 0)
+        if type(replicate) is not int or replicate < 0:
+            raise ValueError("replicate must be a nonnegative integer, without coercion")
+        if any(not isinstance(record.get(field), str) or not record[field] for field in ("item_id", "arm")):
+            raise ValueError("each study record requires item_id and arm")
+        key = (record["item_id"], record["arm"], replicate)
         latest[key] = record
     return latest
 

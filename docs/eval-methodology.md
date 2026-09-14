@@ -559,6 +559,17 @@ averaging down noise a config setting might have removed.
 
 ## 8. What every run records
 
+September 13, 2026 measurement boundary: corpus identity v1 remains the
+historical ID/task-only digest. Measurement identity v2 additionally hashes
+expectations, referenced schema/fixture bytes, and grader identity. Grader 3
+and corpus v3 start `legacy-interactive-v3`; no historical score or band has
+been regraded. The six legacy interactive items now have declared DOM/canvas
+smoke checks and positive/broken authored fixtures. These checks detect the
+specified behaviors, not arbitrary playability or complete functional correctness.
+
+`--no-exec` disables all execution-dependent primary and legacy checks. Static
+checks still run, but execution checks remain ungraded and cannot pass.
+
 `evals/runrecord.py`, append-only, one JSON object per line in `runs.jsonl`
 beside the existing `results.jsonl`:
 
@@ -593,7 +604,26 @@ Three properties worth naming:
 
 `scripts/eval_study_summary.py` computes the pre-registered test and prints the
 counts and the statistic together. It will not print a p-value on its own, and
-it refuses outright when an item is missing from an arm or was not fully graded.
+it refuses outright when any planned cell is missing or was not fully graded.
+The expected cells come from an explicit `manifest.json` frozen before the
+first run, not from observed rows. The manifest names items, arms, replicate
+IDs, measurement/checker/model identity, and budget policy. Historical rows
+without the new identity cannot be silently upgraded. Only one declared
+replicate per item/arm is currently supported; multi-replicate designs in the
+research documents remain unsupported. Results are independent of row order,
+except the documented final-appended-row supersession for the exact same
+item/arm/replicate key.
+
+Elapsed generation latency is not compute. The summarizer reports it separately
+from aggregate per-call inference hardware-seconds and actual tokens. A
+comparable-cost claim requires complete cost capture for all planner, builder,
+reviewer, repair, retry, failed, and cancelled calls and a declared homogeneous
+hardware policy. Missing costs suppress complete totals/comparison; they are
+not treated as zero. Even matched hardware-seconds are a declared measurement
+policy, not hardware-independent compute or energy. The current legacy runner
+cannot collect all runtime counters and therefore cannot establish that claim.
+The [unactivated canonical pilot plan](experiments/2026-09-13-canonical-pilot-plan.md)
+specifies the bounded next experiment and its remaining activation prerequisites.
 
 `evals/stats.py::render_paired` is the only sanctioned way to print a paired
 result, and it always emits the 2×2 table, n, the discordant count with its

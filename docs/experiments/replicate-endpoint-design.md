@@ -188,8 +188,10 @@ pre-registered study on that set ever resolves an ordinary change.
 * **Wall clock is wall clock.** k=5 on the confirmatory set is 176 hours of
   decomposition — seven days — for one comparison. The direct arm's 37 hours
   is the version anybody actually runs.
-* **`scripts/eval_study_summary.py` refuses an incomplete study**, and a
-  replicate study has k times more cells to lose.
+* **Current summaries reject multi-replicate studies explicitly.** This remains
+  a proposed endpoint design. The repaired summarizer requires a predeclared
+  manifest and supports one replicate per item/arm; it does not silently apply
+  the repeated-item method described here.
 
 ---
 

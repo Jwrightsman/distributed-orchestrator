@@ -191,13 +191,27 @@ curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo 
 sudo apt update && sudo apt install -y caddy
 ```
 
-Copy the configuration this repository ships, and edit the two placeholder
-names in it:
+Copy the configuration this repository ships, and replace the hostname,
+certificate paths, and `YOUR-TAILNET-IPV4` listener placeholder:
 
 ```bash
 sudo cp deploy/Caddyfile.tailscale /etc/caddy/Caddyfile
 sudo nano /etc/caddy/Caddyfile
 ```
+
+Use the literal address from `tailscale ip -4` in the `bind` directive. If
+IPv6 service is wanted, append the literal address from `tailscale ip -6` on
+that same line. The IPv4-only template opens no IPv6 listener. Do not substitute
+a wildcard (`0.0.0.0` or `::`) or a hostname. A `.ts.net` hostname selects a
+site/certificate; it does not restrict listening interfaces. Recheck the bind
+addresses after device re-enrollment or address changes. Keep the application
+listener on `127.0.0.1:8000`.
+
+Verify listening addresses for both IP families on the deployment host and
+test denial from outside the overlay even when the client supplies the correct
+Host/SNI. The isolated repository tests substitute IPv4/IPv6 loopback addresses
+and test off-address denial; they cannot attest to a deployed tailnet ACL,
+firewall, or routing configuration.
 
 Check it parses before you load it — this catches typos while the old
 configuration is still running:
@@ -594,8 +608,18 @@ on the event stream and no counter. The only trace is the access log — uvicorn
 
 ```bash
 docker compose logs orchestrator | grep "nodes/register"
-sudo grep "nodes/register" /var/log/caddy/mycelium.log
+sudo tail /var/log/caddy/mycelium.log
 ```
+
+The shipped Caddy templates now omit complete request URIs and all request and
+response headers in access and runtime logs. They retain status and timing,
+but cannot identify `/nodes/register` by path. This deliberately covers path
+share capabilities, encoded paths, queries, Referer/Location, cookies,
+Authorization, all custom credential headers, and Idempotency-Key. Headers
+still reach the application for authentication. Do not enable debug/body
+logging or add an unfiltered logging sink. These filters do not clean old
+logs or backups; an operator who confirms prior use must assess retention and
+affected credential/share rotation separately.
 
 If you see a run of 401s against that path from an address you do not
 recognise, rotate `node_secret` — see [SECRET_ROTATION.md](SECRET_ROTATION.md).

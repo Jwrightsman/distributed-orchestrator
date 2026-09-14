@@ -1,6 +1,6 @@
 {
-  "version": 2,
-  "notes": "Corpus v2. Every item declares a taxonomy (which category of work Mycelium claims to do), an origin (taxonomy, observed_failure, or legacy for the original 28), a split (development or confirmatory - the confirmatory assignment is frozen in evals/split.lock.json), and a band once it has been run. expect.artifact drives the artifact-kind check; expect.keywords are case-insensitive substrings and are a weak proxy, never an item's only check; expect.checks adds output-level grading. See docs/eval-methodology.md.",
+  "version": 3,
+  "notes": "Corpus v3 starts a new rubric series. Legacy tasks and historical bands are retained; six interactive items now declare behavior smoke probes. Historical scores were not regraded. See docs/eval-methodology.md.",
   "prompts": [
     {
       "id": "web-snake",
@@ -24,6 +24,27 @@
           "canvas",
           "addeventlistener",
           "score"
+        ],
+        "checks": [
+          {
+            "kind": "html_behaviour",
+            "canvas_drawn": true,
+            "text_present": [
+              "score"
+            ],
+            "forbidden_text": [
+              "game over"
+            ],
+            "frame_changes": true,
+            "responds_to_keys": [
+              "ArrowDown",
+              "ArrowLeft"
+            ],
+            "fixtures": [
+              "interactive_v3/web-snake-positive.html",
+              "interactive_v3/web-snake-broken.html"
+            ]
+          }
         ]
       }
     },
@@ -48,6 +69,61 @@
         "keywords": [
           "setinterval",
           "addeventlistener"
+        ],
+        "checks": [
+          {
+            "kind": "html_behaviour",
+            "steps": [
+              {
+                "op": "text",
+                "selector": "body",
+                "value": "25:00"
+              },
+              {
+                "op": "click",
+                "selector": "button:has-text(\"Start\")",
+                "index": 0
+              },
+              {
+                "op": "wait",
+                "milliseconds": 1200
+              },
+              {
+                "op": "absent",
+                "selector": "body",
+                "value": "25:00"
+              },
+              {
+                "op": "click",
+                "selector": "button:has-text(\"Pause\")",
+                "index": 0
+              },
+              {
+                "op": "snapshot"
+              },
+              {
+                "op": "wait",
+                "milliseconds": 1200
+              },
+              {
+                "op": "unchanged"
+              },
+              {
+                "op": "click",
+                "selector": "button:has-text(\"Reset\")",
+                "index": 0
+              },
+              {
+                "op": "text",
+                "selector": "body",
+                "value": "25:00"
+              }
+            ],
+            "fixtures": [
+              "interactive_v3/web-pomodoro-positive.html",
+              "interactive_v3/web-pomodoro-broken.html"
+            ]
+          }
         ]
       }
     },
@@ -72,6 +148,67 @@
         "keywords": [
           "localstorage",
           "addeventlistener"
+        ],
+        "checks": [
+          {
+            "kind": "html_behaviour",
+            "steps": [
+              {
+                "op": "fill",
+                "selector": "input:not([type=\"checkbox\"])",
+                "value": "measurement task"
+              },
+              {
+                "op": "click",
+                "selector": "button:has-text(\"Add\")",
+                "index": 0
+              },
+              {
+                "op": "text",
+                "selector": "body",
+                "value": "measurement task"
+              },
+              {
+                "op": "reload"
+              },
+              {
+                "op": "text",
+                "selector": "body",
+                "value": "measurement task"
+              },
+              {
+                "op": "click",
+                "selector": "input[type=\"checkbox\"]",
+                "index": 0
+              },
+              {
+                "op": "checked",
+                "selector": "input[type=\"checkbox\"]"
+              },
+              {
+                "op": "click",
+                "selector": "button:has-text(\"Delete\")",
+                "index": 0
+              },
+              {
+                "op": "absent",
+                "selector": "body",
+                "value": "measurement task"
+              },
+              {
+                "op": "reload"
+              },
+              {
+                "op": "absent",
+                "selector": "body",
+                "value": "measurement task"
+              }
+            ],
+            "fixtures": [
+              "interactive_v3/web-todo-positive.html",
+              "interactive_v3/web-todo-broken.html"
+            ]
+          }
         ]
       }
     },
@@ -95,6 +232,52 @@
         "artifact": "html",
         "keywords": [
           "addeventlistener"
+        ],
+        "checks": [
+          {
+            "kind": "html_behaviour",
+            "steps": [
+              {
+                "op": "click",
+                "selector": "button:text-is(\"2\")",
+                "index": 0
+              },
+              {
+                "op": "click",
+                "selector": "button:text-is(\"+\")",
+                "index": 0
+              },
+              {
+                "op": "click",
+                "selector": "button:text-is(\"3\")",
+                "index": 0
+              },
+              {
+                "op": "click",
+                "selector": "button:text-is(\"=\")",
+                "index": 0
+              },
+              {
+                "op": "display_equals",
+                "selector": "output, input, [role=\"status\"], #display, .display",
+                "value": "5"
+              },
+              {
+                "op": "click",
+                "selector": "button:text-is(\"C\"),button:text-is(\"Clear\")",
+                "index": 0
+              },
+              {
+                "op": "display_equals",
+                "selector": "output, input, [role=\"status\"], #display, .display",
+                "value": "0"
+              }
+            ],
+            "fixtures": [
+              "interactive_v3/web-calculator-positive.html",
+              "interactive_v3/web-calculator-broken.html"
+            ]
+          }
         ]
       }
     },
@@ -118,6 +301,37 @@
         "artifact": "html",
         "keywords": [
           "addeventlistener"
+        ],
+        "checks": [
+          {
+            "kind": "html_behaviour",
+            "steps": [
+              {
+                "op": "count",
+                "selector": ".card, [data-card], .memory-card",
+                "value": 16
+              },
+              {
+                "op": "click",
+                "selector": ".card, [data-card], .memory-card",
+                "index": 0
+              },
+              {
+                "op": "click",
+                "selector": ".card, [data-card], .memory-card",
+                "index": 1
+              },
+              {
+                "op": "text",
+                "selector": "body",
+                "value": "Moves: 1"
+              }
+            ],
+            "fixtures": [
+              "interactive_v3/web-memory-game-positive.html",
+              "interactive_v3/web-memory-game-broken.html"
+            ]
+          }
         ]
       }
     },
@@ -142,6 +356,47 @@
         "keywords": [
           "addeventlistener",
           "innerhtml"
+        ],
+        "checks": [
+          {
+            "kind": "html_behaviour",
+            "steps": [
+              {
+                "op": "fill",
+                "selector": "textarea",
+                "value": "# Measurement heading\n\n**bold probe**"
+              },
+              {
+                "op": "text",
+                "selector": "h1",
+                "value": "Measurement heading"
+              },
+              {
+                "op": "text",
+                "selector": "strong",
+                "value": "bold probe"
+              },
+              {
+                "op": "fill",
+                "selector": "textarea",
+                "value": "# Updated heading"
+              },
+              {
+                "op": "text",
+                "selector": "h1",
+                "value": "Updated heading"
+              },
+              {
+                "op": "absent",
+                "selector": "h1",
+                "value": "Measurement heading"
+              }
+            ],
+            "fixtures": [
+              "interactive_v3/web-markdown-preview-positive.html",
+              "interactive_v3/web-markdown-preview-broken.html"
+            ]
+          }
         ]
       }
     },
@@ -830,7 +1085,7 @@
       "id": "transform-csv-to-jsonl",
       "category": "data_processing",
       "taxonomy": "data_transformation",
-      "task": "Write a Python script that reads inventory.csv from the current directory and prints it to stdout as JSON Lines \u2014 one JSON object per row, using the header row as keys.",
+      "task": "Write a Python script that reads inventory.csv from the current directory and prints it to stdout as JSON Lines — one JSON object per row, using the header row as keys.",
       "origin": "taxonomy",
       "split": "development",
       "band": null,
@@ -1328,7 +1583,7 @@
       "id": "analyse-csv-schema",
       "category": "cli_tool",
       "taxonomy": "static_analysis",
-      "task": "Write a Python script that reads inventory.csv from the current directory and prints a JSON object to stdout mapping each column name to the type its values look like \u2014 one of integer, number or string.",
+      "task": "Write a Python script that reads inventory.csv from the current directory and prints a JSON object to stdout mapping each column name to the type its values look like — one of integer, number or string.",
       "origin": "taxonomy",
       "split": "development",
       "band": null,
@@ -2263,5 +2518,6 @@
         ]
       }
     }
-  ]
+  ],
+  "measurement_series": "legacy-interactive-v3"
 }

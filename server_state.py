@@ -2450,6 +2450,12 @@ class PitchRequest(BaseModel):
     verification: VerificationPolicyV1 = Field(default_factory=VerificationPolicyV1)
     confidentiality: ConfidentialityV1 = "trusted_guild"
 
+    @field_validator("project_id")
+    @classmethod
+    def safe_project_id(cls, value: str | None) -> str | None:
+        from project_ids import validate_project_id
+        return None if value is None else validate_project_id(value)
+
     @field_validator("task")
     @classmethod
     def task_not_empty(cls, v: str) -> str:

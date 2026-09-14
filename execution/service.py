@@ -136,6 +136,22 @@ def _record_provenance_envelope(execution_id, manifest, result) -> None:
 
 
 class ExecutionService:
+    def _revoke_dispatcher_work(self, execution_id: str) -> None:
+        """Required terminal cleanup; settled receipts/contributions are immutable."""
+        last_error = None
+        for _ in range(_REQUIRED_PERSISTENCE_ATTEMPTS):
+            try:
+                Dispatcher.cancel_execution(
+                    execution_id, reason="execution terminated before successful completion",
+                )
+                return
+            except Exception as exc:
+                last_error = exc
+        # Do not publish terminal failure while active leases remain admissible.
+        raise TerminalPersistenceError(
+            execution_id, "dispatcher_revocation", _REQUIRED_PERSISTENCE_ATTEMPTS,
+        ) from last_error
+
     def __init__(
         self,
         store: ExecutionStore | None = None,
@@ -603,6 +619,7 @@ class ExecutionService:
         started = time.perf_counter()
         progress_accounted = False
         attempt_starts: list[tuple[str, str]] = []
+        work_revoked = False
         if control is None:
             control = ExecutionControl(
                 execution_id=execution_id,
@@ -613,6 +630,20 @@ class ExecutionService:
             )
         else:
             control.request = request
+
+        def revoke_outstanding_work() -> None:
+            nonlocal work_revoked
+            if work_revoked:
+                return
+            control.cancel_event.set()
+            try:
+                self._revoke_dispatcher_work(execution_id)
+                work_revoked = True
+            except ExecutionPersistenceError:
+                self._controls.pop(execution_id, None)
+                if registered_current_task:
+                    self._background.pop(execution_id, None)
+                raise
         try:
             result = self._commit_snapshot(
                 request,
@@ -871,6 +902,7 @@ class ExecutionService:
             result.reassignment_count = reassignment_count
             progress_accounted = True
         except ExecutionPersistenceError:
+            revoke_outstanding_work()
             self._controls.pop(execution_id, None)
             if registered_current_task:
                 self._background.pop(execution_id, None)
@@ -960,6 +992,9 @@ class ExecutionService:
                 }
             ]
             legacy = {}
+
+        if result.lifecycle_status != "completed":
+            revoke_outstanding_work()
 
         if not progress_accounted:
             self._apply_terminal_progress(
@@ -1066,6 +1101,17 @@ class ExecutionService:
                     execution_id,
                     type(exc).__name__,
                 )
+            except Exception as exc:
+                result.lifecycle_status = "failed"
+                result.status = "failed"
+                result.errors = [{
+                    "code": "artifact_finalization_failed",
+                    "message": f"{type(exc).__name__}: artifact finalization failed",
+                    "retryable": True,
+                }]
+                result.retryable = True
+                legacy = {}
+                revoke_outstanding_work()
         # Assignment validation is intentionally disabled on the wire models so
         # strategy adapters can assemble results efficiently. Re-validate once
         # at the service boundary so persistence and every caller always see
@@ -1101,6 +1147,8 @@ class ExecutionService:
             ]
             result = ExecutionResultV1.model_validate(dict(fallback.__dict__))
             legacy = {}
+        if result.lifecycle_status != "completed":
+            revoke_outstanding_work()
         try:
             result = self._commit_snapshot(
                 request,
@@ -1109,6 +1157,7 @@ class ExecutionService:
                 terminal=True,
             )
         except TerminalPersistenceError:
+            revoke_outstanding_work()
             self._controls.pop(execution_id, None)
             if registered_current_task:
                 self._background.pop(execution_id, None)
@@ -1527,6 +1576,8 @@ class ExecutionService:
                         )
                     ]
                     try:
+                        control.cancel_event.set()
+                        self._revoke_dispatcher_work(execution_id)
                         crashed = self._commit_snapshot(
                             request,
                             crashed,

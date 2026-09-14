@@ -57,7 +57,7 @@ from execution.publication import (
 from execution.service import get_execution_service
 from ollama_client import check_ollama, auto_detect_model, DEFAULT_MODEL
 from ledger import get_standings
-from memory import create_project, load_project, list_projects, PROJECTS_DIR
+from memory import create_project, load_project, list_projects, project_path
 import showcase
 
 SERVER_URL = "http://localhost:8000"
@@ -133,7 +133,7 @@ async def run_task(
                 title="[bold cyan]Continuing Project[/bold cyan]",
                 border_style="cyan",
             ))
-        except FileNotFoundError:
+        except (FileNotFoundError, ValueError):
             console.print(f"[red]Project '{project_id}' not found.[/red]")
             return
     else:
@@ -624,7 +624,7 @@ async def run_demo(fast: bool = False):
     # Show memory growth — concrete proof the context was accumulated
     memory_lines = 0
     memory_bytes = 0
-    memory_file = PROJECTS_DIR / project_id / "memory.md"
+    memory_file = project_path(project_id, "memory.md")
     if memory_file.exists():
         raw = memory_file.read_text(errors="ignore", encoding="utf-8")
         memory_lines = len([ln for ln in raw.splitlines() if ln.strip()])
@@ -822,7 +822,7 @@ async def run_demo_live():
     console.print()
 
     # ── Pitch 2 ──────────────────────────────────────────────────────────
-    memory_file = PROJECTS_DIR / project_id / "memory.md"
+    memory_file = project_path(project_id, "memory.md")
     if memory_file.exists():
         raw = memory_file.read_text(errors="ignore", encoding="utf-8")
         lines = len([ln for ln in raw.splitlines() if ln.strip()])
@@ -940,8 +940,7 @@ def import_fork(zip_path: str):
 
     # Write the imported memory.md to the project directory
     if memory_content:
-        from memory import PROJECTS_DIR
-        memory_file = PROJECTS_DIR / project_id / "memory.md"
+        memory_file = project_path(project_id, "memory.md")
         memory_file.write_text(memory_content, encoding="utf-8")
 
     original_ts = fork_config.get("original_timestamp", "")
@@ -1027,7 +1026,7 @@ async def main():
                 task = console.input("[bold cyan]What's next?>[/bold cyan] ").strip()
                 if task:
                     await execute_task(task, project_id=project_id)
-            except FileNotFoundError:
+            except (FileNotFoundError, ValueError):
                 console.print(f"[red]Project '{project_id}' not found.[/red]")
             return
         await execute_task(" ".join(args), project_id=project_id)

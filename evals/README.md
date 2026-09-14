@@ -97,6 +97,11 @@ checks.
 
 ## Controls, bands and the held-out split
 
+The five committed broad-suite runs use the historical `success` endpoint;
+none has been regraded under grader 3. The explicit legacy interactive checks
+start the `legacy-interactive-v3` measurement series. Old scores and difficulty
+bands remain historical evidence, not behavior-verified results.
+
 ```bash
 python scripts/eval_controls.py       # does the instrument detect anything? (no model needed)
 python scripts/eval_power.py          # what can it see, and what a lower noise floor would buy
@@ -105,7 +110,21 @@ python scripts/eval_band_corpus.py --from-results   # difficulty bands from the 
 python scripts/eval_study_summary.py <study_dir> --paired <arm_a> <arm_b>
 ```
 
-None of those runs a model. The six banded `web_app` items carry
+The summary requires a `manifest.json` frozen before any runs, naming every
+planned item, arm, replicate, measurement/checker/model identity, and budget
+comparison policy. It rejects missing cells even when every arm stops at the
+same item. Current summaries support one declared replicate per item/arm;
+multi-replicate summaries are explicitly unsupported.
+
+Named runner studies require both `--study <id>` and
+`--study-manifest <path>`, with `--arm` and `--replicate` selecting planned
+cells. Partial selections keep the full manifest and cannot become complete
+studies. This runner still executes legacy DAG: arm names do not select direct
+or ensemble strategies. It cannot establish remote model identity, so remote
+named studies are refused. The [canonical pilot plan](../docs/experiments/2026-09-13-canonical-pilot-plan.md)
+describes the preparation required before any strategy benchmark.
+
+None of those commands runs a model. The six banded `web_app` items carry
 `known_suspect: true`, because their evidence predates the HTML execution
 check being corrected — treat any `web_app` band as an upper bound until it is
 re-banded with `--live`.
@@ -233,8 +252,12 @@ answer would buy, with every unmeasured floor marked as a projection.
 
 - **Executing model output.** Scoring runs generated code in a subprocess with
   a scrubbed environment, a scratch working directory and a hard timeout. That
-  is a speed bump, not a sandbox. Use `--no-exec` for prompt sets you did not
-  write.
+  is a speed bump, not a sandbox. `--no-exec` disables all artifact execution
+  in both the legacy and primary graders, including Python, stdout, and
+  browser checks. Static parsing, artifact-kind, and keyword checks still run;
+  execution-dependent checks remain explicitly **ungraded**, so the primary
+  endpoint cannot pass. Model generation and optional model judgment are
+  separate; this flag only controls artifact execution.
 - **Browser checks are optional.** With Playwright installed, HTML is loaded in
   real Chromium and uncaught JS errors fail the run (`browser_ok` in the
   results). Without it, only structure is checked (`static_ok`). The outcome

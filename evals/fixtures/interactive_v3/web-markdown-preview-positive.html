@@ -1,0 +1,1 @@
+<!DOCTYPE html><html><body><textarea></textarea><article></article><script>document.querySelector('textarea').addEventListener('input',e=>{document.querySelector('article').innerHTML=e.target.value.split('\n').map(line=>line.startsWith('# ')?'<h1>'+line.slice(2)+'</h1>':line.replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>')).join('')});</script></body></html>

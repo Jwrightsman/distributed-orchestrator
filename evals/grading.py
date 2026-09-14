@@ -69,7 +69,7 @@ import scoring  # noqa: E402
 # Recorded on every run so two results scored by different graders are never
 # silently compared — the mistake that produced 0/14 for ensemble before the
 # checker was repaired.
-GRADER_VERSION = "2"
+GRADER_VERSION = "3"
 
 EXEC_TIMEOUT = 20
 
@@ -286,7 +286,7 @@ def check_runs(
     cache: dict | None = None,
     inputs: Sequence[str] = (),
 ) -> CheckResult:
-    """Does the artifact actually execute — the check that cannot be skipped.
+    """Does the artifact execute when the caller has enabled execution?
 
     `inputs` are the item's declared fixture files. They have to be present for
     this check too: running a script that was asked to read sales.csv in a
@@ -447,6 +447,7 @@ def check_html_behaviour(
         with sync_playwright() as pw:
             browser = pw.chromium.launch(**scoring._chromium_launch_kwargs())
             page = browser.new_page()
+            page.set_default_timeout(min(timeout * 1000, 1500))
             page.on("pageerror", lambda e: errors.append(str(e)[:200]))
             page.on(
                 "console",
@@ -475,6 +476,14 @@ def check_html_behaviour(
                 second = page.evaluate(_FRAME_HASH_JS)
                 if first == second:
                     reasons.append("nothing on the page changed")
+            try:
+                _html_steps(page, spec.get("steps", []))
+            except (AssertionError, ValueError) as exc:
+                reasons.append(str(exc)[:200])
+            except Exception as exc:
+                # A loaded page lacking a required control is an observed
+                # artifact failure, not an unavailable browser.
+                reasons.append(f"interaction failed ({type(exc).__name__})")
             if not page.evaluate("document.body && document.body.innerHTML.length > 0"):
                 reasons.append("body rendered empty")
             browser.close()
@@ -494,6 +503,77 @@ def check_html_behaviour(
         detail="; ".join(reasons[:3]),
         deterministic=False,
     )
+
+
+def _html_steps(page, steps: list[dict]) -> None:
+    """Bounded authored DOM probes, never arbitrary evaluator JavaScript.
+
+    These are interaction smoke checks with declared locator conventions, not
+    proof of general playability. A failed action after page load is a failure.
+    Missing browser infrastructure remains explicitly ungraded in the caller.
+    """
+    if not isinstance(steps, list) or len(steps) > 32:
+        raise ValueError("HTML behavior requires at most 32 declared steps")
+    snapshots = {}
+    for step in steps:
+        op = step.get("op")
+        if op == "wait":
+            delay = step.get("milliseconds")
+            if type(delay) is not int or not 0 <= delay <= 1500:
+                raise ValueError("HTML wait must be between 0 and 1500ms")
+            page.wait_for_timeout(delay)
+            continue
+        if op == "reload":
+            page.reload()
+            continue
+        if op in ("snapshot", "changed", "unchanged"):
+            name = step.get("name", "default")
+            current = page.screenshot()
+            if op == "snapshot":
+                snapshots[name] = current
+            else:
+                if name not in snapshots:
+                    raise ValueError("HTML comparison has no prior snapshot")
+                if (current != snapshots[name]) != (op == "changed"):
+                    raise AssertionError(f"page did not satisfy {op}")
+            continue
+        if op == "press_key":
+            page.keyboard.press(step["key"])
+            continue
+        selector = step.get("selector")
+        if not isinstance(selector, str) or not selector or len(selector) > 256:
+            raise ValueError("HTML step needs a bounded CSS selector")
+        locator = page.locator(selector)
+        index = step.get("index", 0)
+        if type(index) is not int or not 0 <= index <= 31:
+            raise ValueError("HTML locator index must be between 0 and 31")
+        target = locator.nth(index)
+        if op == "fill":
+            if not isinstance(step.get("value"), str) or len(step["value"]) > 1024:
+                raise ValueError("HTML fill needs at most 1024 characters")
+            target.fill(step["value"])
+        elif op == "click":
+            target.click()
+        elif op == "checked":
+            if not target.is_checked():
+                raise AssertionError("task checkbox did not become checked")
+        elif op == "count":
+            if locator.count() != step["value"]:
+                raise AssertionError("DOM count differs from expected")
+        elif op in ("text", "absent"):
+            expected = step["value"]
+            present = any(node.is_visible() and expected.lower() in node.inner_text().lower()
+                          for node in locator.all())
+            if present != (op == "text"):
+                raise AssertionError(f"DOM text did not satisfy {op}: {expected!r}")
+        elif op == "display_equals":
+            expected = step["value"]
+            values = [node.input_value() if node.evaluate("e => e.tagName === 'INPUT'")
+                      else node.inner_text().strip() for node in locator.all() if node.is_visible()]
+            if expected not in values:
+                raise AssertionError(f"display did not equal {expected!r}")
+        else:
+            raise ValueError(f"unknown HTML step {op!r}")
 
 
 _CANVAS_DRAWN_JS = """
@@ -555,13 +635,19 @@ _FRAME_HASH_JS = """
 
 # -- the entry point ---------------------------------------------------------
 
-def grade(item, code_files: Sequence[str], timeout: int = EXEC_TIMEOUT) -> GradeResult:
+def grade(
+    item, code_files: Sequence[str], timeout: int = EXEC_TIMEOUT,
+    *, execution_enabled: bool = True,
+) -> GradeResult:
     """Grade one corpus item's artifact.
 
     `item` is an `evals.corpus.CorpusItem`. Every item gets parse, artifact
     kind, keyword and execution checks; `expect.checks` adds the output-level
     ones. An item with no artifact at all is graded — as a failure — rather
-    than skipped, because "produced nothing" is a result.
+    than skipped, because "produced nothing" is a result. If execution is
+    disabled, execution-dependent checks remain explicitly ungraded and no
+    Python, stdout, or browser execution entry point is called. Static checks
+    still run; they cannot establish an overall pass.
     """
     files = [str(f) for f in code_files]
     run_cache: dict = {}
@@ -577,11 +663,19 @@ def grade(item, code_files: Sequence[str], timeout: int = EXEC_TIMEOUT) -> Grade
         check_parses(files),
         check_artifact_kind(files, item.artifact),
         check_keywords(files, item.expect.get("keywords", [])),
-        check_runs(files, item.artifact, timeout, run_cache, declared_inputs),
     ]
+    results.append(
+        check_runs(files, item.artifact, timeout, run_cache, declared_inputs)
+        if execution_enabled else _execution_disabled("runs")
+    )
 
     for spec in item.checks:
         kind = spec.get("kind")
+        if not execution_enabled and kind in {
+            "runs", "stdout_contains", "stdout_json_schema", "html_behaviour",
+        }:
+            results.append(_execution_disabled(kind))
+            continue
         if kind == "stdout_contains":
             results.append(
                 check_stdout_contains(
@@ -605,3 +699,11 @@ def grade(item, code_files: Sequence[str], timeout: int = EXEC_TIMEOUT) -> Grade
             )
 
     return GradeResult(item_id=item.id, grader_version=GRADER_VERSION, checks=results)
+
+
+def _execution_disabled(kind: str) -> CheckResult:
+    return CheckResult(
+        kind, graded=False, passed=False,
+        detail="execution disabled by caller policy — check was not run",
+        deterministic=kind != "html_behaviour",
+    )

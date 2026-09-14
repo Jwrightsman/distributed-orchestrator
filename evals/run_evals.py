@@ -232,7 +232,8 @@ async def run_one(item, args, run_dir: Path) -> dict:
     keywords_ok, missing = check_keywords(code_files, expect.get("keywords", []))
     artifact_match = matches_expected_artifact(code_files, expect.get("artifact", "any"))
 
-    if args.no_exec or not code_files:
+    execution_enabled = not args.no_exec
+    if not execution_enabled or not code_files:
         exec_result = {
             "ok": False,
             "outcome": "skipped" if args.no_exec else "no_files",
@@ -245,8 +246,12 @@ async def run_one(item, args, run_dir: Path) -> dict:
         item.task, result.get("final_output") or result.get("review", "")
     )
 
-    # The primary endpoint. Runs in a thread because it executes the artifact.
-    grade_result = await asyncio.to_thread(grading.grade, item, code_files, args.exec_timeout)
+    # Both grading paths obey the same policy. Static checks remain available
+    # under --no-exec, but never stand in for an execution result.
+    grade_result = await asyncio.to_thread(
+        grading.grade, item, code_files, args.exec_timeout,
+        execution_enabled=execution_enabled,
+    )
 
     record.update(
         {
@@ -262,6 +267,7 @@ async def run_one(item, args, run_dir: Path) -> dict:
             "missing_keywords": missing,
             "artifact_match": artifact_match,
             "executes": exec_result["ok"],
+            "exec_enabled": execution_enabled,
             "exec_outcome": exec_result["outcome"],
             "exec_detail": exec_result["detail"],
             "judge_score": judge_score,
@@ -362,6 +368,22 @@ def install_fake_backend() -> None:
     orchestrator.generate_stream = fake_stream
 
 
+def validate_study_selection(manifest: dict, args, items, measurement_digest: str) -> None:
+    """Check the supplied plan before any generation; never derive it from rows."""
+    runrecord.validate_manifest(manifest)
+    if args.study != manifest["study_id"]:
+        raise ValueError("--study does not match the frozen manifest")
+    if args.arm not in manifest["arms"] or args.replicate not in manifest["replicates"]:
+        raise ValueError("arm/replicate is not a planned study cell")
+    if not {item.id for item in items} <= set(manifest["item_ids"]):
+        raise ValueError("selected items include cells absent from the study manifest")
+    expected = manifest["identity"]
+    if (expected["measurement_identity_version"] != corpus_mod.MEASUREMENT_IDENTITY_VERSION
+            or expected["measurement_digest"] != measurement_digest
+            or expected["grader_version"] != grading.GRADER_VERSION):
+        raise ValueError("measurement/checker identity differs from the frozen study manifest")
+
+
 async def main() -> int:
     parser = argparse.ArgumentParser(description="Run the orchestrator eval set.")
     parser.add_argument("--only", help="restrict to one category")
@@ -375,13 +397,18 @@ async def main() -> int:
     parser.add_argument("--limit", type=int, help="cap the number of prompts")
     parser.add_argument("--study", default="",
                         help="study id recorded on every run record, for a pre-registered study")
+    parser.add_argument("--study-manifest", type=Path,
+                        help="existing preregistered manifest, required with --study")
+    parser.add_argument("--replicate", type=int, default=0,
+                        help="planned replicate identity (current summaries support one)")
     parser.add_argument("--arm", default="default",
                         help="arm name recorded on every run record")
     parser.add_argument("--resume", help="continue an existing run id")
     parser.add_argument("--retry-failed", action="store_true",
                         help="with --resume, also re-run prompts that errored")
     parser.add_argument("--label", default="", help="label recorded in the summary")
-    parser.add_argument("--no-exec", action="store_true", help="skip executing generated code")
+    parser.add_argument("--no-exec", action="store_true",
+                        help="disable artifact execution in both graders; execution checks remain ungraded")
     parser.add_argument("--no-judge", action="store_true", help="skip the model judgment step")
     parser.add_argument("--exec-timeout", type=int, default=15)
     parser.add_argument("--fake", action="store_true", help="stubbed model — plumbing self-test")
@@ -405,6 +432,12 @@ async def main() -> int:
         parser.error("--concurrency must be at least 1")
     if args.pitch_key and not args.orchestrator:
         parser.error("--pitch-key only applies with --orchestrator")
+    if bool(args.study) != bool(args.study_manifest):
+        parser.error("--study and --study-manifest must be supplied together")
+    if args.replicate < 0:
+        parser.error("--replicate must be nonnegative")
+    if args.study and args.orchestrator:
+        parser.error("remote study identity capture is unavailable in this legacy DAG runner")
 
     if args.prompt_set:
         try:
@@ -421,10 +454,29 @@ async def main() -> int:
         print("No prompts matched the selection.")
         return 1
 
+    measurement_digest = corpus_mod.measurement_digest(all_items, grader_version=grading.GRADER_VERSION)
+    manifest = None
+    if args.study_manifest:
+        try:
+            manifest = runrecord.load_manifest(args.study_manifest)
+            validate_study_selection(manifest, args, prompts, measurement_digest)
+        except (ValueError, OSError) as exc:
+            parser.error(str(exc))
+
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     run_id = args.resume or datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     run_dir = RESULTS_DIR / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
+    if manifest is not None:
+        try:
+            runrecord.write_manifest(run_dir, manifest)
+            if (run_dir / runrecord.RUNS_FILENAME).exists():
+                previous = runrecord.load_runs(run_dir)
+                if any(row.get("study_id") != args.study or row.get("arm") != args.arm
+                       or row.get("replicate", 0) != args.replicate for row in previous):
+                    raise ValueError("resume directory belongs to a different study/arm/replicate")
+        except (ValueError, OSError) as exc:
+            parser.error(str(exc))
 
     records = load_existing(run_dir) if args.resume else []
     if args.resume and args.retry_failed:
@@ -476,6 +528,10 @@ async def main() -> int:
         "prompt_set": orchestrator.active_prompt_set().name,
         "corpus_version": corpus_mod.corpus_version(PROMPTS_FILE),
         "corpus_digest": corpus_mod.corpus_digest(all_items),
+        "corpus_identity_version": corpus_mod.CORPUS_IDENTITY_VERSION,
+        "measurement_identity_version": corpus_mod.MEASUREMENT_IDENTITY_VERSION,
+        "measurement_digest": measurement_digest,
+        "measurement_series": corpus_mod.measurement_series(PROMPTS_FILE),
         "grader_version": grading.GRADER_VERSION,
         "split_lock_holds": not lock_problems,
         "study_id": args.study,
@@ -496,7 +552,15 @@ async def main() -> int:
     limiter = asyncio.Semaphore(args.concurrency)
     done_count = 0
 
-    model_identity = await runrecord.capture_model_identity()
+    # A plumbing fixture must not inspect or claim a real local model identity.
+    if args.fake:
+        model_identity = runrecord.ModelIdentity("fixture", "fake-backend", digest="authored-fixture-v1")
+    elif args.orchestrator:
+        model_identity = runrecord.ModelIdentity("unknown-remote", "unknown")
+    else:
+        model_identity = await runrecord.capture_model_identity()
+    if manifest is not None and model_identity.digest != manifest["identity"]["model_digest"]:
+        parser.error("model identity differs from the frozen study manifest or is unavailable")
 
     async def worker(index: int, item) -> None:
         nonlocal done_count
@@ -523,6 +587,11 @@ async def main() -> int:
                     },
                     corpus_version=meta["corpus_version"],
                     corpus_digest=meta["corpus_digest"],
+                    corpus_identity_version=meta["corpus_identity_version"],
+                    measurement_identity_version=meta["measurement_identity_version"],
+                    measurement_digest=meta["measurement_digest"],
+                    measurement_series=meta["measurement_series"],
+                    replicate=args.replicate,
                     band=item.band_label,
                     model=model_identity,
                     descriptor_hash=None,

@@ -12,6 +12,7 @@ from typing import Any, Callable
 import ensemble
 import orchestrator
 from execution.contracts import DagOptionsV1, EnsembleOptionsV1
+from execution.generation import generation_brief
 from execution.artifacts import ArtifactEntryV1, ArtifactError, ArtifactStore
 from execution.dispatch import DispatchResult, Dispatcher, ExecutionUnit, PlacementDecision
 from execution.registry import ExecutionStrategy, StrategyOutcome
@@ -116,6 +117,7 @@ class DagStrategy(ExecutionStrategy):
             raise TypeError("DAG strategy requires DagOptionsV1")
 
         by_subtask: dict[int, DispatchResult] = {}
+        brief = generation_brief(request.task, request.output_contract)
 
         async def dispatch_build(subtask: dict, dependency_context: str) -> str:
             context.ensure_active()
@@ -123,7 +125,7 @@ class DagStrategy(ExecutionStrategy):
                 unit_id=f"dag-{subtask['id']}",
                 kind="dag_subtask",
                 title=subtask["title"],
-                prompt=orchestrator.compose_builder_prompt(subtask, dependency_context, request.task),
+                prompt=orchestrator.compose_builder_prompt(subtask, dependency_context, brief),
                 system=orchestrator.BUILDER_SYSTEM,
                 depends_on=tuple(f"dag-{item}" for item in subtask.get("depends_on", [])),
                 metadata={"subtask_id": subtask["id"]},
@@ -136,7 +138,7 @@ class DagStrategy(ExecutionStrategy):
                     subtask,
                     dependency_context,
                     on_token=token_callback,
-                    task=request.task,
+                    task=brief,
                 )
 
             dispatched = await context.dispatcher.execute(
@@ -213,6 +215,7 @@ class DagStrategy(ExecutionStrategy):
             validator_deadline_monotonic=context.deadline_monotonic,
             validator_cancel_event=context.cancel_event,
             validator_artifact_store=context.artifacts,
+            generation_task=brief,
         )
 
         files = [str(path) for path in result.get("code_files", [])]
@@ -357,13 +360,7 @@ class EnsembleStrategy(ExecutionStrategy):
 
         async def run_candidate(index: int) -> tuple[DispatchResult, list[str], list[Any], str | None]:
             candidate_id = f"candidate-{index}"
-            contract_text = ""
-            if request.output_contract:
-                contract_text = (
-                    "\n\n## Output contract\n"
-                    + json.dumps(request.output_contract.model_dump(mode="json"), indent=2)
-                )
-            prompt = request.task + contract_text
+            prompt = generation_brief(request.task, request.output_contract)
             unit = ExecutionUnit(
                 unit_id=candidate_id,
                 kind="candidate",

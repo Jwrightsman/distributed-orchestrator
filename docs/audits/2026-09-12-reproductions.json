@@ -1,0 +1,31 @@
+{
+  "project_traversal": {
+    "accepted_project_id": "../outside",
+    "outside_memory_read": true,
+    "outside_metadata_modified": true
+  },
+  "no_exec": {
+    "reported_legacy_outcome": "skipped",
+    "artifact_executed": true
+  },
+  "corpus_digest": {
+    "changed_checks_same_digest": true
+  },
+  "study_summary": {
+    "one_item_prefix_accepted_without_planned_manifest": true,
+    "replicates_forward": {
+      "only_observed_item": false
+    },
+    "replicates_reversed": {
+      "only_observed_item": true
+    }
+  },
+  "review_rating": {
+    "unchanged_bad_revision_rating": "PASS",
+    "missing_rating": "PASS"
+  },
+  "builder_failure": {
+    "pending_siblings_after_failure": 1,
+    "sibling_completed_after_pipeline_failed": true
+  }
+}
