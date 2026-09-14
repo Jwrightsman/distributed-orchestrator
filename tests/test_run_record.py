@@ -35,12 +35,19 @@ REVIEW_NEEDS_WORK = (
 
 
 def _stub(monkeypatch, review, revised=None):
+    review_count = 0
+
     async def fake_generate(prompt, system="", model=None, role=None, format=None):
+        nonlocal review_count
         if system == orchestrator.PLANNER_SYSTEM:
             return PLAN_JSON
         if system == orchestrator.BUILDER_SYSTEM:
             return "```python\nprint('built')\n```"
         if system == orchestrator.REVIEWER_SYSTEM:
+            if isinstance(review, tuple):
+                response = review[min(review_count, len(review) - 1)]
+                review_count += 1
+                return response
             return review
         if system == orchestrator.REVISER_SYSTEM:
             return revised if revised is not None else review
@@ -124,13 +131,13 @@ def test_a_reviser_that_gave_up_is_recorded_as_such(tmp_path, monkeypatch):
     assert rev["fired"] is True
     assert rev["passes"] == orchestrator._MAX_REVISIONS
     assert rev["cleared_the_rating"] is False
-    assert "limit" in rev["stopped_because"]
+    assert "did not change" in rev["stopped_because"]
     assert rev["rating_before"] == "NEEDS_WORK"
 
 
 def test_a_reviser_that_fixed_it_flips_the_rating(tmp_path, monkeypatch):
     fixed = "## Final Assembled Output\n\n```python\n" + "print('fixed')\n" * 60 + "```\n"
-    log = _run(tmp_path, monkeypatch, REVIEW_NEEDS_WORK, revised=fixed)
+    log = _run(tmp_path, monkeypatch, (REVIEW_NEEDS_WORK, REVIEW_PASS), revised=fixed)
     rev = log["revision"]
     assert rev["fired"] is True and rev["passes"] == 1
     assert rev["cleared_the_rating"] is True

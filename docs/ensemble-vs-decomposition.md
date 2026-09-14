@@ -2,15 +2,15 @@
 
 _August 15, 2026. `qwen3.5:4b`, CPU-only, prompt set v3, one machine._
 
-> **This is the pilot, and it came out inconclusive.** The study designed to
-> settle it is pre-registered at
-> [`experiments/ensemble-vs-decomposition.md`](experiments/ensemble-vs-decomposition.md)
-> and has **not been run**. It differs from this one in three ways: it is paired
-> over a 36-item locked corpus rather than unpaired over one artifact, its
-> primary endpoint is success at equal compute rather than per attempt, and the
-> compute ratio between the arms is measured rather than assumed. Read that
-> document before running anything; read this one for what was actually
-> observed.
+**September 13 correction:** this historical pilot does not establish equal
+compute or real candidate independence. Its unexecuted follow-on proposal is
+withdrawn pending measurement repairs; use the [new unactivated pilot plan](experiments/2026-09-13-canonical-pilot-plan.md).
+
+> **This historical pilot was inconclusive.** Its
+> [earlier follow-on proposal](experiments/ensemble-vs-decomposition.md) was
+> never run and is now withdrawn because its cost definition was invalid.
+> The new bounded pilot remains unactivated until identity and cost capture
+> prerequisites are met.
 
 The August 2026 external review's sharpest observation came from this project's
 own data: a labelled bar chart comes out right **10 times in 10**, and a
@@ -91,15 +91,17 @@ noise. Ensemble does not get promoted on p = 0.073.
 
 ---
 
-## The comparison that *is* robust: equal compute
+## Independence-based illustration, not a measured compute comparison
 
 Significance testing on the single-shot rate is the strict question. The
 practical question a coordinator faces is different: **given a fixed compute
 budget, which architecture delivers a working artifact?**
 
-One decomposed attempt costs ~50 minutes and yields 20%. The same 50 minutes
-buys roughly **eight** ensemble candidates, and the coordinator keeps any that
-passes.
+Historical elapsed times were about 50 minutes for a decomposed attempt and
+about six minutes per complete candidate. They do not measure aggregate
+hardware work or the correctness of an actual selected ensemble result.
+The following table is an oracle calculation under independent candidate
+errors, not an observed ensemble outcome or a supported cost-matched arm.
 
 | | budget | P(at least one working artifact) |
 | --- | --- | --- |
@@ -107,15 +109,16 @@ passes.
 | Ensemble ×5 | ~30 min | **98%** at p=0.55 · **88%** at the pessimistic bound p=0.35 |
 | Ensemble ×8 | ~45 min | **99.8%** at p=0.55 · **97%** at the pessimistic bound p=0.35 |
 
-Taking the **worst** end of ensemble's interval against the **best** end of
-decomposition's — 35% single-shot against 51% — five ensemble candidates still
-win, 88% to 51%, for less wall clock. That conclusion does not depend on which
-end of the confidence intervals is true, which is why it is worth more than the
-p-value.
+The interval arithmetic does not remove the independence and perfect-selection
+assumptions. It cannot establish a robust architecture advantage or cost parity.
 
-The caveat: this assumes candidates fail independently. Resampling the observed
-trials rather than trusting the closed form gives the same answer to within a
-percentage point, which is weak evidence for independence, not proof.
+Independent resampling constructs independent draws from the empirical marginal
+outcomes, so it converges to the same closed form. The gap is Monte Carlo noise,
+not evidence about real candidate independence. Perfectly correlated groups
+gain nothing: five candidates with marginal success 50% still have any-pass
+success 50%. The script now reports intact observed groups and actual selected
+outcomes separately when those data are supplied; it never invents groups from
+ungrouped trials.
 
 ---
 
@@ -169,11 +172,11 @@ checker, decomposition comes out at exactly 2/10 again.
 
 **Supported by this data:**
 
-- Ensemble is *at least as good* as decomposition on a coupled artifact, at a
-  fraction of the cost per attempt.
-- At equal compute, ensemble is better by a margin that survives both
-  confidence intervals.
-- The failure modes differ in the way the architectural explanation predicts.
+- The historical complete-candidate success estimate is 12/22 against 2/10
+  for the separate decomposition baseline; uncertainty remains substantial.
+- Observed failure modes motivate a controlled architecture comparison.
+- Comparable compute, candidate independence, and actual ensemble-selection
+  benefit remain unestablished by these records.
 
 **Not supported, and not claimed:**
 

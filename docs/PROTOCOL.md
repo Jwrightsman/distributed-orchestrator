@@ -180,6 +180,28 @@ subtask is an execution unit and uses the shared dispatcher. Planning, review,
 and revision execute on the coordinator; builder units may execute locally or
 on admitted workers according to placement.
 
+DAG planning, each local or remote builder, review, and revision MUST receive
+the same public output-contract requirements used for ensemble generation.
+The shared generation brief includes the task and explicit contract fields
+(kind, format, artifact count, required filenames, schema, and validators),
+preserves those constraints without truncation, and is bounded to 96 KiB in
+UTF-8. Private evaluator expectations, reference answers, and fixtures MUST
+NOT enter this brief; a caller-supplied canonical output contract is public
+to every generator that receives it. Stored task identity remains the original
+task rather than the expanded inference prompt.
+
+Review ratings are separate from canonical validation and assurance. Missing,
+malformed, or ambiguous ratings, and disabled review, MUST be represented as
+`UNKNOWN`, never synthesized as `PASS`. An attempted revision MUST NOT clear
+a failed rating merely because its deliverable lacks an issue heading. A
+changed deliverable requires a separate review accepting that output before
+`successful`/`cleared_the_rating` becomes true; the revision record preserves
+attempts, review responses, and the reviewed output's SHA-256. Unchanged,
+mostly empty, ungraded, or incompletely reviewed revisions cannot establish
+repair success. A later parser repair invalidates any earlier PASS for the
+changed bytes. These model review claims MUST NOT elevate canonical assurance
+or replace the required contract-floor validators.
+
 ### Ensemble version 1
 
 Each candidate receives the complete task and output contract. Candidate
@@ -255,6 +277,17 @@ the field as a security boundary.
 
 ## Project memory
 
+Every entry point and the storage layer MUST validate a portable `project_id`:
+1–128 word/hyphen/dot characters, starting with a word character or hyphen,
+without trailing dots or Windows device names. Valid existing identifiers are
+preserved verbatim. Separators, drive/UNC paths, traversal, and alternate data
+streams are rejected on either platform. All project paths, including metadata,
+memory and iteration files, are resolved inside the configured root. Symlinks,
+Windows junctions/reparse points, and multiply linked files are refused, with
+path rechecks after asynchronous summarization. This assumes a trusted host
+filesystem; check-then-open is not a race-proof boundary against a hostile local
+process replacing paths concurrently.
+
 DAG supports bounded project memory through its existing project pipeline.
 Ensemble and direct reject `project_id` with a validation error. They do not
 silently accept an identifier while ignoring its memory. Selected-result-only
@@ -295,6 +328,16 @@ validator process, rejects later worker results, persists a terminal failure
 with `execution_timeout`, and marks the result retryable. Failure to confirm
 process-tree cleanup is separately counted and must be treated as a containment
 incident.
+
+Every builder wave MUST cancel and await its unfinished siblings before a
+failure or cancellation returns. Every terminal execution failure, including
+strategy exceptions, placement failure, unsuccessful strategy outcomes, and
+result-normalization failure, MUST revoke queued work and durably cancel active
+attempts before normal terminal publication. Late output is inadmissible;
+already settled receipts and accepted contribution records remain intact.
+Required revocation uses finite persistence retries and fails closed if it
+cannot commit. Cooperative cancellation cannot guarantee an external inference
+provider has stopped spending compute.
 
 `POST /v1/executions/{execution_id}/cancel` is idempotent. It records the
 cancellation request and timestamps, signals local work, removes queued worker

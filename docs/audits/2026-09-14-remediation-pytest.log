@@ -1,0 +1,81 @@
+........................................................................ [  2%]
+........................................................................ [  5%]
+........................................................................ [  8%]
+........................................................................ [ 10%]
+........................................................................ [ 13%]
+........................................................................ [ 16%]
+........................................................................ [ 19%]
+.......................sssss.......................s.................... [ 21%]
+........................................................................ [ 24%]
+........................................................................ [ 27%]
+........................................................................ [ 29%]
+........................................................................ [ 32%]
+........................................................................ [ 35%]
+........................................................................ [ 38%]
+....................s..................ss............................... [ 40%]
+..............................................................ssssssssss [ 43%]
+sss..........s........s..s.ss..s..........s............................. [ 46%]
+........................................................................ [ 49%]
+........................................................................ [ 51%]
+........................................................................ [ 54%]
+........................................................................ [ 57%]
+........................................................................ [ 59%]
+........................................................................ [ 62%]
+........................................................................ [ 65%]
+.....................s.................................................. [ 68%]
+xx...................................................................... [ 70%]
+........................................................................ [ 73%]
+........................................................................ [ 76%]
+........................................................................ [ 79%]
+........................................................................ [ 81%]
+........................................................................ [ 84%]
+........................................................................ [ 87%]
+.................s...ss..............ss................................. [ 89%]
+........................................................................ [ 92%]
+................s..........s..s......................................... [ 95%]
+................................ss........................s............. [ 98%]
+.................................................                        [100%]
+=========================== short test summary info ===========================
+SKIPPED [1] tests\test_deploy_preflight.py:346: POSIX modes
+SKIPPED [1] tests\test_deploy_preflight.py:356: POSIX modes
+SKIPPED [1] tests\test_deploy_preflight.py:365: POSIX modes
+SKIPPED [1] tests\test_deploy_preflight.py:385: POSIX modes
+SKIPPED [1] tests\test_deploy_preflight.py:395: POSIX modes
+SKIPPED [1] tests\test_deployment_config.py:198: Windows permissions are ACL-based
+SKIPPED [1] tests\test_execution_validators.py:1309: POSIX process-group coverage
+SKIPPED [1] tests\test_execution_validators.py:1879: POSIX descriptor inheritance coverage
+SKIPPED [1] tests\test_execution_validators.py:1926: Linux RLIMIT_AS containment coverage
+SKIPPED [1] tests\test_local_tls_verification.py:189: openssl is needed to mint a throwaway CA for the stub
+SKIPPED [1] tests\test_local_tls_verification.py:199: openssl is needed to mint a throwaway CA for the stub
+SKIPPED [1] tests\test_local_tls_verification.py:214: openssl is needed to mint a throwaway CA for the stub
+SKIPPED [2] tests\test_local_tls_verification.py:252: openssl is needed to mint a throwaway CA for the stub
+SKIPPED [1] tests\test_local_tls_verification.py:274: openssl is needed to mint a throwaway CA for the stub
+SKIPPED [1] tests\test_local_tls_verification.py:293: openssl is needed to mint a throwaway CA for the stub
+SKIPPED [1] tests\test_local_tls_verification.py:311: openssl is needed to mint a throwaway CA for the stub
+SKIPPED [1] tests\test_local_tls_verification.py:326: openssl is needed to mint a throwaway CA for the stub
+SKIPPED [1] tests\test_local_tls_verification.py:338: openssl is needed to mint a throwaway CA for the stub
+SKIPPED [1] tests\test_local_tls_verification.py:350: openssl is needed to mint a throwaway CA for the stub
+SKIPPED [1] tests\test_local_tls_verification.py:384: openssl is needed to mint a throwaway CA for the stub
+SKIPPED [1] tests\test_local_tls_verification.py:393: openssl is needed to mint a throwaway CA for the stub
+SKIPPED [1] tests\test_macos_worker.py:167: executed macOS behaviour; reasoned elsewhere
+SKIPPED [1] tests\test_macos_worker.py:217: executed macOS behaviour; reasoned elsewhere
+SKIPPED [1] tests\test_macos_worker.py:247: executed macOS behaviour; reasoned elsewhere
+SKIPPED [1] tests\test_macos_worker.py:273: POSIX permission bits; skipped on Windows
+SKIPPED [1] tests\test_macos_worker.py:289: POSIX permission bits; skipped on Windows
+SKIPPED [1] tests\test_macos_worker.py:322: POSIX permission bits; skipped on Windows
+SKIPPED [1] tests\test_macos_worker.py:455: executed macOS behaviour; reasoned elsewhere
+SKIPPED [1] tests\test_runtime_deps.py:73: pyproject.toml does not declare requires-python
+SKIPPED [1] tests\test_validator_staging.py:337: POSIX descriptor replacement coverage
+SKIPPED [1] tests\test_validator_staging.py:405: POSIX special-file coverage
+SKIPPED [1] tests\test_validator_staging.py:418: Unix-domain socket coverage
+SKIPPED [1] tests\test_validator_staging.py:647: POSIX special-file coverage
+SKIPPED [1] tests\test_validator_staging.py:657: Unix-domain socket coverage
+SKIPPED [1] tests\test_worker_identity.py:247: POSIX mode checks do not model Windows ACLs
+SKIPPED [1] tests\test_worker_installer.py:279: POSIX permission bits
+SKIPPED [1] tests\test_worker_installer.py:318: POSIX permission bits
+SKIPPED [1] tests\test_worker_secret.py:68: POSIX permission bits
+SKIPPED [1] tests\test_worker_secret.py:82: POSIX symlinks
+SKIPPED [1] tests\test_worker_secret.py:389: POSIX permission bits
+XFAIL tests/test_seam_contracts.py::test_settlement_does_not_execute_accounting_inline - FINDING (Theme 4A): accounting executes inside the settlement transaction. ledger.compute_contribution_points is now a named policy that settlement applies rather than defines, but the contribution INSERT still runs inside AttemptStore.settle's BEGIN IMMEDIATE. A second accounting or payment policy could not be substituted without threading one through settlement, which would be exactly the indirection this PR was told not to build. Deferred: see ADR 0016.
+XFAIL tests/test_seam_contracts.py::test_registration_does_not_accept_a_worker_supplied_hostname - FINDING (Theme 4A): the legacy registration accepts a worker-supplied `hostname` and stores it on the process-local node record, where a protected operator view displays it. It is never dialled - the transport boundary holds - but it is transport-shaped data crossing a boundary that says addresses are not needed, and the typed capability descriptor deliberately excludes hostnames for exactly that reason. Removing the field is a protocol change, not a Theme 4A cleanup. Deferred: see ADR 0016.
+2598 passed, 41 skipped, 2 xfailed in 1369.21s (0:22:49)

@@ -380,6 +380,13 @@ If the study is interrupted it resumes; it is not reported partway.
 `scripts/eval_study_summary.py` refuses to compute a statistic over a study
 with a missing or ungraded cell.
 
+September 13 implementation note: a predeclared `manifest.json` is now required
+and the current summarizer supports only one replicate per item/arm. This
+multi-run research design needs its own explicit aggregation implementation
+before activation; it must not be reported using whichever replicate appears
+last. Freeze measurement v2 identity and complete budget capture under the
+repaired rules rather than inferring a plan from observed rows.
+
 ---
 
 ## Prerequisites

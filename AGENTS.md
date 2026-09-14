@@ -71,6 +71,11 @@ claim built on one run of a 28-task suite — including claims about this projec
 should be treated as provisional. Tightly-coupled artifacts are where a small
 model fails; the 2/10 is published for the same reason as the 10/10.
 
+The ~57% is a historical legacy-endpoint score, not the current grader's
+behavior-verified success rate. Its HTML check only established loading without
+uncaught errors. Grader 3 starts a new measurement series with explicit
+interactive checks; no historical score has been upgraded or regraded.
+
 ## What joining costs the host machine
 
 | resource | cost |

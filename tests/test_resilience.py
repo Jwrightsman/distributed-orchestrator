@@ -87,7 +87,7 @@ def test_pipeline_completes_even_when_never_satisfied(stub_model, tmp_path, monk
 
     assert result["final_output"]
     assert stub_model["plan"] >= 1
-    assert stub_model["review"] == 1
+    assert 1 <= stub_model["review"] <= 1 + orchestrator._MAX_REVISIONS
 
 
 def test_empty_revision_does_not_replace_good_output(monkeypatch, tmp_path):

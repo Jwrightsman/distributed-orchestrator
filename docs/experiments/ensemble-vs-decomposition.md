@@ -1,8 +1,14 @@
 # Does ensemble beat decomposition at equal compute?
 
-**Status: pre-registered, not run.** Written in September 2026 so the design is
-fixed before any data exists. Nothing in this document reports a result, and
-nothing in this pull request executed any part of it.
+**Withdrawn, September 13, 2026 — not executed.** This earlier proposal
+incorrectly treated elapsed generation time as compute. Its budget endpoint,
+sample-size/promotion rules, and commands below are historical design material,
+not an active preregistration. A new study must freeze an explicit manifest,
+measurement identity, complete per-call cost collection and a hardware policy.
+Use the [new unactivated canonical pilot plan](2026-09-13-canonical-pilot-plan.md).
+
+**Original status: proposed preregistration, never run; now withdrawn.** Written
+in September 2026. The historical design below reports no experimental result.
 
 **This is not the August experiment.** [`docs/ensemble-vs-decomposition.md`](../ensemble-vs-decomposition.md)
 reports a measurement that was made and came out inconclusive: 12/22 for a
@@ -66,9 +72,10 @@ from the measured costs rather than from a round number:
 
 On medians the ratio is 3.3 rather than 4.8, which is a real spread and the
 reason the *realised* ratio is reported alongside the result rather than taken
-on faith. `scripts/eval_study_summary.py` compares the arms' measured wall clock
-and refuses to describe the comparison as equal-compute if they came out more
-than 25% apart.
+on faith. The original proposal used a wall-clock ratio here; that was not a
+valid compute comparison. The repaired summarizer requires complete per-call
+timing/token/hardware records under a declared hardware policy, and reports
+elapsed latency separately.
 
 **`direct` is a baseline, not a cost-matched arm.** It costs about a fifth of
 the other two. It is there to separate "ensemble helps" from "one agent writing
@@ -101,21 +108,16 @@ prompt-set versions and are development-set material.
 judgment is involved anywhere in the primary endpoint. `judge_score` is
 collected and recorded, labelled exploratory, and gates nothing.
 
-**Compute is wall-clock model time**, in seconds, as recorded in
-`RunRecord.wall_clock_seconds`. Chosen over token counts because it is the cost
-that actually binds on this hardware — an 8 GB CPU-only machine — and because
-token telemetry is not currently captured end-to-end, so a token-based endpoint
-would be a promise rather than a measurement. Token counts are recorded when
-available and reported as a secondary figure; when they are absent the record
-says `token_cost` is unknown rather than implying zero.
+**The original compute definition is withdrawn.** `RunRecord.wall_clock_seconds`
+is elapsed latency. Parallel workers can consume much more aggregate hardware
+work at the same latency. Missing end-to-end token/timing capture prevents the
+cost-matched endpoint; it does not justify substituting elapsed time.
 
 **Both comparisons are reported. Equal-compute is primary.**
 
 * *Equal-attempt*: `decomposition` against `ensemble_5`, one attempt each, McNemar exact, one-sided.
-* *Equal-compute*: the same table, reported only if the measured wall-clock
-  ratio between the arms is within ±25%. Outside that band, the study reports
-  an equal-attempt result and states plainly that the equal-compute endpoint was
-  not established.
+* *Comparable declared hardware work*: unavailable until a new manifest and
+  complete per-call collector exist. A latency ratio cannot qualify this endpoint.
 
 Secondary, and pre-registered so they cannot be introduced afterwards as if they
 had been planned: `direct` against `decomposition`; per-taxonomy pass rates
@@ -234,8 +236,8 @@ the fix is a config setting, not a caveat. **Add it before running.**
 hypothetical: `qwen3.5:4b` is a moving tag, and re-pulling it between arms would
 silently make the two halves incomparable. The provenance envelope from Theme 3C
 gives the model digest and the descriptor hash needed to detect it, and
-`scripts/eval_study_summary.py` prints a warning when the digests in one study
-disagree. Where a run could not obtain a digest, the record says
+`scripts/eval_study_summary.py` now refuses a study when the digests disagree
+with its frozen manifest. Where a run could not obtain a digest, the record says
 `model_digest` is unknown rather than implying it was checked — following the
 envelope's own convention of recording absent facts rather than inferring them.
 
@@ -251,8 +253,8 @@ these is a null result and gets published as one:
 
 * `ensemble_5` does not pass more confirmatory items than `decomposition`.
 * Or it passes more, but McNemar's exact one-sided p > 0.05 at the 36 items run.
-* Or the arms' measured wall clock came out more than 25% apart, so what was
-  measured is not the equal-compute endpoint whatever the p-value says.
+* Or complete per-call cost capture under a new declared hardware policy is
+  unavailable. The old elapsed-time criterion cannot establish this endpoint.
 * Or the discordant count is small enough that no split could have cleared
   α = 0.05 — `stats.min_detectable` returning None — in which case the study
   had no resolving power and says so instead of reporting a p-value.
@@ -272,8 +274,8 @@ because changing a shipping default is the more consequential move:
 
 1. `ensemble_5` beats `decomposition` on the confirmatory set at McNemar exact
    one-sided **p < 0.05**;
-2. the measured wall-clock ratio between the arms is **within ±25%**, so the
-   win is at equal compute rather than at more compute;
+2. a new preregistered comparison establishes matching aggregate hardware work
+   with complete call costs; the withdrawn wall-clock ratio cannot qualify;
 3. the advantage is **not confined to one taxonomy group** — it appears in at
    least three of the nine taxonomy families, descriptively, since no single
    family is large enough to carry a test;

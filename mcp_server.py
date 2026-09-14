@@ -105,8 +105,12 @@ async def pitch_task(
         "placement": placement,
         "confidentiality": confidentiality,
     }
-    if project_id:
-        payload["project_id"] = project_id
+    if project_id is not None:
+        from project_ids import validate_project_id
+        try:
+            payload["project_id"] = validate_project_id(project_id)
+        except ValueError:
+            return "Invalid project_id: use a portable project identifier from list_projects."
     if candidates is not None:
         payload["candidates"] = candidates
     if output_contract is not None:
@@ -257,6 +261,11 @@ async def continue_project(project_id: str, task: str) -> str:
         project_id: from list_projects
         task: the next step, e.g. "add user authentication"
     """
+    from project_ids import validate_project_id
+    try:
+        validate_project_id(project_id)
+    except ValueError:
+        return "Invalid project_id: use a portable project identifier from list_projects."
     try:
         async with _client() as client:
             check = await client.get(f"/projects/{project_id}")

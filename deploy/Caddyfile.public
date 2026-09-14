@@ -14,6 +14,16 @@
 	# Let's Encrypt uses this to warn you before a certificate expires.
 	email YOUR-EMAIL@example.com
 
+	# Error logs may also contain request objects. Keep the same privacy
+	# filter as access logs; do not enable debug or request-body logging.
+	log default {
+		format filter {
+			request>uri delete
+			request>headers delete
+			resp_headers delete
+		}
+	}
+
 	servers {
 		timeouts {
 			# See the note in Caddyfile.tailscale: read_header only. A read or
@@ -66,13 +76,16 @@ YOUR-DOMAIN.example.com {
 		}
 	}
 
-	# A share URL is a bearer capability. Keep the query string out of the log.
+	# Omit full URI and all request/response headers from logs. This covers
+	# /v1/shares/{token}, encoded paths, queries, Referer/Location, cookies,
+	# Authorization, X-Node-Secret/Session, X-Pitch-Key, X-Viewer-Key and
+	# Idempotency-Key. Requests still forward those headers to the application.
 	log {
 		output file /var/log/caddy/mycelium.log
 		format filter {
-			request>uri query {
-				delete token
-			}
+			request>uri delete
+			request>headers delete
+			resp_headers delete
 		}
 	}
 }

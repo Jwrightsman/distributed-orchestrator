@@ -39,6 +39,8 @@ def make_record(item_id, arm, passed=True, graded=True, **over):
         strategy_config={"prompt_set": "v3"},
         corpus_version="2",
         corpus_digest="abc123",
+        measurement_identity_version="2",
+        measurement_digest="measurement-test",
         band="discriminating",
         model=runrecord.ModelIdentity("ollama", "qwen3.5:4b", digest="sha256:aa"),
         descriptor_hash=None,
@@ -54,7 +56,23 @@ def make_record(item_id, arm, passed=True, graded=True, **over):
     return runrecord.RunRecord(**base)
 
 
-def write_study(tmp_path, records):
+def make_manifest(records, **over):
+    manifest = {
+        "version": "1", "study_id": "s1", "item_ids": sorted({r.item_id for r in records}),
+        "arms": sorted({r.arm for r in records}), "replicates": [0],
+        "aggregation": "single_replicate",
+        "identity": {"measurement_identity_version": "2", "measurement_digest": "measurement-test",
+                     "grader_version": "2", "model_digest": "sha256:aa"},
+        "budget_policy": {"metric": "descriptive_only"},
+    }
+    manifest.update(over)
+    return manifest
+
+
+def write_study(tmp_path, records, manifest=None):
+    # Fixture plan is written before any synthetic run. Production callers must
+    # supply a preregistered plan, never infer it from the observed records.
+    runrecord.write_manifest(tmp_path, manifest or make_manifest(records))
     for record in records:
         runrecord.append_run(tmp_path, record)
     return tmp_path
@@ -266,15 +284,15 @@ def test_the_summariser_refuses_an_empty_study(tmp_path):
     assert "ERROR" in result.stdout
 
 
-def test_the_summariser_warns_when_the_model_changed_mid_study(tmp_path):
+def test_the_summariser_refuses_when_the_model_changed_mid_study(tmp_path):
     records = [
         make_record("item-0", "baseline"),
         make_record("item-0", "candidate",
                     model=runrecord.ModelIdentity("ollama", "qwen3.5:4b", digest="sha256:bb")),
     ]
     result = run_summary(write_study(tmp_path, records))
-    assert result.returncode == 0
-    assert "the model changed during this study, which invalidates it" in result.stdout
+    assert result.returncode == 1
+    assert "model_digest differs from frozen manifest" in result.stdout
 
 
 def test_the_summariser_warns_when_grader_versions_differ(tmp_path):
@@ -284,7 +302,8 @@ def test_the_summariser_warns_when_grader_versions_differ(tmp_path):
                     grading={"grader_version": "1", "ungraded_checks": []}),
     ]
     result = run_summary(write_study(tmp_path, records))
-    assert "different grader versions" in result.stdout
+    assert result.returncode == 1
+    assert "grader_version differs from frozen manifest" in result.stdout
 
 
 def test_the_summariser_says_when_the_arms_were_not_cost_matched(tmp_path):
@@ -295,18 +314,19 @@ def test_the_summariser_says_when_the_arms_were_not_cost_matched(tmp_path):
         records.append(make_record(f"item-{index}", "candidate", wall_clock_seconds=360.0))
     result = run_summary(write_study(tmp_path, records), "--paired", "baseline", "candidate")
     assert result.returncode == 0
-    assert "NOT within" in result.stdout
-    assert "equal-compute endpoint is not established" in result.stdout
+    assert "descriptive only" in result.stdout
+    assert "comparable-compute endpoint is not established" in result.stdout
 
 
-def test_the_summariser_confirms_equal_compute_when_the_arms_match(tmp_path):
+def test_matching_elapsed_time_does_not_establish_equal_compute(tmp_path):
     records = []
     for index in range(4):
         records.append(make_record(f"item-{index}", "baseline", wall_clock_seconds=1800.0))
         records.append(make_record(f"item-{index}", "candidate", wall_clock_seconds=1900.0))
     result = run_summary(write_study(tmp_path, records), "--paired", "baseline", "candidate")
     assert result.returncode == 0
-    assert "IS the equal-compute comparison" in result.stdout
+    assert "comparable-compute endpoint is not established" in result.stdout
+    assert "elapsed latency" in result.stdout
 
 
 def test_the_summariser_rejects_a_corrupt_run_log(tmp_path):

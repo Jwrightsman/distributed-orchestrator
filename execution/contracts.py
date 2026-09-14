@@ -12,6 +12,7 @@ from jsonschema.exceptions import SchemaError
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from node_capabilities import NodeResourceRequirementsV1
+from project_ids import validate_project_id
 
 StrategyNameV1 = Literal["auto", "dag", "ensemble", "direct"]
 SelectedStrategyV1 = Literal["dag", "ensemble"]
@@ -320,10 +321,7 @@ class ExecutionRequestV1(ProtocolModel):
     def project_id_not_blank(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        value = value.strip()
-        if not value:
-            raise ValueError("project_id cannot be blank")
-        return value
+        return validate_project_id(value)
 
     @model_validator(mode="after")
     def strategy_and_placement_are_coherent(self):

@@ -6,6 +6,7 @@ executes each subtask (builder), and reviews the assembled output (reviewer).
 """
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -215,15 +216,12 @@ def _extract_final_output(review_text: str) -> str | None:
 
 
 def _extract_rating(review_text: str) -> str:
-    """Return 'PASS', 'NEEDS_WORK', or 'FAIL' from a reviewer response."""
-    # First look inside a Quality Rating section for precision
-    section_match = re.search(r"##\s*quality rating\s*\n(.*?)(?=\n##|\Z)", review_text, re.IGNORECASE | re.DOTALL)
-    search_text = section_match.group(1) if section_match else review_text
-    for line in search_text.splitlines():
-        stripped = line.strip()
-        if stripped in ("PASS", "NEEDS_WORK", "FAIL"):
-            return stripped
-    return "PASS"  # default if we can't find it
+    """Return an unambiguous review rating; absent/malformed evidence is UNKNOWN."""
+    sections = re.findall(r"##\s*quality rating\s*\n(.*?)(?=\n##|\Z)", review_text, re.IGNORECASE | re.DOTALL)
+    if len(sections) != 1:
+        return "UNKNOWN"
+    rating = sections[0].strip()
+    return rating if rating in ("PASS", "NEEDS_WORK", "FAIL") else "UNKNOWN"
 
 
 def _extract_issues(review_text: str) -> str:
@@ -588,10 +586,9 @@ def ratings_for(log: dict, review_text: str = "") -> tuple[str, str]:
     """(final rating, the reviewer's own rating) for a saved run.
 
     These are two different things and the codebase used to treat them as one.
-    review.md holds what the *reviewer* said, which is the rating before any
-    revision pass; the log's `rating` is what the run ended on. When the
-    reviser clears the issues, a run whose review.md still reads FAIL is a
-    PASS — and reading the rating off the file reports it as a failure.
+    review.md holds the initial review; the log records the final rating.
+    A revision can change that rating only with a separate review of the
+    changed deliverable. The saved revision evidence records that review.
 
     That is not hypothetical: run 20260814_040809 showed PASS in the history
     list and FAIL in the detail modal, for the same run, on the same page.
@@ -617,14 +614,14 @@ async def commit_project_iteration(project_id: str, result: dict, task: str) -> 
 
     try:
         from memory import (
-            PROJECTS_DIR as project_memory_dir,
             SUMMARIZE_THRESHOLD,
             _summarize_memory,
             add_iteration,
+            project_path,
         )
 
         add_iteration(project_id, result, task)
-        memory_file = project_memory_dir / project_id / "memory.md"
+        memory_file = project_path(project_id, "memory.md")
         if not memory_file.exists():
             return
         raw = memory_file.read_text(errors="ignore", encoding="utf-8")
@@ -636,7 +633,7 @@ async def commit_project_iteration(project_id: str, result: dict, task: str) -> 
             # Optional compression must not unwind a durable completion.
             return
         if compressed and compressed != raw:
-            memory_file.write_text(compressed, encoding="utf-8")
+            project_path(project_id, "memory.md").write_text(compressed, encoding="utf-8")
     except asyncio.CancelledError:
         # Cancellation can race this hook after the terminal commit.
         return
@@ -655,6 +652,9 @@ def new_revision_record(rating: str, issues: str, final_output: str) -> dict:
     """
     return {
         "fired": False,
+        "attempted": False,
+        "successful": False,
+        "reviews": [],
         "passes": 0,
         "rating_before": rating,
         "rating_after": rating,
@@ -719,6 +719,7 @@ async def run_pipeline(
     validator_deadline_monotonic: float | None = None,
     validator_cancel_event=None,
     validator_artifact_store=None,
+    generation_task: str | None = None,
 ) -> dict:
     """Run the full planner -> builder -> reviewer pipeline.
 
@@ -737,6 +738,9 @@ async def run_pipeline(
     """
     node_id = platform.node()  # this machine's hostname
     _started = time.time()
+    # Keep the original user task in logs/memory; only inference receives the
+    # public contract compiled by the canonical strategy adapter.
+    inference_task = generation_task if generation_task is not None else task
 
     # Per-subtask facts the run page shows: who executed it, how long it took,
     # what it settled. Recorded here rather than reconstructed later, because
@@ -756,7 +760,7 @@ async def run_pipeline(
 
     # 1. Plan
     subtasks = await plan(
-        task,
+        inference_task,
         memory_context=memory_context,
         maximum_subtasks=maximum_subtasks,
     )
@@ -792,7 +796,7 @@ async def run_pipeline(
         else:
             # Default: local Ollama inference with optional token streaming
             st_on_token = (lambda tok: on_token(tok, st)) if on_token else None
-            output = await build(st, context, on_token=st_on_token, task=task)
+            output = await build(st, context, on_token=st_on_token, task=inference_task)
 
         build_meta = build_metadata_fn(st) if build_metadata_fn else {}
         if build_fn is None:
@@ -833,7 +837,16 @@ async def run_pipeline(
                 if all(dep_id in results for dep_id in st.get("depends_on", []))]
         if not wave:
             break  # shouldn't happen — cycle detection already ran
-        wave_results = await asyncio.gather(*[_build_one(st) for st in wave])
+        wave_tasks = [asyncio.create_task(_build_one(st)) for st in wave]
+        try:
+            wave_results = await asyncio.gather(*wave_tasks)
+        finally:
+            # gather propagates one failure without cancelling siblings. Own
+            # and drain every child before failure/cancellation leaves a wave.
+            for child in wave_tasks:
+                if not child.done():
+                    child.cancel()
+            await asyncio.gather(*wave_tasks, return_exceptions=True)
         for st_id, output in wave_results:
             results[st_id] = output
             remaining.pop(st_id)
@@ -843,7 +856,7 @@ async def run_pipeline(
     if review_enabled:
         if on_review_start:
             on_review_start()
-        review_output = await review(task, subtasks, results, memory_context=memory_context)
+        review_output = await review(inference_task, subtasks, results, memory_context=memory_context)
         log_contribution(
             node_id,
             "compute",
@@ -855,7 +868,7 @@ async def run_pipeline(
     else:
         assembled = "\n\n".join(results[st["id"]] for st in subtasks)
         review_output = (
-            "## Quality Rating\nPASS\n\n## Issues Found\nNone\n\n"
+            "## Quality Rating\nUNKNOWN\n\n## Issues Found\nNone\n\n"
             f"## Final Assembled Output\n{assembled}"
         )
     _review_seconds = round(time.time() - _review_t0, 1)
@@ -874,21 +887,54 @@ async def run_pipeline(
             break
         if on_revision_start:
             on_revision_start(_rev_pass + 1)
-        revised = await revise(task, issues, final_output)
+        revision["fired"] = True
+        revision["attempted"] = True
+        revision["passes"] += 1
+        revised = await revise(inference_task, issues, final_output)
         if len(revised.strip()) <= len(final_output) // 2:
             revision["stopped_because"] = "the revision came back mostly empty"
             break  # revision came back mostly empty — don't replace
-        revision["fired"] = True
-        revision["passes"] += 1
+        if revised.strip() == final_output.strip():
+            revision["stopped_because"] = "the revision did not change the deliverable"
+            break
         revision["chars_after"] = len(revised)
         final_output = revised
-        # Re-extract issues from the revised text in case it introduced new markers
-        issues = _extract_issues(revised)
-        # A revision pass clears the rating — if issues are gone, we're done
-        if not issues:
+        # A reviser returns a deliverable, not evidence that it fixed anything.
+        # Review the changed output separately and retain it unchanged; do not
+        # replace it with another unreviewed reviewer assembly.
+        _revision_review_t0 = time.time()
+        verification = await review(
+            inference_task,
+            [{"id": 1, "title": "Revised deliverable", "prompt": "Assess this exact revised deliverable against the task and all previous issues: " + issues, "depends_on": []}],
+            {1: revised},
+            memory_context=memory_context,
+        )
+        _review_seconds += round(time.time() - _revision_review_t0, 1)
+        log_contribution(node_id, "compute", credits=3, task="pipeline_revision_review")
+        credits.append({"contributor": node_id, "type": "review", "credits": 3,
+                        "for": "reviewing the revised deliverable"})
+        checked_rating = _extract_rating(verification)
+        checked_issues = _extract_issues(verification)
+        revision["reviews"].append({
+            "rating": checked_rating,
+            "issues": checked_issues,
+            "output_sha256": hashlib.sha256(revised.encode("utf-8")).hexdigest(),
+            "response": verification,
+        })
+        # A clipped candidate cannot support a claim about its unseen suffix.
+        complete_review = len(revised) <= _review_char_budget(1)
+        if checked_rating == "PASS" and not checked_issues and complete_review:
             rating = "PASS"
+            revision["successful"] = True
             revision["cleared_the_rating"] = True
-            revision["stopped_because"] = "the reviewer's issues were gone"
+            revision["stopped_because"] = "a separate review accepted the revised deliverable"
+            break
+        if checked_rating in ("FAIL", "NEEDS_WORK"):
+            rating = checked_rating
+        if checked_issues:
+            issues = checked_issues
+        else:
+            revision["stopped_because"] = "the separate review did not establish repair success"
             break
     else:
         if revision["fired"]:
@@ -912,8 +958,9 @@ async def run_pipeline(
         (project_dir / "output.md").write_text(final_output, encoding="utf-8")
 
     # Extract runnable code files, then mechanically verify and repair them
+    reviewed_output = final_output
     final_output, code_files, code_problems, code_precheck_error = await extract_and_repair(
-        task,
+        inference_task,
         final_output,
         review_output,
         project_dir,
@@ -927,6 +974,14 @@ async def run_pipeline(
         validator_artifact_store=validator_artifact_store,
         validator_execution_id=execution_id,
     )
+    if final_output != reviewed_output and rating == "PASS":
+        # A parser repair establishes only parsing evidence. It does not carry
+        # a review of the new bytes or establish overall review success.
+        rating = "UNKNOWN"
+        revision["successful"] = False
+        revision["cleared_the_rating"] = False
+        revision["stopped_because"] = "the deliverable changed after its last review"
+        revision["rating_after"] = rating
 
     log = {
         "task": task,

@@ -27,13 +27,20 @@ async def create_new_project(req: NewProjectRequest):
 @router.get("/projects/{project_id}")
 async def get_project(project_id: str):
     """Get project metadata and memory."""
-    from memory import load_project, get_memory_context, PROJECTS_DIR
+    from memory import load_project, get_memory_context, project_path
     try:
         meta = load_project(project_id)
+        memory = get_memory_context(project_id)
+        iter_dir = project_path(project_id, "iterations")
+        iterations = []
+        if iter_dir.exists():
+            for child in iter_dir.iterdir():
+                safe_child = project_path(project_id, "iterations", child.name)
+                if child.name.isdecimal() and safe_child.is_dir():
+                    iterations.append(child.name)
+        iterations.sort(key=int)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Invalid project storage path") from exc
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Project not found")
-    memory = get_memory_context(project_id)
-    # List iteration dirs
-    iter_dir = PROJECTS_DIR / project_id / "iterations"
-    iterations = sorted([d.name for d in iter_dir.iterdir() if d.is_dir()], key=lambda x: int(x)) if iter_dir.exists() else []
     return {**meta, "memory_context": memory, "iterations": iterations}

@@ -1,0 +1,900 @@
+{
+  "retrieved_utc": "2026-09-12T19:08:44.699707+00:00",
+  "repositories": [
+    {
+      "repository": "mudler/LocalAI",
+      "url": "https://github.com/mudler/LocalAI",
+      "default_branch": "master",
+      "commit": "832123427517cfcf4b0a89c7c78081d053225942",
+      "commit_date": "2026-09-12T08:15:23Z",
+      "archived": false,
+      "license_spdx": "MIT",
+      "license_api_url": "https://api.github.com/repos/mudler/LocalAI/license",
+      "description": "LocalAI is the open-source AI engine. Run any model - LLMs, vision, voice, image, video - on any hardware. No GPU required.",
+      "source_paths": [
+        "backend/python/mlx-distributed/Makefile",
+        "backend/python/mlx-distributed/backend.py",
+        "backend/python/mlx-distributed/coordinator.py",
+        "backend/python/mlx-distributed/install.sh",
+        "backend/python/mlx-distributed/mlx_cache.py",
+        "backend/python/mlx-distributed/requirements-cpu.txt",
+        "backend/python/mlx-distributed/requirements-cublas12.txt",
+        "backend/python/mlx-distributed/requirements-cublas13.txt",
+        "backend/python/mlx-distributed/requirements-l4t12.txt",
+        "backend/python/mlx-distributed/requirements-l4t13.txt",
+        "backend/python/mlx-distributed/requirements-mps.txt",
+        "backend/python/mlx-distributed/requirements.txt",
+        "backend/python/mlx-distributed/run.sh",
+        "backend/python/mlx-distributed/sharding.py",
+        "backend/python/mlx-distributed/test.py",
+        "backend/python/mlx-distributed/test.sh",
+        "core/application/distributed.go",
+        "core/application/p2p.go",
+        "core/cli/federated.go",
+        "core/cli/run_distributed_timeouts_test.go",
+        "core/cli/worker/worker_mlx_distributed.go",
+        "core/cli/worker/worker_p2p.go",
+        "core/cli/worker/worker_p2p_mlx.go",
+        "core/config/distributed_config.go",
+        "core/config/distributed_config_test.go",
+        "core/http/endpoints/localai/p2p.go",
+        "core/http/react-ui/e2e/p2p.spec.js",
+        "core/http/static/p2panimation.js",
+        "core/http/views/p2p.html",
+        "core/p2p/federated.go",
+        "core/p2p/federated_server.go",
+        "core/p2p/node.go",
+        "core/p2p/p2p.go",
+        "core/p2p/p2p_common.go",
+        "core/services/agentpool/agent_config_distributed.go",
+        "core/services/distributed/finetune.go",
+        "core/services/distributed/finetune_suite_test.go",
+        "core/services/distributed/finetune_test.go",
+        "core/services/distributed/gallery.go",
+        "core/services/distributed/gallery_test.go"
+      ],
+      "tree_truncated": false
+    },
+    {
+      "repository": "mudler/LocalAGI",
+      "url": "https://github.com/mudler/LocalAGI",
+      "default_branch": "main",
+      "commit": "8253de99163ef14dfe204e43e1addb550c697eca",
+      "commit_date": "2026-09-12T14:00:06Z",
+      "archived": false,
+      "license_spdx": "MIT",
+      "license_api_url": "https://api.github.com/repos/mudler/LocalAGI/license",
+      "description": "LocalAGI is a powerful, self-hostable AI Agent platform designed for maximum privacy and flexibility. A complete drop-in replacement for OpenAI's Responses APIs with advanced agentic capabilities. No clouds.  Local AI that works on consumer-grade hardware (CPU and GPU).",
+      "source_paths": [
+        "cmd/agent.go",
+        "core/action/state.go",
+        "core/agent/agent.go",
+        "core/agent/state.go",
+        "core/types/state.go",
+        "webui/collections/state.go"
+      ],
+      "tree_truncated": false
+    },
+    {
+      "repository": "BOINC/boinc",
+      "url": "https://github.com/BOINC/boinc",
+      "default_branch": "master",
+      "commit": "e89b76a8744264b81b7e4193679cd548427a71a4",
+      "commit_date": "2026-09-12T16:40:02Z",
+      "archived": false,
+      "license_spdx": "LGPL-3.0",
+      "license_api_url": "https://api.github.com/repos/BOINC/boinc/license",
+      "description": "Open-source software for volunteer computing and grid computing.",
+      "source_paths": [
+        "sched/credit.cpp",
+        "sched/credit.h",
+        "sched/credit_test.cpp",
+        "sched/sched_send.cpp",
+        "sched/sched_send.h",
+        "sched/validator.cpp",
+        "sched/validator.h",
+        "sched/validator_test.cpp"
+      ],
+      "tree_truncated": false
+    },
+    {
+      "repository": "langchain-ai/langgraph",
+      "url": "https://github.com/langchain-ai/langgraph",
+      "default_branch": "main",
+      "commit": "e539ac122f4126f6dd850581c1494948cf620e31",
+      "commit_date": "2026-09-09T07:22:43Z",
+      "archived": false,
+      "license_spdx": "MIT",
+      "license_api_url": "https://api.github.com/repos/langchain-ai/langgraph/license",
+      "description": "Build resilient agents.",
+      "source_paths": [
+        "libs/checkpoint/langgraph/checkpoint/base/__init__.py",
+        "libs/checkpoint/langgraph/checkpoint/base/id.py",
+        "libs/checkpoint/langgraph/checkpoint/base/py.typed",
+        "libs/langgraph/langgraph/pregel/_loop.py",
+        "libs/langgraph/langgraph/pregel/_runner.py"
+      ],
+      "tree_truncated": false
+    },
+    {
+      "repository": "SWE-agent/mini-swe-agent",
+      "url": "https://github.com/SWE-agent/mini-swe-agent",
+      "default_branch": "main",
+      "commit": "04d809ceab9df28f9adaed044884180159172930",
+      "commit_date": "2026-09-03T05:05:59Z",
+      "archived": false,
+      "license_spdx": "MIT",
+      "license_api_url": "https://api.github.com/repos/SWE-agent/mini-swe-agent/license",
+      "description": "The 100 line AI agent that solves GitHub issues or helps you in your command line. Radically simple, no huge configs, no giant monorepo\u2014but scores >74% on SWE-bench verified!",
+      "source_paths": [
+        "docs/reference/agents/default.md",
+        "docs/reference/environments/docker.md",
+        "docs/reference/environments/local.md",
+        "src/minisweagent/agents/default.py",
+        "src/minisweagent/environments/docker.py",
+        "src/minisweagent/environments/local.py"
+      ],
+      "tree_truncated": false
+    },
+    {
+      "repository": "huggingface/smolagents",
+      "url": "https://github.com/huggingface/smolagents",
+      "default_branch": "main",
+      "commit": "30bb1161095dbae2271e6bc3cc4c219cc3897a57",
+      "commit_date": "2026-08-22T12:10:32Z",
+      "archived": false,
+      "license_spdx": "Apache-2.0",
+      "license_api_url": "https://api.github.com/repos/huggingface/smolagents/license",
+      "description": "\ud83e\udd17 smolagents: a barebones library for agents that think in code."
+    },
+    {
+      "repository": "exo-explore/exo",
+      "url": "https://github.com/exo-explore/exo",
+      "default_branch": "main",
+      "commit": "21a54c5ea0230a3bec1e1a786d200126c7e34ec6",
+      "commit_date": "2026-08-25T18:59:53Z",
+      "archived": false,
+      "license_spdx": "Apache-2.0",
+      "license_api_url": "https://api.github.com/repos/exo-explore/exo/license",
+      "description": "Run frontier AI locally."
+    },
+    {
+      "repository": "bigscience-workshop/petals",
+      "url": "https://github.com/bigscience-workshop/petals",
+      "default_branch": "main",
+      "commit": "22afba627a7eb4fcfe9418c49472c6a51334b8ac",
+      "commit_date": "2024-08-25T08:12:19Z",
+      "archived": false,
+      "license_spdx": "MIT",
+      "license_api_url": "https://api.github.com/repos/bigscience-workshop/petals/license",
+      "description": "\ud83c\udf38 Run LLMs at home, BitTorrent-style. Fine-tuning and inference up to 10x faster than offloading"
+    },
+    {
+      "repository": "learning-at-home/hivemind",
+      "url": "https://github.com/learning-at-home/hivemind",
+      "default_branch": "master",
+      "commit": "4bd43b77895019b20d18d81d0d0c1a5ab9a10847",
+      "commit_date": "2026-01-04T23:36:23Z",
+      "archived": false,
+      "license_spdx": "MIT",
+      "license_api_url": "https://api.github.com/repos/learning-at-home/hivemind/license",
+      "description": "Decentralized deep learning in PyTorch. Built to train models on thousands of volunteers across the world."
+    },
+    {
+      "repository": "ggml-org/llama.cpp",
+      "url": "https://github.com/ggml-org/llama.cpp",
+      "default_branch": "master",
+      "commit": "3057bb66c86c46d5781e50e85462a760ba7d1feb",
+      "commit_date": "2026-09-12T14:09:46Z",
+      "archived": false,
+      "license_spdx": "MIT",
+      "license_api_url": "https://api.github.com/repos/ggml-org/llama.cpp/license",
+      "description": "LLM inference in C/C++"
+    },
+    {
+      "repository": "TheTom/llama-cpp-turboquant",
+      "url": "https://github.com/TheTom/llama-cpp-turboquant",
+      "default_branch": "feature/turboquant-kv-cache",
+      "commit": "407f3237bfb3eeaff61546797de3d8c1a96be748",
+      "commit_date": "2026-09-06T10:25:51Z",
+      "archived": false,
+      "license_spdx": "MIT",
+      "license_api_url": "https://api.github.com/repos/TheTom/llama-cpp-turboquant/license",
+      "description": "LLM inference in C/C++",
+      "source_paths": [],
+      "tree_truncated": false
+    }
+  ],
+  "inspected_files": [
+    {
+      "repository": "mudler/LocalAI",
+      "file": "core/p2p/federated.go",
+      "source_url": "https://raw.githubusercontent.com/mudler/LocalAI/832123427517cfcf4b0a89c7c78081d053225942/core/p2p/federated.go",
+      "browse_url": "https://github.com/mudler/LocalAI/blob/832123427517cfcf4b0a89c7c78081d053225942/core/p2p/federated.go",
+      "sha256": "a62100967762e5e5f86866004a205660e37e243ef2b610700cc0157f4f159e8f",
+      "lines": 118,
+      "inspected_symbols": [
+        {
+          "line": 13,
+          "text": "func NetworkID(networkID, serviceID string) string {"
+        },
+        {
+          "line": 24,
+          "text": "loadBalanced                  bool"
+        },
+        {
+          "line": 28,
+          "text": "func NewFederatedServer(listenAddr, service, p2pToken string, loadBalanced bool, workerTarget string) *FederatedServer {"
+        },
+        {
+          "line": 34,
+          "text": "loadBalanced: loadBalanced,"
+        },
+        {
+          "line": 39,
+          "text": "func (fs *FederatedServer) RandomServer() string {"
+        },
+        {
+          "line": 57,
+          "text": "func (fs *FederatedServer) syncTableStatus() {"
+        },
+        {
+          "line": 77,
+          "text": "func (fs *FederatedServer) SelectLeastUsedServer() string {"
+        },
+        {
+          "line": 101,
+          "text": "func (fs *FederatedServer) RecordRequest(nodeID string) {"
+        },
+        {
+          "line": 110,
+          "text": "func (fs *FederatedServer) ensureRecordExist(nodeID string) {"
+        }
+      ]
+    },
+    {
+      "repository": "mudler/LocalAI",
+      "file": "core/p2p/federated_server.go",
+      "source_url": "https://raw.githubusercontent.com/mudler/LocalAI/832123427517cfcf4b0a89c7c78081d053225942/core/p2p/federated_server.go",
+      "browse_url": "https://github.com/mudler/LocalAI/blob/832123427517cfcf4b0a89c7c78081d053225942/core/p2p/federated_server.go",
+      "sha256": "fe824125288a2e1d5a4a704d711b53bea6bca68d98422bc0014f0fe61e6a5166",
+      "lines": 142,
+      "inspected_symbols": [
+        {
+          "line": 15,
+          "text": "func (f *FederatedServer) Start(ctx context.Context) error {"
+        },
+        {
+          "line": 34,
+          "text": "func (fs *FederatedServer) proxy(ctx context.Context, node *node.Node) error {"
+        },
+        {
+          "line": 55,
+          "text": "return errors.New(\"context canceled\")"
+        },
+        {
+          "line": 70,
+          "text": "} else if fs.loadBalanced {"
+        },
+        {
+          "line": 97,
+          "text": "if fs.loadBalanced {"
+        },
+        {
+          "line": 107,
+          "text": "func (fs *FederatedServer) sendHTMLResponse(conn net.Conn, statusCode int, message string) {"
+        },
+        {
+          "line": 131,
+          "text": "func getHTTPStatusText(statusCode int) string {"
+        }
+      ]
+    },
+    {
+      "repository": "mudler/LocalAGI",
+      "file": "core/agent/agent.go",
+      "source_url": "https://raw.githubusercontent.com/mudler/LocalAGI/8253de99163ef14dfe204e43e1addb550c697eca/core/agent/agent.go",
+      "browse_url": "https://github.com/mudler/LocalAGI/blob/8253de99163ef14dfe204e43e1addb550c697eca/core/agent/agent.go",
+      "sha256": "3b7679a6bc86606c0ef5ef29644204c7ca1e7269917305f333bffdb6c6938d9d",
+      "lines": 1588,
+      "inspected_symbols": [
+        {
+          "line": 43,
+          "text": "func (t NoToolToCallTool) Run(args NoToolToCallArgs) (string, any, error) {"
+        },
+        {
+          "line": 81,
+          "text": "// currentJobByConversation tracks the running job per conversation_id for cancel-previous-on-new-message"
+        },
+        {
+          "line": 93,
+          "text": "func New(opts ...Option) (*Agent, error) {"
+        },
+        {
+          "line": 106,
+          "text": "ctx, cancel := context.WithCancel(c)"
+        },
+        {
+          "line": 114,
+          "text": "context:                  types.NewActionContext(ctx, cancel),"
+        },
+        {
+          "line": 181,
+          "text": "func (a *Agent) SharedState() *types.AgentSharedState {"
+        },
+        {
+          "line": 187,
+          "text": "func (a *Agent) SetStreamCallback(fn func(cogito.StreamEvent)) {"
+        },
+        {
+          "line": 194,
+          "text": "func (a *Agent) StartConversationConsumer() {"
+        },
+        {
+          "line": 198,
+          "text": "func (a *Agent) startNewConversationsConsumer() {"
+        },
+        {
+          "line": 220,
+          "text": "func (a *Agent) AddSubscriber(f func(*types.ConversationMessage)) {"
+        },
+        {
+          "line": 226,
+          "text": "func (a *Agent) Context() context.Context {"
+        },
+        {
+          "line": 230,
+          "text": "func (a *Agent) streamCallbackForJob(job *types.Job) func(cogito.StreamEvent) {"
+        },
+        {
+          "line": 247,
+          "text": "func (a *Agent) Ask(opts ...types.JobOption) *types.JobResult {"
+        },
+        {
+          "line": 274,
+          "text": "func (a *Agent) AskDirect(opts ...types.JobOption) *types.JobResult {"
+        },
+        {
+          "line": 322,
+          "text": "func (a *Agent) AskDirectSystem(opts ...types.JobOption) *types.JobResult {"
+        },
+        {
+          "line": 350,
+          "text": "func (a *Agent) Execute(j *types.Job) *types.JobResult {"
+        },
+        {
+          "line": 387,
+          "text": "func (a *Agent) Enqueue(j *types.Job) {"
+        },
+        {
+          "line": 392,
+          "text": "cancelPrevious := a.options.cancelPreviousOnNewMessage == nil || *a.options.cancelPreviousOnNewMessage"
+        },
+        {
+          "line": 393,
+          "text": "if cancelPrevious && j.Metadata != nil {"
+        },
+        {
+          "line": 407,
+          "text": "func (a *Agent) Transcribe(ctx context.Context, file string) (string, error) {"
+        },
+        {
+          "line": 421,
+          "text": "func (a *Agent) TTS(ctx context.Context, text string) ([]byte, error) {"
+        },
+        {
+          "line": 443,
+          "text": "var ErrContextCanceled = fmt.Errorf(\"context canceled\")"
+        },
+        {
+          "line": 445,
+          "text": "func (a *Agent) Stop() {"
+        },
+        {
+          "line": 459,
+          "text": "func (a *Agent) Pause() {"
+        },
+        {
+          "line": 466,
+          "text": "func (a *Agent) Resume() {"
+        },
+        {
+          "line": 472,
+          "text": "func (a *Agent) Paused() bool {"
+        },
+        {
+          "line": 478,
+          "text": "func (a *Agent) Memory() RAGDB {"
+        },
+        {
+          "line": 482,
+          "text": "func (a *Agent) processPrompts(ctx context.Context, conversation Messages) Messages {"
+        },
+        {
+          "line": 581,
+          "text": "func (a *Agent) describeImage(ctx context.Context, model, imageURL string) (string, error) {"
+        },
+        {
+          "line": 617,
+          "text": "func extractAllImageContent(message openai.ChatCompletionMessage) (images []string, text string, e error) {"
+        },
+        {
+          "line": 634,
+          "text": "func (a *Agent) processUserInputs(conv Messages) Messages {"
+        },
+        {
+          "line": 700,
+          "text": "func (a *Agent) filterJob(job *types.Job) (ok bool, err error) {"
+        }
+      ]
+    },
+    {
+      "repository": "BOINC/boinc",
+      "file": "sched/validator.cpp",
+      "source_url": "https://raw.githubusercontent.com/BOINC/boinc/e89b76a8744264b81b7e4193679cd548427a71a4/sched/validator.cpp",
+      "browse_url": "https://github.com/BOINC/boinc/blob/e89b76a8744264b81b7e4193679cd548427a71a4/sched/validator.cpp",
+      "sha256": "315e56343dba1b11790889ee7342183c2b7386bd97d9eb82a26053628cd4a951",
+      "lines": 1028,
+      "inspected_symbols": [
+        {
+          "line": 18,
+          "text": "// validator - check and validate results, and grant credit"
+        },
+        {
+          "line": 24,
+          "text": "// We recommend that you use the versions of these in validate_util2.cpp,"
+        },
+        {
+          "line": 35,
+          "text": "//  [--max_granted_credit X]    limit maximum granted credit to X"
+        },
+        {
+          "line": 36,
+          "text": "//  [--update_credited_job]     add userid/wuid pair to credited_job table"
+        },
+        {
+          "line": 38,
+          "text": "// credit options."
+        },
+        {
+          "line": 39,
+          "text": "// The default is to grant credit using an adaptive scheme"
+        },
+        {
+          "line": 43,
+          "text": "//  [--no_credit]               don't grant credit"
+        },
+        {
+          "line": 44,
+          "text": "//                              Use this, e.g., if using trickles for credit"
+        },
+        {
+          "line": 45,
+          "text": "//  [--post_assigned_credit]    init_result() must set result.claimed_credit"
+        },
+        {
+          "line": 46,
+          "text": "//  [--credit_from_wu]          get credit from workunit.canonical_credit"
+        },
+        {
+          "line": 47,
+          "text": "//  [--credit_from_runtime]     grant credit based on runtime"
+        },
+        {
+          "line": 71,
+          "text": "#include \"credit.h\""
+        },
+        {
+          "line": 76,
+          "text": "#include \"validate_util.h\""
+        },
+        {
+          "line": 77,
+          "text": "#include \"validate_util2.h\""
+        },
+        {
+          "line": 78,
+          "text": "#ifdef GCL_SIMULATOR"
+        },
+        {
+          "line": 84,
+          "text": "#define LOCKFILE \"validate.out\""
+        },
+        {
+          "line": 85,
+          "text": "#define PIDFILE  \"validate.pid\""
+        },
+        {
+          "line": 92,
+          "text": "typedef enum {"
+        },
+        {
+          "line": 108,
+          "text": "double max_granted_credit = 200 * 1000 * 365;"
+        },
+        {
+          "line": 109,
+          "text": "// limit credit to 1 TeraFLOP-year"
+        },
+        {
+          "line": 110,
+          "text": "bool update_credited_job = false;"
+        },
+        {
+          "line": 111,
+          "text": "bool credit_from_wu = false;"
+        },
+        {
+          "line": 112,
+          "text": "bool credit_from_runtime = false;"
+        },
+        {
+          "line": 113,
+          "text": "bool post_assigned_credit = false;"
+        },
+        {
+          "line": 114,
+          "text": "bool no_credit = false;"
+        },
+        {
+          "line": 130,
+          "text": "// Here when a result has been validated."
+        },
+        {
+          "line": 133,
+          "text": "// - insert credited_job record if needed"
+        },
+        {
+          "line": 138,
+          "text": "DB_CREDITED_JOB credited_job;"
+        },
+        {
+          "line": 158,
+          "text": "if (update_credited_job) {"
+        },
+        {
+          "line": 159,
+          "text": "credited_job.userid = host.userid;"
+        },
+        {
+          "line": 160,
+          "text": "credited_job.workunitid = long(wu.opaque);"
+        },
+        {
+          "line": 164,
+          "text": "retval = credited_job.insert();"
+        }
+      ]
+    },
+    {
+      "repository": "BOINC/boinc",
+      "file": "sched/credit.cpp",
+      "source_url": "https://raw.githubusercontent.com/BOINC/boinc/e89b76a8744264b81b7e4193679cd548427a71a4/sched/credit.cpp",
+      "browse_url": "https://github.com/BOINC/boinc/blob/e89b76a8744264b81b7e4193679cd548427a71a4/sched/credit.cpp",
+      "sha256": "96663f357fac3bce22a0116e08d763a554ce46efd71c3d185c608b2d43f52e7a",
+      "lines": 1042,
+      "inspected_symbols": [
+        {
+          "line": 17,
+          "text": "// Modify claimed credit based on the historical granted credit if"
+        },
+        {
+          "line": 21,
+          "text": "// functions related to the computation and granting of credit"
+        },
+        {
+          "line": 22,
+          "text": "// Note: this is credit.cpp rather than sched_credit.cpp"
+        },
+        {
+          "line": 23,
+          "text": "// because you might grant credit e.g. from a trickle handler"
+        },
+        {
+          "line": 37,
+          "text": "#include \"credit.h\""
+        },
+        {
+          "line": 39,
+          "text": "double fpops_to_credit(double fpops) {"
+        },
+        {
+          "line": 43,
+          "text": "double cpu_time_to_credit(double cpu_time, double cpu_flops_sec) {"
+        },
+        {
+          "line": 44,
+          "text": "return fpops_to_credit(cpu_time*cpu_flops_sec);"
+        },
+        {
+          "line": 48,
+          "text": "// the given amount of credit for work that started at the given time."
+        },
+        {
+          "line": 52,
+          "text": "int grant_credit(DB_HOST &host, double start_time, double credit) {"
+        },
+        {
+          "line": 63,
+          "text": "start_time, credit, CREDIT_HALF_LIFE,"
+        },
+        {
+          "line": 64,
+          "text": "host.expavg_credit, host.expavg_time"
+        },
+        {
+          "line": 66,
+          "text": "host.total_credit += credit;"
+        },
+        {
+          "line": 81,
+          "text": "start_time, credit, CREDIT_HALF_LIFE,"
+        },
+        {
+          "line": 82,
+          "text": "user.expavg_credit, user.expavg_time"
+        },
+        {
+          "line": 85,
+          "text": "buf, \"total_credit=total_credit+%.15e, expavg_credit=%.15e, expavg_time=%.15e\","
+        },
+        {
+          "line": 86,
+          "text": "credit,  user.expavg_credit, user.expavg_time"
+        },
+        {
+          "line": 109,
+          "text": "start_time, credit, CREDIT_HALF_LIFE,"
+        },
+        {
+          "line": 110,
+          "text": "team.expavg_credit, team.expavg_time"
+        },
+        {
+          "line": 113,
+          "text": "\"total_credit=total_credit+%.15e, expavg_credit=%.15e, expavg_time=%.15e\","
+        },
+        {
+          "line": 114,
+          "text": "credit,  team.expavg_credit, team.expavg_time"
+        },
+        {
+          "line": 127,
+          "text": "int grant_credit_by_app(RESULT& result, double credit) {"
+        },
+        {
+          "line": 145,
+          "text": "credit, CREDIT_HALF_LIFE,"
+        },
+        {
+          "line": 150,
+          "text": "credit, cu.expavg, cu.expavg_time"
+        },
+        {
+          "line": 158,
+          "text": "// team.  keep track of credit for zero (no team) also"
+        },
+        {
+          "line": 174,
+          "text": "credit, CREDIT_HALF_LIFE,"
+        },
+        {
+          "line": 179,
+          "text": "credit, ct.expavg, ct.expavg_time"
+        },
+        {
+          "line": 191,
+          "text": "// levels of confidence in a credit value"
+        },
+        {
+          "line": 206,
+          "text": "// PFC exceeded max granted credit - ignore"
+        },
+        {
+          "line": 261,
+          "text": "if (config.debug_credit) {"
+        },
+        {
+          "line": 297,
+          "text": "if (config.debug_credit) {"
+        },
+        {
+          "line": 302,
+          "text": "if (config.debug_credit) {"
+        }
+      ]
+    },
+    {
+      "repository": "langchain-ai/langgraph",
+      "file": "libs/langgraph/langgraph/pregel/_runner.py",
+      "source_url": "https://raw.githubusercontent.com/langchain-ai/langgraph/e539ac122f4126f6dd850581c1494948cf620e31/libs/langgraph/langgraph/pregel/_runner.py",
+      "browse_url": "https://github.com/langchain-ai/langgraph/blob/e539ac122f4126f6dd850581c1494948cf620e31/libs/langgraph/langgraph/pregel/_runner.py",
+      "sha256": "316cf133c724163a18ef279322615588b3fa8b96e359289a7cadea90f0df7622",
+      "lines": 941,
+      "inspected_symbols": [
+        {
+          "line": 47,
+          "text": "from langgraph.pregel._retry import arun_with_retry, run_with_retry"
+        },
+        {
+          "line": 51,
+          "text": "RetryPolicy,"
+        },
+        {
+          "line": 61,
+          "text": "\"langgraph/pregel/retry.py\","
+        },
+        {
+          "line": 86,
+          "text": "def __init__("
+        },
+        {
+          "line": 104,
+          "text": "def __setitem__("
+        },
+        {
+          "line": 116,
+          "text": "def on_done("
+        },
+        {
+          "line": 136,
+          "text": "\"\"\"Responsible for executing a set of Pregel tasks concurrently, committing"
+        },
+        {
+          "line": 140,
+          "text": "def __init__("
+        },
+        {
+          "line": 171,
+          "text": "def _should_route_to_error_handler(self, task: PregelExecutableTask) -> bool:"
+        },
+        {
+          "line": 176,
+          "text": "def tick("
+        },
+        {
+          "line": 182,
+          "text": "retry_policy: Sequence[RetryPolicy] | None = None,"
+        },
+        {
+          "line": 191,
+          "text": "callback=weakref.WeakMethod(self.commit),"
+        },
+        {
+          "line": 207,
+          "text": "run_with_retry("
+        },
+        {
+          "line": 209,
+          "text": "retry_policy,"
+        },
+        {
+          "line": 214,
+          "text": "retry_policy=retry_policy,"
+        },
+        {
+          "line": 221,
+          "text": "self.commit(t, None)"
+        },
+        {
+          "line": 223,
+          "text": "self.commit(t, exc)"
+        },
+        {
+          "line": 261,
+          "text": "run_with_retry,"
+        },
+        {
+          "line": 263,
+          "text": "retry_policy,"
+        },
+        {
+          "line": 268,
+          "text": "retry_policy=retry_policy,"
+        },
+        {
+          "line": 308,
+          "text": "run_with_retry,"
+        },
+        {
+          "line": 310,
+          "text": "retry_policy,"
+        },
+        {
+          "line": 315,
+          "text": "retry_policy=retry_policy,"
+        },
+        {
+          "line": 360,
+          "text": "async def atick("
+        },
+        {
+          "line": 366,
+          "text": "retry_policy: Sequence[RetryPolicy] | None = None,"
+        },
+        {
+          "line": 380,
+          "text": "callback=weakref.WeakMethod(self.commit),"
+        },
+        {
+          "line": 396,
+          "text": "await arun_with_retry("
+        },
+        {
+          "line": 398,
+          "text": "retry_policy,"
+        },
+        {
+          "line": 405,
+          "text": "retry_policy=retry_policy,"
+        },
+        {
+          "line": 413,
+          "text": "self.commit(t, None)"
+        },
+        {
+          "line": 415,
+          "text": "self.commit(t, exc)"
+        },
+        {
+          "line": 454,
+          "text": "arun_with_retry,"
+        }
+      ]
+    },
+    {
+      "repository": "SWE-agent/mini-swe-agent",
+      "file": "src/minisweagent/agents/default.py",
+      "source_url": "https://raw.githubusercontent.com/SWE-agent/mini-swe-agent/04d809ceab9df28f9adaed044884180159172930/src/minisweagent/agents/default.py",
+      "browse_url": "https://github.com/SWE-agent/mini-swe-agent/blob/04d809ceab9df28f9adaed044884180159172930/src/minisweagent/agents/default.py",
+      "sha256": "e8ef8aa365942d739c2ec5cb0879f60f377d2dc2de8ec670aaedf3bafb45a4c2",
+      "lines": 190,
+      "inspected_symbols": [
+        {
+          "line": 39,
+          "text": "def __init__(self, model: Model, env: Environment, *, config_class: type = AgentConfig, **kwargs):"
+        },
+        {
+          "line": 52,
+          "text": "def get_template_vars(self, **kwargs) -> dict:"
+        },
+        {
+          "line": 66,
+          "text": "def _render_template(self, template: str) -> str:"
+        },
+        {
+          "line": 69,
+          "text": "def add_messages(self, *messages: dict) -> list[dict]:"
+        },
+        {
+          "line": 74,
+          "text": "def handle_uncaught_exception(self, e: Exception) -> list[dict]:"
+        },
+        {
+          "line": 88,
+          "text": "def run(self, task: str = \"\", **kwargs) -> dict:"
+        },
+        {
+          "line": 126,
+          "text": "def step(self) -> list[dict]:"
+        },
+        {
+          "line": 130,
+          "text": "def query(self) -> dict:"
+        },
+        {
+          "line": 154,
+          "text": "def execute_actions(self, message: dict) -> list[dict]:"
+        },
+        {
+          "line": 159,
+          "text": "def serialize(self, *extra_dicts) -> dict:"
+        },
+        {
+          "line": 182,
+          "text": "def save(self, path: Path | None, *extra_dicts) -> dict:"
+        }
+      ]
+    }
+  ]
+}

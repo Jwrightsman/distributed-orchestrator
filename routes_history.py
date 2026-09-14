@@ -382,8 +382,8 @@ async def fork_template(timestamp: str):
     memory_content = ""
     if project_id:
         try:
-            from memory import PROJECTS_DIR
-            proj_memory_file = PROJECTS_DIR / project_id / "memory.md"
+            from memory import project_path
+            proj_memory_file = project_path(project_id, "memory.md")
             if proj_memory_file.exists():
                 memory_content = proj_memory_file.read_text(errors="ignore", encoding="utf-8")
         except Exception:

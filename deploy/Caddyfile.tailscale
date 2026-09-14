@@ -1,6 +1,6 @@
 # Path A — private overlay (Tailscale). See docs/DEPLOY.md.
 #
-# Copy to /etc/caddy/Caddyfile, replace the two placeholder names, then:
+# Copy to /etc/caddy/Caddyfile, replace the hostname and tailnet IP, then:
 #
 #     sudo caddy validate --config /etc/caddy/Caddyfile
 #     sudo systemctl reload caddy
@@ -13,14 +13,23 @@
 # self-signed certificate cannot be made to work on a worker. `tailscale cert`
 # and Caddy's automatic issuance both produce certificates that already work.
 #
-# Reachability: the site address below is a tailnet name, so Caddy binds only
-# the interface the tailnet gave this host. Nothing here is on the public
-# Internet, and the application itself is on 127.0.0.1:8000 where only this
-# host can reach it.
+# Reachability: the hostname selects the TLS/site identity; it does NOT restrict
+# listening interfaces. The explicit bind below restricts listening to the
+# configured tailnet address. Keep the application on 127.0.0.1:8000.
 {
 	# No public ACME issuance on this path — the certificate comes from
 	# `tailscale cert` and is named explicitly in the site block.
 	auto_https disable_redirects
+
+	# Error logs can include request objects too. Omit sensitive fields there
+	# as well as in access logs; do not enable debug or request-body logging.
+	log default {
+		format filter {
+			request>uri delete
+			request>headers delete
+			resp_headers delete
+		}
+	}
 
 	servers {
 		timeouts {
@@ -38,6 +47,11 @@
 # Replace with your own tailnet name: `tailscale status --json | grep DNSName`
 # gives it, and it always ends in .ts.net.
 YOUR-HOST.YOUR-TAILNET.ts.net {
+	# Replace with this server's literal `tailscale ip -4` address.
+	# Optional IPv6: append its literal `tailscale ip -6` address on this line.
+	# Never use 0.0.0.0, ::, or a hostname here. Recheck after device re-enrollment.
+	bind YOUR-TAILNET-IPV4
+
 	# Written by: tailscale cert YOUR-HOST.YOUR-TAILNET.ts.net
 	tls /var/lib/caddy/YOUR-HOST.YOUR-TAILNET.ts.net.crt /var/lib/caddy/YOUR-HOST.YOUR-TAILNET.ts.net.key
 
@@ -68,14 +82,16 @@ YOUR-HOST.YOUR-TAILNET.ts.net {
 		}
 	}
 
-	# A share URL is a bearer capability: whoever reads the log line can open
-	# the run. Keep the query string out of the log.
+	# Omit full URI and all request/response headers from logs. This covers
+	# /v1/shares/{token}, encoded paths, queries, Referer/Location, cookies,
+	# Authorization, X-Node-Secret/Session, X-Pitch-Key, X-Viewer-Key and
+	# Idempotency-Key. Requests still forward those headers to the application.
 	log {
 		output file /var/log/caddy/mycelium.log
 		format filter {
-			request>uri query {
-				delete token
-			}
+			request>uri delete
+			request>headers delete
+			resp_headers delete
 		}
 	}
 }

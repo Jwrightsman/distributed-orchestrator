@@ -14,8 +14,10 @@ complete artifact, scored by the same browser checks that produced the 2/10
 (`showcase_reliability.check_artifact`). That gives `p`, the single-shot rate
 for the ensemble architecture. Ensemble-of-N is then the chance that at least
 one of N independent candidates passes, reported two ways: the closed form
-1-(1-p)^N, and an empirical estimate by resampling the observed trials, which
-does not assume independence holds.
+1-(1-p)^N, and independent resampling of the observed marginal outcomes.
+Both assume independent candidates. Their difference is Monte Carlo noise,
+not a test of independence in real executions. Actual grouped and selected
+outcomes, when supplied via --groups, are reported separately.
 
 **The comparison is p against the 2/10 decomposition baseline**, by Fisher's
 exact test. Everything after that is arithmetic on p, so if p is not
@@ -37,7 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import ensemble  # noqa: E402
 import showcase  # noqa: E402
-from showcase_reliability import check_artifact  # noqa: E402
+from scripts.showcase_reliability import check_artifact  # noqa: E402
 
 # The published decomposition result this is measured against. Both numbers are
 # committed: scripts/showcase_results/showcase_20260808_162106.jsonl, re-scored
@@ -55,13 +57,9 @@ from stats import fisher_exact_greater, wilson  # noqa: E402
 
 
 def ensemble_rate_empirical(outcomes: list[bool], n: int, draws: int = 20000) -> float:
-    """P(at least one pass in a group of n), by resampling the observed trials.
-
-    Sampling with replacement from the observed outcomes rather than assuming
-    independence analytically. With a small number of trials the two agree; the
-    point of showing both is that a gap between them is a signal the trials are
-    not as independent as the closed form assumes.
-    """
+    """Independence-based illustration; cannot diagnose real group dependence."""
+    if n < 1 or draws < 1:
+        raise ValueError("group size and draws must be positive")
     if not outcomes:
         return 0.0
     rng = random.Random(20260815)
@@ -70,6 +68,43 @@ def ensemble_rate_empirical(outcomes: list[bool], n: int, draws: int = 20000) ->
         if any(rng.choice(outcomes) for _ in range(n))
     )
     return hits / draws
+
+
+def grouped_outcomes(groups: list[dict]) -> dict:
+    """Describe intact observed task/execution groups, including actual selection.
+
+    No synthetic grouping of marginal trials. Missing selection remains unknown;
+    an oracle any-pass rate never substitutes for selected-winner correctness.
+    These descriptive rates do not assume independent candidates or tasks.
+    """
+    if not groups:
+        raise ValueError("no observed candidate groups")
+    seen = set()
+    observed = []
+    for group in sorted(groups, key=lambda g: (g["item_id"], g["execution_id"])):
+        key = (group["item_id"], group["execution_id"])
+        candidates = group.get("candidates")
+        if key in seen or not candidates:
+            raise ValueError("duplicate or empty observed candidate group")
+        seen.add(key)
+        ids = [c["candidate_id"] for c in candidates]
+        if len(ids) != len(set(ids)) or any(type(c.get("passed")) is not bool for c in candidates):
+            raise ValueError("candidate ids must be unique and outcomes fully graded")
+        selected = group.get("selected_candidate_id")
+        if selected is not None and selected not in ids:
+            raise ValueError("selected candidate was not graded in its group")
+        values = {c["candidate_id"]: c["passed"] for c in candidates}
+        observed.append({"item_id": key[0], "execution_id": key[1],
+                         "candidate_count": len(values), "any_pass": any(values.values()),
+                         "selected_pass": values.get(selected),
+                         "all_outcomes_equal": len(set(values.values())) == 1})
+    selected = [g["selected_pass"] for g in observed if g["selected_pass"] is not None]
+    return {"groups": observed, "group_count": len(observed),
+            "any_pass_rate": sum(g["any_pass"] for g in observed) / len(observed),
+            "selected_pass_rate": sum(selected) / len(selected) if len(selected) == len(observed) else None,
+            "selection_missing": len(observed) - len(selected),
+            "all_outcomes_equal_groups": sum(g["all_outcomes_equal"] for g in observed),
+            "inference": "descriptive intact groups; no independence or causal gain claim"}
 
 
 def min_trials_for_significance(baseline_k: int, baseline_n: int, true_p: float) -> int | None:
@@ -152,14 +187,12 @@ def baseline_trials_needed(true_p: float, baseline_p: float, cap: int = 300) -> 
 
 
 def report(outcomes: list[bool], cand, elapsed: float, out_root: Path,
-           ensemble_n: int = 3) -> None:
+           ensemble_n: int = 3, groups: list[dict] | None = None) -> None:
     """Print the verdict and write summary.json. Shared by both entry paths."""
     k, n = sum(outcomes), len(outcomes)
     lo, hi = wilson(k, n)
     b_k, b_n = BASELINE.get(cand.id, (2, 10))
     p_value = fisher_exact_greater(k, n - k, b_k, b_n - b_k)
-    pass
-
     print(f"\n{'=' * 64}", flush=True)
     print(f"SINGLE-SHOT (ensemble architecture): {k}/{n} = {k/n:.0%}"
           f"   95% CI {lo:.0%}-{hi:.0%}", flush=True)
@@ -186,20 +219,27 @@ def report(outcomes: list[bool], cand, elapsed: float, out_root: Path,
                 print("         side is ~50 min per run, which is the expensive half.", flush=True)
         print("         Do not promote ensemble on this result.", flush=True)
 
-    print(f"\nENSEMBLE-OF-N (at least one candidate passes), from p = {k/n:.2f}:", flush=True)
+    print(f"\nINDEPENDENCE-BASED ILLUSTRATION (oracle any-pass), from p = {k/n:.2f}:", flush=True)
     for grp in sorted({2, 3, ensemble_n, 5}):
         closed = 1 - (1 - k / n) ** grp if n else 0
         emp = ensemble_rate_empirical(outcomes, grp)
         print(f"  N={grp}: closed form {closed:.0%}   resampled {emp:.0%}"
               f"   (cost: {grp} model calls)", flush=True)
     print("\nThose rows are arithmetic on the single-shot rate, not separate", flush=True)
-    print("measurements. If the verdict above is inconclusive, so are they.", flush=True)
+    print("measurements. Both assume independent draws; gaps are Monte Carlo noise.", flush=True)
+    observed = grouped_outcomes(groups) if groups else None
+    if observed:
+        print(f"Observed intact groups: {observed['group_count']}; "
+              f"any-pass={observed['any_pass_rate']}; selected-pass={observed['selected_pass_rate']}; "
+              f"selection missing={observed['selection_missing']}", flush=True)
 
     (out_root / "summary.json").write_text(json.dumps({
         "candidate": cand.id, "trials": n, "passes": k,
         "single_shot_rate": k / n if n else 0, "ci95": [lo, hi],
         "baseline": [b_k, b_n], "fisher_p_one_sided": p_value,
         "seconds_total": elapsed, "outcomes": outcomes,
+        "resampling_assumption": "independent marginal draws, not a dependence test",
+        "observed_groups": observed,
     }, indent=2), encoding="utf-8")
     print(f"\nwrote {out_root/'summary.json'}", flush=True)
 
@@ -211,11 +251,15 @@ async def main() -> int:
     ap.add_argument("--trials", type=int, default=12, help="independent candidates to generate")
     ap.add_argument("--ensemble-n", type=int, default=3, help="group size to report")
     ap.add_argument("--out", default=None, help="results directory")
+    ap.add_argument("--groups", help="JSON list of observed item/execution candidate groups and selected ids")
     ap.add_argument("--score-only", default=None, metavar="DIR",
                     help="re-score candidates already generated in DIR; no inference")
     args = ap.parse_args()
 
     cand = showcase.get(args.candidate)
+    groups = json.loads(Path(args.groups).read_text(encoding="utf-8")) if args.groups else None
+    if groups is not None:
+        grouped_outcomes(groups)
 
     if args.score_only:
         root = Path(args.score_only)
@@ -226,7 +270,7 @@ async def main() -> int:
                   f"{str(r['reasons'])[:64]}", flush=True)
         (root / "rescored.jsonl").write_text(
             "\n".join(json.dumps(r) for r in rows), encoding="utf-8")
-        report(outcomes, cand, 0.0, root, args.ensemble_n)
+        report(outcomes, cand, 0.0, root, args.ensemble_n, groups)
         return 0
     out_root = Path(args.out or f"scripts/ensemble_results/{args.candidate}_"
                                 f"{time.strftime('%Y%m%d_%H%M%S')}")
@@ -234,7 +278,7 @@ async def main() -> int:
     jsonl = out_root / "trials.jsonl"
 
     print(f"ENSEMBLE EXPERIMENT — {cand.id} ({cand.title})", flush=True)
-    print(f"  {args.trials} independent complete-artifact candidates, one model call each", flush=True)
+    print(f"  {args.trials} separately generated complete-artifact candidates, one model call each", flush=True)
     print("  scored by the same browser checks that produced the published baseline", flush=True)
     print(f"  baseline (decomposition): {BASELINE.get(cand.id, ('?', '?'))}")
     print(f"  writing to {out_root}\n", flush=True)
@@ -272,7 +316,7 @@ async def main() -> int:
         ap.error("--trials must be at least 1")
     await ensemble.run_ensemble(cand.pitch, args.trials, out_root, on_candidate=record)
 
-    report(outcomes, cand, time.time() - started, out_root, args.ensemble_n)
+    report(outcomes, cand, time.time() - started, out_root, args.ensemble_n, groups)
     return 0
 
 

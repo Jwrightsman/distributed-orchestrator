@@ -154,8 +154,8 @@ def test_extract_rating_fail():
     assert _extract_rating(REVIEW.replace("PASS", "FAIL")) == "FAIL"
 
 
-def test_extract_rating_defaults_to_pass_when_missing():
-    assert _extract_rating("no rating anywhere in this text") == "PASS"
+def test_extract_rating_is_unknown_when_missing():
+    assert _extract_rating("no rating anywhere in this text") == "UNKNOWN"
 
 
 def test_extract_issues_none_is_empty():
