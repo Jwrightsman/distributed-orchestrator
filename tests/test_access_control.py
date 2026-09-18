@@ -74,6 +74,7 @@ def test_server_installs_viewer_middleware():
         "/node/private-node",
         "/v1/operator/health",
         "/v1/operator/config",
+        "/v1/operator/invite",
     ],
 )
 def test_sensitive_read_routes_require_viewer(viewer_config, gated_app, path):

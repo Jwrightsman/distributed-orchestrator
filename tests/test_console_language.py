@@ -68,7 +68,7 @@ SOURCES = STANDALONE + ("run.html", "status.html", "_dashboard.css", "_dashboard
 # next to exactly the claims this list exists for: sampling, evidence, and what
 # a credential proves.
 RENDERING_MODULES = ("routes_status.py", "routes_run.py", "routes_try.py",
-                     "run_detail.py", "config_view.py")
+                     "run_detail.py", "config_view.py", "invite_view.py")
 
 _SCRIPT_OR_STYLE = re.compile(r"<(script|style)\b.*?</\1>", re.S | re.I)
 _TAG = re.compile(r"<[^>]+>")

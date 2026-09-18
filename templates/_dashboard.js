@@ -278,11 +278,11 @@ try {
 } catch (e) {}
 
 // ── Views ────────────────────────────────────────────────────────
-const TABS = ['overview', 'runs', 'gallery', 'nodes', 'projects', 'guild', 'evals', 'config'];
+const TABS = ['overview', 'runs', 'gallery', 'nodes', 'projects', 'guild', 'evals', 'invite', 'config'];
 const TAB_TITLES = {
   overview: 'Overview', runs: 'Runs', gallery: 'Gallery',
   nodes: 'Network nodes', projects: 'Projects', guild: 'Guild standings',
-  evals: 'Evals', config: 'Config',
+  evals: 'Evals', invite: 'Connect', config: 'Config',
 };
 
 function showTab(name, opts) {
@@ -313,6 +313,7 @@ function showTab(name, opts) {
   if (name === 'guild') loadStandings();
   if (name === 'runs') loadHistory();
   if (name === 'evals') loadEvals();
+  if (name === 'invite') loadInvite();
   if (name === 'config') loadConfig();
   // Evidence is only fetched while this view is open, so opening it has to ask
   // rather than waiting up to 3s for the next tick to notice.
@@ -818,7 +819,7 @@ function renderNodes(nodes) {
     nodesList.innerHTML = `
       <div class="empty-state">
         <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="18" r="2.2"/><path d="M10.5 6.8 6.5 15.8M13.5 6.8l4 9M7.4 18h9.2"/></svg></div>
-        <p>No machines connected yet.<br>Run <code class="code-inline">python join.py ${escHtml(location.origin)}</code> on another machine to join.</p>
+        <p>No machines connected yet.<br><button class="link-btn" type="button" data-tab="invite">How a machine joins →</button></p>
       </div>`;
     return;
   }
@@ -1501,6 +1502,33 @@ async function loadConfig() {
   renderStatus();
 }
 
+// ── Connect ──────────────────────────────────────────────────────
+/* Built in invite_view.py, the same arrangement as Config: the route reads
+   this coordinator's settings for the warning panel and reduces every key to
+   a word before the fragment exists. Asked for when the view opens. */
+async function loadInvite() {
+  const el = $('invite-body');
+  try {
+    const data = await apiJson('/v1/operator/invite');
+    el.innerHTML = data.invite_html || (
+      '<div class="empty-state"><p>The settings were read but this view could not be built.</p></div>'
+    );
+  } catch (e) {
+    if (e instanceof ViewerLocked) return;
+    el.innerHTML = '<div class="empty-state"><p>How this coordinator is set up could not be loaded.<br>'
+      + 'The coordinator may be unreachable.</p></div>';
+  }
+}
+
+function copyCommand(text) {
+  const done = () => showToast('Copied');
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(() => prompt('Copy this:', text));
+  } else {
+    prompt('Copy this:', text);   // non-HTTPS contexts have no clipboard API
+  }
+}
+
 // ── Projects ─────────────────────────────────────────────────────
 async function loadProjects() {
   try {
@@ -1671,8 +1699,10 @@ function copyShareLink() {
 // because they are all real <button> and <a> elements now.
 document.addEventListener('click', (e) => {
   const t = e.target.closest('[data-tab], [data-close-modal], [data-node], [data-template], ' +
-                             '[data-fork], [data-share], [data-continue-project]');
+                             '[data-fork], [data-share], [data-continue-project], [data-copy]');
   if (!t) return;
+
+  if (t.hasAttribute('data-copy')) { copyCommand(t.dataset.copy); return; }
 
   if (t.dataset.tab) { showTab(t.dataset.tab); return; }
   if (t.dataset.closeModal) { closeModal(t.dataset.closeModal); return; }
