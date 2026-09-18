@@ -86,6 +86,39 @@ def test_theme_partial_defines_both_themes():
     assert "localStorage" in theme, "a theme choice that does not persist is decoration"
 
 
+def _theme_blocks() -> dict[str, dict[str, str]]:
+    """The literal token values of each theme block, keyed by theme."""
+    theme = (TEMPLATES / "_theme.html").read_text(encoding="utf-8")
+    dark = theme[theme.index(":root {"):theme.index('[data-theme="light"]')]
+    light = theme[theme.index('[data-theme="light"]'):]
+    light = light[: light.index("}")]
+    token = re.compile(r"(--[a-z-]+):\s*(#[0-9A-Fa-f]{6})\s*;")
+    blocks = {"dark": dict(token.findall(dark))}
+    blocks["light"] = {**blocks["dark"], **dict(token.findall(light))}
+    return blocks
+
+
+def _contrast(fg: str, bg: str) -> float:
+    def lum(hex_colour: str) -> float:
+        channels = [int(hex_colour[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+        linear = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+        return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+    high, low = sorted((lum(fg), lum(bg)), reverse=True)
+    return (high + 0.05) / (low + 0.05)
+
+
+@pytest.mark.parametrize("theme", ["dark", "light"])
+@pytest.mark.parametrize("text", ["--text-muted", "--text-faint"])
+@pytest.mark.parametrize("ground", ["--bg", "--surface", "--bg-elevated"])
+def test_the_quiet_text_tokens_clear_aa_on_every_ground(theme, text, ground):
+    """The theme's header promises this, and every 11px uppercase label rests on
+    it. The Sept 18 handoff shipped a light --text-faint at 4.2:1 on --surface
+    with that promise still written above it."""
+    tokens = _theme_blocks()[theme]
+    ratio = _contrast(tokens[text], tokens[ground])
+    assert ratio >= 4.5, f"{theme} {text} on {ground} is {ratio:.2f}:1"
+
+
 @pytest.mark.parametrize("route,page", ROUTES.items())
 def test_served_pages_carry_the_tokens(client, route, page):
     """The marker is only useful if the server actually substitutes it."""

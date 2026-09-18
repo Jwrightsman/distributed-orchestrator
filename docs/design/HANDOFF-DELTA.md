@@ -960,3 +960,76 @@ sans section labels and 10px corners, but every sentence in it is the one
 §11.2 corrects. Those two style changes belong to the shell pass (that
 handoff's §15.1–15.2), which moves every view's panel labels at once. They are
 left for that pass so this view matches its neighbours until then.
+
+---
+
+## 12. The Sept 18 theme — ported, with six repairs
+
+The Sept 18 handoff (`docs/design/console-2026-09-18/`) says to copy
+`spec/_theme.html` over `templates/_theme.html` as-is. That would have broken
+every page, as the Aug 28 file did (§4.4). `templates/_theme.html` is that file
+with six repairs, each named in its header. The palette, radii, lift, keyframes
+and element rules are the handoff's, and so is every colour value but one.
+
+### 12.1 The repairs
+
+| # | As received | Why it could not ship | Now |
+|---|---|---|---|
+| 1 | Line 2 names the marker as `` `<!-- THEME -->` `` inside the header comment | The same fault as §4.4, reintroduced: HTML comments do not nest, so about forty lines of designer notes rendered as text at the top of every page | "at the THEME marker comment" |
+| 2 | The light block has no `color-scheme` | Scrollbars, form controls and the date picker stay dark on a light page | `color-scheme: light` |
+| 3 | Mono stack `…, Menlo, monospace` | On Windows, without Plex, that falls through to Courier New | The previous stack's `'SF Mono'`, `'Cascadia Code'` and `Consolas` kept, and the sans stack's `Roboto, system-ui` |
+| 4 | The floating theme-switch script is gone | Pages without their own switch (`/status`, `/try`, the landing page) lose any way to change theme | Kept verbatim from the previous file |
+| 5 | `--accent-text: var(--accent)` in both themes | The previous light theme gave text a darker green, `#12692E`. Without it every green label on the accent wash is 4.44:1: the landing page's step numbers and the dashboard's Pitch button | Light block sets `--accent-text: var(--accent-strong)`, which is `#12692E` in the new palette too. No new colour |
+| 6 | Light `--text-faint: #74757A` | 4.21:1 on `--surface` and 4.40:1 on `--bg`, under a header that promises 4.5:1 on both | `#6F7075`: the smallest darkening on the same hue that clears every ground (4.53:1 on `--surface`), and still lighter than `--text-muted` |
+
+Repair 6 is the one colour value changed. `tests/test_theme.py` now computes
+the promise itself: `--text-muted` and `--text-faint` against `--bg`,
+`--surface` and `--bg-elevated`, in both themes. Against the file as received
+it fails on exactly the two light-theme pairs above and passes the other ten.
+
+Separately, `/try`'s INVITE ONLY badge set warning *fill* colour as text:
+4.40:1 in dark on master, 3.74:1 on the lighter Sept 18 surface. It uses
+`--warn-text` now.
+
+### 12.2 The element rules were measured, not assumed
+
+The new file adds page-wide rules the old one did not carry: `body`
+(13.5px, tabular figures), `a`, `a:hover`, form-control font inheritance,
+`::placeholder`, `:focus-visible`, `::selection` and the scrollbar. Every page
+has its own reset and `body` rule, but none of them sets a font size. So on
+`/`, `/try`, `/status` and `/dashboard`, in both themes, every element's
+computed style was recorded with the theme's element rules in place and again
+with them deleted from the live stylesheet:
+
+- **No visible text changes size.** 13.5px reaches containers only. Every
+  element that holds text sets its own size, except a screen-reader-only label.
+- The brand links (`a.brand`, `a.nav-brand`) were the browser's default link
+  blue on master, and the console's icon buttons were Arial. `a { color }` and
+  the form-control inheritance fix both. `a.btn-quiet` loses an underline it was
+  never meant to have.
+- The 2.5px shift in centred columns is the new 10px scrollbar.
+
+### 12.3 Contrast, measured on the served pages
+
+Every visible text element was measured against its composited ground: 1,994
+elements across `/`, `/try`, `/status` and all eight console views, at 1280px,
+in both themes. The theme was set before load, because a colour transition on
+a switched page does not advance in a hidden frame, and the first pass read
+half-transitioned colours as failures on master too.
+
+| | failing | lowest |
+|---|---|---|
+| master | 3 (the INVITE ONLY badge in both themes, the Nodes "MAP" label in light) | 3.85:1 |
+| as received | 6 (repairs 5 and 6, the badge, and the Nodes points footnote) | 3.74:1 |
+| as shipped | **0** | 4.78:1 dark, 4.53:1 light |
+
+There is no sideways scroll at 375px on any page, no leaked comment text, a
+theme switch on every page, and `color-scheme` follows the theme.
+
+### 12.4 Not done here
+
+The shell (the handoff's §15–18: sans section labels, collapsed rail,
+full-bleed Overview, status bar), the node map (§16.6, §19) and the
+per-view restyles. The new radius tokens (8 / 6 / 10 / 16px) move every panel
+that reads `var(--radius*)`; markup with a radius written into it (for
+example `rd-panel`, 5px) moves with its view's port.

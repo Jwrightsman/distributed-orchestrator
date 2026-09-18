@@ -1,27 +1,57 @@
 <!-- Shared theme layer — drop-in replacement for templates/_theme.html.
      Injected into every page by dashboard.py at the THEME marker comment.
 
-     This is a SUPERSET of the previous token set: every name the existing
-     pages already reference is still defined, so index.html, dashboard.html
-     and try.html keep working unchanged and immediately pick up the new
-     palette. The additions (--mark, --text-faint, --on-accent, --warn-text,
-     --warn-body, --warn-wash, --warn-line, --accent-strong, --violet,
-     --slate, --lift) are what the console markup uses.
+     REGENERATED Sept 18 2026 from the token layer in `Mycelium Console.dc.html`.
+     The previous version of this file shipped the pre-September palette (cool
+     blue-black ink, 5px radii). If you ported against that one, re-copy this
+     file first: the design in the bundle will not look like itself otherwise.
 
-     Two deliberate changes from the old file:
+     This is a SUPERSET of the token set the repo already references. Every name
+     index.html, dashboard.html, try.html, run.html, status.html and
+     _dashboard.css use today is still defined, so those pages keep working
+     unchanged and immediately pick up the current palette. Names the console
+     markup adds are grouped after them.
 
-     1. --mark is the brand colour and is NEUTRAL, not green. Green used to
-        mean both "Mycelium" and "PASS", which is a collision on a page whose
-        whole job is reporting state. Green is now reserved for status.
-     2. --radius drops from 8px to 5px (and 6px/12px to 4px/6px). Hairline
-        tables at this density read as toy-like at 8px corners.
+     Three things about this palette that are decisions, not preferences:
 
-     FONTS: the stacks name IBM Plex first and fall back to system UI fonts.
-     No webfont is loaded here on purpose — this project makes a point of not
+     1. --mark is the brand colour and is NEUTRAL. Green used to mean both
+        "Mycelium" and "PASS", which is a collision on a page whose whole job
+        is reporting state. --accent means PASS / connected / ok and nothing
+        else. Never use it as decoration.
+
+     2. The ink is warm neutral, in both themes (Sept 14). It replaced a
+        blue-black that read as clinical next to the chat-first layout. Status
+        colours were NOT touched by that change.
+
+     3. Surfaces separate by FILL and a soft lift, not by outline (Sept 13).
+        --border and --border-subtle both sit close to their backgrounds, and
+        panels carry --card-lift. Table hairlines stay: they are load-bearing
+        at 61 rows. If you darken the borders back up, the calm goes.
+
+     --text-muted and --text-faint hold every uppercase column header, the nav
+     section labels and the activity-log timestamps, all at 11px. They are
+     tuned to clear 4.5:1 against --bg AND --surface. Do not darken them.
+
+     FONTS: the stacks name IBM Plex first and fall back to system UI fonts. No
+     webfont is loaded here on purpose — this project makes a point of not
      phoning home, and a Google Fonts <link> on every page would be a request
-     per visitor. To actually get Plex, self-host the woff2 files under
-     static/ and add an @font-face block below. Without that the pages render
-     in system fonts, which is a graceful and honest default. -->
+     per visitor. To actually get Plex, self-host the woff2 files under static/
+     and add an @font-face block below. Without that the pages render in system
+     fonts, which is a graceful and honest default. (The design file in this
+     bundle DOES link Google Fonts — it is a local prototype, not the server.)
+
+     PORTED Sept 18 2026 with six repairs to the file as received. Every colour
+     value but one is the handoff's. docs/design/HANDOFF-DELTA.md §12 says why
+     each repair was needed:
+       1. The line above naming the marker no longer nests a comment marker.
+       2. The light block declares color-scheme: light, so scrollbars and
+          form controls follow the theme.
+       3. The font stacks keep the Windows and older macOS monospace fallbacks.
+       4. The floating theme switch for pages without their own is kept.
+       5. The light block points --accent-text at --accent-strong, as the
+          previous file did, so green text clears 4.5:1 on the accent wash.
+       6. The light --text-faint is #6F7075, not #74757A, so it keeps the
+          4.5:1 promise below; tests/test_theme.py now holds it to that. -->
 <script>
   // Runs before paint: a theme applied after first render flashes the wrong
   // colours, which is the tell of a bolted-on dark mode.
@@ -38,162 +68,159 @@
 <style>
   /* ── Design tokens ───────────────────────────────────────────────────
      Dark is the default because this is a monitoring surface people leave
-     open; light ships alongside it rather than as an afterthought.
-
-     Colour is reserved for state that means something. Structure comes from
-     typography, hairlines and spacing — a developer audience reads saturated
-     decoration as a toy. */
+     open; light ships alongside it rather than as an afterthought. */
   :root {
     color-scheme: dark;
 
-    --bg:             #08090A;
-    --bg-elevated:    #0B0C0E;
-    --surface:        #0C0D0F;
-    --surface-hover:  #101215;
-    --surface-sunken: #050607;
+    --bg: #0B0B0C;
+    --bg-elevated: #121214;
+    --surface: #191A1C;
+    --surface-hover: #212225;
+    --surface-sunken: #0E0E10;
+    --border-subtle: #1C1D20;
+    --border: #24262A;
+    --border-strong: #34373C;
+    --card-lift: 0 1px 2px rgba(0,0,0,0.45), 0 8px 24px rgba(0,0,0,0.28);
+    --text: #EDEDEF;
+    --text-dim: #A8AAB0;
+    --text-muted: #92959C;
+    --text-faint: #83868E;
+    --mark: #EDEDEF;
+    --accent: #3FB950;
+    --accent-dim: #2C8C3C;
+    --accent-strong: #4ACB5D;
+    --accent-wash: rgba(63,185,80,0.08);
+    --on-accent: #06210C;
+    --warn: #C9922B;
+    --warn-text: #E8C88A;
+    --warn-body: #B5A681;
+    --warn-wash: #14100A;
+    --warn-line: #3B3222;
+    --danger: #E5534B;
+    --danger-text: #F0938C;
+    --danger-body: #C29691;
+    --danger-wash: rgba(229,83,75,0.10);
+    --danger-line: rgba(229,83,75,0.28);
+    --info: #5B8DEF;
+    --info-wash: rgba(91,141,239,0.08);
+    --violet: #9A7BE0;
+    --slate: #949AA2;
+    --scrim: rgba(4,5,6,0.72);
+    --lift: 0 24px 64px rgba(0,0,0,0.6);
+    --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, 'Cascadia Code', Consolas, monospace;
+    --sans: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, system-ui, sans-serif;
 
-    /* Hairlines. --border-subtle is the row divider and is deliberately
-       almost invisible; --border outlines a panel; --border-strong is for a
-       control that must read as interactive. */
-    --border-subtle:  #131518;
-    --border:         #1E2126;
-    --border-strong:  #2A2E34;
-
-    /* --text-muted and --text-faint hold every uppercase column header, the
-       nav section labels and the activity-log timestamps, all at 11px. They
-       are tuned to clear 4.5:1 against --bg AND --surface; the older, darker
-       values measured 4.0:1 and 2.6:1. Do not darken them again. */
-    --text:           #E8E9EB;
-    --text-dim:       #9CA1A8;
-    --text-muted:     #868C95;
-    --text-faint:     #7E848C;
-
-    /* Brand. Neutral on purpose — see the note at the top of this file. */
-    --mark:           #E8E9EB;
-
-    /* Status green. Never used for branding or decoration. */
-    --accent:         #3FB950;
-    --accent-dim:     #2C8C3C;
-    --accent-text:    #3FB950;
-    --accent-strong:  #4ACB5D;
-    --accent-wash:      rgba(63,185,80,0.08);
+    /* Aliases and extras the existing repo templates reference. Defined here
+       so no template needs editing to keep compiling. */
+    --accent-text:      var(--accent);
     --accent-wash-mid:  rgba(63,185,80,0.14);
     --accent-border:    rgba(63,185,80,0.24);
     --accent-line:      rgba(63,185,80,0.35);
     --accent-glow:      rgba(63,185,80,0.45);
-    --on-accent:      #06210C;
+    --info-line:        rgba(91,141,239,0.30);
+    --highlight:        #E8FF47;
+    --highlight-line:   rgba(232,255,71,0.50);
+    --highlight-wash:   rgba(232,255,71,0.18);
+    --overlay:          var(--scrim);
+    --shadow:           rgba(0,0,0,0.30);
 
-    --warn:           #C9922B;
-    --warn-text:      #E8C88A;
-    --warn-body:      #9A8B6B;
-    --warn-wash:      #14100A;
-    --warn-line:      #3B3222;
+    /* Pipeline stages — distinguishable but low-chroma; these labels repeat on
+       every line of the activity log. */
+    --stage-pitch:  var(--slate);
+    --stage-plan:   var(--info);
+    --stage-build:  var(--accent);
+    --stage-review: var(--violet);
 
-    --danger:         #E5534B;
-    --danger-text:    #F0938C;
-    --danger-body:    #C29691;
-    --danger-wash:    rgba(229,83,75,0.10);
-    --danger-line:    rgba(229,83,75,0.28);
-
-    --highlight:      #E8FF47;
-    --highlight-line: rgba(232,255,71,0.50);
-    --highlight-wash: rgba(232,255,71,0.18);
-
-    --info:           #5B8DEF;
-    --info-wash:      rgba(91,141,239,0.08);
-    --info-line:      rgba(91,141,239,0.30);
-    --violet:         #9A7BE0;
-    --slate:          #7D848D;
-
-    --overlay:        rgba(4,5,6,0.72);
-    --scrim:          rgba(8,9,10,0.95);
-    --shadow:         rgba(0,0,0,0.30);
-    --lift:           0 24px 64px rgba(0,0,0,0.60);
-
-    /* Pipeline stages — distinguishable but low-chroma; these labels repeat
-       on every line of the activity log. */
-    --stage-pitch:  #7D848D;
-    --stage-plan:   #5B8DEF;
-    --stage-build:  #3FB950;
-    --stage-review: #9A7BE0;
-
-    --radius:    5px;
-    --radius-sm: 4px;
-    --radius-lg: 6px;
-
-    --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, 'SF Mono', 'Cascadia Code', Consolas, monospace;
-    --sans: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, system-ui, sans-serif;
+    /* Radius scale, Sept 14: 3→8, 6→10, 12→16, 14→18. The console markup sets
+       radii inline; these tokens exist so the pages that use them move with it. */
+    --radius:    8px;
+    --radius-sm: 6px;
+    --radius-lg: 10px;
+    --radius-xl: 16px;
   }
 
-  /* Light theme. Not an inversion — a green that reads well on black is too
-     bright on white, so the accent darkens to hold >=4.5:1 for text use. */
+  /* Light theme. Not an inversion — the warm neutrals are picked for paper,
+     and every status colour is re-picked to clear 4.5:1 on a light ground. */
   :root[data-theme="light"] {
     color-scheme: light;
 
-    --bg:             #FFFFFF;
-    --bg-elevated:    #FCFCFD;
-    --surface:        #F7F8F9;
-    --surface-hover:  #F0F2F4;
-    --surface-sunken: #EEF0F2;
+    --bg: #FAFAF9;
+    --bg-elevated: #FFFFFF;
+    --surface: #F5F5F3;
+    --surface-hover: #EFEFEC;
+    --surface-sunken: #F7F7F5;
+    --border-subtle: #EDEDEA;
+    --border: #E3E3DF;
+    --border-strong: #C9C9C4;
+    --card-lift: 0 1px 2px rgba(18,22,28,0.04), 0 6px 18px rgba(18,22,28,0.05);
+    --text: #17181A;
+    --text-dim: #4B4C50;
+    --text-muted: #6A6B70;
+    /* Repair 6: #74757A as received, which is 4.21:1 on --surface, below the
+       promise above. The smallest darkening on the same hue that clears it. */
+    --text-faint: #6F7075;
+    --mark: #17181A;
+    --accent: #1A7F37;
+    --accent-dim: #157030;
+    --accent-strong: #12692E;
+    /* Repair 5: text needs the darker green. The alias in :root points at
+       --accent, which is 4.44:1 on the accent wash in this theme. */
+    --accent-text: var(--accent-strong);
+    --accent-wash: rgba(26,127,55,0.07);
+    --on-accent: #FFFFFF;
+    --warn: #9A6700;
+    --warn-text: #6B4A00;
+    --warn-body: #6E5A28;
+    --warn-wash: #FFF8E6;
+    --warn-line: #E8D9A8;
+    --danger: #CF222E;
+    --danger-text: #A0111B;
+    --danger-body: #7A2E33;
+    --danger-wash: rgba(207,34,46,0.08);
+    --danger-line: rgba(207,34,46,0.30);
+    --info: #0969DA;
+    --info-wash: rgba(9,105,218,0.07);
+    --violet: #8250DF;
+    --slate: #57606A;
+    --scrim: rgba(20,24,31,0.42);
+    --lift: 0 20px 52px rgba(16,22,26,0.18);
 
-    --border-subtle:  #EBEDEF;
-    --border:         #DDE0E4;
-    --border-strong:  #C4C9CE;
-
-    --text:           #16181D;
-    --text-dim:       #4A5057;
-    --text-muted:     #656C74;
-    --text-faint:     #6E747C;
-
-    --mark:           #16181D;
-
-    --accent:         #1A7F37;
-    --accent-dim:     #157030;
-    --accent-text:    #12692E;
-    --accent-strong:  #12692E;
-    --accent-wash:      rgba(26,127,55,0.07);
-    --accent-wash-mid:  rgba(26,127,55,0.13);
-    --accent-border:    rgba(26,127,55,0.28);
-    --accent-line:      rgba(26,127,55,0.40);
-    --accent-glow:      rgba(26,127,55,0.30);
-    --on-accent:      #FFFFFF;
-
-    --warn:           #9A6700;
-    --warn-text:      #6B4A00;
-    --warn-body:      #7A6430;
-    --warn-wash:      #FFF8E6;
-    --warn-line:      #E8D9A8;
-
-    --danger:         #CF222E;
-    --danger-text:    #A0111B;
-    --danger-body:    #7A2E33;
-    --danger-wash:    rgba(207,34,46,0.08);
-    --danger-line:    rgba(207,34,46,0.30);
-
-    --highlight:      #6B7A00;
-    --highlight-line: rgba(107,122,0,0.45);
-    --highlight-wash: rgba(107,122,0,0.14);
-
-    --info:           #0969DA;
-    --info-wash:      rgba(9,105,218,0.07);
-    --info-line:      rgba(9,105,218,0.28);
-    --violet:         #8250DF;
-    --slate:          #57606A;
-
-    --overlay:        rgba(20,24,31,0.42);
-    --scrim:          rgba(255,255,255,0.96);
-    --shadow:         rgba(16,22,26,0.14);
-    --lift:           0 20px 52px rgba(16,22,26,0.18);
-
-    --stage-pitch:  #57606A;
-    --stage-plan:   #0969DA;
-    --stage-build:  #1A7F37;
-    --stage-review: #8250DF;
+    --accent-wash-mid:  rgba(26,127,55,0.12);
+    --accent-border:    rgba(26,127,55,0.22);
+    --accent-line:      rgba(26,127,55,0.32);
+    --accent-glow:      rgba(26,127,55,0.28);
+    --info-line:        rgba(9,105,218,0.28);
+    --highlight:        #B8A400;
+    --highlight-line:   rgba(184,164,0,0.45);
+    --highlight-wash:   rgba(184,164,0,0.14);
+    --shadow:           rgba(16,22,26,0.10);
   }
 
-  @media (prefers-reduced-motion: reduce) {
-    *, *::before, *::after { animation-duration: 0s !important; animation-iteration-count: 1 !important; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--text); font-family: var(--sans);
+    font-size: 13.5px; -webkit-font-smoothing: antialiased; font-variant-numeric: tabular-nums;
   }
+  a { color: var(--text); text-decoration: none; }
+  a:hover { color: var(--accent); }
+  input, textarea, button { font-family: inherit; color: inherit; }
+  ::placeholder { color: var(--text-faint); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 8px; }
+  ::selection { background: var(--accent-wash); color: var(--text); }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: var(--border-strong); border: 3px solid var(--bg); border-radius: 10px; }
+
+  /* Used by the node map, the pitch map and the live run. dashFlow/dashBack
+     carry DIRECTION on a line — out and back — which is why there is no second
+     colour for it. */
+  @keyframes dashFlow { to { stroke-dashoffset: -9; } }
+  @keyframes dashBack { to { stroke-dashoffset: 9; } }
+  @keyframes liveBlink { 0%, 55% { opacity: 1; } 56%, 100% { opacity: .3; } }
+  @keyframes runPulse { 0%, 100% { opacity: 1; } 50% { opacity: .32; } }
+  @keyframes cursorBlink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+  @keyframes cardIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
+  @keyframes railIn { from { opacity: 0; } to { opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
 </style>
 
 <script>
