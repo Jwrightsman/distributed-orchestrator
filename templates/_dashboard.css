@@ -2043,3 +2043,31 @@ a.gallery-task:hover { color: var(--accent-text); }
 .guild-row:hover { background: var(--surface); }
 .guild-name { font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .guild-points { font-size: 12.5px; color: var(--text); text-align: right; }
+
+/* ── Evidence ─────────────────────────────────────────────────────── */
+.evd-band {
+  display: flex; align-items: flex-start; gap: 11px;
+  padding: 13px 20px; border-bottom: 1px solid var(--border-subtle);
+  background: var(--info-wash);
+}
+.evd-band > i { width: 7px; height: 7px; flex-shrink: 0; margin-top: 5px; background: var(--info); }
+.evd-band-head { font-size: 12.5px; font-weight: 500; color: var(--text); }
+.evd-band-body { font-size: 12.5px; color: var(--text-dim); line-height: 1.6; margin-top: 3px; max-width: 90ch; }
+.evd-band-body .mono { font-family: var(--mono); }
+.evd-state { padding: 20px; }
+.evd-state-k { font-size: 12px; color: var(--text-dim); }
+.evd-state p { font-size: 12.5px; color: var(--text-muted); line-height: 1.65; margin-top: 8px; max-width: 80ch; }
+.evd-scope { padding: 14px 20px; border-bottom: 1px solid var(--border-subtle); }
+.evd-scope-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.evd-dot { width: 7px; height: 7px; flex-shrink: 0; background: transparent; box-shadow: inset 0 0 0 1px var(--text-faint); }
+.evd-dot.is-on { background: var(--info); box-shadow: none; }
+.evd-node { font-size: 13px; color: var(--text); }
+.evd-scope-k { font-size: 11px; color: var(--text-muted); }
+.evd-metrics, .evd-shadow {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px 20px; margin-top: 12px;
+}
+.evd-shadow { padding: 0 20px 16px; margin-top: 0; }
+.evd-shadow-head { border-top: 1px solid var(--border-subtle); }
+.evd-metric-v { font-size: 15px; color: var(--text-dim); margin-top: 4px; }
+.evd-metric-d { font-size: 11.5px; color: var(--text-muted); margin-top: 3px; line-height: 1.45; }
+.evd-note { font-size: 12px; color: var(--text-muted); line-height: 1.6; margin-top: 10px; }

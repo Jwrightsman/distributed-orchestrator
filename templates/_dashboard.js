@@ -366,11 +366,11 @@ function runPalette(i) {
 }
 
 // ── Views ────────────────────────────────────────────────────────
-const TABS = ['overview', 'runs', 'gallery', 'nodes', 'projects', 'guild', 'evals', 'invite', 'config'];
+const TABS = ['overview', 'runs', 'gallery', 'nodes', 'projects', 'guild', 'evals', 'evidence', 'invite', 'config'];
 const TAB_TITLES = {
   overview: 'Overview', runs: 'Runs', gallery: 'Gallery',
   nodes: 'Nodes', projects: 'Projects', guild: 'Guild standings',
-  evals: 'Output quality', invite: 'Connect', config: 'Configuration',
+  evals: 'Output quality', evidence: 'Observed evidence', invite: 'Connect', config: 'Configuration',
 };
 /* The line under the title. Each is a claim about the view, so each says only
    what the view shows: no counts that a capped endpoint cannot back. */
@@ -382,6 +382,7 @@ const TAB_SUBS = {
   projects: 'Work that remembers what it already built',
   guild: 'Compute contribution points — accepted work, not payment',
   evals: 'What the eval harness recorded, and how much of it is chance',
+  evidence: 'What the coordinator watched happen after it handed work out — recorded, never used to choose',
   invite: 'Machines that do the work, and apps that ask for it',
   config: 'What this coordinator loaded when it started, and what each setting does',
 };
@@ -417,6 +418,7 @@ function showTab(name, opts) {
   if (name === 'guild') loadStandings();
   if (name === 'runs') loadHistory();
   if (name === 'evals') loadEvals();
+  if (name === 'evidence') loadEvidenceView();
   if (name === 'invite') loadInvite();
   if (name === 'config') loadConfig();
   // Evidence is only fetched while this view is open, so opening it has to ask
@@ -2113,6 +2115,107 @@ async function loadConfig() {
       + 'The coordinator may be unreachable.</p></div>';
   }
   renderStatus();
+}
+
+// ── Evidence ─────────────────────────────────────────────────────
+/* Shadow-only capability observations. Nothing on this view is a claim the
+   route does not make: the routing value is read from the payload, and a rate
+   below the sample floor is shown as the count it is, never as a percentage. */
+function pct(x) { return x == null ? '—' : `${Math.round(x * 100)}%`; }
+function evidenceRate(r, minimum) {
+  if (!r || !r.sample_count) return {v: '—', d: 'no samples'};
+  if (r.sample_count < minimum || r.rate == null) {
+    return {v: `${r.sample_count} of ${minimum}`, d: 'below the sample floor — no rate drawn'};
+  }
+  const w = r.wilson_interval || {};
+  return {v: pct(r.rate), d: `${r.positive_count} of ${r.sample_count} · 95% interval ${pct(w.low)}–${pct(w.high)}`};
+}
+async function loadEvidenceView() {
+  const el = $('evidence-body');
+  let d;
+  try {
+    d = await apiJson('/v1/operator/capability-evidence');
+  } catch (e) {
+    if (e instanceof ViewerLocked) return;
+    el.innerHTML = '<div class="empty-state"><p>The evidence record could not be read.</p></div>';
+    return;
+  }
+  const routing = String(d.affects_routing);
+  const head = `
+    <div class="evd-band">
+      <i aria-hidden="true"></i>
+      <div><div class="evd-band-head">Nothing on this page decides where work goes</div>
+        <div class="evd-band-body">These are things the coordinator watched happen after it had
+          already handed work out: whether a machine came back inside its lease, how long it took,
+          how many bytes it returned, whether the required checks passed. The route that serves them
+          says <span class="mono">affects_routing: ${escHtml(routing)}</span>.</div></div>
+    </div>`;
+  const mode = String(d.mode || 'off');
+  const nav = $('nav-evidence-mode');
+  if (nav) { nav.textContent = mode; nav.hidden = false; }
+  if (mode === 'off') {
+    el.innerHTML = head + `<div class="evd-state"><div class="evd-state-k mono">capability_evidence_mode = off</div>
+      <p>Recording is off, which is the default. Runs work exactly the same; the coordinator simply
+        keeps no per-machine history of how they went, so there is nothing here to read. Turning it
+        on in config.json starts recording and the shadow comparison. Neither changes a placement.</p></div>`;
+    return;
+  }
+  const scopes = d.scopes || [];
+  if (!scopes.length) {
+    el.innerHTML = head + `<div class="evd-state"><div class="evd-state-k mono">no scopes yet</div>
+      <p>Recording is on and no machine has finished a piece of work yet. A scope appears the first
+        time a run settles.</p></div>`;
+    return;
+  }
+  const minimum = Number(d.minimum_samples || 0);
+  const shadow = {decisions: 0, same: 0, different: 0, none: 0};
+  const rows = scopes.map(sc => {
+    const sp = sc.shadow_policy || {};
+    shadow.decisions += Number(sp.decision_count || 0);
+    shadow.same += Number(sp.same_count || 0);
+    shadow.different += Number(sp.different_count || 0);
+    shadow.none += Number(sp.no_preference_count || 0);
+    const dl = evidenceRate(sc.deadline_success, minimum);
+    const cf = evidenceRate(sc.contract_floor, minimum);
+    const lat = sc.latency && sc.latency.recent_median_coordinator_wall_seconds;
+    const thr = sc.throughput && sc.throughput.recent_median_effective_output_bytes_per_second;
+    const metrics = [
+      ['BACK INSIDE ITS LEASE', dl.v, dl.d],
+      ['CHECKS HELD', cf.v, cf.d],
+      ['MEDIAN WALL', lat != null ? `${Number(lat).toFixed(1)}s` : '—', `${(sc.latency || {}).sample_count || 0} samples`],
+      ['MEDIAN OUTPUT RATE', thr != null ? `${Math.round(thr)} B/s` : '—', `${(sc.throughput || {}).sample_count || 0} samples`],
+    ];
+    return `
+      <div class="evd-scope">
+        <div class="evd-scope-head">
+          <i class="evd-dot${sc.insufficient_evidence ? '' : ' is-on'}" aria-hidden="true"></i>
+          <span class="mono evd-node">${escHtml(sc.node_label || sc.enrollment_id || 'unlabelled')}</span>
+          <span class="mono evd-scope-k">${escHtml(sc.enrollment_id || 'no enrolment')}</span>
+          <span class="mono evd-scope-k">${escHtml(sc.task_class || '')}</span>
+          <span class="mono evd-scope-k">${escHtml((sc.model || {}).name || '')}</span>
+        </div>
+        <div class="evd-metrics">${metrics.map(([k, v, dd]) => `
+          <div class="evd-metric"><div class="card-k">${k}</div><div class="evd-metric-v mono">${escHtml(v)}</div>
+            <div class="evd-metric-d">${escHtml(dd)}</div></div>`).join('')}</div>
+        <p class="evd-note">${escHtml(sc.observation_count)} observations${sc.insufficient_evidence ? ', below the floor of ' + minimum : ''}.
+          The checks figure is structural contract assurance, not semantic correctness.</p>
+      </div>`;
+  }).join('');
+  el.innerHTML = head + `
+    <div class="card-tools"><span class="card-summary">${scopes.length} ${scopes.length === 1 ? 'scope' : 'scopes'} · ${escHtml(mode)}</span>
+      <span class="card-count">production role · ${minimum}-sample floor</span></div>
+    ${rows}
+    <div class="card-tools evd-shadow-head"><span class="card-k">SHADOW DECISIONS</span>
+      <span class="card-summary">what a placement policy built on the numbers above would have done differently</span></div>
+    <div class="evd-shadow">${d.shadow_decision_aggregates_available === false
+      ? '<p class="evd-note">The shadow comparison could not be read.</p>'
+      : [['decisions compared', shadow.decisions], ['would have chosen the same machine', shadow.same],
+         ['would have chosen a different one', shadow.different], ['no preference', shadow.none]]
+        .map(([k, v]) => `<div class="evd-metric"><div class="evd-metric-v mono">${escHtml(v)}</div><div class="evd-metric-d">${escHtml(k)}</div></div>`).join('')}</div>
+    <p class="card-note">Why it stays a shadow: the moment a number like this picks the machine, it
+      starts writing its own evidence. Whoever is ahead gets more work, therefore more history,
+      therefore stays ahead, while a new machine never gets the chance to show what it can do.
+      Switching it on would need its own decision.</p>`;
 }
 
 // ── Connect ──────────────────────────────────────────────────────
