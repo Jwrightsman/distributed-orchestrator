@@ -185,87 +185,156 @@
     <main class="content" id="main" tabindex="-1">
 
       <!-- ── OVERVIEW ── -->
-      <section id="view-overview" aria-labelledby="tab-overview">
+      <!-- ── OVERVIEW ──
+           Full-bleed (§15.5): a vital line across the top, the thread filling
+           the middle, and a floating window on the right that shows one panel at
+           a time. The thread is the page; the numbers are a quiet line above it.
+
+           The four vitals read the same derived state as the status bar
+           (renderStatus paints both), so the line and the bar cannot disagree
+           (§17.2, "one derivation, three indicators"). -->
+      <section id="view-overview" class="ov" aria-labelledby="tab-overview">
         <h2 class="sr-only">Overview</h2>
 
-        <div class="stats-bar">
-          <div class="stat">
-            <span class="stat-value" id="stat-nodes">0</span>
-            <span class="stat-label">Nodes online</span>
-          </div>
-          <!-- This is /health.tasks_pending, the SUBTASK queue. The status bar
-               30px away carries QUEUED, which is /metrics.jobs_queued, the JOB
-               queue -- a different number. Under two labels a reader could take
-               for the same thing, one of them is always wrong, and the reader
-               has no way to tell which. So the cell is named after the number
-               it actually holds. Not both under one word. -->
-          <div class="stat">
-            <span class="stat-value" id="stat-tasks">0</span>
-            <span class="stat-label">Subtasks pending</span>
-          </div>
-          <div class="stat">
-            <span class="stat-value" id="stat-models">-</span>
-            <span class="stat-label">Models available</span>
-          </div>
-          <div class="stat">
-            <span class="stat-status" id="stat-status"><i aria-hidden="true"></i>checking</span>
-            <span class="stat-label">Ollama</span>
-          </div>
-          <div class="stat">
-            <span class="stat-value" id="stat-done">-</span>
-            <span class="stat-label">Tasks done</span>
-          </div>
-          <div class="stat">
-            <span class="stat-value" id="stat-latency">-</span>
-            <span class="stat-label">Avg latency</span>
-          </div>
+        <div class="ov-vitals">
+          <div class="ov-vital" id="vital-nodes"><i class="ov-vital-dot" aria-hidden="true"></i>
+            <span class="ov-vital-v" id="stat-nodes">&mdash;</span><span class="ov-vital-k">machines online</span></div>
+          <div class="ov-vital" id="vital-inference"><i class="ov-vital-dot" aria-hidden="true"></i>
+            <span class="ov-vital-v" id="vital-inference-v">&mdash;</span><span class="ov-vital-k">inference</span></div>
+          <div class="ov-vital" id="vital-running"><i class="ov-vital-dot" aria-hidden="true"></i>
+            <span class="ov-vital-v" id="vital-running-v">&mdash;</span><span class="ov-vital-k">running now</span></div>
+          <div class="ov-vital" id="vital-queued"><i class="ov-vital-dot" aria-hidden="true"></i>
+            <span class="ov-vital-v" id="vital-queued-v">&mdash;</span><span class="ov-vital-k">queued</span></div>
+          <span class="ov-totals">
+            <span><span class="mono" id="stat-done">&mdash;</span> subtasks built all-time</span>
+            <span><span class="mono" id="stat-latency">&mdash;</span> avg per subtask</span>
+            <a class="ov-totals-link" href="#evals" data-tab="evals"
+               title="Output quality — what the eval harness recorded, beside how much of it is chance">output quality &rarr;</a>
+          </span>
         </div>
 
-        <div class="view-head"><h2>Pitch a task</h2><span class="view-sub">Describe what you want built; the planner splits it up</span></div>
+        <div class="ov-body">
+          <section class="ov-thread" aria-label="Thread">
+            <!-- Context: which project this pitch will carry memory from. -->
+            <div class="ov-context" id="project-context">
+              <button class="ov-project-chip" type="button" data-tab="projects"
+                      title="Open Projects — the work a pitch can carry memory from">
+                <i class="ov-project-dot" id="ov-project-dot" aria-hidden="true"></i>
+                <span id="project-context-name">No project</span>
+              </button>
+              <span class="ov-memory" id="ov-memory-note">no memory carried in</span>
+              <button type="button" class="ov-clear" id="clear-project" hidden
+                      title="Stop carrying this project's memory into the next pitch">detach</button>
+            </div>
+            <input type="hidden" id="active-project-id" value="">
 
-        <!-- Project context — shown when "Continue" is clicked on a project -->
-        <div id="project-context" class="project-context" hidden>
-          <span class="project-context-label">Continuing project: <strong id="project-context-name"></strong></span>
-          <button type="button" class="link-btn" id="clear-project">✕ clear</button>
-        </div>
-        <input type="hidden" id="active-project-id" value="">
+            <div class="ov-stream">
+              <div class="ov-col">
+                <div class="ov-empty" id="ov-empty">
+                  <p class="ov-empty-title">What should the machines build?</p>
+                  <p class="ov-empty-body">Describe it in a sentence. With the planning strategy a
+                    planner breaks it into subtasks, connected machines build them in parallel, and a
+                    reviewer assembles the result. The other two strategies generate complete attempts
+                    instead. One machine is enough.</p>
+                </div>
+                <!-- Each pitch is a turn: the ask, then the agent's reply led by the
+                     step timeline (§16.2). Newest last, like any thread. -->
+                <div id="pipeline-log" class="ov-turns" aria-live="polite" aria-label="Runs pitched from this page"></div>
+              </div>
+            </div>
 
-        <div class="pitch-form">
-          <label class="sr-only" for="pitch-input">Describe what you want built</label>
-          <input type="text" class="pitch-input" id="pitch-input"
-                 placeholder="Describe what you want built...">
-          <button class="pitch-btn" id="pitch-btn" type="button">Pitch</button>
-        </div>
+            <div class="ov-composer-wrap">
+              <div class="ov-col">
+                <div class="ov-composer">
+                  <label class="sr-only" for="pitch-input">Describe what you want built</label>
+                  <input type="text" class="pitch-input" id="pitch-input" autocomplete="off"
+                         placeholder="Describe what you want built">
+                  <div class="ov-composer-row">
+                    <div class="ov-strategy" role="radiogroup" aria-label="How to attempt it">
+                      <button type="button" role="radio" aria-checked="true" data-strategy="auto"
+                              title="Let the coordinator choose, conservatively, and record why">auto</button>
+                      <button type="button" role="radio" aria-checked="false" data-strategy="dag"
+                              title="Decompose into subtasks across machines. The only strategy that can use a project">plan &amp; split</button>
+                      <button type="button" role="radio" aria-checked="false" data-strategy="ensemble"
+                              title="Generate candidates for the whole task and pick one. No project memory">several tries</button>
+                      <button type="button" role="radio" aria-checked="false" data-strategy="direct"
+                              title="One attempt, no planning. No project memory">one shot</button>
+                    </div>
+                    <span class="ov-rate" title="The pitch rate limit, per address"><!--SLOT:PITCH_RATE_NOTE--></span>
+                    <button class="pitch-btn" id="pitch-btn" type="button"
+                            title="Send this to the coordinator · POST /pitch/async">Pitch<span class="pitch-key" aria-hidden="true">&#9166;</span></button>
+                  </div>
+                </div>
+                <p class="ov-note" id="ov-strategy-note" hidden></p>
+                <div class="ov-suggest">
+                  <span class="ov-suggest-k">TEMPLATES</span>
+                  <div id="task-templates" class="template-row"></div>
+                </div>
+              </div>
+            </div>
+          </section>
 
-        <div id="task-templates" class="template-row"></div>
-
-        <!-- The live log is the most convincing thing on this page and the least
-             self-explanatory: PLANNER / BUILDER / REVIEWER mean nothing to a
-             visitor. One line of plain language, above the log, is enough to make
-             the rest readable without turning the page into a tutorial. -->
-        <div class="flow" aria-label="What happens to a task">
-          <div class="flow-step"><span class="flow-dot is-pitch" aria-hidden="true"></span>
-            <b>You pitch</b><i>a task in plain English</i></div>
-          <span class="flow-arrow" aria-hidden="true">→</span>
-          <div class="flow-step"><span class="flow-dot is-plan" aria-hidden="true"></span>
-            <b>Planner</b><i>splits it into smaller jobs</i></div>
-          <span class="flow-arrow" aria-hidden="true">→</span>
-          <div class="flow-step"><span class="flow-dot is-build" aria-hidden="true"></span>
-            <b>Builders</b><i>write the pieces, on separate machines</i></div>
-          <span class="flow-arrow" aria-hidden="true">→</span>
-          <div class="flow-step"><span class="flow-dot is-review" aria-hidden="true"></span>
-            <b>Reviewer</b><i>assembles and grades the result</i></div>
-        </div>
-
-        <h2 id="activity-heading">Live activity</h2>
-        <div id="event-log" class="event-log" role="log" aria-live="polite"
-             aria-relevant="additions" aria-labelledby="activity-heading"></div>
-
-        <h2 id="pipeline-heading">Pipeline runs</h2>
-        <div id="pipeline-log" aria-live="polite" aria-labelledby="pipeline-heading">
-          <div class="empty-state">
-            <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l2.5-6 4 12 2.5-6h5"/></svg></div>
-            <p>No active pipelines.<br>Pitch a task above to see agents work.</p>
+          <!-- The floating window (§15.5b): one panel at a time, chosen by tabs in
+               its own title bar. ACTIVITY is the default because it is the live
+               /ws/events feed. The active tab is a preference resolved against
+               what is available, so the window never goes blank. -->
+          <div class="ov-window-wrap">
+            <aside class="ov-window" id="ov-window" aria-label="Live panels">
+              <div class="ov-window-bar" role="tablist" aria-label="Side panel">
+                <i class="ov-window-mark" aria-hidden="true"></i>
+                <button type="button" role="tab" class="ov-tab" data-ovtab="activity" aria-selected="true"
+                        title="The live event stream from this coordinator">ACTIVITY</button>
+                <button type="button" role="tab" class="ov-tab" data-ovtab="swarm" aria-selected="false"
+                        title="The machines connected to this coordinator">SWARM</button>
+                <button type="button" role="tab" class="ov-tab" data-ovtab="run" aria-selected="false"
+                        title="The run pitched from this page, while it runs">RUN</button>
+                <button type="button" role="tab" class="ov-tab" data-ovtab="how" aria-selected="false"
+                        title="How a pitch becomes code">HOW</button>
+                <span class="ov-window-meta" id="ov-window-meta">connecting</span>
+                <button type="button" class="ov-window-min" id="ov-window-min"
+                        title="Shrink the window to its title bar" aria-expanded="true">&ndash;</button>
+              </div>
+              <div class="ov-window-body" id="ov-window-body">
+                <section class="ov-panel" data-ovpanel="activity" role="tabpanel">
+                  <div id="event-log" class="event-log" role="log" aria-live="polite"
+                       aria-relevant="additions" aria-label="Live activity">
+                    <p class="event-empty" id="event-empty">Waiting for the first event. A pitch
+                      shows up here as it moves through the coordinator.</p>
+                  </div>
+                </section>
+                <section class="ov-panel" data-ovpanel="swarm" role="tabpanel" hidden>
+                  <div class="ov-swarm-summary" id="ov-swarm-summary">none connected</div>
+                  <div id="ov-swarm-list"></div>
+                  <div class="ov-lend">
+                    <div class="ov-lend-k">LEND A MACHINE</div>
+                    <p class="ov-lend-body">The installer runs on the machine being added, and asks
+                      its owner before it downloads or writes anything.</p>
+                    <button class="ov-link" type="button" data-tab="invite"
+                            title="How a machine joins, and what it agrees to">how a machine joins &rarr;</button>
+                  </div>
+                  <button class="ov-link ov-link-row" type="button" data-tab="nodes"
+                          title="Open Nodes — every connected machine">all nodes &rarr;</button>
+                </section>
+                <section class="ov-panel" data-ovpanel="run" role="tabpanel" hidden>
+                  <div id="ov-run-panel"></div>
+                </section>
+                <section class="ov-panel" data-ovpanel="how" role="tabpanel" hidden>
+                  <div class="ov-how">
+                    <div class="ov-how-k">HOW A PITCH BECOMES CODE</div>
+                    <div class="flow">
+                      <div class="flow-step"><span class="flow-dot is-pitch" aria-hidden="true"></span>
+                        <b>you pitch</b><i>a task, in plain English</i></div>
+                      <div class="flow-step"><span class="flow-dot is-plan" aria-hidden="true"></span>
+                        <b>planner</b><i>splits it into smaller jobs, when the strategy plans</i></div>
+                      <div class="flow-step"><span class="flow-dot is-build" aria-hidden="true"></span>
+                        <b>builders</b><i>write the pieces, on separate machines</i></div>
+                      <div class="flow-step"><span class="flow-dot is-review" aria-hidden="true"></span>
+                        <b>reviewer</b><i>assembles and grades the result</i></div>
+                    </div>
+                  </div>
+                </section>
+              </div>
+            </aside>
           </div>
         </div>
       </section>

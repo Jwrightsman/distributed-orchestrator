@@ -180,6 +180,15 @@ def identity_at_load() -> dict[str, str]:
     }
 
 
+def composer_at_load() -> dict[str, str]:
+    """Overview's rate note, from the two keys the rate limiter reads."""
+    settings = get_config()
+    count = settings.get("pitch_rate_max", 5)
+    window = settings.get("pitch_rate_window", 60)
+    per = "min" if window == 60 else ("hour" if window == 3600 else f"{window}s")
+    return {"PITCH_RATE_NOTE": html.escape(f"{count} / {per}")}
+
+
 @router.get("/", response_class=HTMLResponse)
 async def landing():
     return _page("index.html")
@@ -187,5 +196,6 @@ async def landing():
 
 @router.get("/dashboard", response_class=HTMLResponse)
 async def dashboard():
-    return render("dashboard.html", **status_bar_at_load(), **identity_at_load())
+    return render("dashboard.html", **status_bar_at_load(), **identity_at_load(),
+                  **composer_at_load())
 

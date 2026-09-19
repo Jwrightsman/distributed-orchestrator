@@ -395,6 +395,8 @@ function showTab(name, opts) {
       else btn.removeAttribute('aria-current');
     }
   });
+  const main = $('main');
+  if (main) main.classList.toggle('is-bleed', name === 'overview');
   const title = $('view-title');
   if (title) title.textContent = TAB_TITLES[name] || name;
   setText('view-sub', TAB_SUBS[name] || '');
@@ -560,15 +562,14 @@ async function pollStatus() {
     statusText.nodes = String(health.nodes_online);
     statusFresh.inference = true;
     statusFresh.nodes = true;
-    setText('stat-nodes', health.nodes_online);
+
     /* The subtask queue, under a label that says so. The archived handoff had
        Overview read "running now" and "queued" off /health: it has no running
        count at all, and its tasks_pending is this number rather than the job
        queue. Ported as written, one screen would have carried QUEUED over two
        different numbers. RUNNING and QUEUED are the status bar's, from
        /metrics, and there is exactly one of each. */
-    setText('stat-tasks', health.tasks_pending);
-    setText('stat-models', (health.models || []).length);
+
   } else {
     statusFresh.inference = false;
     statusFresh.nodes = false;
@@ -590,7 +591,7 @@ async function pollStatus() {
     setText('stat-done', met.tasks_completed_total);
     const latEl = $('stat-latency');
     if (latEl) latEl.textContent = met.avg_task_latency_seconds != null
-      ? met.avg_task_latency_seconds + 's' : '-';
+      ? met.avg_task_latency_seconds + 's' : '—';
     // Name whose balance this is — anyone can open this dashboard.
     const hostEl = $('credit-host');
     if (hostEl && met.orchestrator_id) {
@@ -767,6 +768,15 @@ function renderStatus() {
     tile.innerHTML = '<i aria-hidden="true"></i>' + escHtml(word);
   }
 
+  paintVital('vital-nodes', cellState('nodes', served), statusText.nodes,
+             Number(statusText.nodes) > 0 ? 'ok' : 'idle');
+  paintVital('vital-inference', cellState('inference', d.values.inference), statusText.inference,
+             d.values.inference === 'bad' ? 'bad' : 'ok', 'vital-inference-v');
+  paintVital('vital-running', cellState('running', served), statusText.running,
+             Number(statusText.running) > 0 ? 'warn' : 'idle', 'vital-running-v');
+  paintVital('vital-queued', cellState('queued', served), statusText.queued,
+             Number(statusText.queued) > 0 ? 'warn' : 'idle', 'vital-queued-v');
+
   const cfgDot = $('nav-config-dot');
   if (cfgDot) cfgDot.hidden = d.values.gate !== 'bad';
 
@@ -776,6 +786,18 @@ function renderStatus() {
   if (lockedLine) lockedLine.textContent = d.severity + ' · ' + d.ageText;
 
   renderBanner(d);
+}
+
+/* One vital on Overview's line. `state` is the cell's freshness, exactly as
+   the bar's cell gets it; `tone` is what a fresh value means. A stale value
+   stays readable and stops claiming to be now, like the bar's. */
+function paintVital(id, state, text, tone, valueId) {
+  const el = $(id);
+  if (!el) return;
+  const known = text != null && text !== '';
+  el.className = 'ov-vital is-' + (state === 'unknown' || !known ? 'stale' : tone);
+  const v = valueId ? $(valueId) : el.querySelector('.ov-vital-v');
+  if (v) v.textContent = known ? text : '—';
 }
 
 /* Collapsed, the bar is the pill: same derived state, nothing new. */
@@ -825,6 +847,7 @@ async function refresh() {
     }
 
     renderNodes(nodes);
+    paintSwarmPanel(nodes);
   } catch (e) {
     // Deliberately silent. This used to paint "offline" on the shell from
     // here, which meant a request this browser was not authorised to make —
@@ -1098,153 +1121,240 @@ function renderNodeMap(nodes) {
   }
 }
 
-// ── Stage bar ────────────────────────────────────────────────────
-function stageBarHtml(planDone, buildDone, reviewDone, buildLabel) {
-  const planClass = planDone ? 'done' : (!planDone && !buildDone && !reviewDone ? 'active' : '');
-  const buildClass = planDone && !buildDone ? 'active' : (buildDone ? 'done' : '');
-  const reviewClass = buildDone && !reviewDone ? 'active' : (reviewDone ? 'done' : '');
-  const planLbl = planClass === 'active' ? 'active' : (planDone ? 'done' : '');
-  const buildLbl = buildClass === 'active' ? 'active' : (buildDone ? 'done' : '');
-  const reviewLbl = reviewClass === 'active' ? 'active' : (reviewDone ? 'done' : '');
-  return `
-    <div class="stage-bar" aria-hidden="true">
-      <div class="stage ${planClass}"></div>
-      <div class="stage ${buildClass}"></div>
-      <div class="stage ${reviewClass}"></div>
-    </div>
-    <div class="stage-labels">
-      <div class="stage-label ${planLbl}">Plan</div>
-      <div class="stage-label ${buildLbl}">${escHtml(buildLabel || 'Build')}</div>
-      <div class="stage-label ${reviewLbl}">Review</div>
-    </div>`;
+// ── The thread ───────────────────────────────────────────────────
+/* A pitch is a turn: the ask, then the agent's reply led by the step
+   timeline (HANDOFF-UI §16.2). The timeline's durations are measured from
+   the coordinator's own event timestamps, not from an animation clock, so
+   they are the real time each stage took. A step marker is round because it
+   reports progress; every status lamp in the console is square, and the two
+   must not be confused. */
+const STRATEGY_WORDS = {
+  auto: 'auto', dag: 'plan & split', ensemble: 'several tries', direct: 'one shot',
+};
+let pitchStrategy = 'auto';
+const turns = {};
+
+function fmtDur(ms) {
+  if (ms == null || ms < 0) return '—';
+  const secs = Math.round(ms / 1000);
+  if (secs < 60) return `${secs}s`;
+  return `${Math.floor(secs / 60)}m ${String(secs % 60).padStart(2, '0')}s`;
 }
 
-// ── Pitching ─────────────────────────────────────────────────────
+function turnSteps(t, now) {
+  // A pitch the coordinator never accepted has no stages at all: say that,
+  // rather than drawing a run that attempted anything.
+  if (t.status === 'failed' && !t.jobId) {
+    return [
+      {label: 'PLAN', state: 'stopped', detail: 'the coordinator did not accept this pitch', dur: '—'},
+      {label: 'BUILD', state: 'waiting', detail: 'did not run', dur: '—'},
+      {label: 'REVIEW', state: 'waiting', detail: 'did not run', dur: '—'},
+    ];
+  }
+  const done = t.status === 'complete' || t.status === 'failed';
+  const planned = t.planAt != null;
+  const steps = [];
+  // PLAN. Only the planning strategy decomposes; a finished run with no plan
+  // event attempted the whole task, and says so rather than drawing a step
+  // that never happened.
+  if (planned) {
+    steps.push({label: 'PLAN', state: 'done',
+      detail: `${t.subtasks} ${t.subtasks === 1 ? 'subtask' : 'subtasks'}`,
+      dur: fmtDur(t.planAt - t.startedAt)});
+  } else if (done) {
+    steps.push({label: 'PLAN', state: 'skipped',
+      detail: 'no plan — this run attempted the whole task', dur: '—'});
+  } else {
+    steps.push({label: 'PLAN', state: 'active', detail: 'the planner is working',
+      dur: fmtDur(now - t.startedAt)});
+  }
+  // BUILD.
+  const buildLabel = t.subtasks ? `BUILD ${Math.min(t.builds, t.subtasks)}/${t.subtasks}` : 'BUILD';
+  if (t.reviewAt != null || (done && t.status === 'complete')) {
+    const end = t.reviewAt != null ? t.reviewAt : t.doneAt;
+    steps.push({label: buildLabel, state: 'done',
+      detail: t.subtasks ? `${Math.min(t.builds, t.subtasks)} of ${t.subtasks} built` : 'built',
+      dur: planned ? fmtDur(end - t.planAt) : '—'});
+  } else if (planned && !done) {
+    steps.push({label: buildLabel, state: 'active',
+      detail: t.lastBuilt ? `last built: ${t.lastBuilt}` : 'waiting on the first subtask',
+      dur: fmtDur(now - t.planAt)});
+  } else {
+    steps.push({label: buildLabel, state: done ? 'stopped' : 'waiting',
+      detail: done ? 'stopped before building' : 'waiting for the plan', dur: '—'});
+  }
+  // REVIEW.
+  if (t.reviewAt != null && done) {
+    steps.push({label: 'REVIEW', state: t.status === 'failed' ? 'stopped' : 'done',
+      detail: t.status === 'failed' ? 'stopped during review' : 'assembled and graded',
+      dur: fmtDur(t.doneAt - t.reviewAt)});
+  } else if (t.reviewAt != null) {
+    steps.push({label: 'REVIEW', state: 'active', detail: 'assembling and grading',
+      dur: fmtDur(now - t.reviewAt)});
+  } else {
+    steps.push({label: 'REVIEW', state: done ? (t.status === 'failed' ? 'stopped' : 'done') : 'waiting',
+      detail: done ? (t.status === 'failed' ? 'did not run' : 'graded') : 'waiting for builders', dur: '—'});
+  }
+  return steps;
+}
+
+function stepsHtml(steps) {
+  return steps.map((st, i) => `
+    <li class="step is-${st.state}${i === steps.length - 1 ? ' is-last' : ''}">
+      <span class="step-rail" aria-hidden="true"><i class="step-mark"></i><i class="step-spine"></i></span>
+      <span class="step-body">
+        <span class="step-label">${escHtml(st.label)}</span>
+        <span class="step-detail">${escHtml(st.detail)}</span>
+      </span>
+      <span class="step-dur">${escHtml(st.dur)}</span>
+    </li>`).join('');
+}
+
+function paintTurn(pid) {
+  const t = turns[pid];
+  if (!t) return;
+  const now = Date.now();
+  const stepsEl = $(`pstages-${pid}`);
+  if (stepsEl) stepsEl.innerHTML = stepsHtml(turnSteps(t, now));
+  const meta = $(`pmeta-${pid}`);
+  if (meta) {
+    const parts = [];
+    if (t.jobId) parts.push(t.jobId.replace(/^job_/, 'job ').slice(0, 16));
+    parts.push(STRATEGY_WORDS[t.strategy] || t.strategy);
+    const end = t.doneAt != null ? t.doneAt : now;
+    parts.push(t.doneAt != null ? fmtDur(end - t.startedAt) : `${fmtDur(end - t.startedAt)} elapsed`);
+    meta.textContent = parts.join(' · ');
+  }
+  paintRunPanel();
+}
+
+function turnFromEvent(ev) {
+  // Events carry no pitch id, so they belong to the one turn still open on
+  // this page. Two concurrent pitches from one page would share the stream;
+  // the timeline then shows the newest, and the run page has each exactly.
+  const open = Object.keys(turns).map(Number).filter(k => turns[k].doneAt == null).sort((a, b) => b - a);
+  return open.length ? turns[open[0]] : null;
+}
+
+function noteEventForTurn(ev) {
+  const t = turnFromEvent(ev);
+  if (!t) return;
+  const at = ev.time ? Date.parse(ev.time) : Date.now();
+  if (ev.type === 'plan' && t.planAt == null) {
+    t.planAt = at;
+    t.subtasks = Number.isInteger(ev.subtask_count)
+      ? ev.subtask_count : (Array.isArray(ev.subtasks) ? ev.subtasks.length : 0);
+  } else if (ev.type === 'build') {
+    t.builds += 1;
+    if (ev.subtask) t.lastBuilt = ev.subtask;
+  } else if (ev.type === 'review_start' && t.reviewAt == null) {
+    t.reviewAt = at;
+  }
+  paintTurn(t.pid);
+}
+
+function setStrategy(key) {
+  pitchStrategy = key;
+  document.querySelectorAll('.ov-strategy [data-strategy]').forEach(b =>
+    b.setAttribute('aria-checked', b.dataset.strategy === key ? 'true' : 'false'));
+  paintStrategyNote();
+}
+
+/* Only the planning strategy can carry a project; ensemble and direct reject
+   one outright (execution/service.py). So choosing either detaches the
+   project in front of you, and says so, instead of letting the pair 422
+   after you press Pitch. */
+function paintStrategyNote() {
+  const note = $('ov-strategy-note');
+  const project = $('active-project-id').value;
+  const drops = !!project && (pitchStrategy === 'ensemble' || pitchStrategy === 'direct');
+  note.hidden = !drops;
+  if (drops) {
+    note.textContent = `${STRATEGY_WORDS[pitchStrategy][0].toUpperCase()}${STRATEGY_WORDS[pitchStrategy].slice(1)} `
+      + `cannot carry a project. This pitch runs detached from ${$('project-context-name').textContent}: `
+      + 'nothing in its memory is read, and the result is not filed as one of its iterations.';
+  }
+}
+
 async function pitchTask() {
   const input = $('pitch-input');
   const btn = $('pitch-btn');
   const task = input.value.trim();
   if (!task) return;
-  const activeProjectId = $('active-project-id').value || null;
+  const projectId = $('active-project-id').value || null;
+  const detached = !!projectId && (pitchStrategy === 'ensemble' || pitchStrategy === 'direct');
+  const projectName = projectId && !detached ? $('project-context-name').textContent : null;
 
   btn.disabled = true;
-  btn.textContent = 'Pitching...';
+  const pid = Date.now();
+  turns[pid] = {pid, task, strategy: pitchStrategy, startedAt: pid, planAt: null, subtasks: 0,
+                builds: 0, reviewAt: null, doneAt: null, status: 'running', jobId: null,
+                lastBuilt: null, projectName};
 
-  const pipelineLog = $('pipeline-log');
-  const pipelineId = Date.now();
-  const _cardStart = Date.now();
-
-  const runningCard = `
-    <div class="pipeline-card running" id="pipeline-${pipelineId}">
-      <div class="pipeline-header">
-        <div class="pipeline-task">${escHtml(task)}</div>
-        <div class="pipeline-head-right">
-          <span class="pipeline-elapsed" id="pelapsed-${pipelineId}">0s</span>
-          <div class="pipeline-status status-running" id="pstatus-${pipelineId}">PLANNING</div>
+  const askMeta = [projectName ? `into ${projectName}` : (detached ? 'detached · no project' : 'no project'),
+                   STRATEGY_WORDS[pitchStrategy], 'pitched just now'].join(' · ');
+  $('ov-empty').hidden = true;
+  $('pipeline-log').insertAdjacentHTML('beforeend', `
+    <article class="turn" id="pipeline-${pid}">
+      <div class="turn-ask"><div class="turn-bubble">
+        <div class="turn-text">${escHtml(task)}</div>
+        <div class="turn-meta">${escHtml(askMeta)}</div>
+      </div></div>
+      <div class="turn-reply">
+        <span class="turn-mark" aria-hidden="true">&#9672;</span>
+        <div class="turn-body">
+          <div class="turn-verdict">
+            <span class="turn-state is-running" id="pstatus-${pid}">RUNNING</span>
+            <span class="turn-runmeta" id="pmeta-${pid}"></span>
+          </div>
+          <ol class="steps" id="pstages-${pid}" aria-label="Where this run is"></ol>
+          <pre class="token-stream" id="token-stream-${pid}" hidden></pre>
+          <div class="turn-result" id="presult-${pid}" hidden></div>
         </div>
       </div>
-      <div id="pstages-${pipelineId}">${stageBarHtml(false, false, false)}</div>
-      <pre class="token-stream" id="token-stream-${pipelineId}" hidden></pre>
-    </div>`;
+    </article>`);
+  paintTurn(pid);
+  $(`pipeline-${pid}`).scrollIntoView({block: 'nearest'});
+  showOvTab('run');
 
-  const elapsedTicker = setInterval(() => {
-    const el = $(`pelapsed-${pipelineId}`);
-    if (!el) { clearInterval(elapsedTicker); return; }
-    const secs = Math.round((Date.now() - _cardStart) / 1000);
-    el.textContent = secs >= 60 ? `${Math.floor(secs / 60)}m ${secs % 60}s` : `${secs}s`;
-  }, 1000);
-
-  const empty = pipelineLog.querySelector('.empty-state');
-  if (empty) pipelineLog.innerHTML = '';
-  pipelineLog.insertAdjacentHTML('afterbegin', runningCard);
-
-  // Watch events to update the stage bar while the request is in flight.
-  // Uses its own cursor so it doesn't conflict with the WebSocket log.
-  let planDone = false, buildDone = false, buildCount = 0, totalSubtasks = 0;
-  let stageCursor = eventCursor;
-  const stageWatcher = setInterval(async () => {
-    try {
-      const d = await apiJson(`/events?since=${stageCursor}`);
-      d.events.forEach(ev => {
-        if (ev.type === 'plan') {
-          planDone = true;
-          totalSubtasks = Number.isInteger(ev.subtask_count)
-            ? ev.subtask_count
-            : (Array.isArray(ev.subtasks) ? ev.subtasks.length : 0);
-        }
-        if (ev.type === 'build') buildCount++;
-        if (ev.type === 'review_start') buildDone = true;
-        if (ev.id && ev.id > stageCursor) stageCursor = ev.id;
-      });
-
-      const statusEl = $(`pstatus-${pipelineId}`);
-      const stagesEl = $(`pstages-${pipelineId}`);
-      if (!statusEl) return;
-
-      const buildLabel = totalSubtasks > 0
-        ? `Build ${Math.min(buildCount, totalSubtasks)}/${totalSubtasks}`
-        : 'Build';
-
-      if (!planDone) {
-        statusEl.textContent = 'PLANNING';
-        stagesEl.innerHTML = stageBarHtml(false, false, false, buildLabel);
-      } else if (!buildDone) {
-        statusEl.textContent = buildLabel.toUpperCase();
-        stagesEl.innerHTML = stageBarHtml(true, false, false, buildLabel);
-      } else {
-        statusEl.textContent = 'REVIEWING';
-        stagesEl.innerHTML = stageBarHtml(true, true, false, buildLabel);
-      }
-    } catch (e) {}
+  const ticker = setInterval(() => {
+    if (!turns[pid] || turns[pid].doneAt != null) { clearInterval(ticker); return; }
+    paintTurn(pid);
   }, 1000);
 
   try {
-    // Always use the async endpoint — returns job_id immediately, live updates
-    // via WebSocket. /pitch/async falls back to /pitch/distributed internally
-    // when nodes are connected.
-    const body = {task};
-    if (activeProjectId) body.project_id = activeProjectId;
+    const body = {task, strategy: pitchStrategy};
+    if (projectId && !detached) body.project_id = projectId;
     const resp = await apiFetch('/pitch/async', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(body),
     });
     const data = await resp.json();
-
-    // Re-key the token stream element so _appendToken can find it by job_id
-    if (data.job_id) {
-      const tsEl = $(`token-stream-${pipelineId}`);
-      if (tsEl) tsEl.id = `token-stream-${data.job_id}`;
+    if (!resp.ok || !data.job_id) {
+      throw new Error(typeof data.detail === 'string' ? data.detail : `the coordinator answered ${resp.status}`);
     }
-
-    if (!data.job_id) throw new Error('Unexpected response: ' + JSON.stringify(data));
-    btn.textContent = 'Running...';
-    await _pollJobCompletion(data.job_id, pipelineId, task, stageWatcher, elapsedTicker);
+    turns[pid].jobId = data.job_id;
+    // Re-key the token stream element so _appendToken can find it by job_id.
+    const tsEl = $(`token-stream-${pid}`);
+    if (tsEl) tsEl.id = `token-stream-${data.job_id}`;
+    paintTurn(pid);
+    input.value = '';
+    await _pollJobCompletion(data.job_id, pid);
   } catch (e) {
-    clearInterval(stageWatcher);
-    clearInterval(elapsedTicker);
-    const card = $(`pipeline-${pipelineId}`);
-    if (card) {
-      card.classList.remove('running');
-      const s = $(`pstatus-${pipelineId}`);
-      if (s) { s.className = 'pipeline-status status-pending'; s.textContent = 'FAILED'; }
-    }
+    finishTurn(pid, {status: 'failed', error: e && e.message ? e.message : 'the pitch was not accepted'});
   }
-
+  clearInterval(ticker);
   btn.disabled = false;
-  btn.textContent = 'Pitch';
-  input.value = '';
 }
 
-async function _pollJobCompletion(jobId, pipelineId, task, stageWatcher, elapsedTicker) {
+async function _pollJobCompletion(jobId, pid) {
   while (true) {
     await new Promise(r => setTimeout(r, 3000));
     try {
       const job = await apiJson(`/jobs/${jobId}`);
       if (job.status === 'complete' || job.status === 'failed') {
-        clearInterval(stageWatcher);
-        clearInterval(elapsedTicker);
-        _showCompletedCard(pipelineId, task, {
+        finishTurn(pid, {
           plan: job.plan || [],
           project_dir: job.project_dir || '',
           rating: job.rating,
@@ -1260,40 +1370,128 @@ async function _pollJobCompletion(jobId, pipelineId, task, stageWatcher, elapsed
   }
 }
 
-function _showCompletedCard(pipelineId, task, result) {
-  const card = $(`pipeline-${pipelineId}`);
-  if (!card) return;
-  card.classList.remove('running');
+function finishTurn(pid, result) {
+  const t = turns[pid];
+  if (!t) return;
+  t.status = result.status === 'failed' ? 'failed' : 'complete';
+  t.doneAt = Date.now();
+  if (!t.subtasks && (result.plan || []).length) t.subtasks = result.plan.length;
+  paintTurn(pid);
 
-  const failed = result.status === 'failed';
-  const statusClass = failed ? 'status-pending' : 'status-complete';
-  const statusText = failed ? 'FAILED' : (result.mode === 'distributed' ? 'DISTRIBUTED' : 'COMPLETE');
-  const badge = failed ? '' : verdictChip(result.rating, result.code_precheck_error);
-
-  let subtasksHtml = '<div class="subtask-list">';
-  (result.plan || []).forEach(st => {
-    subtasksHtml += `
-      <div class="subtask">
-        <span class="subtask-id">${escHtml(String(st.id))}</span>
-        <span class="subtask-title">${escHtml(st.title)}</span>
-        <span class="subtask-check" aria-hidden="true">&#10003;</span>
-      </div>`;
-  });
-  subtasksHtml += '</div>';
-
+  const state = $(`pstatus-${pid}`);
+  if (state) {
+    if (t.status === 'failed') {
+      state.className = 'turn-state is-failed';
+      state.textContent = 'FAILED';
+    } else {
+      // The verdict is the run's own chip: lifecycle and checks are separate
+      // claims, and "completed" is not "passed" (HANDOFF-UI §7).
+      state.outerHTML = verdictChip(result.rating, result.code_precheck_error);
+    }
+  }
   const ts = result.project_dir ? result.project_dir.split(/[\\/]/).pop() : '';
-
-  card.innerHTML = `
-    <div class="pipeline-header">
-      <div class="pipeline-task">${escHtml(task)}</div>
-      <div class="pipeline-head-right">${badge}<div class="pipeline-status ${statusClass}">${statusText}</div></div>
-    </div>
-    ${stageBarHtml(true, true, true)}
-    ${subtasksHtml}
-    ${ts ? `<a class="run-link" href="/run/${encodeURIComponent(ts)}">Open the run page &#8594;</a>` : ''}
-    ${result.error ? `<div class="error-box">${escHtml(result.error)}</div>` : ''}
-  `;
+  const out = $(`presult-${pid}`);
+  if (out) {
+    const plan = (result.plan || []).map(st => `
+      <span class="turn-file" title="${escHtml(st.title || '')}">${escHtml(String(st.id))}
+        <span class="turn-file-k">${escHtml(st.title || '')}</span></span>`).join('');
+    out.innerHTML = `
+      ${result.error ? `<div class="error-box">${escHtml(result.error)}</div>` : ''}
+      ${plan ? `<div class="turn-files">${plan}</div>` : ''}
+      <div class="turn-links">
+        ${ts ? `<button type="button" class="ov-link" data-run="${escHtml(ts)}" title="Open the full run detail">run detail &rarr;</button>
+                <a class="ov-link" href="/run/${encodeURIComponent(ts)}" title="The run's own page, the link to share">run page &#8599;</a>` : ''}
+        <button type="button" class="ov-link" data-template="${escHtml(t.task)}" title="Put this task back in the composer">pitch again</button>
+      </div>`;
+    out.hidden = false;
+  }
+  paintRunPanel();
 }
+
+/* The RUN panel: the newest turn while it runs, and the last one after. The
+   tab is absent when there is nothing to show (§15.5b). */
+function paintRunPanel() {
+  const keys = Object.keys(turns).map(Number).sort((a, b) => b - a);
+  const tab = document.querySelector('.ov-tab[data-ovtab="run"]');
+  const el = $('ov-run-panel');
+  if (!keys.length) { if (tab) tab.hidden = true; return; }
+  if (tab) tab.hidden = false;
+  const t = turns[keys[0]];
+  const now = Date.now();
+  const running = t.doneAt == null;
+  el.innerHTML = `
+    <div class="ov-run-head">
+      <span class="ov-run-k">${running ? 'ACTIVE RUN' : 'LAST RUN'}</span>
+      ${running ? '<span class="ov-run-live"><i aria-hidden="true"></i>running</span>' : ''}
+      <span class="ov-run-elapsed">${escHtml(fmtDur((t.doneAt || now) - t.startedAt))}</span>
+    </div>
+    <div class="ov-run-task">${escHtml(t.task)}</div>
+    <div class="ov-run-meta">${escHtml([t.jobId || 'not accepted yet', STRATEGY_WORDS[t.strategy]].join(' · '))}</div>
+    <ol class="steps is-compact">${stepsHtml(turnSteps(t, now))}</ol>
+    <button type="button" class="ov-link ov-link-row" data-scroll-turn="${t.pid}"
+            title="Scroll the thread to this run">show in thread &rarr;</button>`;
+  paintOvWindowMeta();
+}
+
+// ── The floating window ─────────────────────────────────────────
+let ovTabPref = 'activity';
+function availableOvTabs() {
+  return [...document.querySelectorAll('.ov-tab')].filter(b => !b.hidden).map(b => b.dataset.ovtab);
+}
+function showOvTab(name) {
+  ovTabPref = name;
+  paintOvTabs();
+}
+/* The choice is a preference resolved against what is available, so a panel
+   that disappears (a tab hidden because it has nothing to show) falls back to
+   ACTIVITY instead of leaving the window blank. */
+function paintOvTabs() {
+  const avail = availableOvTabs();
+  const active = avail.indexOf(ovTabPref) !== -1 ? ovTabPref : (avail[0] || 'activity');
+  document.querySelectorAll('.ov-tab').forEach(b =>
+    b.setAttribute('aria-selected', b.dataset.ovtab === active ? 'true' : 'false'));
+  document.querySelectorAll('.ov-panel').forEach(p => { p.hidden = p.dataset.ovpanel !== active; });
+  $('ov-window').classList.toggle('is-activity', active === 'activity');
+  paintOvWindowMeta();
+}
+function paintOvWindowMeta() {
+  const active = (document.querySelector('.ov-tab[aria-selected="true"]') || {}).dataset?.ovtab;
+  let meta = '';
+  if (active === 'activity') meta = wsConnected ? 'websocket · live' : 'reconnecting';
+  else if (active === 'swarm') meta = $('ov-swarm-summary').textContent;
+  else if (active === 'run') meta = '';
+  setText('ov-window-meta', meta);
+}
+function toggleOvWindow() {
+  const w = $('ov-window');
+  const min = w.classList.toggle('is-min');
+  const b = $('ov-window-min');
+  b.setAttribute('aria-expanded', min ? 'false' : 'true');
+  b.title = min ? 'Show the window again' : 'Shrink the window to its title bar';
+  b.textContent = min ? '+' : '\u2013';
+}
+
+/* The SWARM panel: the same /nodes answer the Nodes view renders. */
+function paintSwarmPanel(nodes) {
+  const list = nodes.nodes || [];
+  const building = list.filter(n => n.status === 'busy' || n.current_task).length;
+  setText('ov-swarm-summary', list.length
+    ? `${list.length} online · ${building} building`
+    : 'none connected');
+  $('ov-swarm-list').innerHTML = list.length ? list.map(n => {
+    const busy = n.status === 'busy' || n.current_task;
+    return `
+      <button type="button" class="ov-swarm-row" data-tab="nodes" title="Open Nodes — ${escHtml(n.node_id)}">
+        <span class="ov-swarm-top"><i class="lamp ${busy ? 'is-warn' : 'is-ok'}" aria-hidden="true"></i>
+          <span class="ov-swarm-id">${escHtml(n.node_id)}</span>
+          <span class="ov-swarm-pts">${escHtml(String(n.credits_earned || 0))} pts</span></span>
+        <span class="ov-swarm-spec">${escHtml([n.platform, n.cpu_count ? n.cpu_count + ' CPU' : '', n.ram_gb ? n.ram_gb + ' GB' : ''].filter(Boolean).join(' · '))}</span>
+        <span class="ov-swarm-task${busy ? ' is-busy' : ''}">${busy ? escHtml('▶ ' + (n.current_task || 'building')) : 'waiting for work'}</span>
+      </button>`;
+  }).join('') : '<p class="ov-swarm-none">No machines connected. The coordinator still works: builders run locally, one at a time.</p>';
+  paintOvWindowMeta();
+}
+
 
 let _currentModalTimestamp = null;
 
@@ -1416,6 +1614,7 @@ function appendEvent(ev) {
 
   const label = EVENT_LABELS[ev.type];
   if (!label) return;  // skip unknown events
+  noteEventForTurn(ev);
   const t = new Date(ev.time).toLocaleTimeString();
   let msg = '';
   if (ev.type === 'pitch') {
@@ -1432,13 +1631,18 @@ function appendEvent(ev) {
   else if (ev.type === 'complete') msg = `Pipeline complete → ${escHtml(ev.project_dir)}`;
   else if (ev.type === 'error') msg = `Error: ${escHtml(ev.message || '')}`;
 
+  // Stacked, not a three-column grid: at 316px the grid wrapped every
+  // message (§15.5b). Agent and time on one mono line, the message beneath.
   const log = $('event-log');
+  const empty = $('event-empty');
+  if (empty) empty.remove();
   log.insertAdjacentHTML('beforeend', `<div class="log-entry">
-    <span class="log-time">${t}</span>
-    <span class="log-agent ${label.cls}">${label.agent}</span>
-    <span class="log-event"> ${msg}</span>
+    <div class="log-head"><span class="log-agent ${label.cls}">${label.agent}</span>
+      <span class="log-time">${t}</span></div>
+    <div class="log-event">${msg}</div>
   </div>`);
-  log.scrollTop = log.scrollHeight;
+  const pane = log.closest('.ov-window-body') || log;
+  pane.scrollTop = pane.scrollHeight;
 }
 
 /* Live state on a row. The square, its colour and the word move together —
@@ -1489,7 +1693,7 @@ function _setNodeBlacklisted(nodeId, seconds) {
 function connectWebSocket() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const ws = new WebSocket(`${proto}://${location.host}/ws/events`);
-  ws.onopen = () => { wsConnected = true; };
+  ws.onopen = () => { wsConnected = true; paintOvWindowMeta(); };
   ws.onmessage = (e) => {
     try {
       const ev = JSON.parse(e.data);
@@ -1499,6 +1703,7 @@ function connectWebSocket() {
   };
   ws.onclose = (e) => {
     wsConnected = false;
+    paintOvWindowMeta();
     // 4401 is the server saying this browser has no viewer credential. It will
     // say the same thing every time, so reconnecting is a loop that never ends
     // and never reports anything. Show the locked screen and stop.
@@ -1711,16 +1916,23 @@ async function promptNewProject() {
 function continueProject(projectId, projectName) {
   $('active-project-id').value = projectId;
   $('project-context-name').textContent = projectName;
-  $('project-context').hidden = false;
+  $('ov-project-dot').classList.add('is-on');
+  setText('ov-memory-note', `${projectId} · its memory goes into the next pitch`);
+  $('clear-project').hidden = false;
   showTab('overview');
-  $('pitch-input').placeholder = `What's next for ${projectName}?`;
+  $('pitch-input').placeholder = `Pitch the next change to ${projectName}`;
+  paintStrategyNote();
   $('pitch-input').focus();
 }
 
 function clearProjectContext() {
   $('active-project-id').value = '';
-  $('project-context').hidden = true;
-  $('pitch-input').placeholder = 'Describe what you want built...';
+  $('project-context-name').textContent = 'No project';
+  $('ov-project-dot').classList.remove('is-on');
+  setText('ov-memory-note', 'no memory carried in');
+  $('clear-project').hidden = true;
+  $('pitch-input').placeholder = 'Describe what you want built';
+  paintStrategyNote();
 }
 
 // ── Gallery ──────────────────────────────────────────────────────
@@ -1809,8 +2021,9 @@ const _TEMPLATES = [
 function renderTemplates() {
   const el = $('task-templates');
   if (!el) return;
-  el.innerHTML = '<span class="template-label">Try:</span>' + _TEMPLATES.map(t =>
-    `<button type="button" class="template-chip" data-template="${escHtml(t)}">${escHtml(t)}</button>`
+  el.innerHTML = _TEMPLATES.map(t =>
+    `<button type="button" class="template-chip" data-template="${escHtml(t)}"
+             title="Put this suggestion in the composer">${escHtml(t)}</button>`
   ).join('');
 }
 
@@ -1870,6 +2083,20 @@ $('statusbar-collapse').addEventListener('click', toggleStatusBar);
 
 $('nav-toggle').addEventListener('click', toggleNav);
 $('rail-toggle').addEventListener('click', toggleNav);
+document.querySelectorAll('.ov-strategy [data-strategy]').forEach(b =>
+  b.addEventListener('click', () => setStrategy(b.dataset.strategy)));
+document.querySelectorAll('.ov-tab').forEach(b =>
+  b.addEventListener('click', () => showOvTab(b.dataset.ovtab)));
+$('ov-window-min').addEventListener('click', toggleOvWindow);
+document.addEventListener('click', (e) => {
+  const run = e.target.closest('[data-run]');
+  if (run) { viewRun(run.dataset.run); return; }
+  const turn = e.target.closest('[data-scroll-turn]');
+  if (turn) {
+    const el = $(`pipeline-${turn.dataset.scrollTurn}`);
+    if (el) el.scrollIntoView({block: 'start', behavior: 'smooth'});
+  }
+});
 $('ident-toggle').addEventListener('click', () => setIdentMenu($('ident-menu').hidden));
 $('ident-scrim').addEventListener('click', () => setIdentMenu(false));
 // Every item navigates and closes in one step, so none leaves the menu open
@@ -1929,6 +2156,9 @@ window.matchMedia(DRAWER_QUERY).addEventListener?.('change', (e) => {
 // ── Start ────────────────────────────────────────────────────────
 renderTemplates();
 wireLockedScreen();
+$('main').classList.add('is-bleed');
+paintRunPanel();
+paintOvTabs();
 
 // Restore the view from the URL. #run=<ts> opens a run; #gallery selects a
 // view. Before this, reloading on #gallery silently landed on Overview.

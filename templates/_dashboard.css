@@ -373,271 +373,345 @@ body {
 .search-input:focus { border-color: var(--accent-border); }
 .search-input::placeholder { color: var(--text-muted); }
 
-.stats-bar {
-  display: flex;
-  gap: 24px;
-  padding: 16px 20px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius);
-  background: var(--surface);
-  margin-bottom: 24px;
-  flex-wrap: wrap;
-}
-.stat { display: flex; align-items: baseline; gap: 8px; }
-.stat-status {
-  display: inline-flex; align-items: center; gap: 7px;
-  font-family: var(--mono); font-size: 13px; font-weight: 500;
-  color: var(--text-dim); letter-spacing: -0.1px;
-}
-.stat-status i {
-  width: 7px; height: 7px; border-radius: 50%;
-  background: var(--text-muted); flex-shrink: 0;
-}
-.stat-status.is-ok    { color: var(--accent-text); }
-.stat-status.is-ok i  { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-wash); }
-.stat-status.is-down  { color: var(--danger); }
-.stat-status.is-down i{ background: var(--danger); box-shadow: 0 0 0 3px var(--danger-wash); }
-/* Not heard back. Hollow, and in no colour that could be read as a verdict:
-   this tile had two states, so a silent coordinator painted red here and said
-   "unavailable" — the console asserting an outage nobody had reported. */
-.stat-status.is-unknown  { color: var(--text-muted); }
-.stat-status.is-unknown i{ background: transparent; box-shadow: inset 0 0 0 1px var(--text-faint); }
+/* ── Overview ────────────────────────────────────────────────────
+   Full-bleed (HANDOFF-UI §15.5). #main gives up its padding and its scroll
+   on this view; the thread column scrolls inside it, and the floating window
+   is centred in that scrollport by a sticky full-height wrapper, never by a
+   transform: sticky cannot clamp a transform, and the window would ride up
+   over the notice above it. */
+.content.is-bleed { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
+.content.is-bleed > .ov { flex: 1 1 auto; min-height: 0; }
+.ov { display: flex; flex-direction: column; }
 
-.stat-value {
-  font-size: 22px;
-  font-weight: 700;
-  color: var(--text);
-  font-family: var(--mono);
-  font-variant-numeric: tabular-nums;
+/* The vital line: the same four signs as the status bar, as quiet phrases
+   (§15.3). Round dots here, because this is a sentence and not a lamp row. */
+.ov-vitals {
+  display: flex; align-items: center; gap: 22px; flex-wrap: wrap;
+  padding: 13px 22px; flex-shrink: 0;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
 }
-.stat-label {
-  font-size: 12px;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 1px;
+.ov-vital { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.ov-vital-dot {
+  width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; align-self: center;
+  background: var(--border-strong);
+}
+.ov-vital-v { font-family: var(--mono); font-size: 13px; font-weight: 500; color: var(--text); }
+.ov-vital-k { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+.ov-vital.is-ok .ov-vital-dot { background: var(--accent); }
+.ov-vital.is-warn .ov-vital-dot { background: var(--warn); }
+.ov-vital.is-bad .ov-vital-dot { background: var(--danger); }
+.ov-vital.is-bad .ov-vital-v { color: var(--danger-text); }
+.ov-vital.is-idle .ov-vital-v { color: var(--text-muted); }
+/* Not heard back: hollow, and the number greys, exactly like the bar. */
+.ov-vital.is-stale .ov-vital-dot { background: transparent; box-shadow: inset 0 0 0 1px var(--text-faint); }
+.ov-vital.is-stale .ov-vital-v { color: var(--text-faint); }
+.ov-totals {
+  margin-left: auto; display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
+  font-size: 12px; color: var(--text-faint);
+}
+.ov-totals .mono { font-family: var(--mono); }
+.ov-totals-link { color: var(--text-muted); text-decoration: none; }
+.ov-totals-link:hover { color: var(--text); }
+
+.ov-body {
+  flex: 1 1 auto; min-height: 0;
+  overflow-y: auto; overflow-x: hidden;
+  display: flex; flex-wrap: wrap; align-items: stretch;
 }
 
-/* Plain-language key for the live log. */
-.flow {
-  display: flex; align-items: stretch; gap: 8px; flex-wrap: wrap;
-  padding: 12px 14px; margin-bottom: 20px;
-  border: 1px solid var(--border-subtle); border-radius: var(--radius);
-  background: var(--surface);
+/* The thread sits on --bg with no fill of its own: a lighter panel that
+   stopped at the last message read worse than no panel (§15.5b). */
+.ov-thread { flex: 100 1 420px; min-width: 0; display: flex; flex-direction: column; background: var(--bg); }
+.ov-col { width: 100%; max-width: 740px; }
+
+.ov-context {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 14px 28px 2px;
 }
-.flow-step { display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; min-width: 0; }
-.flow-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; align-self: center; }
+.ov-project-chip {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: none; border: 1px solid var(--border); border-radius: 20px;
+  padding: 4px 11px; font-size: 12.5px; color: var(--text); cursor: pointer;
+}
+.ov-project-chip:hover { border-color: var(--border-strong); }
+.ov-project-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; background: var(--text-faint); }
+.ov-project-dot.is-on { background: var(--mark); }
+.ov-memory { font-family: var(--mono); font-size: 11px; color: var(--text-muted); }
+.ov-clear {
+  margin-left: auto; background: none; border: none; padding: 0; cursor: pointer;
+  font-family: var(--mono); font-size: 11px; color: var(--text-muted);
+}
+.ov-clear:hover { color: var(--text); }
+
+.ov-stream {
+  flex: 1 1 auto; display: flex; flex-direction: column; align-items: center;
+  padding: 0 28px;
+}
+.ov-empty { padding: 52px 0 8px; }
+.ov-empty-title { font-size: 24px; font-weight: 500; letter-spacing: -0.01em; color: var(--text); }
+.ov-empty-body {
+  font-size: 13.5px; color: var(--text-muted); line-height: 1.6; margin-top: 9px;
+  max-width: 60ch; text-wrap: pretty;
+}
+
+.ov-turns { display: flex; flex-direction: column; }
+.turn { padding: 24px 0 12px; display: flex; flex-direction: column; gap: 20px; animation: cardIn 260ms ease-out both; }
+.turn-ask { display: flex; justify-content: flex-end; }
+.turn-bubble {
+  max-width: 82%;
+  background: var(--surface); border: 1px solid var(--border-subtle);
+  border-radius: 18px 14px 4px 14px; padding: 11px 15px;
+}
+.turn-text { font-size: 14px; color: var(--text); line-height: 1.55; text-wrap: pretty; overflow-wrap: anywhere; }
+.turn-meta { font-family: var(--mono); font-size: 11px; color: var(--text-faint); margin-top: 6px; }
+.turn-reply { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 13px; align-items: start; }
+.turn-mark {
+  width: 22px; height: 22px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface);
+  display: inline-flex; align-items: center; justify-content: center;
+  font-family: var(--mono); font-size: 11px; color: var(--mark);
+}
+.turn-body { min-width: 0; display: flex; flex-direction: column; gap: 13px; }
+.turn-verdict { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; font-family: var(--mono); font-size: 11.5px; }
+.turn-state { letter-spacing: 0.05em; }
+.turn-state.is-running { color: var(--warn-text); }
+.turn-state.is-failed { color: var(--danger-text); }
+.turn-runmeta { color: var(--text-muted); }
+.turn-result { display: flex; flex-direction: column; gap: 10px; }
+.turn-files { display: flex; flex-wrap: wrap; gap: 7px; }
+.turn-file {
+  display: inline-flex; align-items: baseline; gap: 9px; max-width: 100%;
+  background: var(--surface); border: 1px solid var(--border-subtle); border-radius: 10px;
+  padding: 7px 11px; font-family: var(--mono); font-size: 11.5px; color: var(--text-dim);
+}
+.turn-file-k { font-family: var(--sans); font-size: 12px; color: var(--text-muted); overflow-wrap: anywhere; }
+.turn-links { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; }
+
+/* The agent-step timeline (§16.2). A 1px spine in --border-strong, round
+   markers, a sans label over a 13px detail line, duration on the right, and
+   no segment after the last step: a connector joins steps, and one after the
+   final marker would imply a step that is not there. */
+.steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.step { display: grid; grid-template-columns: 11px minmax(0, 1fr) auto; gap: 14px; align-items: start; }
+.step-rail { display: flex; flex-direction: column; align-items: center; align-self: stretch; }
+.step-mark { width: 9px; height: 9px; border-radius: 9px; margin-top: 4px; flex-shrink: 0; background: var(--border-strong); }
+.step-spine { flex: 1 1 auto; width: 1px; min-height: 14px; margin: 4px 0; background: var(--border-strong); }
+.step.is-last .step-spine { background: transparent; }
+.step-body { min-width: 0; padding-bottom: 16px; }
+.step-label { display: block; font-size: 11px; font-weight: 600; letter-spacing: 0.09em; color: var(--text-faint); }
+.step-detail { display: block; font-size: 13px; color: var(--text-dim); line-height: 1.5; margin-top: 4px; text-wrap: pretty; }
+.step-dur { font-family: var(--mono); font-size: 11.5px; color: var(--text-muted); text-align: right; padding-top: 1px; }
+.step.is-done .step-mark { background: var(--accent); }
+.step.is-done .step-label { color: var(--accent-text); }
+.step.is-active .step-mark { background: var(--warn); animation: runPulse 1.6s ease-in-out infinite; }
+.step.is-active .step-label { color: var(--warn-text); }
+.step.is-stopped .step-mark { background: var(--danger); }
+.step.is-stopped .step-label { color: var(--danger-text); }
+.step.is-skipped .step-detail, .step.is-waiting .step-detail { color: var(--text-muted); }
+.steps.is-compact .step-body { padding-bottom: 10px; }
+.steps.is-compact .step-detail { font-size: 12px; }
+
+.token-stream {
+  margin: 0; padding: 10px 12px;
+  background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: 10px;
+  font-family: var(--mono); font-size: 11.5px; line-height: 1.6; color: var(--text-dim);
+  white-space: pre-wrap; word-break: break-word;
+  max-height: 140px; overflow-y: auto;
+}
+.error-box {
+  background: var(--danger-wash); border: 1px solid var(--danger-line); border-radius: 10px;
+  padding: 10px 12px; font-size: 12.5px; color: var(--danger-text); line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.ov-link {
+  background: none; border: none; padding: 6px 4px; cursor: pointer;
+  font-family: var(--mono); font-size: 11.5px; color: var(--text-muted); text-decoration: none;
+}
+.ov-link:hover { color: var(--text); }
+.ov-link-row {
+  display: block; width: 100%; text-align: left;
+  padding: 13px 12px; border-top: 1px solid var(--border-subtle);
+}
+
+/* The composer floats on --bg (§16.3) rather than docking on a hairline. */
+.ov-composer-wrap {
+  margin-top: auto; display: flex; justify-content: center;
+  padding: 10px 28px 22px; background: var(--bg);
+}
+.ov-composer {
+  border: 1px solid var(--border-subtle); border-radius: 18px;
+  box-shadow: var(--card-lift); background: var(--surface);
+  padding: 12px 14px 10px;
+}
+.pitch-input {
+  display: block; width: 100%;
+  background: none; border: none; outline: none;
+  font-size: 14px; color: var(--text); font-family: inherit; line-height: 1.5;
+}
+.pitch-input::placeholder { color: var(--text-muted); }
+.ov-composer:focus-within { border-color: var(--border-strong); }
+.ov-composer-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+.ov-strategy { display: flex; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.ov-strategy button {
+  background: transparent; color: var(--text-muted);
+  border: none; border-left: 1px solid var(--border);
+  padding: 5px 10px; min-height: 28px;
+  font-family: var(--mono); font-size: 11px; cursor: pointer; white-space: nowrap;
+}
+.ov-strategy button:first-child { border-left: none; }
+.ov-strategy button:hover { color: var(--text); }
+.ov-strategy button[aria-checked="true"] { background: var(--surface-hover); color: var(--text); }
+.ov-rate { font-family: var(--mono); font-size: 11px; color: var(--text-muted); }
+.pitch-btn {
+  margin-left: auto;
+  display: inline-flex; align-items: center; gap: 8px; min-height: 32px;
+  background: var(--accent); color: var(--on-accent);
+  border: none; border-radius: 8px; padding: 7px 14px;
+  font-family: var(--sans); font-size: 12.5px; font-weight: 500; cursor: pointer;
+}
+.pitch-btn:hover { background: var(--accent-strong); }
+.pitch-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.pitch-key { font-family: var(--mono); font-size: 11px; opacity: 0.75; }
+.ov-note {
+  margin-top: 10px; padding-left: 15px; position: relative;
+  font-size: 12px; color: var(--text-muted); line-height: 1.55; text-wrap: pretty;
+}
+.ov-note::before {
+  content: ""; position: absolute; left: 0; top: 6px;
+  width: 6px; height: 6px; background: var(--info);
+}
+.ov-suggest { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 11px; align-items: center; }
+.ov-suggest-k { font-size: 11px; font-weight: 600; letter-spacing: 0.09em; color: var(--text-faint); margin-right: 2px; }
+.template-row { display: contents; }
+.template-chip {
+  background: none; border: 1px solid var(--border-subtle); border-radius: 20px;
+  padding: 5px 11px; font-family: var(--sans); font-size: 12px; color: var(--text-muted);
+  cursor: pointer;
+}
+.template-chip:hover { border-color: var(--border-strong); color: var(--text-dim); }
+
+/* The floating window (§15.5b): 316px, 16px of air, 14px corners, lift, one
+   panel at a time. Centred by a sticky full-height wrapper. Sized by its
+   content and capped: ACTIVITY at 58vh, the others at the viewport. */
+.ov-window-wrap {
+  flex: 0 1 316px; min-width: 276px; max-width: 100%;
+  align-self: stretch; position: sticky; top: 0; height: 100%; max-height: 100%;
+  display: flex; align-items: center; justify-content: flex-end;
+  padding: 16px 16px 16px 0;
+}
+.ov-window {
+  width: 100%; display: flex; flex-direction: column;
+  max-height: calc(100vh - 220px);
+  border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: var(--lift); overflow: hidden;
+  background: var(--bg-elevated);
+}
+.ov-window.is-activity { max-height: 58vh; }
+.ov-window-bar {
+  display: flex; align-items: center; gap: 3px; flex-shrink: 0;
+  padding: 0 7px 0 10px; height: 34px;
+  background: var(--surface-sunken); border-bottom: 1px solid var(--border);
+}
+.ov-window.is-min .ov-window-bar { border-bottom: none; }
+.ov-window-mark { width: 6px; height: 6px; background: var(--mark); flex-shrink: 0; margin-right: 5px; }
+/* Tab labels never truncate: the meta is what yields when the bar is tight. */
+.ov-tab {
+  flex: 0 0 auto; height: 21px; padding: 0 6px;
+  border: none; border-radius: 6px; background: transparent;
+  font-family: var(--sans); font-size: 11px; font-weight: 600; letter-spacing: 0.02em;
+  color: var(--text-muted); white-space: nowrap; cursor: pointer;
+}
+.ov-tab:hover { color: var(--text); }
+.ov-tab[aria-selected="true"] { background: var(--surface-hover); color: var(--text); }
+.ov-window-meta {
+  margin-left: auto; min-width: 0; flex-shrink: 1; padding-left: 6px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--mono); font-size: 11px; color: var(--text-muted);
+}
+.ov-window-min {
+  flex-shrink: 0; width: 21px; height: 21px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: none; border: none; border-radius: 6px; cursor: pointer;
+  font-family: var(--mono); font-size: 11px; line-height: 1; color: var(--text-muted);
+}
+.ov-window-min:hover { background: var(--surface-hover); color: var(--text); }
+.ov-window-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+.ov-window.is-min .ov-window-body { display: none; }
+
+.event-log { display: flex; flex-direction: column; }
+.event-empty { padding: 14px 12px; font-size: 12px; color: var(--text-muted); line-height: 1.55; }
+.log-entry { padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); }
+.log-head { display: flex; align-items: baseline; gap: 8px; font-family: var(--mono); font-size: 11px; line-height: 1.4; }
+.log-time { margin-left: auto; color: var(--text-faint); flex-shrink: 0; }
+.log-agent { letter-spacing: 0.04em; }
+.log-agent.is-pitch  { color: var(--text-dim); }
+.log-agent.is-plan   { color: var(--info); }
+.log-agent.is-build  { color: var(--accent-text); }
+.log-agent.is-review { color: var(--violet); }
+.log-agent.is-done   { color: var(--accent-text); }
+.log-agent.is-error  { color: var(--danger-text); }
+.log-event {
+  font-size: 12px; color: var(--text-dim); line-height: 1.5; margin-top: 3px;
+  text-wrap: pretty; overflow-wrap: anywhere;
+}
+
+.ov-swarm-summary {
+  padding: 10px 12px; border-bottom: 1px solid var(--border-subtle);
+  font-family: var(--mono); font-size: 11px; color: var(--text-muted); line-height: 1.5;
+}
+.ov-swarm-row {
+  display: block; width: 100%; text-align: left; cursor: pointer;
+  padding: 11px 12px; background: none; border: none; border-bottom: 1px solid var(--border-subtle);
+}
+.ov-swarm-row:hover { background: var(--surface-hover); }
+.ov-swarm-top { display: flex; align-items: center; gap: 8px; }
+.ov-swarm-id { font-family: var(--mono); font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ov-swarm-pts { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text-muted); flex-shrink: 0; }
+.ov-swarm-spec { display: block; font-family: var(--mono); font-size: 11px; color: var(--text-muted); margin-top: 4px; padding-left: 13px; }
+.ov-swarm-task {
+  display: block; font-size: 11.5px; color: var(--text-muted); margin-top: 4px; padding-left: 13px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ov-swarm-task.is-busy { color: var(--warn-text); }
+.ov-swarm-none { padding: 14px 12px; font-size: 12.5px; color: var(--text-dim); line-height: 1.6; border-bottom: 1px solid var(--border-subtle); }
+.ov-lend { padding: 14px 12px; background: var(--surface-sunken); }
+.ov-lend-k { font-size: 11px; font-weight: 600; letter-spacing: 0.09em; color: var(--text-muted); }
+.ov-lend-body { font-size: 12px; color: var(--text-muted); line-height: 1.55; margin: 6px 0 4px; text-wrap: pretty; }
+.ov-lend .ov-link { padding-left: 0; }
+
+#ov-run-panel { padding: 12px 12px 0; }
+.ov-run-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.ov-run-k { font-size: 11px; font-weight: 600; letter-spacing: 0.09em; color: var(--text-muted); }
+.ov-run-live { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11.5px; color: var(--warn-text); }
+.ov-run-live i { width: 5px; height: 5px; background: var(--warn); animation: liveBlink 2.6s steps(1, end) infinite; }
+.ov-run-elapsed { margin-left: auto; font-family: var(--mono); font-size: 11.5px; color: var(--text-muted); }
+.ov-run-task { font-size: 13px; color: var(--text); line-height: 1.45; text-wrap: pretty; overflow-wrap: anywhere; }
+.ov-run-meta { font-family: var(--mono); font-size: 11px; color: var(--text-muted); margin: 5px 0 12px; overflow-wrap: anywhere; }
+#ov-run-panel .ov-link-row { margin: 0 -12px; width: calc(100% + 24px); }
+
+.ov-how { padding: 16px 14px; }
+.ov-how-k { font-size: 11px; font-weight: 600; letter-spacing: 0.09em; color: var(--text-faint); margin-bottom: 8px; }
+.flow { display: flex; flex-direction: column; gap: 8px; }
+.flow-step { display: grid; grid-template-columns: 5px 74px minmax(0, 1fr); gap: 10px; align-items: baseline; }
+.flow-dot { width: 5px; height: 5px; flex-shrink: 0; }
 .flow-dot.is-pitch  { background: var(--stage-pitch); }
 .flow-dot.is-plan   { background: var(--stage-plan); }
 .flow-dot.is-build  { background: var(--stage-build); }
 .flow-dot.is-review { background: var(--stage-review); }
-.flow-step b { font-size: 12.5px; font-weight: 650; color: var(--text); white-space: nowrap; }
-.flow-step i { font-size: 12.5px; font-style: normal; color: var(--text-muted); }
-.flow-arrow { color: var(--text-muted); font-size: 13px; align-self: center; }
+.flow-step b { font-family: var(--mono); font-size: 11.5px; font-weight: 400; color: var(--text-dim); }
+.flow-step i { font-size: 11.5px; font-style: normal; color: var(--text-muted); line-height: 1.45; }
 
-/* ── Pitch form ──────────────────────────────────────────────── */
-.pitch-form { display: flex; gap: 8px; margin-bottom: 14px; }
-.pitch-input {
-  flex: 1;
-  background: var(--surface-hover);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 10px 14px;
-  color: var(--text);
-  font-family: var(--sans);
-  font-size: 15px;
-  outline: none;
-  transition: border-color .12s ease;
+/* Below the width where thread and window sit side by side, the window drops
+   under the thread and stops being sticky. */
+@media (max-width: 900px) {
+  .ov-window-wrap { position: static; height: auto; flex-basis: 100%; padding: 0 16px 16px; }
+  .ov-window, .ov-window.is-activity { max-height: 60vh; }
+  .ov-context, .ov-stream, .ov-composer-wrap { padding-left: 16px; padding-right: 16px; }
+  .ov-vitals { padding: 12px 16px; gap: 10px 18px; }
+  .ov-totals { margin-left: 0; }
 }
-.pitch-input:focus { border-color: var(--accent-border); }
-.pitch-input::placeholder { color: var(--text-muted); }
-.pitch-btn {
-  background: var(--accent-wash);
-  border: 1px solid var(--accent-wash-mid);
-  border-radius: var(--radius);
-  padding: 10px 20px;
-  color: var(--accent-text);
-  font-family: var(--sans);
-  font-weight: 700;
-  font-size: 14px;
-  cursor: pointer;
-  transition: background .12s ease;
-  white-space: nowrap;
-}
-.pitch-btn:hover { background: var(--accent-wash-mid); }
-.pitch-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-
-.project-context {
-  display: flex; justify-content: space-between; align-items: center; gap: 10px;
-  margin-bottom: 10px; padding: 8px 12px;
-  background: var(--accent-wash);
-  border: 1px solid var(--accent-wash-mid);
-  border-radius: var(--radius-sm);
-}
-.project-context-label { font-size: 14px; color: var(--accent-text); }
-
-.template-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 20px; }
-.template-label {
-  font-size: 12px; color: var(--text-muted); letter-spacing: 1px;
-  text-transform: uppercase; align-self: center; margin-right: 4px; white-space: nowrap;
-}
-.template-chip {
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius-sm); padding: 4px 10px;
-  font-family: var(--sans); font-size: 13px; color: var(--text-dim);
-  cursor: pointer;
-  transition: border-color .12s ease, color .12s ease;
-}
-.template-chip:hover { border-color: var(--accent-border); color: var(--accent-text); }
-
-/* ── Live activity log ───────────────────────────────────────── */
-.event-log { margin-bottom: 24px; max-height: 220px; overflow-y: auto; }
-.log-entry {
-  font-family: var(--mono);
-  font-size: 13px;
-  color: var(--text-dim);
-  padding: 4px 0;
-  border-bottom: 1px solid var(--border-subtle);
-  animation: fadeIn 0.3s ease;
-}
-.log-time { color: var(--text-muted); margin-right: 8px; }
-.log-agent { font-weight: 600; }
-.log-agent.is-pitch  { color: var(--stage-pitch); }
-.log-agent.is-plan   { color: var(--stage-plan); }
-.log-agent.is-build  { color: var(--stage-build); }
-.log-agent.is-review { color: var(--stage-review); }
-.log-agent.is-done   { color: var(--accent-text); }
-.log-agent.is-error  { color: var(--danger); }
-.log-event { color: var(--text-muted); }
-
-.run-link {
-  display: block; width: 100%; text-align: left;
-  margin-top: 8px; padding: 4px 0;
-  background: none; border: none; border-top: 1px solid var(--border-subtle);
-  font-family: var(--mono); font-size: 13px; color: var(--accent-text);
-  cursor: pointer;
-  transition: color .12s ease;
-}
-.run-link:hover { color: var(--accent); }
-
-/* ── Pipeline cards ──────────────────────────────────────────── */
-.pipeline-card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 18px 20px;
-  margin-bottom: 12px;
-  animation: fadeIn 0.25s ease;
-}
-.pipeline-card.running { animation: fadeIn 0.25s ease, pulseBorder 2s ease-in-out infinite; }
-.pipeline-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 12px;
-}
-.pipeline-head-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
-.pipeline-task { font-weight: 700; color: var(--text); font-size: 15px; min-width: 0; }
-.pipeline-elapsed {
-  font-family: var(--mono); font-size: 12px; color: var(--text-muted);
-  font-variant-numeric: tabular-nums;
-}
-.pipeline-status {
-  font-family: var(--mono);
-  font-size: 12px;
-  letter-spacing: 1px;
-  padding: 3px 10px;
-  border-radius: 4px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-.status-running {
-  color: var(--warn);
-  background: var(--highlight-wash);
-  border: 1px solid var(--highlight-line);
-}
-.status-complete {
-  color: var(--accent-text);
-  background: var(--accent-wash);
-  border: 1px solid var(--accent-wash-mid);
-}
-.status-pending {
-  color: var(--text-muted);
-  background: var(--surface);
-  border: 1px solid var(--border);
-}
-
-.token-stream {
-  margin-top: 8px; padding: 8px 10px;
-  background: var(--surface-sunken);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  font-family: var(--mono); font-size: 12.5px; color: var(--text-dim);
-  max-height: 120px; overflow-y: auto;
-  white-space: pre-wrap; word-break: break-word;
-}
-
-.error-box {
-  margin-top: 8px; padding: 8px 10px;
-  background: var(--danger-wash);
-  border: 1px solid var(--danger-line);
-  border-radius: var(--radius-sm);
-  font-family: var(--mono); font-size: 13px; color: var(--danger);
-}
-
-.subtask-list { margin-top: 10px; }
-.subtask {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 0;
-  border-top: 1px solid var(--border-subtle);
-}
-.subtask:first-child { border-top: none; }
-.subtask-id {
-  font-family: var(--mono);
-  font-size: 13px;
-  color: var(--text-muted);
-  min-width: 24px;
-}
-.subtask-title { font-size: 14px; color: var(--text-dim); flex: 1; min-width: 0; }
-.subtask-check { color: var(--accent-text); font-size: 15px; }
-
-/* Stage progress shown while a pipeline runs */
-.stage-bar { display: flex; gap: 6px; margin: 10px 0 4px; }
-.stage {
-  flex: 1;
-  height: 3px;
-  border-radius: 2px;
-  background: var(--border-subtle);
-  position: relative;
-  overflow: hidden;
-}
-.stage.done   { background: var(--accent); }
-.stage.active { background: var(--highlight-line); }
-.stage.active::after {
-  content: '';
-  position: absolute;
-  left: -60%;
-  top: 0;
-  width: 60%;
-  height: 100%;
-  background: linear-gradient(90deg, transparent, var(--warn), transparent);
-  animation: shimmer 1.4s ease-in-out infinite;
-}
-.stage-labels { display: flex; gap: 6px; margin-bottom: 10px; }
-.stage-label {
-  flex: 1;
-  font-family: var(--mono);
-  font-size: 11px;
-  letter-spacing: 1px;
-  text-transform: uppercase;
-  color: var(--text-muted);
-  text-align: center;
-  transition: color .12s ease;
-}
-.stage-label.done   { color: var(--accent-text); }
-.stage-label.active { color: var(--warn); }
 
 /* ── Ratings and badges ──────────────────────────────────────────
    These used to be built by string-concatenating a token with an alpha
@@ -988,30 +1062,20 @@ a.gallery-task:hover { color: var(--accent-text); }
   .topbar-title { font-size: 15px; }
   .topbar-sub { display: none; }
   .palette-btn { display: none; }
-  .stats-bar { gap: 12px 20px; padding: 12px 14px; }
-  .stat-value { font-size: 18px; }
-  .stat-label { font-size: 11px; }
 
   /* Prevent iOS from zooming into the pitch field on focus */
   .pitch-input { font-size: 16px; }
 
   .modal-panel { margin: 16px; padding: 20px; }
   .gallery-grid { grid-template-columns: 1fr; }
-  .pipeline-header { flex-wrap: wrap; gap: 6px; }
-  .pipeline-task { font-size: 14px; }
-  .flow { flex-direction: column; gap: 7px; }
-  .flow-arrow { display: none; }
   .kv { grid-template-columns: 92px 1fr; gap: 6px 12px; }
 }
 
 @media (max-width: 560px) {
-  .pitch-form { flex-direction: column; }
-  .pitch-btn { width: 100%; padding: 12px 20px; }
   .history-card { flex-direction: column; align-items: flex-start; gap: 8px; }
   .history-meta { width: 100%; }
   .section-head { flex-wrap: wrap; }
   .search-input { width: 100%; }
-  .stats-bar { gap: 10px 16px; }
 }
 
 
