@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mycelium — Distributed Orchestrator</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0B0C0E; color: #EDEDEF; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, system-ui, sans-serif; min-height: 100vh; }
+  a { color: #3FB950; text-decoration: none; }
+  a:hover { color: #2EA043; }
+  @keyframes cardWorking {
+    0%, 100% { box-shadow: 0 0 4px rgba(63,185,80,0.13); background: rgba(63,185,80,0.06); }
+    50% { box-shadow: 0 0 22px rgba(63,185,80,0.35); background: rgba(63,185,80,0.06); }
+  }
+  @keyframes dotPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes pulseBorder {
+    0%, 100% { border-color: rgba(232,255,71,0.2); box-shadow: none; }
+    50% { border-color: rgba(232,255,71,0.5); box-shadow: 0 0 16px rgba(232,255,71,0.2); }
+  }
+  @keyframes shimmer { from { left: -60%; } to { left: 160%; } }
+</style>
+</helmet>
+
+<div style="display: flex; min-height: 100vh; background: #0B0C0E;" data-screen-label="Current dashboard">
+
+  <aside style="width: 232px; flex-shrink: 0; display: flex; flex-direction: column; border-right: 1px solid rgba(255,255,255,0.06); background: #0F1013; position: sticky; top: 0; height: 100vh;">
+    <div style="display: flex; align-items: center; gap: 10px; padding: 18px 16px 16px; margin-bottom: 4px;">
+      <span style="width: 18px; height: 18px; border-radius: 5px; flex-shrink: 0; background: #3FB950; box-shadow: 0 0 0 3px rgba(63,185,80,0.06);"></span>
+      <span style="font-size: 14px; font-weight: 650; color: #EDEDEF; letter-spacing: -0.2px;">Mycelium</span>
+    </div>
+
+    <nav style="display: flex; flex-direction: column; gap: 2px; padding: 0 8px;" aria-label="Primary">
+      <button onClick="{{ goOverview }}" style="display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border: none; border-radius: 6px; font-family: inherit; font-size: 13.5px; cursor: pointer; text-align: left; background: {{ nav.ovBg }}; color: {{ nav.ovFg }}; font-weight: {{ nav.ovW }};">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="width: 16px; height: 16px; flex-shrink: 0; opacity: .85;"><path d="M3 13h5v8H3zM10 3h5v18h-5zM17 9h4v12h-4z"></path></svg>
+        <span>Overview</span>
+      </button>
+      <button onClick="{{ goRuns }}" style="display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border: none; border-radius: 6px; font-family: inherit; font-size: 13.5px; cursor: pointer; text-align: left; background: {{ nav.ruBg }}; color: {{ nav.ruFg }}; font-weight: {{ nav.ruW }};">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="width: 16px; height: 16px; flex-shrink: 0; opacity: .85;"><path d="M12 8v4l3 2"></path><circle cx="12" cy="12" r="9"></circle></svg>
+        <span>Runs</span>
+      </button>
+      <button onClick="{{ goGallery }}" style="display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border: none; border-radius: 6px; font-family: inherit; font-size: 13.5px; cursor: pointer; text-align: left; background: {{ nav.gaBg }}; color: {{ nav.gaFg }}; font-weight: {{ nav.gaW }};">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="width: 16px; height: 16px; flex-shrink: 0; opacity: .85;"><rect x="3" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="3" width="7" height="7" rx="1.5"></rect><rect x="3" y="14" width="7" height="7" rx="1.5"></rect><rect x="14" y="14" width="7" height="7" rx="1.5"></rect></svg>
+        <span>Gallery</span>
+      </button>
+      <button onClick="{{ goNodes }}" style="display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border: none; border-radius: 6px; font-family: inherit; font-size: 13.5px; cursor: pointer; text-align: left; background: {{ nav.noBg }}; color: {{ nav.noFg }}; font-weight: {{ nav.noW }};">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="width: 16px; height: 16px; flex-shrink: 0; opacity: .85;"><circle cx="12" cy="5" r="2.2"></circle><circle cx="5" cy="18" r="2.2"></circle><circle cx="19" cy="18" r="2.2"></circle><path d="M10.5 6.8 6.5 15.8M13.5 6.8l4 9M7.4 18h9.2"></path></svg>
+        <span>Nodes</span>
+        <span style="margin-left: auto; font-family: ui-monospace, 'SF Mono', Consolas, monospace; font-size: 11px; color: #8B8B96; background: #131316; border: 1px solid rgba(255,255,255,0.09); border-radius: 20px; padding: 1px 7px; min-width: 22px; text-align: center;">3</span>
+      </button>
+      <button onClick="{{ goProjects }}" style="display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border: none; border-radius: 6px; font-family: inherit; font-size: 13.5px; cursor: pointer; text-align: left; background: {{ nav.prBg }}; color: {{ nav.prFg }}; font-weight: {{ nav.prW }};">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="width: 16px; height: 16px; flex-shrink: 0; opacity: .85;"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>
+        <span>Projects</span>
+      </button>
+      <button onClick="{{ goGuild }}" style="display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border: none; border-radius: 6px; font-family: inherit; font-size: 13.5px; cursor: pointer; text-align: left; background: {{ nav.guBg }}; color: {{ nav.guFg }}; font-weight: {{ nav.guW }};">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="width: 16px; height: 16px; flex-shrink: 0; opacity: .85;"><path d="M12 3l2.6 5.6 6.4.8-4.7 4.3 1.2 6.3L12 17l-5.5 3 1.2-6.3L3 9.4l6.4-.8z"></path></svg>
+        <span>Guild</span>
+      </button>
+    </nav>
+
+    <div style="margin-top: auto; padding: 14px 16px; border-top: 1px solid rgba(255,255,255,0.06); display: flex; flex-direction: column; gap: 5px;">
+      <span style="display: inline-flex; align-items: center; gap: 7px; font-family: ui-monospace, 'SF Mono', Consolas, monospace; font-size: 13px; font-weight: 500; color: #3FB950; letter-spacing: -0.1px;">
+        <i style="width: 7px; height: 7px; border-radius: 50%; background: #3FB950; flex-shrink: 0; box-shadow: 0 0 0 3px rgba(63,185,80,0.06);"></i>connected
+      </span>
+      <span style="font-family: ui-monospace, 'SF Mono', Consolas, monospace; font-size: 11px; color: #8B8B96;">qwen3.5:4b</span>
+    </div>
+  </aside>
+
+  <div style="flex: 1; min-width: 0; display: flex; flex-direction: column;">
+    <header style="display: flex; align-items: center; gap: 14px; padding: 0 20px; height: 56px; flex-shrink: 0; border-bottom: 1px solid rgba(255,255,255,0.06); background: #0B0C0E; position: sticky; top: 0; z-index: 20;">
+      <button style="display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; flex-shrink: 0; background: none; border: 1px solid transparent; border-radius: 6px; color: #A1A1AA; cursor: pointer;" aria-label="Toggle sidebar">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" style="width: 17px; height: 17px;"><path d="M4 6h16M4 12h16M4 18h16"></path></svg>
+      </button>
+      <h1 style="font-size: 15px; font-weight: 620; color: #EDEDEF; letter-spacing: -0.2px;">{{ viewTitle }}</h1>
+      <div style="margin-left: auto; display: flex; align-items: center; gap: 10px;">
+        <span style="font-family: ui-monospace, 'SF Mono', Consolas, monospace; font-size: 12px; color: #A1A1AA; background: #131316; border: 1px solid rgba(255,255,255,0.09); border-radius: 6px; padding: 4px 10px; white-space: nowrap;">
+          orchestrator-jw<span style="color: #8B8B96; margin: 0 6px;">·</span><span style="color: #3FB950; font-weight: 600;">38</span> credits
+        </span>
+        <button style="background: #3FB950; color: #0B0C0E; border: none; border-radius: 6px; padding: 7px 14px; font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap;">Pitch a task</button>
+        <button style="display: inline-flex; align-items: center; gap: 7px; background: #131316; color: #A1A1AA; border: 1px solid rgba(255,255,255,0.09); border-radius: 6px; padding: 7px 12px; cursor: pointer; font-family: inherit; font-size: 12px; font-weight: 500; flex-shrink: 0;">
+          <span aria-hidden="true">☀</span><span>Light</span>
+        </button>
+      </div>
+    </header>
+
+    <main style="padding: 20px 28px; max-width: 1180px; width: 100%;">
+
+      <sc-if value="{{ isOverview }}" hint-placeholder-val="{{ true }}">
+        <div>
+          <div style="display: flex; gap: 24px; padding: 16px 32px; border-bottom: 1px solid rgba(255,255,255,0.06); background: rgba(255,255,255,0.06);">
+            <div style="display: flex; align-items: baseline; gap: 8px;">
+              <span style="font-size: 22px; font-weight: 700; color: #EDEDEF; font-family: ui-monospace, 'SF Mono', Consolas, monospace;">3</span>
+              <span style="font-size: 13px; color: #8B8B96; text-transform: uppercase; letter-spacing: 1px;">Nodes Online</span>
+            </div>
+            <div style="display: flex; align-items: baseline; gap: 8px;">
+              <span style="font-size: 22px; font-weight: 700; color: #EDEDEF; font-family: ui-monospace, 'SF Mono', Consolas, monospace;">1</span>
+              <span style="font-size: 13px; color: #8B8B96; text-transform: uppercase; letter-spacing: 1px;">Tasks Pending</span>
+            </div>
+            <div style="display: flex; align-items: baseline; gap: 8px;">
+              <span style="font-size: 22px; font-weight: 700; color: #EDEDEF; font-family: ui-monospace, 'SF Mono', Consolas, monospace;">2</span>
+              <span style="font-size: 13px; color: #8B8B96; text-transform: uppercase; letter-spacing: 1px;">Models Available</span>
+            </div>
+            <div style="display: flex; align-items: baseline; gap: 8px;">
+              <span style="display: inline-flex; align-items: center; gap: 7px; font-family: ui-monospace, 'SF Mono', Consolas, monospace; font-size: 13px; font-weight: 500; color: #3FB950;">
+                <i style="width: 7px; height: 7px; border-radius: 50%; background: #3FB950; flex-shrink: 0; box-shadow: 0 0 0 3px rgba(63,185,80,0.06);"></i>connected
+              </span>
+              <span style="font-size: 13px; color: #8B8B96; text-transform: uppercase; letter-spacing: 1px;">Ollama</span>
+            </div>
+            <div style="display: flex; align-items: baseline; gap: 8px;">
+              <span style="font-size: 22px; font-weight: 700; color: #EDEDEF; font-family: ui-monospace, 'SF Mono', Consolas, monospace;">61</span>
+              <span style="font-size: 13px; color: #8B8B96; text-transform: uppercase; letter-spacing: 1px;">Tasks Done</span>
+            </div>
+            <div style="display: flex; align-items: baseline; gap: 8px;">
+              <span style="font-size: 22px; font-weight: 700; color: #EDEDEF; font-family: ui-monospace, 'SF Mono', Consolas, monospace;">84.2s</span>
+              <span style="font-size: 13px; color: #8B8B96; text-transform: uppercase; letter-spacing: 1px;">Avg Latency</span>
+            </div>
+          </div>
+
+          <div style="display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; margin-top: 4px;">
+            <h2 style="font-size: 13px; color: #A1A1AA; letter-spacing: 2px; text-transform: uppercase; font-weight: 600; margin: 0;">Pitch a task</h2>
+            <span style="font-size: 13px; color: #8B8B96;">Describe what you want built; the planner splits it up</span>
+          </div>
+
+          <div style="display: flex; gap: 8px; margin-bottom: 24px;">
+            <input type="text" placeholder="Describe what you want built..." style="flex: 1; background: #17171B; border: 1px solid rgba(255,255,255,0.09); border-radius: 8px; padding: 10px 14px; color: #EDEDEF; font-size: 15px; font-family: inherit; outline: none;" />
+            <button style="background: rgba(63,185,80,0.06); border: 1px solid rgba(63,185,80,0.13); border-radius: 8px; padding: 10px 20px; color: #3FB950; font-weight: 700; font-size: 14px; font-family: inherit; cursor: pointer; white-space: nowrap;">Pitch</button>
+          </div>
+
+          <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 20px;">
+            <span style="font-size: 12px; color: #8B8B96; letter-spacing: 1px; text-transform: uppercase; align-self: center; margin-right: 4px; white-space: nowrap;">Try:</span>
+            <button style="background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.09); border-radius: 5px; padding: 4px 10px; font-size: 13px; color: #8B8B96; font-family: inherit; cursor: pointer;">Build a REST API with FastAPI and SQLite</button>
+            <button style="background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.09); border-radius: 5px; padding: 4px 10px; font-size: 13px; color: #8B8B96; font-family: inherit; cursor: pointer;">Write a Python web scraper with BeautifulSoup</button>
+            <button style="background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.09); border-radius: 5px; padding: 4px 10px; font-size: 13px; color: #8B8B96; font-family: inherit; cursor: pointer;">Create a CLI tool in Python with argparse</button>
+            <button style="background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.09); border-radius: 5px; padding: 4px 10px; font-size: 13px; color: #8B8B96; font-family: inherit; cursor: pointer;">Write a data analysis script for a CSV file</button>
+            <button style="background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.09); border-radius: 5px; padding: 4px 10px; font-size: 13px; color: #8B8B96; font-family: inherit; cursor: pointer;">Build a React component library starter</button>
+          </div>
+
+          <div style="display: flex; align-items: stretch; gap: 8px; flex-wrap: wrap; padding: 12px 14px; margin-bottom: 20px; border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; background: #131316;">
+            <div style="display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; min-width: 0;">
+              <span style="width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; align-self: center; background: #8B949E;"></span>
+              <b style="font-size: 12.5px; font-weight: 650; color: #EDEDEF; white-space: nowrap;">You pitch</b>
+              <i style="font-size: 12.5px; font-style: normal; color: #8B8B96;">a task in plain English</i>
+            </div>
+            <span style="color: #8B8B96; font-size: 13px; align-self: center;" aria-hidden="true">→</span>
+            <div style="display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; min-width: 0;">
+              <span style="width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; align-self: center; background: #58A6FF;"></span>
+              <b style="font-size: 12.5px; font-weight: 650; color: #EDEDEF; white-space: nowrap;">Planner</b>
+              <i style="font-size: 12.5px; font-style: normal; color: #8B8B96;">splits it into smaller jobs</i>
+            </div>
+            <span style="color: #8B8B96; font-size: 13px; align-self: center;" aria-hidden="true">→</span>
+            <div style="display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; min-width: 0;">
+              <span style="width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; align-self: center; background: #3FB950;"></span>
+              <b style="font-size: 12.5px; font-weight: 650; color: #EDEDEF; white-space: nowrap;">Builders</b>
+              <i style="font-size: 12.5px; font-style: normal; color: #8B8B96;">write the pieces, on separate machines</i>
+            </div>
+            <span style="color: #8B8B96; font-size: 13px; align-self: center;" aria-hidden="true">→</span>
+            <div style="display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; min-width: 0;">
+              <span style="width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; align-self: center; background: #A371F7;"></span>
+              <b style="font-size: 12.5px; font-weight: 650; color: #EDEDEF; white-space: nowrap;">Reviewer</b>
+              <i style="font-size: 12.5px; font-style: normal; color: #8B8B96;">assembles and grades the result</i>
+            </div>
+          </div>
+
+          <h2 style="font-size: 13px; color: #A1A1AA; letter-spacing: 2px; text-transform: uppercase; margin-bottom: 14px; font-weight: 600;">Live Activity</h2>
+          <div style="margin-bottom: 24px; max-height: 200px; overflow-y: auto;">
+            <sc-for list="{{ events }}" as="ev" hint-placeholder-count="6">
+              <div style="font-family: ui-monospace, 'SF Mono', Consolas, monospace; font-size: 14px; color: #A1A1AA; padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,0.06);">
+                <span style="color: #8B8B96; margin-right: 8px;">{{ ev.time }}</span>
+                <span style="font-weight: 600; color: {{ ev.color }};">{{ ev.agent }}</span>
+                <span style="color: #8B8B96;"> {{ ev.msg }}</span>
+              </div>
+            </sc-for>
+          </div>
+
+          <h2 style="font-size: 13px; color: #A1A1AA; letter-spacing: 2px; text-transform: uppercase; margin-bottom: 14px; font-weight: 600;">Pipeline Runs</h2>
+          <div>
+            <div style="background: rgba(255,255,255,0.06); border: 1px solid rgba(232,255,71,0.2); border-radius: 10px; padding: 18px 20px; margin-bottom: 12px; animation: pulseBorder 2s ease-in-out infinite;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <div style="font-weight: 700; color: #EDEDEF; font-size: 15px;">Build a CLI todo app with add, list and remove</div>
+                <div style="display: flex; align-items: center; gap: 10px; flex-shrink: 0;">
+                  <span style="font-family: Consolas, monospace; font-size: 12px; color: #8B8B96;">1m 12s</span>
+                  <div style="font-family: ui-monospace, 'SF Mono', Consolas, monospace; font-size: 12px; letter-spacing: 1px; padding: 3px 10px; border-radius: 4px; font-weight: 600; color: #D29922; background: rgba(232,255,71,0.2); border: 1px solid rgba(232,255,71,0.2);">BUILD 2/4</div>
+                </div>
+              </div>
+              <div style="display: flex; gap: 6px; margin: 10px 0 4px;">
+                <div style="flex: 1; height: 3px; border-radius: 2px; background: #3FB950;"></div>
+                <div style="flex: 1; height: 3px; border-radius: 2px; background: rgba(63,185,80,0.35); position: relative; overflow: hidden;"></div>
+                <div style="flex: 1; height: 3px; border-radius: 2px; background: rgba(255,255,255,0.06);"></div>
+              </div>
+              <div style="display: flex; gap: 6px; margin-bottom: 10px;">
+                <div style="flex: 1; font-family: ui-monospace, 'SF Mono', Consolas, monospace; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: #3FB950; text-align: center;">Plan</div>
+                <div style="flex: 1; font-family: ui-monospace, 'SF Mono', Consolas, monospace; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: #D29922; text-align: center;">Build 2/4</div>
+                <div style="flex: 1; font-family: ui-monospace, 'SF Mono', Consolas, monospace; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: #8B8B96; text-align: center;">Review</div>
+              </div>
+              <pre style="margin-top: 8px; padding: 8px 10px; background: rgba(63,185,80,0.06); border: 1px solid rgba(63,185,80,0.06); border-radius: 4px; font-size: 13px; color: #A1A1AA; max-height: 120px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, 'SF Mono', Consolas, monospace;">def add_task(tasks, title):
+    tasks.append({"title": title, "done": False})
+    return tasks</pre>
+            </div>
+
+            <div style="background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.09); border-radius: 10px; padding: 18px 20px; margin-bottom: 12px;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <div style="font-weight: 700; color: #EDEDEF; font-size: 15px;">Build a Python script that analyzes a CSV of sales data</div>
+                <div style="display: flex; align-items: center; gap: 8px; flex-shrink: 0;">
+                  <span style="font-family: Consolas, monospace; font-size: 12px; font-weight: 700; color: #3FB950; background: rgba(63,185,80,0.09); border: 1px solid rgba(63,185,80,0.19); border-radius: 4px; padding: 2px 7px;">PASS</span>
+                  <div style="font-family: ui-monospace, 'SF Mono', Consolas, monospace; font-size: 12px; letter-spacing: 1px; padding: 3px 10px; border-radius: 4px; font-weight: 600; color: #3FB950; background: rgba(63,185,80,0.06); border: 1px solid rgba(63,185,80,0.13);">DISTRIBUTED</div>
+                </div>
+              </div>
+              <div style="display: flex; gap: 6px; margin: 10px 0 4px;">
+                <div style="flex: 1; height: 3px; border-radius: 2px; background: #3FB950;"></div>
+                <div style="flex: 1; height: 3px; border-radius: 2px; background: #3FB950;"></div>
+                <div style="flex: 1; height: 3px; border-radius: 2px; background: #3FB950;"></div>
+              </div>
+              <div style="display: flex; gap: 6px; margin-bottom: 10px;">
+                <div style="flex: 1; font-family: ui-monospace, 'SF Mono', Consolas, monospace; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: #3FB950; text-align: center;">Plan</div>
+                <div style="flex: 1; font-family: ui-monospace, 'SF Mono', Consolas, monospace; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: #3FB950; text-align: center;">Build</div>
+                <div style="flex: 1; font-family: ui-monospace, 'SF Mono', Consolas, monospace; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: #3FB950; text-align: center;">Review</div>
+              </div>
+              <div style="margin-top: 10px;">
+                <sc-for list="{{ subtasks }}" as="st" hint-placeholder-count="4">
+                  <div style="display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid rgba(255,255,255,0.06);">
+                    <span style="font-family: ui-monospace, 'SF Mono', Consolas, monospace; font-size: 13px; color: #8B8B96; min-width: 24px;">{{ st.id }}</span>
+                    <span style="font-size: 14px; color: #A1A1AA; flex: 1;">{{ st.title }}</span>
+                    <span style="color: #3FB950; font-size: 15px;">✓</span>
+                  </div>
+                </sc-for>
+              </div>
+              <div style="font-family: ui-monospace, 'SF Mono', Consolas, monospace; font-size: 14px; color: #A1A1AA; padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,0.06); margin-top: 8px; cursor: pointer;">
+                <span style="color: #8B8B96; margin-right: 8px;">14:07:12</span>
+                <span style="color: #3FB950;">View output →</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isRuns }}" hint-placeholder-val="{{ false }}">
+        <div>
+          <div style="display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px; flex-wrap: wrap;">
+            <h2 style="font-size: 13px; color: #A1A1AA; letter-spacing: 2px; text-transform: uppercase; font-weight: 600; margin: 0;">Runs</h2>
+            <span style="font-size: 13px; color: #8B8B96;">Every pipeline this orchestrator has completed</span>
+          </div>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 24px; margin-bottom: 8px;">
+            <h2 style="font-size: 13px; color: #A1A1AA; letter-spacing: 2px; text-transform: uppercase; font-weight: 600; margin: 0;">History</h2>
+            <input type="text" placeholder="search..." style="background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.09); border-radius: 5px; padding: 3px 8px; font-size: 13px; color: #A1A1AA; outline: none; width: 100px; font-family: inherit;" />
+          </div>
+          <div>
+            <sc-for list="{{ runs }}" as="r" hint-placeholder-count="5">
+              <div style="background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.09); border-radius: 10px; padding: 12px 16px; margin-bottom: 6px; cursor: pointer;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                  <div style="font-size: 14px; color: #A1A1AA; flex: 1; padding-right: 12px;">{{ r.task }}</div>
+                  <div style="display: flex; gap: 10px; align-items: center; flex-shrink: 0;">
+                    <span style="font-family: Consolas, monospace; font-size: 12px; color: {{ r.ratingColor }};">{{ r.rating }}</span>
+                    <span style="font-family: Consolas, monospace; font-size: 13px; color: #8B8B96;">{{ r.tasks }} tasks</span>
+                    <span style="font-family: Consolas, monospace; font-size: 13px; color: #8B8B96;">{{ r.ago }}</span>
+                    <span style="font-size: 13px; color: #3FB950;">view</span>
+                  </div>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isNodes }}" hint-placeholder-val="{{ false }}">
+        <div>
+          <div style="display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px; flex-wrap: wrap;">
+            <h2 style="font-size: 13px; color: #A1A1AA; letter-spacing: 2px; text-transform: uppercase; font-weight: 600; margin: 0;">Network Nodes</h2>
+            <span style="font-size: 13px; color: #8B8B96;">Machines contributing compute right now</span>
+          </div>
+          <h2 style="font-size: 13px; color: #A1A1AA; letter-spacing: 2px; text-transform: uppercase; margin-bottom: 14px; font-weight: 600;">Network Nodes</h2>
+          <div>
+            <div style="background: rgba(63,185,80,0.06); border: 1px solid rgba(63,185,80,0.48); border-radius: 8px; padding: 12px 14px; margin-bottom: 8px; position: relative; cursor: pointer; animation: cardWorking 1.6s ease-in-out infinite;">
+              <div style="font-weight: 700; color: #EDEDEF; font-size: 14px; margin-bottom: 4px;">
+                <span style="display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #D29922; margin-right: 6px; box-shadow: 0 0 8px rgba(232,255,71,0.5); animation: dotPulse 1s ease-in-out infinite;"></span>node-a1f3
+              </div>
+              <div style="font-size: 13px; color: #8B8B96; font-family: ui-monospace, 'SF Mono', Consolas, monospace;">Darwin / arm64</div>
+              <div style="font-size: 13px; color: #8B8B96; font-family: ui-monospace, 'SF Mono', Consolas, monospace;">qwen3.5:4b</div>
+              <div style="font-size: 13px; color: #8B8B96; font-family: ui-monospace, 'SF Mono', Consolas, monospace;">8 CPU · 16GB RAM · Apple M2</div>
+              <div style="font-size: 13px; color: #3FB950; margin-top: 4px;">12 tasks · 34 credits</div>
+              <div style="font-size: 13px; color: #D29922; margin-top: 3px; font-family: ui-monospace, 'SF Mono', Consolas, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">▶ Implement Add Task</div>
+            </div>
+
+            <div style="background: #131316; border: 1px solid rgba(63,185,80,0.13); border-radius: 8px; padding: 12px 14px; margin-bottom: 8px; position: relative; cursor: pointer;">
+              <div style="font-weight: 700; color: #EDEDEF; font-size: 14px; margin-bottom: 4px;">
+                <span style="display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #3FB950; margin-right: 6px; box-shadow: 0 0 8px rgba(63,185,80,0.24);"></span>node-7c22
+              </div>
+              <div style="font-size: 13px; color: #8B8B96; font-family: ui-monospace, 'SF Mono', Consolas, monospace;">Linux / x86_64</div>
+              <div style="font-size: 13px; color: #8B8B96; font-family: ui-monospace, 'SF Mono', Consolas, monospace;">qwen3.5:4b</div>
+              <div style="font-size: 13px; color: #8B8B96; font-family: ui-monospace, 'SF Mono', Consolas, monospace;">12 CPU · 32GB RAM · RTX 3060</div>
+              <div style="font-size: 13px; color: #8B8B96; font-family: ui-monospace, 'SF Mono', Consolas, monospace; margin-top: 3px;">
+                <span style="background: rgba(63,185,80,0.06); border: 1px solid rgba(63,185,80,0.13); border-radius: 3px; padding: 1px 5px; font-size: 11px; color: #3FB950; margin-right: 3px;">gpu</span>
+                <span style="background: rgba(63,185,80,0.06); border: 1px solid rgba(63,185,80,0.13); border-radius: 3px; padding: 1px 5px; font-size: 11px; color: #3FB950; margin-right: 3px;">python</span>
+              </div>
+              <div style="font-size: 13px; color: #3FB950; margin-top: 4px;">27 tasks · 81 credits</div>
+              <div style="font-size: 13px; color: #8B8B96; font-family: ui-monospace, 'SF Mono', Consolas, monospace; margin-top: 3px;">
+                <span style="color: #3FB950;">◆ 0.96 routing weight</span>
+                <span style="color: #8B8B96;"> · 98% agreement over 6 checks</span>
+              </div>
+            </div>
+
+            <div style="background: #131316; border: 1px solid rgba(63,185,80,0.13); border-radius: 8px; padding: 12px 14px; margin-bottom: 8px; position: relative; cursor: pointer;">
+              <div style="font-weight: 700; color: #EDEDEF; font-size: 14px; margin-bottom: 4px;">
+                <span style="display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #3FB950; margin-right: 6px; box-shadow: 0 0 8px rgba(63,185,80,0.24);"></span>node-e910
+              </div>
+              <div style="font-size: 13px; color: #8B8B96; font-family: ui-monospace, 'SF Mono', Consolas, monospace;">Windows / AMD64</div>
+              <div style="font-size: 13px; color: #8B8B96; font-family: ui-monospace, 'SF Mono', Consolas, monospace;">gemma4:4b</div>
+              <div style="font-size: 13px; color: #8B8B96; font-family: ui-monospace, 'SF Mono', Consolas, monospace;">4 CPU · 8GB RAM</div>
+              <div style="font-size: 13px; color: #3FB950; margin-top: 4px;">3 tasks · 9 credits</div>
+              <div style="display: inline-block; font-family: ui-monospace, 'SF Mono', Consolas, monospace; font-size: 11px; font-weight: 700; letter-spacing: 1px; padding: 2px 7px; border-radius: 3px; margin-top: 4px; color: #F85149; background: rgba(248,81,73,0.10); border: 1px solid rgba(248,81,73,0.28);">CIRCUIT OPEN — 45s</div>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isGallery }}" hint-placeholder-val="{{ false }}">
+        <div>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+            <h2 style="font-size: 13px; color: #A1A1AA; letter-spacing: 2px; text-transform: uppercase; font-weight: 600; margin: 0;">Swarm Gallery</h2>
+            <span style="font-size: 13px; color: #8B8B96;">Tasks completed by the network</span>
+          </div>
+          <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px;">
+            <sc-for list="{{ gallery }}" as="c" hint-placeholder-count="4">
+              <div style="background: #131316; border: 1px solid rgba(255,255,255,0.09); border-radius: 10px; padding: 16px 18px; display: flex; flex-direction: column; gap: 10px;">
+                <div style="font-size: 14px; font-weight: 700; color: #EDEDEF; line-height: 1.4;">{{ c.task }}</div>
+                <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                  <span style="font-family: Consolas, monospace; font-size: 12px; font-weight: 700; color: {{ c.ratingColor }}; border: 1px solid rgba(255,255,255,0.09); border-radius: 4px; padding: 2px 8px;">{{ c.rating }}</span>
+                  <span style="font-family: Consolas, monospace; font-size: 12px; color: #8B8B96;">{{ c.tasks }} tasks</span>
+                  <span style="font-family: Consolas, monospace; font-size: 12px; color: #64B4FF;">{{ c.nodes }} nodes</span>
+                  <span style="font-family: Consolas, monospace; font-size: 12px; color: #8B8B96;">{{ c.ago }}</span>
+                </div>
+                <div style="font-family: ui-monospace, 'SF Mono', Consolas, monospace; font-size: 13px; color: #8B8B96; line-height: 1.5; max-height: 120px; overflow: hidden;">{{ c.preview }}</div>
+                <div style="display: flex; flex-wrap: wrap; gap: 4px;">
+                  <sc-for list="{{ c.files }}" as="f" hint-placeholder-count="2">
+                    <span style="background: rgba(63,185,80,0.06); border: 1px solid rgba(63,185,80,0.13); border-radius: 4px; padding: 2px 8px; font-family: ui-monospace, 'SF Mono', Consolas, monospace; font-size: 12px; color: #3FB950;">{{ f }}</span>
+                  </sc-for>
+                </div>
+                <div style="display: flex; gap: 8px; margin-top: 2px;">
+                  <button style="flex: 1; background: none; border: 1px solid rgba(255,255,255,0.09); border-radius: 6px; padding: 6px 10px; font-size: 13px; color: #8B8B96; cursor: pointer; font-weight: 600; font-family: inherit;">View Output</button>
+                  <button style="flex: 1; background: none; border: 1px solid rgba(63,185,80,0.13); border-radius: 6px; padding: 6px 10px; font-size: 13px; color: #3FB950; cursor: pointer; font-weight: 600; font-family: inherit;">Fork &amp; continue</button>
+                  <button style="flex: 1; background: none; border: 1px solid rgba(100,180,255,0.30); border-radius: 6px; padding: 6px 10px; font-size: 13px; color: #64B4FF; cursor: pointer; font-weight: 600; font-family: inherit;">Share ↗</button>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isProjects }}" hint-placeholder-val="{{ false }}">
+        <div>
+          <div style="display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px; flex-wrap: wrap;">
+            <h2 style="font-size: 13px; color: #A1A1AA; letter-spacing: 2px; text-transform: uppercase; font-weight: 600; margin: 0;">Projects</h2>
+            <span style="font-size: 13px; color: #8B8B96;">Work that remembers what it already built</span>
+          </div>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 24px; margin-bottom: 14px;">
+            <h2 style="font-size: 13px; color: #A1A1AA; letter-spacing: 2px; text-transform: uppercase; font-weight: 600; margin: 0;">Projects</h2>
+            <button style="background: rgba(63,185,80,0.06); border: 1px solid rgba(63,185,80,0.13); border-radius: 5px; padding: 3px 10px; font-size: 12px; font-weight: 700; color: #3FB950; cursor: pointer; font-family: inherit;">+ New</button>
+          </div>
+          <div>
+            <sc-for list="{{ projects }}" as="p" hint-placeholder-count="3">
+              <div style="background: #131316; border: 1px solid rgba(255,255,255,0.09); border-radius: 8px; margin-bottom: 6px; cursor: pointer; padding: 10px 12px;">
+                <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                  <div style="flex: 1; min-width: 0;">
+                    <div style="font-weight: 700; color: #EDEDEF; font-size: 14px; margin-bottom: 2px;">{{ p.name }}</div>
+                    <div style="font-size: 12px; color: #8B8B96; font-family: ui-monospace, 'SF Mono', Consolas, monospace;">{{ p.id }}</div>
+                    <div style="font-size: 13px; color: #8B8B96; font-family: ui-monospace, 'SF Mono', Consolas, monospace; margin-top: 3px;">{{ p.iters }}</div>
+                  </div>
+                  <button style="background: rgba(63,185,80,0.06); border: 1px solid rgba(63,185,80,0.13); border-radius: 5px; padding: 4px 10px; color: #3FB950; font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap; margin-left: 8px; flex-shrink: 0; font-family: inherit;">Continue</button>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isGuild }}" hint-placeholder-val="{{ false }}">
+        <div>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+            <h2 style="font-size: 13px; color: #A1A1AA; letter-spacing: 2px; text-transform: uppercase; font-weight: 600; margin: 0;">Guild Standings</h2>
+            <span style="font-size: 13px; color: #8B8B96;">Credits earned for compute, pitches and reviews</span>
+          </div>
+          <div>
+            <sc-for list="{{ standings }}" as="s" hint-placeholder-count="4">
+              <div style="background: #131316; border: 1px solid rgba(255,255,255,0.09); border-radius: 8px; padding: 12px 14px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                <div>
+                  <div style="font-weight: 700; color: #EDEDEF; font-size: 14px; margin-bottom: 4px;">
+                    <span style="color: {{ s.rankColor }}; margin-right: 6px;">{{ s.rank }}</span>{{ s.name }}
+                  </div>
+                  <div style="font-size: 13px; color: #8B8B96; font-family: ui-monospace, 'SF Mono', Consolas, monospace;">{{ s.detail }}</div>
+                </div>
+                <div style="font-family: Consolas, monospace; font-size: 16px; font-weight: 700; color: #D29922;">{{ s.credits }}</div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </sc-if>
+
+    </main>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+const ACTIVE_BG = 'rgba(63,185,80,0.06)';
+const ACTIVE_FG = '#3FB950';
+const IDLE_FG = '#A1A1AA';
+
+class Component extends DCLogic {
+  state = { view: 'overview' };
+
+  navFor(view) {
+    const on = this.state.view === view;
+    return { bg: on ? ACTIVE_BG : 'transparent', fg: on ? ACTIVE_FG : IDLE_FG, w: on ? 600 : 500 };
+  }
+
+  renderVals() {
+    const v = this.state.view;
+    const ov = this.navFor('overview'), ru = this.navFor('runs'), ga = this.navFor('gallery');
+    const no = this.navFor('nodes'), pr = this.navFor('projects'), gu = this.navFor('guild');
+    const titles = { overview: 'Overview', runs: 'Runs', gallery: 'Gallery', nodes: 'Network Nodes', projects: 'Projects', guild: 'Guild Standings' };
+    const go = (name) => () => this.setState({ view: name });
+
+    return {
+      viewTitle: titles[v],
+      isOverview: v === 'overview', isRuns: v === 'runs', isNodes: v === 'nodes',
+      isGallery: v === 'gallery', isProjects: v === 'projects', isGuild: v === 'guild',
+      goOverview: go('overview'), goRuns: go('runs'), goGallery: go('gallery'),
+      goNodes: go('nodes'), goProjects: go('projects'), goGuild: go('guild'),
+      nav: {
+        ovBg: ov.bg, ovFg: ov.fg, ovW: ov.w, ruBg: ru.bg, ruFg: ru.fg, ruW: ru.w,
+        gaBg: ga.bg, gaFg: ga.fg, gaW: ga.w, noBg: no.bg, noFg: no.fg, noW: no.w,
+        prBg: pr.bg, prFg: pr.fg, prW: pr.w, guBg: gu.bg, guFg: gu.fg, guW: gu.w,
+      },
+      events: [
+        { time: '14:02:11', agent: 'PITCH', color: '#8B949E', msg: 'Task pitched: "Build a CLI todo app with add, list and remove"' },
+        { time: '14:02:19', agent: 'PLANNER', color: '#58A6FF', msg: 'Decomposed into 4 subtasks: Initialize Project, Implement Add Task, Implement List Tasks, Implement Remove Task' },
+        { time: '14:03:44', agent: 'BUILDER', color: '#3FB950', msg: 'Subtask 1 complete: Initialize Project' },
+        { time: '14:05:02', agent: 'BUILDER', color: '#3FB950', msg: 'Subtask 2 complete: Implement Add Task' },
+        { time: '14:06:31', agent: 'REVIEWER', color: '#A371F7', msg: 'Reviewing combined output...' },
+        { time: '14:07:12', agent: 'DONE', color: '#3FB950', msg: 'Pipeline complete → output/20260818_140211' },
+      ],
+      subtasks: [
+        { id: '1', title: 'Load CSV' }, { id: '2', title: 'Parse CSV' },
+        { id: '3', title: 'Calculate Totals' }, { id: '4', title: 'Output Summary' },
+      ],
+      runs: [
+        { task: 'Build a Python script that analyzes a CSV of sales data', rating: 'PASS', ratingColor: '#3FB950', tasks: 4, ago: '2h ago' },
+        { task: 'Build a CLI todo app with add, list and remove', rating: 'PASS', ratingColor: '#3FB950', tasks: 4, ago: '5h ago' },
+        { task: 'Build a weather CLI that fetches and formats forecast data', rating: 'NEEDS_WORK', ratingColor: '#D29922', tasks: 4, ago: '1d ago' },
+        { task: 'Generate an argparse-based CLI scaffold from a spec', rating: 'PASS', ratingColor: '#3FB950', tasks: 4, ago: '2d ago' },
+        { task: 'Build a personal budget tracker that imports CSV', rating: 'NEEDS_WORK', ratingColor: '#D29922', tasks: 4, ago: '3d ago' },
+      ],
+      gallery: [
+        { task: 'Build a Python script that analyzes a CSV of sales data', rating: 'PASS', ratingColor: '#3FB950', tasks: 4, nodes: 3, ago: '2h ago', preview: 'Reads a sales CSV, groups rows by region and month, then prints a formatted summary table with totals and averages.', files: ['analyze.py', 'test_analyze.py'] },
+        { task: 'Build a CLI todo app with add, list and remove', rating: 'PASS', ratingColor: '#3FB950', tasks: 4, nodes: 2, ago: '5h ago', preview: 'A single-file argparse CLI backed by a JSON store. Supports add, list, remove and done, with tests for each path.', files: ['todo.py'] },
+        { task: 'Build a weather CLI that fetches and formats forecast data', rating: 'NEEDS_WORK', ratingColor: '#D29922', tasks: 4, nodes: 2, ago: '1d ago', preview: 'Fetches a forecast from an open API and formats it for the terminal. The reviewer flagged missing error handling on the network call.', files: ['weather.py'] },
+        { task: 'Generate an argparse-based CLI scaffold from a spec', rating: 'PASS', ratingColor: '#3FB950', tasks: 4, nodes: 3, ago: '2d ago', preview: 'Takes a short spec and emits a runnable argparse skeleton with subcommands, help text and a smoke test.', files: ['scaffold.py', 'spec.json'] },
+      ],
+      projects: [
+        { name: 'Sales pipeline tools', id: 'proj_8f21ab', iters: '3 iterations' },
+        { name: 'Snake game', id: 'proj_1c04de', iters: '7 iterations' },
+        { name: 'CSV utilities', id: 'proj_44b7c0', iters: '2 iterations' },
+      ],
+      standings: [
+        { rank: '#1', rankColor: '#D29922', name: 'node-7c22', detail: '34 tasks / 2 pitches', credits: '81' },
+        { rank: '#2', rankColor: '#3FB950', name: 'node-a1f3', detail: '19 tasks / 0 pitches', credits: '47' },
+        { rank: '#3', rankColor: '#A1A1AA', name: 'orchestrator-jw', detail: '6 tasks / 14 pitches', credits: '38' },
+        { rank: '#4', rankColor: '#A1A1AA', name: 'node-e910', detail: '3 tasks / 0 pitches', credits: '9' },
+      ],
+    };
+  }
+}
+
+</script>
+</body>
+</html>

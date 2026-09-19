@@ -1,0 +1,691 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mycelium — run detail, provenance envelope, ledger chain</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
+<script>
+  (function () {
+    try {
+      var saved = localStorage.getItem('mycelium-theme');
+      var system = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', saved || system);
+    } catch (e) {
+      document.documentElement.setAttribute('data-theme', 'dark');
+    }
+  })();
+</script>
+<style>
+  /* Token values copied verbatim from the console design file. The only change
+     is the selector: the console declares light as :root[data-theme], this page
+     declares it as [data-theme] so a light pane can sit inside a dark page and
+     be judged beside it. templates/_theme.html keeps :root. */
+  :root, [data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #030405;
+    --bg-elevated: #0D0F12;
+    --surface: #15181C;
+    --surface-hover: #1D2126;
+    --surface-sunken: #08090B;
+    --border-subtle: #1A1D21;
+    --border: #262A30;
+    --border-strong: #333841;
+    --text: #E8E9EB;
+    --text-dim: #9CA1A8;
+    --text-muted: #949BA3;
+    --text-faint: #878E97;
+    --mark: #E8E9EB;
+    --accent: #3FB950;
+    --accent-dim: #2C8C3C;
+    --accent-strong: #4ACB5D;
+    --accent-wash: rgba(63,185,80,0.08);
+    --on-accent: #06210C;
+    --warn: #C9922B;
+    --warn-text: #E8C88A;
+    --warn-body: #B5A681;
+    --warn-wash: #14100A;
+    --warn-line: #3B3222;
+    --danger: #E5534B;
+    --danger-text: #F0938C;
+    --danger-body: #C29691;
+    --danger-wash: rgba(229,83,75,0.10);
+    --danger-line: rgba(229,83,75,0.28);
+    --info: #5B8DEF;
+    --info-wash: rgba(91,141,239,0.08);
+    --violet: #9A7BE0;
+    --slate: #949AA2;
+    --scrim: rgba(4,5,6,0.72);
+    --lift: 0 24px 64px rgba(0,0,0,0.6);
+    --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    --sans: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+  [data-theme="light"] {
+    color-scheme: light;
+    --bg: #F1F3F5;
+    --bg-elevated: #FFFFFF;
+    --surface: #F7F8FA;
+    --surface-hover: #EDEFF3;
+    --surface-sunken: #F0F2F5;
+    --border-subtle: #E7EAEE;
+    --border: #D4D9DF;
+    --border-strong: #B7BEC6;
+    --text: #16181D;
+    --text-dim: #4A5057;
+    --text-muted: #656C74;
+    --text-faint: #6E747C;
+    --mark: #16181D;
+    --accent: #1A7F37;
+    --accent-dim: #157030;
+    --accent-strong: #12692E;
+    --accent-wash: rgba(26,127,55,0.07);
+    --on-accent: #FFFFFF;
+    --warn: #9A6700;
+    --warn-text: #6B4A00;
+    --warn-body: #6E5A28;
+    --warn-wash: #FFF8E6;
+    --warn-line: #E8D9A8;
+    --danger: #CF222E;
+    --danger-text: #A0111B;
+    --danger-body: #7A2E33;
+    --danger-wash: rgba(207,34,46,0.08);
+    --danger-line: rgba(207,34,46,0.30);
+    --info: #0969DA;
+    --info-wash: rgba(9,105,218,0.07);
+    --violet: #8250DF;
+    --slate: #57606A;
+    --scrim: rgba(20,24,31,0.42);
+    --lift: 0 20px 52px rgba(16,22,26,0.18);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--text); font-family: var(--sans);
+    font-size: 13px; -webkit-font-smoothing: antialiased; font-variant-numeric: tabular-nums;
+  }
+  a { color: var(--text); text-decoration: none; border-bottom: 1px solid var(--border-strong); }
+  a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+  button { font-family: inherit; color: inherit; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: var(--border-strong); border: 3px solid var(--bg); border-radius: 6px; }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+</helmet>
+
+<div style="min-height: 100vh; background: var(--bg); padding: 30px 22px 72px;">
+<div style="max-width: 1180px; margin: 0 auto; display: flex; flex-direction: column; gap: 46px;">
+
+  <header style="display: flex; flex-direction: column; gap: 14px;" data-screen-label="Header">
+    <div style="display: flex; align-items: center; gap: 9px;">
+      <span style="width: 9px; height: 9px; background: var(--mark); flex-shrink: 0;"></span>
+      <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.16em; color: var(--text-dim);">MYCELIUM · RUN DETAIL</span>
+    </div>
+    <h1 style="font-size: 24px; font-weight: 600; letter-spacing: -0.4px; line-height: 1.25; max-width: 32ch;">Run detail, and the two records that had nowhere to live</h1>
+    <p style="font-size: 13px; color: var(--text-muted); line-height: 1.7; max-width: 78ch; text-wrap: pretty;">One structure for three surfaces — the dashboard's run modal, the console view, and the server-rendered permalink. Plus the provenance envelope and the tamper-evident ledger chain, both of which landed after the August handoff. The design problem in both cases is the same: how to show a record without letting a reader take it for a guarantee it is not.</p>
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(215px, 1fr)); gap: 1px; background: var(--border-subtle); border: 1px solid var(--border); border-radius: 5px; overflow: hidden;">
+      <sc-for list="{{ headerFacts }}" as="h" hint-placeholder-count="4">
+        <div style="background: var(--bg-elevated); padding: 11px 13px; display: flex; flex-direction: column; gap: 4px;">
+          <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">{{ h.k }}</span>
+          <span style="font-size: 12px; color: var(--text-dim); line-height: 1.55;">{{ h.v }}</span>
+        </div>
+      </sc-for>
+    </div>
+  </header>
+
+  <!-- ══ 01 · the surface ════════════════════════════════════════════ -->
+  <section style="display: flex; flex-direction: column; gap: 20px;" data-screen-label="01 Run detail">
+    <div style="display: flex; flex-direction: column; gap: 7px;">
+      <div style="display: flex; align-items: baseline; gap: 10px;">
+        <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.16em; color: var(--text-faint);">01</span>
+        <h2 style="font-size: 18px; font-weight: 600; letter-spacing: -0.25px;">Run detail, in the console</h2>
+      </div>
+      <p style="font-size: 12.5px; color: var(--text-muted); line-height: 1.7; max-width: 78ch; text-wrap: pretty;">The deliverable leads and the plan follows: plan is process, the code is the product. Three axes stay separate at the top — a run can be complete without being correct, and flattening them is what the compatibility <span style="font-family: var(--mono); font-size: 12px; color: var(--text-dim);">status</span> field already does. Below the fold, two records sit apart on purpose; §02 is why.</p>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(540px, 1fr)); gap: 14px;">
+      <div data-theme="dark" style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden; background: var(--bg);">
+        <div style="padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; color: var(--text-faint); background: var(--surface-sunken);">DARK</div>
+        <div style="padding: 13px;">
+          <dc-import name="Run Detail Surface" surface="console" hint-size="100%,1400px"></dc-import>
+        </div>
+      </div>
+      <div data-theme="light" style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden; background: var(--bg);">
+        <div style="padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; color: var(--text-faint); background: var(--surface-sunken);">LIGHT</div>
+        <div style="padding: 13px;">
+          <dc-import name="Run Detail Surface" surface="console" hint-size="100%,1400px"></dc-import>
+        </div>
+      </div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px;">
+      <sc-for list="{{ structureNotes }}" as="s" hint-placeholder-count="4">
+        <div style="border: 1px solid var(--border); border-radius: 5px; background: var(--bg-elevated); padding: 14px 15px;">
+          <div style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">{{ s.k }}</div>
+          <p style="font-size: 12.5px; color: var(--text-dim); line-height: 1.7; margin-top: 8px; text-wrap: pretty;">{{ s.v }}</p>
+        </div>
+      </sc-for>
+    </div>
+  </section>
+
+  <!-- ══ 02 · two claims ═════════════════════════════════════════════ -->
+  <section style="display: flex; flex-direction: column; gap: 20px;" data-screen-label="02 Two claims">
+    <div style="display: flex; flex-direction: column; gap: 7px;">
+      <div style="display: flex; align-items: baseline; gap: 10px;">
+        <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.16em; color: var(--text-faint);">02</span>
+        <h2 style="font-size: 18px; font-weight: 600; letter-spacing: -0.25px;">Two claims that must not read as one</h2>
+      </div>
+      <p style="font-size: 12.5px; color: var(--text-muted); line-height: 1.7; max-width: 78ch; text-wrap: pretty;">The sealed manifest says these bytes are the bytes that were frozen. The envelope says who produced them, under which identity, with which model, checked by which validators. Neither says the output is correct, and the two do not combine into anything stronger. A reader who counts badges will conclude otherwise, so the design gives them different grammatical classes rather than a second badge.</p>
+    </div>
+
+    <div style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden;">
+      <div style="display: grid; grid-template-columns: minmax(0, 118px) minmax(0, 1fr) minmax(0, 1fr); gap: 1px; background: var(--border-subtle);">
+        <div style="background: var(--surface-sunken); padding: 9px 12px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);"></div>
+        <div style="background: var(--surface-sunken); padding: 9px 12px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">SEALED MANIFEST</div>
+        <div style="background: var(--surface-sunken); padding: 9px 12px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">PROVENANCE ENVELOPE</div>
+        <sc-for list="{{ claimRows }}" as="c" hint-placeholder-count="6">
+          <div style="background: var(--bg-elevated); padding: 11px 12px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em; color: var(--text-muted);">{{ c.k }}</div>
+          <div style="background: var(--bg-elevated); padding: 11px 12px; font-size: 12px; color: {{ c.aColor }}; line-height: 1.6; text-wrap: pretty;">{{ c.a }}</div>
+          <div style="background: var(--bg-elevated); padding: 11px 12px; font-size: 12px; color: {{ c.bColor }}; line-height: 1.6; text-wrap: pretty;">{{ c.b }}</div>
+        </sc-for>
+      </div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px;">
+      <div style="border: 1px solid var(--border); border-radius: 5px; background: var(--bg-elevated); padding: 14px 15px;">
+        <div style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">RULE · DIFFERENT CLASS, NOT A SECOND BADGE</div>
+        <p style="font-size: 12.5px; color: var(--text-dim); line-height: 1.7; margin-top: 8px; text-wrap: pretty;">The manifest carries a state label because its state genuinely varies: <span style="font-family: var(--mono); font-size: 12px;">sealed</span> or <span style="font-family: var(--mono); font-size: 12px;">legacy_live</span>, and which one matters. The envelope carries a sentence, with no chip, no lamp and no colour, because its presence is not the interesting fact — its contents are. Two chips side by side is a row of ticks, and ticks get counted.</p>
+      </div>
+      <div style="border: 1px solid var(--border); border-radius: 5px; background: var(--bg-elevated); padding: 14px 15px;">
+        <div style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">RULE · NO GROUP HEADER OVER BOTH</div>
+        <p style="font-size: 12.5px; color: var(--text-dim); line-height: 1.7; margin-top: 8px; text-wrap: pretty;">There is no <span style="font-family: var(--mono); font-size: 12px;">INTEGRITY</span> panel and no <span style="font-family: var(--mono); font-size: 12px;">TRUST</span> section anywhere in this design. A shared header is the thing that would combine them — it invites the reader to add up whatever sits underneath. They are two panels, one after the other, each carrying its own limit in its own footer.</p>
+      </div>
+      <div style="border: 1px solid var(--border); border-radius: 5px; background: var(--bg-elevated); padding: 14px 15px;">
+        <div style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">RULE · THEY VARY INDEPENDENTLY</div>
+        <p style="font-size: 12.5px; color: var(--text-dim); line-height: 1.7; margin-top: 8px; text-wrap: pretty;">A sealed manifest with a legacy producer and no model digest is an ordinary run. So is an envelope over a <span style="font-family: var(--mono); font-size: 12px;">legacy_live</span> file list. Neither is evidence for the other, and no layout may imply that one being present improves the other.</p>
+      </div>
+    </div>
+
+    <div style="border: 1px solid var(--danger-line); border-radius: 5px; background: var(--danger-wash); overflow: hidden;">
+      <div style="padding: 10px 14px; border-bottom: 1px solid var(--danger-line); font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--danger-text);">WORDS NOTHING ON THESE SURFACES MAY USE</div>
+      <div style="display: flex; flex-wrap: wrap; gap: 8px; padding: 13px 14px;">
+        <sc-for list="{{ banned }}" as="b" hint-placeholder-count="8">
+          <span style="font-family: var(--mono); font-size: 11.5px; color: var(--danger-text); border: 1px solid var(--danger-line); border-radius: 3px; padding: 3px 8px;">{{ b }}</span>
+        </sc-for>
+      </div>
+      <p style="padding: 0 14px 13px; font-size: 12px; color: var(--danger-body); line-height: 1.65; max-width: 82ch; text-wrap: pretty;">Also prohibited: any quality percentage, anything implying capability evidence affects routing, and any presentation of agreement between runs as correctness. ADR 0017 is normative for the first two rows; the delta's §4.6 carries the rest.</p>
+    </div>
+  </section>
+
+  <!-- ══ 03 · the envelope ═══════════════════════════════════════════ -->
+  <section style="display: flex; flex-direction: column; gap: 20px;" data-screen-label="03 Provenance envelope">
+    <div style="display: flex; flex-direction: column; gap: 7px;">
+      <div style="display: flex; align-items: baseline; gap: 10px;">
+        <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.16em; color: var(--text-faint);">03</span>
+        <h2 style="font-size: 18px; font-weight: 600; letter-spacing: -0.25px;">The provenance envelope</h2>
+      </div>
+      <p style="font-size: 12.5px; color: var(--text-muted); line-height: 1.7; max-width: 78ch; text-wrap: pretty;">Roughly twenty identity fields, and almost nobody wants twenty fields. So the page shows one sentence and a count of what is missing; everything else is one click away. The sentence is the whole design problem, because it is the only part most readers will ever see.</p>
+    </div>
+
+    <div style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden;">
+      <div style="padding: 10px 13px; border-bottom: 1px solid var(--border-subtle); background: var(--surface-sunken); display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;">
+        <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">THE ONE LINE</span>
+        <span style="font-size: 12px; color: var(--text-muted);">What a reader who never opens the envelope takes away.</span>
+      </div>
+      <div style="display: grid; grid-template-columns: 15px minmax(0, 1fr); gap: 1px 0; background: var(--border-subtle);">
+        <sc-for list="{{ lineCandidates }}" as="l" hint-placeholder-count="4">
+          <div style="background: var(--bg-elevated); padding: 11px 0 11px 13px; display: flex; align-items: start;">
+            <i style="width: 7px; height: 7px; margin-top: 4px; flex-shrink: 0; background: {{ l.fill }}; border: 1px solid {{ l.line }};"></i>
+          </div>
+          <div style="background: var(--bg-elevated); padding: 11px 13px 11px 10px; min-width: 0;">
+            <div style="font-family: var(--mono); font-size: 12px; color: {{ l.color }}; line-height: 1.6; overflow-wrap: anywhere;">{{ l.text }}</div>
+            <div style="font-size: 11.5px; color: var(--text-muted); line-height: 1.6; margin-top: 5px; text-wrap: pretty;">{{ l.why }}</div>
+          </div>
+        </sc-for>
+      </div>
+      <div style="padding: 11px 13px; border-top: 1px solid var(--border-subtle); font-size: 12px; color: var(--text-muted); line-height: 1.65; text-wrap: pretty;">The label is <span style="font-family: var(--mono); font-size: 12px; color: var(--text-dim);">PRODUCED BY</span> and not <span style="font-family: var(--mono); font-size: 12px; color: var(--text-dim);">PROVENANCE</span>. Most readers have met the second word in a supply-chain context where it means signed and third-party-checked; this record is neither, and the label that describes it exactly is the two words that say what it holds.</div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(430px, 1fr)); gap: 14px;">
+      <div data-theme="dark" style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden; background: var(--bg);">
+        <div style="padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; color: var(--text-faint); background: var(--surface-sunken);">DARK · DEFAULT, ON THE PAGE</div>
+        <div style="padding: 13px;"><dc-import name="Provenance Envelope" mode="summary" hint-size="100%,200px"></dc-import></div>
+      </div>
+      <div data-theme="light" style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden; background: var(--bg);">
+        <div style="padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; color: var(--text-faint); background: var(--surface-sunken);">LIGHT · DEFAULT, ON THE PAGE</div>
+        <div style="padding: 13px;"><dc-import name="Provenance Envelope" mode="summary" hint-size="100%,200px"></dc-import></div>
+      </div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(430px, 1fr)); gap: 14px;">
+      <div data-theme="dark" style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden; background: var(--bg);">
+        <div style="padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; color: var(--text-faint); background: var(--surface-sunken);">DARK · OPENED, ONE PRODUCER</div>
+        <div style="padding: 13px;"><dc-import name="Provenance Envelope" mode="full" hint-size="100%,1500px"></dc-import></div>
+      </div>
+      <div data-theme="light" style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden; background: var(--bg);">
+        <div style="padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; color: var(--text-faint); background: var(--surface-sunken);">LIGHT · OPENED, THE ENSEMBLE PATH</div>
+        <div style="padding: 13px;"><dc-import name="Provenance Envelope" mode="full" plural="{{ true }}" hint-size="100%,1500px"></dc-import></div>
+      </div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px;">
+      <sc-for list="{{ envelopeNotes }}" as="e" hint-placeholder-count="4">
+        <div style="border: 1px solid var(--border); border-radius: 5px; background: var(--bg-elevated); padding: 14px 15px;">
+          <div style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">{{ e.k }}</div>
+          <p style="font-size: 12.5px; color: var(--text-dim); line-height: 1.7; margin-top: 8px; text-wrap: pretty;">{{ e.v }}</p>
+        </div>
+      </sc-for>
+    </div>
+  </section>
+
+  <!-- ══ 04 · the chain ══════════════════════════════════════════════ -->
+  <section style="display: flex; flex-direction: column; gap: 20px;" data-screen-label="04 Ledger chain">
+    <div style="display: flex; flex-direction: column; gap: 7px;">
+      <div style="display: flex; align-items: baseline; gap: 10px;">
+        <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.16em; color: var(--text-faint);">04</span>
+        <h2 style="font-size: 18px; font-weight: 600; letter-spacing: -0.25px;">The ledger chain, passing</h2>
+      </div>
+      <p style="font-size: 12.5px; color: var(--text-muted); line-height: 1.7; max-width: 78ch; text-wrap: pretty;">A green tick here would be exactly the kind of lie this project has spent twenty-six pull requests refusing. So the passing state is not green: it is ordinary ink, a filled marker, a walked count, and the limit stated in the same box a person reads the verdict in. Green is reserved for PASS, connected and ok — an intact chain is none of those.</p>
+    </div>
+
+    <div style="border: 1px solid var(--warn-line); border-radius: 5px; background: var(--warn-wash); padding: 13px 15px; display: flex; gap: 11px; align-items: flex-start;">
+      <span style="width: 7px; height: 7px; background: var(--warn); flex-shrink: 0; margin-top: 5px;"></span>
+      <div style="min-width: 0;">
+        <div style="font-size: 12.5px; font-weight: 500; color: var(--warn-text);">The limitation the repo asserts in a test rather than admits in a doc</div>
+        <p style="font-size: 12.5px; color: var(--warn-body); line-height: 1.65; margin-top: 4px; text-wrap: pretty;">A fully recomputed chain is undetectable. An operator with write access rewrites every entry and every link, and verification reports intact. That is not a caveat to put in a footnote — it is the meaning of the word on screen, so it sits under the verdict on every rendering of it.</p>
+      </div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(430px, 1fr)); gap: 14px;">
+      <div data-theme="dark" style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden; background: var(--bg);">
+        <div style="padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; color: var(--text-faint); background: var(--surface-sunken);">DARK · INTACT</div>
+        <div style="padding: 13px;"><dc-import name="Ledger Chain" state="intact" hint-size="100%,340px"></dc-import></div>
+      </div>
+      <div data-theme="light" style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden; background: var(--bg);">
+        <div style="padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; color: var(--text-faint); background: var(--surface-sunken);">LIGHT · INTACT</div>
+        <div style="padding: 13px;"><dc-import name="Ledger Chain" state="intact" hint-size="100%,340px"></dc-import></div>
+      </div>
+      <div data-theme="dark" style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden; background: var(--bg);">
+        <div style="padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; color: var(--text-faint); background: var(--surface-sunken);">DARK · THE GENESIS BOUNDARY</div>
+        <div style="padding: 13px;"><dc-import name="Ledger Chain" state="genesis" hint-size="100%,340px"></dc-import></div>
+      </div>
+      <div data-theme="light" style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden; background: var(--bg);">
+        <div style="padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; color: var(--text-faint); background: var(--surface-sunken);">LIGHT · THE GENESIS BOUNDARY</div>
+        <div style="padding: 13px;"><dc-import name="Ledger Chain" state="genesis" hint-size="100%,340px"></dc-import></div>
+      </div>
+      <div data-theme="dark" style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden; background: var(--bg);">
+        <div style="padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; color: var(--text-faint); background: var(--surface-sunken);">DARK · BROKEN</div>
+        <div style="padding: 13px;"><dc-import name="Ledger Chain" state="broken" hint-size="100%,560px"></dc-import></div>
+      </div>
+      <div data-theme="light" style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden; background: var(--bg);">
+        <div style="padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; color: var(--text-faint); background: var(--surface-sunken);">LIGHT · BROKEN</div>
+        <div style="padding: 13px;"><dc-import name="Ledger Chain" state="broken" hint-size="100%,560px"></dc-import></div>
+      </div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px;">
+      <sc-for list="{{ chainNotes }}" as="c" hint-placeholder-count="4">
+        <div style="border: 1px solid var(--border); border-radius: 5px; background: var(--bg-elevated); padding: 14px 15px;">
+          <div style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">{{ c.k }}</div>
+          <p style="font-size: 12.5px; color: var(--text-dim); line-height: 1.7; margin-top: 8px; text-wrap: pretty;">{{ c.v }}</p>
+        </div>
+      </sc-for>
+    </div>
+  </section>
+
+  <!-- ══ 05 · the chips ══════════════════════════════════════════════ -->
+  <section style="display: flex; flex-direction: column; gap: 20px;" data-screen-label="05 Verdict chips">
+    <div style="display: flex; flex-direction: column; gap: 7px;">
+      <div style="display: flex; align-items: baseline; gap: 10px;">
+        <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.16em; color: var(--text-faint);">05</span>
+        <h2 style="font-size: 18px; font-weight: 600; letter-spacing: -0.25px;">Five values, no sixth</h2>
+      </div>
+      <p style="font-size: 12.5px; color: var(--text-muted); line-height: 1.7; max-width: 78ch; text-wrap: pretty;">The work card's chip vocabulary, carried into run detail unchanged. No percentage, ever. The dashboard today renders two of these five — it reads <span style="font-family: var(--mono); font-size: 12px; color: var(--text-dim);">code_files</span> and neither <span style="font-family: var(--mono); font-size: 12px; color: var(--text-dim);">code_problems</span> nor <span style="font-family: var(--mono); font-size: 12px; color: var(--text-dim);">code_precheck_error</span>, so a run whose check never reached a verdict is shown as if it had passed.</p>
+    </div>
+
+    <div style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden;">
+      <div style="display: grid; grid-template-columns: 128px minmax(0, 1fr) minmax(0, 1.15fr); gap: 1px; background: var(--border-subtle);">
+        <div style="background: var(--surface-sunken); padding: 9px 12px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">CHIP</div>
+        <div style="background: var(--surface-sunken); padding: 9px 12px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">FROM</div>
+        <div style="background: var(--surface-sunken); padding: 9px 12px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">MEANS</div>
+        <sc-for list="{{ chipRows }}" as="c" hint-placeholder-count="5">
+          <div style="background: var(--bg-elevated); padding: 11px 13px;">
+            <span style="display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em; color: {{ c.fg }}; background: {{ c.wash }}; border: 1px solid {{ c.line }}; border-radius: 3px; padding: 3px 7px;">
+              <i style="width: 6px; height: 6px; flex-shrink: 0; background: {{ c.dot }};"></i>{{ c.chip }}
+            </span>
+          </div>
+          <div style="background: var(--bg-elevated); padding: 11px 13px; font-family: var(--mono); font-size: 11.5px; color: var(--text-dim); line-height: 1.55; overflow-wrap: anywhere;">{{ c.field }}</div>
+          <div style="background: var(--bg-elevated); padding: 11px 13px; font-size: 12px; color: var(--text-muted); line-height: 1.6; text-wrap: pretty;">{{ c.means }}</div>
+        </sc-for>
+      </div>
+    </div>
+
+    <div style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden;">
+      <div style="padding: 10px 13px; border-bottom: 1px solid var(--border-subtle); background: var(--surface-sunken); display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;">
+        <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">WHEN BOTH HALVES SPEAK · WORST WINS</span>
+        <span style="font-size: 12px; color: var(--text-muted);">A precheck error can never soften a named negative verdict.</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 8px; padding: 14px 13px; flex-wrap: wrap;">
+        <sc-for list="{{ ladder }}" as="l" hint-placeholder-count="5">
+          <span style="display: inline-flex; align-items: center; gap: 8px;">
+            <span style="font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.06em; color: {{ l.fg }}; border: 1px solid {{ l.line }}; border-radius: 3px; padding: 3px 8px;">{{ l.chip }}</span>
+            <span style="font-family: var(--mono); font-size: 11px; color: var(--text-faint);">{{ l.arrow }}</span>
+          </span>
+        </sc-for>
+      </div>
+      <div style="padding: 0 13px 13px; font-size: 12px; color: var(--text-muted); line-height: 1.65; max-width: 82ch; text-wrap: pretty;">A record carrying both a runner failure and a problem list cannot be constructed — <span style="font-family: var(--mono); font-size: 12px; color: var(--text-dim);">ParsePrecheckResult.__post_init__</span> raises. So the ladder only ever resolves a rating against a precheck error, never two defect channels against each other. And PASS requires both halves of its claim: the reviewer passed it <em>and</em> the mechanical check found no defects.</div>
+    </div>
+  </section>
+
+  <!-- ══ 06 · three surfaces ═════════════════════════════════════════ -->
+  <section style="display: flex; flex-direction: column; gap: 20px;" data-screen-label="06 Server-rendered">
+    <div style="display: flex; flex-direction: column; gap: 7px;">
+      <div style="display: flex; align-items: baseline; gap: 10px;">
+        <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.16em; color: var(--text-faint);">06</span>
+        <h2 style="font-size: 18px; font-weight: 600; letter-spacing: -0.25px;">The same structure, server-rendered</h2>
+      </div>
+      <p style="font-size: 12.5px; color: var(--text-muted); line-height: 1.7; max-width: 78ch; text-wrap: pretty;"><span style="font-family: var(--mono); font-size: 12px; color: var(--text-dim);">/run/{id}</span> has no design of its own on purpose: §5.5 says port this structure into it rather than inventing a parallel layout. Three differences, all forced by the medium rather than chosen — and 44px controls, because most visitors arrive on a phone from a link in a post.</p>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(540px, 1fr)); gap: 14px;">
+      <div data-theme="dark" style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden; background: var(--bg);">
+        <div style="padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; color: var(--text-faint); background: var(--surface-sunken);">DARK</div>
+        <div style="padding: 13px;"><dc-import name="Run Detail Surface" surface="server" hint-size="100%,1400px"></dc-import></div>
+      </div>
+      <div data-theme="light" style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden; background: var(--bg);">
+        <div style="padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; color: var(--text-faint); background: var(--surface-sunken);">LIGHT</div>
+        <div style="padding: 13px;"><dc-import name="Run Detail Surface" surface="server" hint-size="100%,1400px"></dc-import></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 07 · the header bug ═════════════════════════════════════════ -->
+  <section style="display: flex; flex-direction: column; gap: 20px;" data-screen-label="07 Header bug">
+    <div style="display: flex; flex-direction: column; gap: 7px;">
+      <div style="display: flex; align-items: baseline; gap: 10px;">
+        <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.16em; color: var(--text-faint);">07</span>
+        <h2 style="font-size: 18px; font-weight: 600; letter-spacing: -0.25px;">The modal header, at a narrow width</h2>
+      </div>
+      <p style="font-size: 12.5px; color: var(--text-muted); line-height: 1.7; max-width: 78ch; text-wrap: pretty;">Observed and deferred during the Phase 2 port, and it belongs to this design. <span style="font-family: var(--mono); font-size: 12px; color: var(--text-dim);">.modal-head</span> is a flex row that does not wrap; <span style="font-family: var(--mono); font-size: 12px; color: var(--text-dim);">.modal-title</span> carries <span style="font-family: var(--mono); font-size: 12px; color: var(--text-dim);">min-width: 0</span> with no wrapping rule, so a long unbreakable identifier overflows its squeezed box; <span style="font-family: var(--mono); font-size: 12px; color: var(--text-dim);">.modal-actions</span> is <span style="font-family: var(--mono); font-size: 12px; color: var(--text-dim);">flex-shrink: 0</span> and holds its width. The title runs under the buttons.</p>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 14px;">
+      <div style="border: 1px solid var(--danger-line); border-radius: 5px; overflow: hidden; background: var(--bg-elevated);">
+        <div style="padding: 8px 12px; border-bottom: 1px solid var(--danger-line); font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; color: var(--danger-text); background: var(--danger-wash);">TODAY · 330px</div>
+        <div style="padding: 16px 13px;">
+          <div style="width: 330px; max-width: 100%; border: 1px dashed var(--border-strong); border-radius: 5px; padding: 14px; overflow: hidden; background: var(--surface);">
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;">
+              <h4 style="font-size: 16px; font-family: var(--mono); font-weight: 700; color: var(--text); margin: 0; min-width: 0;">exec_9f4c21e8-4d7a-4b19-9e02-1f7c88ad3b56</h4>
+              <div style="display: flex; gap: 8px; align-items: center; flex-shrink: 0; flex-wrap: wrap;">
+                <span style="font-size: 12px; color: var(--text-dim); border: 1px solid var(--border-strong); border-radius: 4px; padding: 4px 10px; background: var(--bg-elevated);">Download</span>
+                <span style="font-size: 12px; color: var(--text-dim); border: 1px solid var(--border-strong); border-radius: 4px; padding: 4px 10px; background: var(--bg-elevated);">Close</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div style="border: 1px solid var(--accent-dim); border-radius: 5px; overflow: hidden; background: var(--bg-elevated);">
+        <div style="padding: 8px 12px; border-bottom: 1px solid var(--accent-dim); font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; color: var(--accent); background: var(--accent-wash);">FIXED · 330px</div>
+        <div style="padding: 16px 13px;">
+          <div style="width: 330px; max-width: 100%; border: 1px dashed var(--border-strong); border-radius: 5px; padding: 14px; overflow: hidden; background: var(--surface);">
+            <div style="display: flex; align-items: flex-start; flex-wrap: wrap; gap: 12px;">
+              <h4 style="flex: 1 1 200px; font-size: 16px; font-family: var(--mono); font-weight: 700; color: var(--text); margin: 0; min-width: 0; overflow-wrap: anywhere;">exec_9f4c21e8-4d7a-4b19-9e02-1f7c88ad3b56</h4>
+              <div style="margin-left: auto; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                <span style="font-size: 12px; color: var(--text-dim); border: 1px solid var(--border-strong); border-radius: 4px; padding: 4px 10px; background: var(--bg-elevated);">Download</span>
+                <span style="font-size: 12px; color: var(--text-dim); border: 1px solid var(--border-strong); border-radius: 4px; padding: 4px 10px; background: var(--bg-elevated);">Close</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div style="border: 1px solid var(--border); border-radius: 5px; background: var(--bg-elevated); overflow: hidden;">
+      <div style="padding: 10px 13px; border-bottom: 1px solid var(--border-subtle); background: var(--surface-sunken); font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">_dashboard.css · THREE DECLARATIONS</div>
+      <pre style="margin: 0; padding: 13px; background: var(--surface-sunken); font-family: var(--mono); font-size: 11.5px; line-height: 1.75; color: var(--text-dim); white-space: pre; overflow-x: auto;">.modal-head   { flex-wrap: wrap; }              /* added — the row may break */
+.modal-title  { flex: 1 1 200px;                 /* added — it may claim a line */
+                overflow-wrap: anywhere; }       /* added — long ids break */
+.modal-actions{ margin-left: auto; }             /* added — replaces space-between */</pre>
+      <div style="padding: 11px 13px; font-size: 12px; color: var(--text-muted); line-height: 1.65; max-width: 82ch; text-wrap: pretty;">Four lines, no geometry change above the breakpoint: with room, <span style="font-family: var(--mono); font-size: 12px; color: var(--text-dim);">margin-left: auto</span> puts the actions exactly where <span style="font-family: var(--mono); font-size: 12px; color: var(--text-dim);">space-between</span> put them. Both modals share the rule, so the node modal is fixed by the same change.</div>
+    </div>
+  </section>
+
+  <!-- ══ 08 · audit ══════════════════════════════════════════════════ -->
+  <section style="display: flex; flex-direction: column; gap: 20px;" data-screen-label="08 Audit and gaps">
+    <div style="display: flex; flex-direction: column; gap: 7px;">
+      <div style="display: flex; align-items: baseline; gap: 10px;">
+        <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.16em; color: var(--text-faint);">08</span>
+        <h2 style="font-size: 18px; font-weight: 600; letter-spacing: -0.25px;">Overview and Runs, re-audited</h2>
+      </div>
+      <p style="font-size: 12.5px; color: var(--text-muted); line-height: 1.7; max-width: 78ch; text-wrap: pretty;">Both have August designs and neither is redrawn here. Checked against master the way the delta did, and against the status bar, which now carries four of the things Overview says.</p>
+    </div>
+
+    <div style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden;">
+      <div style="display: grid; grid-template-columns: minmax(0, 0.85fr) minmax(0, 1fr) minmax(0, 1.35fr); gap: 1px; background: var(--border-subtle);">
+        <div style="background: var(--surface-sunken); padding: 9px 12px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">ELEMENT</div>
+        <div style="background: var(--surface-sunken); padding: 9px 12px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">WHAT MOVED</div>
+        <div style="background: var(--surface-sunken); padding: 9px 12px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">WHAT TO DO</div>
+        <sc-for list="{{ auditRows }}" as="a" hint-placeholder-count="6">
+          <div style="background: var(--bg-elevated); padding: 11px 12px;">
+            <div style="font-family: var(--mono); font-size: 11.5px; color: var(--text); line-height: 1.5;">{{ a.el }}</div>
+            <div style="font-family: var(--mono); font-size: 11px; color: {{ a.tagColor }}; margin-top: 5px;">{{ a.tag }}</div>
+          </div>
+          <div style="background: var(--bg-elevated); padding: 11px 12px; font-size: 12px; color: var(--text-dim); line-height: 1.6; text-wrap: pretty;">{{ a.moved }}</div>
+          <div style="background: var(--bg-elevated); padding: 11px 12px; font-size: 12px; color: var(--text-muted); line-height: 1.6; text-wrap: pretty;">{{ a.todo }}</div>
+        </sc-for>
+      </div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 7px;">
+      <div style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; color: var(--text-faint);">TWO NEW GAPS · NEITHER SURFACE HAS AN ENDPOINT</div>
+      <p style="font-size: 12.5px; color: var(--text-muted); line-height: 1.7; max-width: 78ch; text-wrap: pretty;">This is the finding that decides how much of §03 and §04 can be built at all. Both records exist, are durable and are well tested; neither is reachable over HTTP.</p>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(430px, 1fr)); gap: 14px;">
+      <sc-for list="{{ gapCards }}" as="g" hint-placeholder-count="2">
+        <div style="border: 1px solid var(--warn-line); border-radius: 5px; background: var(--bg-elevated); overflow: hidden;">
+          <div style="display: flex; align-items: baseline; gap: 9px; padding: 10px 13px; border-bottom: 1px solid var(--warn-line); background: var(--warn-wash); flex-wrap: wrap;">
+            <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--warn-text);">{{ g.n }}</span>
+            <span style="font-size: 12.5px; font-weight: 500; color: var(--warn-text);">{{ g.title }}</span>
+          </div>
+          <div style="padding: 12px 13px; display: flex; flex-direction: column; gap: 10px;">
+            <p style="font-size: 12.5px; color: var(--text-dim); line-height: 1.7; text-wrap: pretty;">{{ g.body }}</p>
+            <div style="display: flex; flex-direction: column; gap: 1px; background: var(--border-subtle); border: 1px solid var(--border); border-radius: 4px; overflow: hidden;">
+              <sc-for list="{{ g.options }}" as="o" hint-placeholder-count="2">
+                <div style="background: var(--surface); padding: 9px 11px; display: grid; grid-template-columns: 62px minmax(0, 1fr); gap: 10px; align-items: start;">
+                  <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; color: var(--text-faint);">{{ o.k }}</span>
+                  <span style="font-size: 12px; color: var(--text-dim); line-height: 1.6; text-wrap: pretty;">{{ o.v }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+
+    <div style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden;">
+      <div style="padding: 10px 13px; border-bottom: 1px solid var(--border-subtle); background: var(--surface-sunken); font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">DELIBERATELY NOT DRAWN</div>
+      <div style="display: grid; grid-template-columns: 1fr; gap: 1px; background: var(--border-subtle);">
+        <sc-for list="{{ notDrawn }}" as="n" hint-placeholder-count="4">
+          <div style="background: var(--bg-elevated); padding: 10px 13px; display: grid; grid-template-columns: 15px minmax(0, 190px) minmax(0, 1fr); gap: 10px; align-items: start;">
+            <i style="width: 7px; height: 7px; margin-top: 4px; flex-shrink: 0; background: transparent; border: 1px solid var(--text-faint);"></i>
+            <span style="font-family: var(--mono); font-size: 11.5px; color: var(--text-dim); line-height: 1.5;">{{ n.k }}</span>
+            <span style="font-size: 12px; color: var(--text-muted); line-height: 1.6; text-wrap: pretty;">{{ n.v }}</span>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+  </section>
+
+  <footer style="border-top: 1px solid var(--border); padding-top: 18px; display: flex; flex-wrap: wrap; gap: 12px 28px; align-items: baseline;">
+    <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em; color: var(--text-faint);">MYCELIUM · PHASE 3</span>
+    <span style="font-size: 12px; color: var(--text-muted); max-width: 74ch; line-height: 1.65; text-wrap: pretty;">Element→endpoint map, the two new gaps and the port order are written up as <span style="font-family: var(--mono); font-size: 12px; color: var(--text-dim);">handoff/HANDOFF-UI.md</span> §13. Every colour on this page is a token from <span style="font-family: var(--mono); font-size: 12px; color: var(--text-dim);">handoff/_theme.html</span>; no new token was added.</span>
+  </footer>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{}">
+class Component extends DCLogic {
+  renderVals() {
+    const OK = 'var(--accent)';
+    const WARN = 'var(--warn)';
+    const BAD = 'var(--danger)';
+    const IDLE = 'var(--text-faint)';
+    const MUTED = 'var(--text-muted)';
+    const DIM = 'var(--text-dim)';
+
+    return {
+      headerFacts: [
+        { k: 'SUBJECT', v: 'Run detail (modal, console view, /run/{id}), the provenance envelope, the ledger chain' },
+        { k: 'AUDITED AGAINST', v: 'master · provenance.py, ledger.py, routes_access.py, routes_history.py, access_control.py, ADR 0017' },
+        { k: 'CONTRACT', v: 'docs/design/HANDOFF-DELTA.md beats the archived handoff; current source beats both' },
+        { k: 'NEW TOKENS', v: 'None. Both themes render from the same markup, mounted twice.' },
+      ],
+
+      structureNotes: [
+        { k: 'ORDER · DELIVERABLE, THEN PLAN', v: 'The old modal led with process. Plan is how the work was cut up; the code is what the requester asked for. The plan still earns its place directly under it, because the waves are the parallelism claim.' },
+        { k: 'WAVES, NOT A COLUMN OF NUMBERS', v: 'Units grouped by dependency depth. Wave 2 showing three units that depend only on unit 01 is the task-level-parallelism claim made visible. Which machine took each is not served, so each card says machine not recorded rather than borrowing one from /nodes.' },
+        { k: 'NO SPEED MULTIPLIER', v: 'The 1.6x figure is the sum of unit durations over wall clock. Neither term is served: per-unit durations sit in full_log.json and per-run wall clock is gap 8.1. The claim is therefore absent, not estimated.' },
+        { k: 'THREE AXES, NOT ONE BADGE', v: 'lifecycle, validation and assurance are read separately. The compatibility status field collapses completed-and-passed to completed and every other completed outcome to unverified — exactly the distinction this view exists to show.' },
+      ],
+
+      claimRows: [
+        { k: 'IS', a: 'A state label on a list of files.', b: 'An attribution sentence.', aColor: DIM, bColor: DIM },
+        { k: 'ESTABLISHES', a: 'These bytes are the bytes that were frozen when the run ended, recorded locally.', b: 'Who produced them, under which enrolled identity, with which model, and which validators ran.', aColor: DIM, bColor: DIM },
+        { k: 'DOES NOT', a: 'Say anything about who made them, or whether they are right.', b: 'Say anything about whether they are right. It is not a signature and not an attestation.', aColor: MUTED, bColor: MUTED },
+        { k: 'VARIES', a: 'sealed · legacy_live — and which one matters to a reader.', b: 'Present or absent. When present, the contents matter and the presence does not.', aColor: MUTED, bColor: MUTED },
+        { k: 'DRAWN AS', a: 'A chip in the panel header, in accent when sealed.', b: 'A sentence. No chip, no lamp, no colour.', aColor: DIM, bColor: DIM },
+        { k: 'CHECKABLE', a: 'Re-hashed against the sealed row on every read, by this coordinator.', b: 'Recomputable offline from the audit bundle with no coordinator, network or credential.', aColor: DIM, bColor: DIM },
+      ],
+
+      banned: ['verified', 'trustless', 'tamper-proof', 'proof of correct execution', 'signature', 'signed', 'attestation', 'attested'],
+
+      lineCandidates: [
+        {
+          text: 'PROVENANCE \u2713  ·  verified',
+          why: 'Rejected. A tick over a binding of identity, and two prohibited words in five characters. This is the version that gets screenshotted.',
+          fill: 'var(--danger)', line: 'var(--danger)', color: 'var(--danger-text)',
+        },
+        {
+          text: 'Signed by node-7c22 \u00b7 qwen3.5:4b',
+          why: 'Rejected. Nothing is signed. The signature slot exists, is reserved, and is empty — and there is no key, no key management and no third party behind it.',
+          fill: 'var(--danger)', line: 'var(--danger)', color: 'var(--danger-text)',
+        },
+        {
+          text: '1 producer \u00b7 2 validators \u00b7 4 unknown',
+          why: 'Rejected for a different reason: accurate and unreadable. It is a field dump in a sentence\u2019s clothing, and it makes the reader do the interpreting, which is how a reader arrives at the wrong one.',
+          fill: 'transparent', line: 'var(--text-faint)', color: MUTED,
+        },
+        {
+          text: 'Built by 1 enrolled machine on qwen3.5:4b, checked by 2 validators. Binds who produced these files \u2014 not whether they are right.',
+          why: 'Chosen. Producer, model and checking in the first clause; the limit in the second, in the same breath rather than in a tooltip. It survives being pasted somewhere with no page around it, which is exactly what the server-rendered page does to it.',
+          fill: 'var(--text-faint)', line: 'var(--border-strong)', color: 'var(--text)',
+        },
+      ],
+
+      envelopeNotes: [
+        { k: 'DEFAULT · FOUR FACTS AND A COUNT', v: 'The sentence, the limit, and how many facts were not recorded. Nothing else. Twenty fields behind one link is not hiding them — it is refusing to make every reader audit a run to read one.' },
+        { k: 'UNKNOWN IS A VALUE, NOT A BLANK', v: 'Hollow marker, muted ink, the field named, and why. Never a dash, and never warn or danger: not writing something down is neither a fault nor fine. The shape carries it, so it survives greyscale and a reader who does not see colour.' },
+        { k: 'THREE ABSENCES, KEPT APART', v: 'sampling_parameters means nothing was pinned. sampling_seed_honoured means a seed was set but is not shown to be honoured. producer_sampling means a distributed machine sampled and did not report it. The repo keeps them separate deliberately; collapsing them to "unknown" would throw away the distinction.' },
+        { k: 'PLURAL IS THE PRIMARY CASE', v: 'The ensemble path settles several accepted receipts and leaves the singular fields null rather than electing a winner. So producers is always a list and one producer is a list of one — a layout built for the single case would need a rule for choosing, and no such rule exists.' },
+      ],
+
+      chainNotes: [
+        { k: 'INTACT IS NOT GREEN', v: 'Green means PASS, connected, ok. An intact chain means no entry changed without every link after it also being recomputed — which a full rewrite satisfies. Ordinary ink with a filled marker says walked; it does not say safe.' },
+        { k: 'AFTER A BREAK, NOT WALKED', v: 'Verification returns at the first break, so entries past it were never checked. They render hollow and muted, labelled not walked. Drawing them as broken would claim more than the walk found; drawing them as intact would claim the opposite.' },
+        { k: 'THE GENESIS BOUNDARY IS VISIBLE', v: 'Entries written before the chain existed have no link and are never retrofitted with one. They are shown as unlinked at the head of the chain, counted separately, and are not a break.' },
+        { k: 'THE BREAK REPORT IS CONTENT-FREE', v: 'Index, entry ID, reason, expected digest, observed digest. No prompts, outputs, credentials or artifact contents can appear, because none of them are in the chained columns — so the report is safe to paste into an issue.' },
+      ],
+
+      chipRows: [
+        { chip: 'PASS', fg: OK, wash: 'var(--accent-wash)', line: 'var(--accent-dim)', dot: OK, field: 'rating: PASS', means: 'The reviewer passed it and the mechanical check found no defects. Both halves, or it is not a pass.' },
+        { chip: 'NEEDS WORK', fg: 'var(--warn-text)', wash: 'var(--warn-wash)', line: 'var(--warn-line)', dot: WARN, field: 'rating: NEEDS_WORK', means: 'Returned with named problems. Still downloadable.' },
+        { chip: 'FAIL', fg: 'var(--danger-text)', wash: 'var(--danger-wash)', line: 'var(--danger-line)', dot: BAD, field: 'rating: FAIL', means: 'Reached a terminal state without a usable deliverable.' },
+        { chip: 'UNCHECKED', fg: MUTED, wash: 'transparent', line: 'var(--border-strong)', dot: IDLE, field: 'code_precheck_error set', means: 'The mechanical check did not run to a verdict, so these files are unchecked rather than known good. An empty problem list is not a pass.' },
+        { chip: 'NO VERDICT', fg: MUTED, wash: 'transparent', line: 'var(--border-strong)', dot: IDLE, field: 'rating: "?"', means: 'No rating was recorded. Says nothing about the work.' },
+      ],
+
+      ladder: [
+        { chip: 'FAIL', fg: 'var(--danger-text)', line: 'var(--danger-line)', arrow: '\u2192' },
+        { chip: 'NEEDS WORK', fg: 'var(--warn-text)', line: 'var(--warn-line)', arrow: '\u2192' },
+        { chip: 'NO VERDICT', fg: MUTED, line: 'var(--border-strong)', arrow: '\u2192' },
+        { chip: 'UNCHECKED', fg: MUTED, line: 'var(--border-strong)', arrow: '\u2192' },
+        { chip: 'PASS', fg: OK, line: 'var(--accent-dim)', arrow: '' },
+      ],
+
+      auditRows: [
+        {
+          el: 'Overview \u00b7 vital "running now"', tag: 'STALE CITATION', tagColor: 'var(--danger-text)',
+          moved: 'The handoff reads it from /health as an active execution count. /health has no such field: it returns status, ollama, models, nodes_online, tasks_pending, node_enrollment_required, private_routes_protected and warnings, and nothing else. The delta checked backticked names, not prose claims about fields.',
+          todo: 'Read /metrics.jobs_running \u2014 the same source as the status bar\u2019s RUNNING cell, so the two can never disagree. Note the consequence: /health is public and /metrics is viewer-gated, which is fine inside the already-gated dashboard.',
+        },
+        {
+          el: 'Overview \u00b7 vital "queued"', tag: 'WRONG NUMBER', tagColor: 'var(--danger-text)',
+          moved: 'It reads /health.tasks_pending, which is the subtask queue \u2014 precisely the trap \u00a712.2 named for the bar\u2019s QUEUED cell. Ported as written, two cells on one screen would carry the label QUEUED over different numbers.',
+          todo: 'Either read /metrics.jobs_queued, or keep tasks_pending and relabel the cell SUBTASKS PENDING. Not both under one word.',
+        },
+        {
+          el: 'Overview \u00b7 the vital strip', tag: 'NOW REDUNDANT', tagColor: 'var(--warn-text)',
+          moved: 'The strip\u2019s stated job is answering "is it working right now" with four signs: nodes, inference, running, queued. The status bar now carries all four, lamped, on every console page including this one.',
+          todo: 'Drop the strip and let Overview lead with what the bar cannot carry \u2014 the active run and the composer. Recorded, not drawn: Overview is its own phase and this is a decision for it, not a change made in passing.',
+        },
+        {
+          el: 'Overview \u00b7 pass rate', tag: 'UNCHANGED', tagColor: MUTED,
+          moved: 'Still deliberately absent, and the delta has since retired the figure outright rather than merely relocating it.',
+          todo: 'Nothing. Do not reintroduce it here or in Evals as a bare number.',
+        },
+        {
+          el: 'Runs \u00b7 rating chip', tag: 'GAP CLOSED', tagColor: OK,
+          moved: '/history and /gallery now both carry code_precheck_error per row, added for exactly this reason: without it a list card renders PASS over a run whose own modal said UNCHECKED.',
+          todo: 'Render all five chips in the list today. No endpoint change needed \u2014 this was the missing third state, and it is served.',
+        },
+        {
+          el: 'Runs \u00b7 WALL column', tag: 'GAP STANDS', tagColor: 'var(--warn-text)',
+          moved: 'Per-run wall clock is still unserved by /history and by /v1/executions/{id}. Gap 8.1, unchanged.',
+          todo: 'Extend the payload with a duration, or drop the column. The design drops it \u2014 including in run detail, where the metric strip carries only counts.',
+        },
+        {
+          el: 'Runs \u2192 run detail \u00b7 defects', tag: 'PORT WORK', tagColor: 'var(--warn-text)',
+          moved: '_dashboard.js reads code_files and reads neither code_problems nor code_precheck_error, so the dashboard shows no defects and no not-checked state \u2014 the delta\u2019s \u00a75 open gap, handed to this phase.',
+          todo: 'Run detail renders the third state. An empty problem list beside a precheck error means not checked, and the prose in routes_run.py already says it correctly \u2014 match that wording rather than inventing a chip for it.',
+        },
+      ],
+
+      gapCards: [
+        {
+          n: 'GAP 8.7', title: 'The provenance envelope has no HTTP route',
+          body: 'provenance.py stores one envelope per execution, append-only, with a deterministic digest and an offline checker. ProvenanceEnvelopeStore.get() exists. No route reads it: the only way a person sees an envelope is to download the audit bundle and open mycelium-provenance.json inside the zip. Everything in \u00a703 is drawn against that constraint.',
+          options: [
+            { k: 'EXTEND', v: 'Add GET /v1/executions/{id}/provenance (viewer-gated) returning as_export() \u2014 the same shape the bundle already carries, so no new contract and the offline checker keeps working unchanged.' },
+            { k: 'OR DROP', v: 'Keep the panel to the summary line built from what /v1/executions/{id} already serves, and make "Open the envelope" the audit-bundle download. Honest, and one zip away from every field.' },
+          ],
+        },
+        {
+          n: 'GAP 8.8', title: 'Chain verification has no HTTP route, and /ledger drops the chain columns',
+          body: 'verify_ledger_chain() returns index, entry ID, reason and both digests, and as_dict() is already the right response shape. Nothing calls it over HTTP: the only caller is scripts/ledger_chain_admin.py verify. /ledger returns entries whose projection omits entry_index, previous_digest and entry_digest, so a client cannot walk the chain itself either.',
+          options: [
+            { k: 'EXTEND', v: 'Add GET /v1/operator/ledger-chain (viewer-gated) returning as_dict(). It is content-free by construction \u2014 no prompts, outputs or credentials are in the chained columns \u2014 so it leaks nothing /nodes does not.' },
+            { k: 'OR DROP', v: 'Show no chain state in the console and let Guild carry one line saying verification is a command an operator runs, naming it. Worse, but not dishonest \u2014 unlike a chip drawn from nothing.' },
+          ],
+        },
+      ],
+
+      notDrawn: [
+        { k: 'Per-unit machine assignment', v: 'Gap 8.2, still open. observed_placements is capped at two and per-unit depends_on is served, so the waves draw dependency structure and decline to place a unit on a machine.' },
+        { k: 'Any quality percentage', v: 'Retired by the delta \u00a74.1. The passing check counted a blank page as a working app, and the discordant pair rate is 0.643 \u2014 18 of 28 tasks flip outcome between two runs that differ by nothing.' },
+        { k: 'A signed envelope', v: 'The slot is reserved and empty. It appears in the opened envelope as reserved, and nowhere else.' },
+        { k: 'Gallery, Projects, Guild, Evals, Config, Connect, the public pages', v: 'Out of scope for this pass. The work card in the status-model file \u00a706 already covers Gallery and Projects and is waiting for them.' },
+      ],
+    };
+  }
+}
+</script>
+</body>
+</html>

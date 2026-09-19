@@ -1,0 +1,1374 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mycelium — status model, status bar, work card</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
+<script>
+  (function () {
+    try {
+      var saved = localStorage.getItem('mycelium-theme');
+      var system = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', saved || system);
+    } catch (e) {
+      document.documentElement.setAttribute('data-theme', 'dark');
+    }
+  })();
+</script>
+<style>
+  /* Token values are copied verbatim from the console design file. The only
+     change is the selector: the console declares light as :root[data-theme],
+     this page declares it as [data-theme] so a light pane can sit inside a
+     dark page and be judged beside it. templates/_theme.html keeps :root. */
+  :root, [data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #030405;
+    --bg-elevated: #0D0F12;
+    --surface: #15181C;
+    --surface-hover: #1D2126;
+    --surface-sunken: #08090B;
+    --border-subtle: #1A1D21;
+    --border: #262A30;
+    --border-strong: #333841;
+    --text: #E8E9EB;
+    --text-dim: #9CA1A8;
+    --text-muted: #949BA3;
+    --text-faint: #878E97;
+    --mark: #E8E9EB;
+    --accent: #3FB950;
+    --accent-dim: #2C8C3C;
+    --accent-strong: #4ACB5D;
+    --accent-wash: rgba(63,185,80,0.08);
+    --on-accent: #06210C;
+    --warn: #C9922B;
+    --warn-text: #E8C88A;
+    --warn-body: #B5A681;
+    --warn-wash: #14100A;
+    --warn-line: #3B3222;
+    --danger: #E5534B;
+    --danger-text: #F0938C;
+    --danger-body: #C29691;
+    --danger-wash: rgba(229,83,75,0.10);
+    --danger-line: rgba(229,83,75,0.28);
+    --info: #5B8DEF;
+    --info-wash: rgba(91,141,239,0.08);
+    --violet: #9A7BE0;
+    --slate: #949AA2;
+    --scrim: rgba(4,5,6,0.72);
+    --lift: 0 24px 64px rgba(0,0,0,0.6);
+    --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    --sans: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+  [data-theme="light"] {
+    color-scheme: light;
+    --bg: #F1F3F5;
+    --bg-elevated: #FFFFFF;
+    --surface: #F7F8FA;
+    --surface-hover: #EDEFF3;
+    --surface-sunken: #F0F2F5;
+    --border-subtle: #E7EAEE;
+    --border: #D4D9DF;
+    --border-strong: #B7BEC6;
+    --text: #16181D;
+    --text-dim: #4A5057;
+    --text-muted: #656C74;
+    --text-faint: #6E747C;
+    --mark: #16181D;
+    --accent: #1A7F37;
+    --accent-dim: #157030;
+    --accent-strong: #12692E;
+    --accent-wash: rgba(26,127,55,0.07);
+    --on-accent: #FFFFFF;
+    --warn: #9A6700;
+    --warn-text: #6B4A00;
+    --warn-body: #6E5A28;
+    --warn-wash: #FFF8E6;
+    --warn-line: #E8D9A8;
+    --danger: #CF222E;
+    --danger-text: #A0111B;
+    --danger-body: #7A2E33;
+    --danger-wash: rgba(207,34,46,0.08);
+    --danger-line: rgba(207,34,46,0.30);
+    --info: #0969DA;
+    --info-wash: rgba(9,105,218,0.07);
+    --violet: #8250DF;
+    --slate: #57606A;
+    --scrim: rgba(20,24,31,0.42);
+    --lift: 0 20px 52px rgba(16,22,26,0.18);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--text); font-family: var(--sans);
+    font-size: 13px; -webkit-font-smoothing: antialiased; font-variant-numeric: tabular-nums;
+  }
+  a { color: var(--text); text-decoration: none; border-bottom: 1px solid var(--border-strong); }
+  a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+  button { font-family: inherit; color: inherit; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: var(--border-strong); border: 3px solid var(--bg); border-radius: 6px; }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+</helmet>
+
+<div style="min-height: 100vh; background: var(--bg); padding: 30px 22px 72px;">
+<div style="max-width: 1180px; margin: 0 auto; display: flex; flex-direction: column; gap: 46px;">
+
+  <header style="display: flex; flex-direction: column; gap: 14px;" data-screen-label="Header">
+    <div style="display: flex; align-items: center; gap: 9px;">
+      <span style="width: 9px; height: 9px; background: var(--mark); flex-shrink: 0;"></span>
+      <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.16em; color: var(--text-dim);">MYCELIUM · CONSOLE ADDITIONS</span>
+    </div>
+    <h1 style="font-size: 24px; font-weight: 600; letter-spacing: -0.4px; line-height: 1.25; max-width: 30ch;">One status model, the bar that shows it, and a card for a unit of work</h1>
+    <p style="font-size: 13px; color: var(--text-muted); line-height: 1.7; max-width: 76ch; text-wrap: pretty;">Three additions to the console at <span style="font-family: var(--mono); font-size: 12px; color: var(--text-dim);">docs/design/console-2026-08-28/</span>, in its existing vocabulary: hairline rules, mono for every datum, one type scale from 11px, colour only where it carries state. Nothing here is a restyle of what exists.</p>
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(215px, 1fr)); gap: 1px; background: var(--border-subtle); border: 1px solid var(--border); border-radius: 5px; overflow: hidden;">
+      <sc-for list="{{ headerFacts }}" as="h" hint-placeholder-count="4">
+        <div style="background: var(--bg-elevated); padding: 11px 13px; display: flex; flex-direction: column; gap: 4px;">
+          <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">{{ h.k }}</span>
+          <span style="font-size: 12px; color: var(--text-dim); line-height: 1.55;">{{ h.v }}</span>
+        </div>
+      </sc-for>
+    </div>
+  </header>
+
+  <!-- ══ 01 · the state machine ══════════════════════════════════════ -->
+  <section style="display: flex; flex-direction: column; gap: 20px;" data-screen-label="01 State machine">
+    <div style="display: flex; flex-direction: column; gap: 7px;">
+      <div style="display: flex; align-items: baseline; gap: 10px;">
+        <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.16em; color: var(--text-faint);">01</span>
+        <h2 style="font-size: 18px; font-weight: 600; letter-spacing: -0.25px;">The state machine</h2>
+      </div>
+      <p style="font-size: 12.5px; color: var(--text-muted); line-height: 1.7; max-width: 78ch; text-wrap: pretty;">Four indicators derive their own truth today — the fail-open banner, the persistence-degraded banner, the locked screen and the footer's inference line. They can disagree, and three of the four have no idea whether the coordinator answered at all. One poller replaces them: four facets, each with three values, one severity, three renderings.</p>
+    </div>
+
+    <div style="border: 1px solid var(--danger-line); border-radius: 5px; background: var(--danger-wash); padding: 13px 15px; display: flex; gap: 11px; align-items: flex-start;">
+      <span style="width: 7px; height: 7px; background: var(--danger); flex-shrink: 0; margin-top: 5px;"></span>
+      <div style="min-width: 0;">
+        <div style="font-size: 12.5px; font-weight: 500; color: var(--danger-text);">The failure this model exists to prevent</div>
+        <p style="font-size: 12.5px; color: var(--danger-body); line-height: 1.65; margin-top: 4px; text-wrap: pretty;">The dashboard on master paints its indicator from the last successful poll and never expires it, so a coordinator that died five minutes ago is still reported as connected. Green is therefore never a cached value here: a filled lamp requires a fresh confirmation, and the age of that confirmation is on screen at all times.</p>
+      </div>
+    </div>
+
+    <div style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden;">
+      <div style="display: grid; grid-template-columns: 92px repeat(3, minmax(0, 1fr)) minmax(0, 1.35fr); gap: 1px; background: var(--border-subtle);">
+        <div style="background: var(--surface-sunken); padding: 9px 12px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">FACET</div>
+        <div style="background: var(--surface-sunken); padding: 9px 12px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">CONFIRMED GOOD</div>
+        <div style="background: var(--surface-sunken); padding: 9px 12px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">CONFIRMED BAD</div>
+        <div style="background: var(--surface-sunken); padding: 9px 12px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">NOT HEARD BACK</div>
+        <div style="background: var(--surface-sunken); padding: 9px 12px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">READ FROM</div>
+        <sc-for list="{{ facetRows }}" as="f" hint-placeholder-count="4">
+          <div style="background: var(--bg-elevated); padding: 11px 12px; font-family: var(--mono); font-size: 12px; color: var(--text);">{{ f.key }}</div>
+          <div style="background: var(--bg-elevated); padding: 11px 12px; display: flex; align-items: center; gap: 7px;">
+            <i style="width: 6px; height: 6px; flex-shrink: 0; background: var(--accent); border: 1px solid var(--accent);"></i>
+            <span style="font-family: var(--mono); font-size: 12px; color: var(--accent);">{{ f.good }}</span>
+          </div>
+          <div style="background: var(--bg-elevated); padding: 11px 12px; display: flex; align-items: center; gap: 7px;">
+            <i style="width: 6px; height: 6px; flex-shrink: 0; background: {{ f.badTone }}; border: 1px solid {{ f.badTone }};"></i>
+            <span style="font-family: var(--mono); font-size: 12px; color: {{ f.badText }};">{{ f.bad }}</span>
+          </div>
+          <div style="background: var(--bg-elevated); padding: 11px 12px; display: flex; align-items: center; gap: 7px;">
+            <i style="width: 6px; height: 6px; flex-shrink: 0; background: transparent; border: 1px solid var(--text-faint);"></i>
+            <span style="font-family: var(--mono); font-size: 12px; color: var(--text-muted);">{{ f.unknown }}</span>
+          </div>
+          <div style="background: var(--bg-elevated); padding: 11px 12px; font-family: var(--mono); font-size: 11px; color: var(--text-dim); line-height: 1.55;">{{ f.src }}</div>
+        </sc-for>
+      </div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px;">
+      <div style="border: 1px solid var(--border); border-radius: 5px; background: var(--bg-elevated); padding: 14px 15px;">
+        <div style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">RULE · FACET DEPENDENCY</div>
+        <p style="font-size: 12.5px; color: var(--text-dim); line-height: 1.7; margin-top: 8px; text-wrap: pretty;">When <span style="font-family: var(--mono); font-size: 12px; color: var(--text);">link</span> leaves <span style="font-family: var(--mono); font-size: 12px; color: var(--text);">up</span>, every facet the coordinator serves becomes not-heard-back — never bad. A silent coordinator cannot tell you inference is down; saying it is would be inventing the answer. Only <span style="font-family: var(--mono); font-size: 12px; color: var(--text);">link: up</span> plus an explicit negative is a confirmed bad.</p>
+      </div>
+      <div style="border: 1px solid var(--border); border-radius: 5px; background: var(--bg-elevated); padding: 14px 15px;">
+        <div style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">RULE · SHAPE CARRIES THE THIRD VALUE</div>
+        <p style="font-size: 12.5px; color: var(--text-dim); line-height: 1.7; margin-top: 8px; text-wrap: pretty;">Filled square means a fresh answer; hollow square means no answer. Colour says which answer. So not-heard-back is never a colour that could be mistaken for good, and the state survives being filmed, printed, or read by someone who does not see green.</p>
+        <div style="display: flex; align-items: center; gap: 16px; margin-top: 12px; flex-wrap: wrap; font-family: var(--mono); font-size: 11px; color: var(--text-muted);">
+          <span style="display: flex; align-items: center; gap: 7px;"><i style="width: 7px; height: 7px; background: var(--accent); border: 1px solid var(--accent);"></i>confirmed</span>
+          <span style="display: flex; align-items: center; gap: 7px;"><i style="width: 7px; height: 7px; background: transparent; border: 1px solid var(--text-faint);"></i>not heard back</span>
+          <span style="display: flex; align-items: center; gap: 7px;"><i style="width: 7px; height: 7px; background: var(--danger); border: 1px solid var(--danger);"></i>refused</span>
+        </div>
+      </div>
+    </div>
+
+    <div style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden;">
+      <div style="padding: 10px 13px; border-bottom: 1px solid var(--border-subtle); background: var(--surface-sunken); display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;">
+        <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">HYSTERESIS</span>
+        <span style="font-size: 12px; color: var(--text-muted);">One failed poll changes nothing on screen except the age.</span>
+      </div>
+      <div style="display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.6fr) 84px; gap: 1px; background: var(--border-subtle);">
+        <sc-for list="{{ hystRows }}" as="h" hint-placeholder-count="6">
+          <div style="background: var(--bg-elevated); padding: 10px 13px; font-family: var(--mono); font-size: 12px; color: var(--text);">{{ h.change }}</div>
+          <div style="background: var(--bg-elevated); padding: 10px 13px; font-size: 12.5px; color: var(--text-dim); line-height: 1.6;">{{ h.cond }}</div>
+          <div style="background: var(--bg-elevated); padding: 10px 13px; font-family: var(--mono); font-size: 12px; color: {{ h.dwellColor }}; text-align: right;">{{ h.dwell }}</div>
+        </sc-for>
+      </div>
+      <div style="padding: 10px 13px; border-top: 1px solid var(--border-subtle); font-size: 12px; color: var(--text-muted); line-height: 1.6;">Poll <span style="font-family: var(--mono); color: var(--text-dim);">/health</span> every 5 s, <span style="font-family: var(--mono); color: var(--text-dim);">/v1/operator/health</span> every 30 s. On load the state is not-heard-back, never ok — there is nothing to be confident about before the first answer.</div>
+    </div>
+
+    <div style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden;">
+      <div style="padding: 10px 13px; border-bottom: 1px solid var(--border-subtle); background: var(--surface-sunken); display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;">
+        <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">SEVERITY · WORST FACET WINS</span>
+        <span style="font-size: 12px; color: var(--text-muted);">The indicator names the condition. It never says “degraded”.</span>
+      </div>
+      <div style="display: grid; grid-template-columns: 1fr; gap: 1px; background: var(--border-subtle);">
+        <sc-for list="{{ sevRows }}" as="s" hint-placeholder-count="6">
+          <div style="background: var(--bg-elevated); padding: 11px 13px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+            <span style="display: flex; align-items: center; gap: 8px; min-width: 168px;">
+              <i style="width: 7px; height: 7px; flex-shrink: 0; background: {{ s.fill }}; border: 1px solid {{ s.line }};"></i>
+              <span style="font-family: var(--mono); font-size: 12px; color: {{ s.text }};">{{ s.word }}</span>
+            </span>
+            <span style="font-size: 12.5px; color: var(--text-dim); line-height: 1.6; flex: 1; min-width: 220px;">{{ s.when }}</span>
+            <span style="font-family: var(--mono); font-size: 11px; color: var(--text-faint); white-space: nowrap;">{{ s.banner }}</span>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px;">
+      <div style="border: 1px solid var(--border); border-radius: 5px; background: var(--bg-elevated); padding: 14px 15px;">
+        <div style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">DELIBERATELY OUTSIDE THE MODEL</div>
+        <div style="display: flex; flex-direction: column; gap: 9px; margin-top: 10px;">
+          <sc-for list="{{ outsideRows }}" as="o" hint-placeholder-count="3">
+            <div style="display: flex; gap: 9px; align-items: flex-start;">
+              <span style="width: 5px; height: 5px; background: var(--border-strong); flex-shrink: 0; margin-top: 6px;"></span>
+              <p style="font-size: 12.5px; color: var(--text-dim); line-height: 1.65; text-wrap: pretty;"><span style="font-weight: 500; color: var(--text);">{{ o.k }}</span> — {{ o.v }}</p>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+      <div style="border: 1px solid var(--warn-line); border-radius: 5px; background: var(--warn-wash); padding: 14px 15px;">
+        <div style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--warn-text);">WHY THERE IS NO UTILIZATION GRAPH</div>
+        <p style="font-size: 12.5px; color: var(--warn-body); line-height: 1.7; margin-top: 8px; text-wrap: pretty;">A node's capability descriptor claims CPU count, physical memory and GPU at registration. Nothing measures them afterwards, and no endpoint serves a sample. A load line drawn from a claim is a drawing, not a measurement — so the bar carries counts and states, and the machine page carries the claim, labelled as claimed.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 02 · the bar ════════════════════════════════════════════════ -->
+  <section style="display: flex; flex-direction: column; gap: 20px;" data-screen-label="02 Status bar">
+    <div style="display: flex; flex-direction: column; gap: 7px;">
+      <div style="display: flex; align-items: baseline; gap: 10px;">
+        <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.16em; color: var(--text-faint);">02</span>
+        <h2 style="font-size: 18px; font-weight: 600; letter-spacing: -0.25px;">The status bar</h2>
+      </div>
+      <p style="font-size: 12.5px; color: var(--text-muted); line-height: 1.7; max-width: 78ch; text-wrap: pretty;">Pinned to the bottom of the console shell, 30px tall, above nothing and under every view. Two kinds of cell, told apart by whether they carry a lamp: polled facts do, facts read once at page load do not. A cell with no lamp is making no claim about this second.</p>
+    </div>
+
+    <div style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden; background: var(--bg-elevated);">
+      <div style="padding: 10px 13px; border-bottom: 1px solid var(--border-subtle); background: var(--surface-sunken); font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">ANATOMY</div>
+      <div style="padding: 18px 14px 20px; display: flex; flex-direction: column; gap: 0;">
+        <div style="overflow-x: auto; overflow-y: hidden; padding-bottom: 2px;">
+        <div style="display: flex; align-items: center; height: 30px; min-width: max-content; background: var(--bg-elevated); border: 1px solid var(--border); font-family: var(--mono); font-size: 11px;">
+          <div style="display: flex; align-items: center; gap: 7px; padding: 0 11px; height: 100%; border-right: 1px solid var(--border-subtle); flex-shrink: 0;">
+            <i style="width: 6px; height: 6px; flex-shrink: 0; background: var(--accent); border: 1px solid var(--accent);"></i>
+            <span style="color: var(--accent);">ok</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 6px; padding: 0 11px; height: 100%; border-right: 1px solid var(--border-subtle); white-space: nowrap;">
+            <i style="width: 5px; height: 5px; background: var(--accent); border: 1px solid var(--accent);"></i>
+            <span style="letter-spacing: 0.1em; color: var(--text-faint);">INFERENCE</span>
+            <span style="color: var(--text);">ready</span>
+            <span style="color: var(--text-faint);">· qwen3.5:4b</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 6px; padding: 0 11px; height: 100%; border-right: 1px solid var(--border-subtle); white-space: nowrap;">
+            <i style="width: 5px; height: 5px; background: var(--accent); border: 1px solid var(--accent);"></i>
+            <span style="letter-spacing: 0.1em; color: var(--text-faint);">NODES</span>
+            <span style="color: var(--text);">3</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 6px; padding: 0 11px; height: 100%; border-right: 1px solid var(--border-subtle); white-space: nowrap;">
+            <i style="width: 5px; height: 5px; background: var(--warn); border: 1px solid var(--warn);"></i>
+            <span style="letter-spacing: 0.1em; color: var(--text-faint);">RUNNING</span>
+            <span style="color: var(--text);">1</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 6px; padding: 0 11px; height: 100%; border-right: 1px solid var(--border); white-space: nowrap;">
+            <i style="width: 5px; height: 5px; background: var(--border-strong); border: 1px solid var(--border-strong);"></i>
+            <span style="letter-spacing: 0.1em; color: var(--text-faint);">QUEUED</span>
+            <span style="color: var(--text-muted);">0</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 6px; padding: 0 11px; height: 100%; border-right: 1px solid var(--border-subtle); white-space: nowrap;">
+            <span style="letter-spacing: 0.1em; color: var(--text-faint);">MODE</span>
+            <span style="color: var(--text-dim);">local</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 6px; padding: 0 11px; height: 100%; border-right: 1px solid var(--border-subtle); white-space: nowrap;">
+            <span style="letter-spacing: 0.1em; color: var(--text-faint);">LOCK</span>
+            <span style="color: var(--text-dim);">held</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 6px; padding: 0 11px; height: 100%; border-right: 1px solid var(--border-subtle); white-space: nowrap;">
+            <span style="letter-spacing: 0.1em; color: var(--text-faint);">TRACING</span>
+            <span style="color: var(--text-dim);">off</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 6px; padding: 0 11px; height: 100%; white-space: nowrap;">
+            <span style="letter-spacing: 0.1em; color: var(--text-faint);">EVIDENCE</span>
+            <span style="color: var(--text-dim);">shadow</span>
+          </div>
+          <div style="margin-left: auto; display: flex; align-items: center; gap: 10px; padding: 0 11px; height: 100%; border-left: 1px solid var(--border-subtle); white-space: nowrap;">
+            <span style="color: var(--text-faint);">as of 3s</span>
+            <span style="color: var(--text-muted);">⌄</span>
+          </div>
+        </div>
+        </div>
+        <div style="font-family: var(--mono); font-size: 11px; color: var(--text-faint); margin-top: 7px;">nine cells at full width — scroll sideways here; the shipped bar spans the browser</div>
+        <div style="display: flex; flex-wrap: wrap; gap: 0 22px; margin-top: 14px;">
+          <sc-for list="{{ anatomyNotes }}" as="a" hint-placeholder-count="6">
+            <div style="display: flex; gap: 8px; align-items: flex-start; padding: 5px 0; max-width: 33ch;">
+              <span style="font-family: var(--mono); font-size: 11px; color: var(--text-faint); flex-shrink: 0;">{{ a.n }}</span>
+              <p style="font-size: 12px; color: var(--text-dim); line-height: 1.6; text-wrap: pretty;">{{ a.v }}</p>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(430px, 1fr)); gap: 14px;">
+      <div data-theme="dark" style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden; background: var(--bg);">
+        <div style="padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; color: var(--text-faint); background: var(--surface-sunken);">DARK</div>
+        <div style="display: flex; flex-direction: column;">
+          <sc-for list="{{ barStates }}" as="s" hint-placeholder-count="7">
+            <div style="padding: 12px 12px 14px; border-bottom: 1px solid var(--border-subtle);">
+              <div style="display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 8px;">
+                <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; color: {{ s.captionColor }};">{{ s.name }}</span>
+                <span style="font-size: 11.5px; color: var(--text-faint); line-height: 1.5;">{{ s.note }}</span>
+              </div>
+              <div style="display: flex; align-items: center; height: 30px; background: var(--bg-elevated); border: 1px solid var(--border); font-family: var(--mono); font-size: 11px; overflow: hidden;">
+                <div style="display: flex; align-items: center; gap: 7px; padding: 0 10px; height: 100%; border-right: 1px solid var(--border-subtle); flex-shrink: 0;">
+                  <i style="width: 6px; height: 6px; flex-shrink: 0; background: {{ s.lampFill }}; border: 1px solid {{ s.lampLine }};"></i>
+                  <span style="color: {{ s.lampText }};">{{ s.word }}</span>
+                </div>
+                <sc-for list="{{ s.live }}" as="c" hint-placeholder-count="4">
+                  <div style="display: flex; align-items: center; gap: 6px; padding: 0 10px; height: 100%; border-right: 1px solid var(--border-subtle); white-space: nowrap;">
+                    <i style="width: 5px; height: 5px; flex-shrink: 0; background: {{ c.dotFill }}; border: 1px solid {{ c.dotLine }};"></i>
+                    <span style="letter-spacing: 0.1em; color: var(--text-faint);">{{ c.k }}</span>
+                    <span style="color: {{ c.color }};">{{ c.v }}</span>
+                  </div>
+                </sc-for>
+                <div style="margin-left: auto; display: flex; align-items: center; padding: 0 10px; height: 100%; border-left: 1px solid var(--border-subtle); white-space: nowrap;">
+                  <span style="color: {{ s.ageColor }};">{{ s.age }}</span>
+                </div>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+      <div data-theme="light" style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden; background: var(--bg);">
+        <div style="padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; color: var(--text-faint); background: var(--surface-sunken);">LIGHT</div>
+        <div style="display: flex; flex-direction: column;">
+          <sc-for list="{{ barStates }}" as="s" hint-placeholder-count="7">
+            <div style="padding: 12px 12px 14px; border-bottom: 1px solid var(--border-subtle);">
+              <div style="display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 8px;">
+                <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; color: {{ s.captionColor }};">{{ s.name }}</span>
+                <span style="font-size: 11.5px; color: var(--text-faint); line-height: 1.5;">{{ s.note }}</span>
+              </div>
+              <div style="display: flex; align-items: center; height: 30px; background: var(--bg-elevated); border: 1px solid var(--border); font-family: var(--mono); font-size: 11px; overflow: hidden;">
+                <div style="display: flex; align-items: center; gap: 7px; padding: 0 10px; height: 100%; border-right: 1px solid var(--border-subtle); flex-shrink: 0;">
+                  <i style="width: 6px; height: 6px; flex-shrink: 0; background: {{ s.lampFill }}; border: 1px solid {{ s.lampLine }};"></i>
+                  <span style="color: {{ s.lampText }};">{{ s.word }}</span>
+                </div>
+                <sc-for list="{{ s.live }}" as="c" hint-placeholder-count="4">
+                  <div style="display: flex; align-items: center; gap: 6px; padding: 0 10px; height: 100%; border-right: 1px solid var(--border-subtle); white-space: nowrap;">
+                    <i style="width: 5px; height: 5px; flex-shrink: 0; background: {{ c.dotFill }}; border: 1px solid {{ c.dotLine }};"></i>
+                    <span style="letter-spacing: 0.1em; color: var(--text-faint);">{{ c.k }}</span>
+                    <span style="color: {{ c.color }};">{{ c.v }}</span>
+                  </div>
+                </sc-for>
+                <div style="margin-left: auto; display: flex; align-items: center; padding: 0 10px; height: 100%; border-left: 1px solid var(--border-subtle); white-space: nowrap;">
+                  <span style="color: {{ s.ageColor }};">{{ s.age }}</span>
+                </div>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+
+    <div style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden;">
+      <div style="padding: 10px 13px; border-bottom: 1px solid var(--border-subtle); background: var(--surface-sunken); display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;">
+        <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">PLACEMENT</span>
+        <span style="font-size: 12px; color: var(--text-muted);">Below the rail and the view, spanning both. The rail's own inference line is deleted, not duplicated.</span>
+      </div>
+      <div style="padding: 16px; background: var(--surface-sunken);">
+        <div style="border: 1px solid var(--border); border-radius: 4px; overflow: hidden; background: var(--bg); display: flex; flex-direction: column; height: 246px;">
+          <div style="flex: 1; display: flex; min-height: 0;">
+            <div style="width: 148px; flex-shrink: 0; border-right: 1px solid var(--border-subtle); padding: 12px 11px; display: flex; flex-direction: column; gap: 8px;">
+              <div style="display: flex; align-items: center; gap: 7px;">
+                <span style="width: 7px; height: 7px; background: var(--mark); flex-shrink: 0;"></span>
+                <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; color: var(--text-dim);">MYCELIUM</span>
+              </div>
+              <div style="display: flex; flex-direction: column; gap: 2px; margin-top: 6px;">
+                <sc-for list="{{ shellNav }}" as="n" hint-placeholder-count="6">
+                  <div style="font-family: var(--mono); font-size: 11px; color: {{ n.color }}; background: {{ n.bg }}; padding: 5px 7px; border-radius: 3px;">{{ n.k }}</div>
+                </sc-for>
+              </div>
+            </div>
+            <div style="flex: 1; min-width: 0; display: flex; flex-direction: column;">
+              <div style="padding: 12px 14px; border-bottom: 1px solid var(--border-subtle);">
+                <div style="font-size: 13px; font-weight: 600; color: var(--text);">Overview</div>
+                <div style="font-family: var(--mono); font-size: 11px; color: var(--text-faint); margin-top: 3px;">Pitch work, and watch the swarm answer</div>
+              </div>
+              <div style="flex: 1; padding: 14px; display: flex; flex-direction: column; gap: 9px;">
+                <sc-for list="{{ shellRows }}" as="r" hint-placeholder-count="3">
+                  <div style="height: 1px; background: var(--border-subtle);"></div>
+                </sc-for>
+                <div style="font-family: var(--mono); font-size: 11px; color: var(--text-faint); margin-top: auto;">view content</div>
+              </div>
+            </div>
+          </div>
+          <div style="display: flex; align-items: center; height: 30px; background: var(--bg-elevated); border-top: 1px solid var(--border); font-family: var(--mono); font-size: 11px; overflow: hidden; flex-shrink: 0;">
+            <div style="display: flex; align-items: center; gap: 7px; padding: 0 10px; height: 100%; border-right: 1px solid var(--border-subtle);">
+              <i style="width: 6px; height: 6px; background: var(--accent); border: 1px solid var(--accent);"></i>
+              <span style="color: var(--accent);">ok</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 6px; padding: 0 10px; height: 100%; border-right: 1px solid var(--border-subtle); white-space: nowrap;">
+              <i style="width: 5px; height: 5px; background: var(--accent); border: 1px solid var(--accent);"></i>
+              <span style="letter-spacing: 0.1em; color: var(--text-faint);">INFERENCE</span><span style="color: var(--text);">ready</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 6px; padding: 0 10px; height: 100%; border-right: 1px solid var(--border-subtle); white-space: nowrap;">
+              <i style="width: 5px; height: 5px; background: var(--accent); border: 1px solid var(--accent);"></i>
+              <span style="letter-spacing: 0.1em; color: var(--text-faint);">NODES</span><span style="color: var(--text);">3</span>
+            </div>
+            <div style="margin-left: auto; padding: 0 10px; color: var(--text-faint);">as of 4s</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 03 · live rig ═══════════════════════════════════════════════ -->
+  <section style="display: flex; flex-direction: column; gap: 20px;" data-screen-label="03 Live rig">
+    <div style="display: flex; flex-direction: column; gap: 7px;">
+      <div style="display: flex; align-items: baseline; gap: 10px;">
+        <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.16em; color: var(--text-faint);">03</span>
+        <h2 style="font-size: 18px; font-weight: 600; letter-spacing: -0.25px;">The hysteresis, running</h2>
+      </div>
+      <p style="font-size: 12.5px; color: var(--text-muted); line-height: 1.7; max-width: 78ch; text-wrap: pretty;">The failure being fixed is a timing failure, so it cannot be shown in a still. Break the backend and watch the bar refuse to lie: one miss holds, two go hollow, sixty seconds of silence earns words. Each tick below is one 5 s poll.</p>
+    </div>
+
+    <div style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden; background: var(--bg-elevated);">
+      <div style="padding: 9px 11px; border-bottom: 1px solid var(--border-subtle); background: var(--surface-sunken); display: flex; align-items: center; gap: 7px; flex-wrap: wrap;">
+        <sc-for list="{{ scenarios }}" as="sc" hint-placeholder-count="6">
+          <button type="button" onClick="{{ sc.pick }}" style="font-family: var(--mono); font-size: 11px; padding: 7px 10px; min-height: 30px; cursor: pointer; border-radius: 3px; border: 1px solid {{ sc.line }}; background: {{ sc.bg }}; color: {{ sc.fg }};" style-hover="border-color: var(--border-strong);">{{ sc.label }}</button>
+        </sc-for>
+        <span style="margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text-faint);">{{ live.clock }}</span>
+      </div>
+
+      <div style="padding: 16px 14px;">
+        <div style="display: flex; align-items: center; height: 30px; background: var(--bg-elevated); border: 1px solid var(--border); font-family: var(--mono); font-size: 11px; overflow: hidden;">
+          <div style="display: flex; align-items: center; gap: 7px; padding: 0 10px; height: 100%; border-right: 1px solid var(--border-subtle); flex-shrink: 0;">
+            <i style="width: 6px; height: 6px; flex-shrink: 0; background: {{ live.lampFill }}; border: 1px solid {{ live.lampLine }};"></i>
+            <span style="color: {{ live.lampText }};">{{ live.word }}</span>
+          </div>
+          <sc-for list="{{ live.cells }}" as="c" hint-placeholder-count="4">
+            <div style="display: flex; align-items: center; gap: 6px; padding: 0 10px; height: 100%; border-right: 1px solid var(--border-subtle); white-space: nowrap;">
+              <i style="width: 5px; height: 5px; flex-shrink: 0; background: {{ c.dotFill }}; border: 1px solid {{ c.dotLine }};"></i>
+              <span style="letter-spacing: 0.1em; color: var(--text-faint);">{{ c.k }}</span>
+              <span style="color: {{ c.color }};">{{ c.v }}</span>
+            </div>
+          </sc-for>
+          <div style="margin-left: auto; display: flex; align-items: center; padding: 0 10px; height: 100%; border-left: 1px solid var(--border-subtle); white-space: nowrap;">
+            <span style="color: {{ live.ageColor }};">{{ live.age }}</span>
+          </div>
+        </div>
+
+        <sc-if value="{{ live.bannerShown }}" hint-placeholder-val="{{ false }}">
+          <div style="display: flex; gap: 10px; align-items: flex-start; border: 1px solid {{ live.bannerLine }}; background: {{ live.bannerWash }}; border-radius: 4px; padding: 11px 13px; margin-top: 12px;">
+            <span style="width: 7px; height: 7px; background: {{ live.bannerDot }}; flex-shrink: 0; margin-top: 5px;"></span>
+            <div style="min-width: 0;">
+              <div style="font-size: 12.5px; font-weight: 500; color: {{ live.bannerTitleColor }};">{{ live.bannerTitle }}</div>
+              <div style="font-size: 12.5px; color: {{ live.bannerBodyColor }}; line-height: 1.6; margin-top: 3px;">{{ live.bannerBody }}</div>
+            </div>
+          </div>
+        </sc-if>
+
+        <div style="margin-top: 14px; border-top: 1px solid var(--border-subtle); padding-top: 11px;">
+          <div style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">DERIVATION LOG</div>
+          <div style="display: flex; flex-direction: column; gap: 4px; margin-top: 8px;">
+            <sc-for list="{{ live.log }}" as="l" hint-placeholder-count="7">
+              <div style="display: flex; gap: 10px; align-items: baseline; font-family: var(--mono); font-size: 11px;">
+                <span style="color: var(--text-faint); flex-shrink: 0; width: 52px;">{{ l.t }}</span>
+                <span style="color: {{ l.color }}; line-height: 1.55;">{{ l.text }}</span>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 04 · ambient indicator ══════════════════════════════════════ -->
+  <section style="display: flex; flex-direction: column; gap: 20px;" data-screen-label="04 Ambient indicator">
+    <div style="display: flex; flex-direction: column; gap: 7px;">
+      <div style="display: flex; align-items: baseline; gap: 10px;">
+        <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.16em; color: var(--text-faint);">04</span>
+        <h2 style="font-size: 18px; font-weight: 600; letter-spacing: -0.25px;">The ambient indicator</h2>
+      </div>
+      <p style="font-size: 12.5px; color: var(--text-muted); line-height: 1.7; max-width: 78ch; text-wrap: pretty;">The bar collapsed to one lamp, one word, one age — the same derived state, nothing new. It is what the console shows when the bar is collapsed, and the only status surface the public pages get. Clicking it expands the bar.</p>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px;">
+      <div data-theme="dark" style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden; background: var(--bg);">
+        <div style="padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; color: var(--text-faint); background: var(--surface-sunken);">DARK</div>
+        <div style="padding: 14px; display: flex; flex-direction: column; gap: 10px;">
+          <sc-for list="{{ ambientStates }}" as="a" hint-placeholder-count="6">
+            <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+              <div style="display: inline-flex; align-items: center; gap: 8px; height: 28px; padding: 0 11px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--lift); flex-shrink: 0;">
+                <i style="width: 6px; height: 6px; flex-shrink: 0; background: {{ a.fill }}; border: 1px solid {{ a.line }};"></i>
+                <span style="font-family: var(--mono); font-size: 11px; color: {{ a.text }};">{{ a.word }}</span>
+                <span style="font-family: var(--mono); font-size: 11px; color: {{ a.ageColor }};">{{ a.age }}</span>
+              </div>
+              <span style="font-size: 11.5px; color: var(--text-faint); line-height: 1.5; flex: 1; min-width: 150px;">{{ a.note }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+      <div data-theme="light" style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden; background: var(--bg);">
+        <div style="padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; color: var(--text-faint); background: var(--surface-sunken);">LIGHT</div>
+        <div style="padding: 14px; display: flex; flex-direction: column; gap: 10px;">
+          <sc-for list="{{ ambientStates }}" as="a" hint-placeholder-count="6">
+            <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+              <div style="display: inline-flex; align-items: center; gap: 8px; height: 28px; padding: 0 11px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--lift); flex-shrink: 0;">
+                <i style="width: 6px; height: 6px; flex-shrink: 0; background: {{ a.fill }}; border: 1px solid {{ a.line }};"></i>
+                <span style="font-family: var(--mono); font-size: 11px; color: {{ a.text }};">{{ a.word }}</span>
+                <span style="font-family: var(--mono); font-size: 11px; color: {{ a.ageColor }};">{{ a.age }}</span>
+              </div>
+              <span style="font-size: 11.5px; color: var(--text-faint); line-height: 1.5; flex: 1; min-width: 150px;">{{ a.note }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px;">
+      <div style="border: 1px solid var(--border); border-radius: 5px; background: var(--bg-elevated); padding: 14px 15px;">
+        <div style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">PUBLIC VARIANT · 44px</div>
+        <p style="font-size: 12.5px; color: var(--text-dim); line-height: 1.65; margin-top: 8px; text-wrap: pretty;">On the landing, try and status pages the pill is 44px tall and carries the same three parts at the same 11px floor. Most visitors arrive on a phone, and this is the only tappable thing in the corner.</p>
+        <div style="margin-top: 12px; display: flex; gap: 10px; flex-wrap: wrap;">
+          <div style="display: inline-flex; align-items: center; gap: 9px; height: 44px; padding: 0 15px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 22px; box-shadow: var(--lift);">
+            <i style="width: 7px; height: 7px; background: var(--accent); border: 1px solid var(--accent);"></i>
+            <span style="font-family: var(--mono); font-size: 11px; color: var(--accent);">ok</span>
+            <span style="font-family: var(--mono); font-size: 11px; color: var(--text-faint);">as of 4s</span>
+          </div>
+          <div data-theme="light" style="display: inline-flex; align-items: center; gap: 9px; height: 44px; padding: 0 15px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 22px; box-shadow: var(--lift);">
+            <i style="width: 7px; height: 7px; background: transparent; border: 1px solid var(--text-faint);"></i>
+            <span style="font-family: var(--mono); font-size: 11px; color: var(--text-muted);">no answer</span>
+            <span style="font-family: var(--mono); font-size: 11px; color: var(--warn-text);">42s</span>
+          </div>
+        </div>
+      </div>
+      <div style="border: 1px solid var(--border); border-radius: 5px; background: var(--bg-elevated); padding: 14px 15px;">
+        <div style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">CORNER</div>
+        <p style="font-size: 12.5px; color: var(--text-dim); line-height: 1.65; margin-top: 8px; text-wrap: pretty;">The pill sits in the corner opposite the primary action so it never covers one. In the console that is the bar's own left end; on the public pages it is the corner set below.</p>
+        <div style="margin-top: 12px; border: 1px solid var(--border-subtle); border-radius: 4px; background: var(--surface-sunken); height: 92px; padding: 9px; display: flex; flex-direction: column;">
+          <div style="font-family: var(--mono); font-size: 11px; color: var(--text-faint);">public page</div>
+          <sc-if value="{{ cornerLeft }}" hint-placeholder-val="{{ true }}">
+            <div style="margin-top: auto; display: flex; justify-content: flex-start;">
+              <div style="display: inline-flex; align-items: center; gap: 8px; height: 28px; padding: 0 11px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 14px;">
+                <i style="width: 6px; height: 6px; background: var(--accent); border: 1px solid var(--accent);"></i>
+                <span style="font-family: var(--mono); font-size: 11px; color: var(--accent);">ok</span>
+              </div>
+            </div>
+          </sc-if>
+          <sc-if value="{{ cornerRight }}" hint-placeholder-val="{{ false }}">
+            <div style="margin-top: auto; display: flex; justify-content: flex-end;">
+              <div style="display: inline-flex; align-items: center; gap: 8px; height: 28px; padding: 0 11px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 14px;">
+                <i style="width: 6px; height: 6px; background: var(--accent); border: 1px solid var(--accent);"></i>
+                <span style="font-family: var(--mono); font-size: 11px; color: var(--accent);">ok</span>
+              </div>
+            </div>
+          </sc-if>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 05 · banners ════════════════════════════════════════════════ -->
+  <section style="display: flex; flex-direction: column; gap: 20px;" data-screen-label="05 Banners">
+    <div style="display: flex; flex-direction: column; gap: 7px;">
+      <div style="display: flex; align-items: baseline; gap: 10px;">
+        <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.16em; color: var(--text-faint);">05</span>
+        <h2 style="font-size: 18px; font-weight: 600; letter-spacing: -0.25px;">The four states that earn words</h2>
+      </div>
+      <p style="font-size: 12.5px; color: var(--text-muted); line-height: 1.7; max-width: 78ch; text-wrap: pretty;">A banner is spent, not decoration: it appears only when the reader's next action will fail, or when something is true that they cannot infer from a lamp. Everything else is the bar's job. A banner that fires on a single dropped poll is a banner nobody reads by the second week.</p>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 14px;">
+      <div data-theme="dark" style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden; background: var(--bg);">
+        <div style="padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; color: var(--text-faint); background: var(--surface-sunken);">DARK</div>
+        <div style="padding: 13px; display: flex; flex-direction: column; gap: 13px;">
+          <sc-for list="{{ banners }}" as="b" hint-placeholder-count="4">
+            <div>
+              <div style="display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 7px;">
+                <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; color: var(--text-faint);">{{ b.trigger }}</span>
+                <span style="font-family: var(--mono); font-size: 11px; color: var(--text-faint);">{{ b.scope }}</span>
+              </div>
+              <div style="display: flex; gap: 10px; align-items: flex-start; border: 1px solid {{ b.line }}; background: {{ b.wash }}; border-radius: 4px; padding: 11px 13px;">
+                <span style="width: 7px; height: 7px; background: {{ b.dot }}; flex-shrink: 0; margin-top: 5px;"></span>
+                <div style="min-width: 0;">
+                  <div style="font-size: 12.5px; font-weight: 500; color: {{ b.titleColor }}; line-height: 1.5;">{{ b.title }}</div>
+                  <div style="font-size: 12.5px; color: {{ b.bodyColor }}; line-height: 1.6; margin-top: 4px;">{{ b.body }}</div>
+                </div>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+      <div data-theme="light" style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden; background: var(--bg);">
+        <div style="padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; color: var(--text-faint); background: var(--surface-sunken);">LIGHT</div>
+        <div style="padding: 13px; display: flex; flex-direction: column; gap: 13px;">
+          <sc-for list="{{ banners }}" as="b" hint-placeholder-count="4">
+            <div>
+              <div style="display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 7px;">
+                <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; color: var(--text-faint);">{{ b.trigger }}</span>
+                <span style="font-family: var(--mono); font-size: 11px; color: var(--text-faint);">{{ b.scope }}</span>
+              </div>
+              <div style="display: flex; gap: 10px; align-items: flex-start; border: 1px solid {{ b.line }}; background: {{ b.wash }}; border-radius: 4px; padding: 11px 13px;">
+                <span style="width: 7px; height: 7px; background: {{ b.dot }}; flex-shrink: 0; margin-top: 5px;"></span>
+                <div style="min-width: 0;">
+                  <div style="font-size: 12.5px; font-weight: 500; color: {{ b.titleColor }}; line-height: 1.5;">{{ b.title }}</div>
+                  <div style="font-size: 12.5px; color: {{ b.bodyColor }}; line-height: 1.6; margin-top: 4px;">{{ b.body }}</div>
+                </div>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+
+    <div style="border: 1px solid var(--border); border-radius: 5px; background: var(--bg-elevated); padding: 14px 15px;">
+      <div style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">NO BANNER, ON PURPOSE</div>
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin-top: 10px;">
+        <sc-for list="{{ noBanner }}" as="n" hint-placeholder-count="3">
+          <div style="display: flex; gap: 9px; align-items: flex-start;">
+            <span style="width: 5px; height: 5px; background: var(--border-strong); flex-shrink: 0; margin-top: 6px;"></span>
+            <p style="font-size: 12.5px; color: var(--text-dim); line-height: 1.65; text-wrap: pretty;"><span style="font-family: var(--mono); font-size: 12px; color: var(--text);">{{ n.k }}</span> — {{ n.v }}</p>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 06 · work card ══════════════════════════════════════════════ -->
+  <section style="display: flex; flex-direction: column; gap: 20px;" data-screen-label="06 Work card">
+    <div style="display: flex; flex-direction: column; gap: 7px;">
+      <div style="display: flex; align-items: baseline; gap: 10px;">
+        <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.16em; color: var(--text-faint);">06</span>
+        <h2 style="font-size: 18px; font-weight: 600; letter-spacing: -0.25px;">The work card</h2>
+      </div>
+      <p style="font-size: 12.5px; color: var(--text-muted); line-height: 1.7; max-width: 78ch; text-wrap: pretty;">Title, status chip, hardware badge, age — four parts, one row of metadata, no preview image. Cards stack full width in one column rather than tiling: one run is usually active, and a grid of nine mostly-idle tiles would be nine tiles of nothing. Gallery adds the code line; Projects replaces the age with the iteration chain.</p>
+    </div>
+
+    <div style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden; background: var(--bg-elevated);">
+      <div style="padding: 10px 13px; border-bottom: 1px solid var(--border-subtle); background: var(--surface-sunken); font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">ANATOMY</div>
+      <div style="padding: 16px 14px; display: flex; flex-direction: column; gap: 14px;">
+        <div style="display: flex; flex-direction: column; gap: 9px; background: var(--surface); border: 1px solid var(--border); border-radius: 5px; padding: 13px 14px; max-width: 620px;">
+          <div style="display: flex; align-items: flex-start; gap: 12px;">
+            <span style="font-size: 13px; font-weight: 500; color: var(--text); line-height: 1.45; flex: 1; min-width: 0; text-wrap: pretty;">Add a --since flag so the summary can cover a date range</span>
+            <span style="display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em; color: var(--accent); background: var(--accent-wash); border: 1px solid var(--accent-dim); border-radius: 3px; padding: 3px 7px; flex-shrink: 0;">
+              <i style="width: 5px; height: 5px; background: var(--accent);"></i>PASS
+            </span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 9px; flex-wrap: wrap; font-family: var(--mono); font-size: 11px;">
+            <span style="color: var(--text-dim); border: 1px solid var(--border); border-radius: 3px; padding: 2px 7px;">8 CPU · 16 GB · Apple M2</span>
+            <span style="color: var(--text-faint);">4 units</span>
+            <span style="color: var(--text-faint);">·</span>
+            <span style="color: var(--text-faint);">2h 14m ago</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px; border-top: 1px solid var(--border-subtle); padding-top: 9px; font-family: var(--mono); font-size: 11px; color: var(--text-muted); min-width: 0;">
+            <span style="color: var(--text-faint); flex-shrink: 0;">code</span>
+            <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">summary.py · cli.py · test_summary.py</span>
+          </div>
+        </div>
+        <div style="display: flex; flex-wrap: wrap; gap: 0 22px;">
+          <sc-for list="{{ cardNotes }}" as="c" hint-placeholder-count="5">
+            <div style="display: flex; gap: 8px; align-items: flex-start; padding: 5px 0; max-width: 36ch;">
+              <span style="font-family: var(--mono); font-size: 11px; color: var(--text-faint); flex-shrink: 0;">{{ c.n }}</span>
+              <p style="font-size: 12px; color: var(--text-dim); line-height: 1.6; text-wrap: pretty;">{{ c.v }}</p>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+
+    <div style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden;">
+      <div style="padding: 10px 13px; border-bottom: 1px solid var(--border-subtle); background: var(--surface-sunken); display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;">
+        <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">CHIP VOCABULARY</span>
+        <span style="font-size: 12px; color: var(--text-muted);">Five values, and no sixth. Never a percentage, never a score.</span>
+      </div>
+      <div style="display: grid; grid-template-columns: 128px minmax(0, 1fr) minmax(0, 1.1fr); gap: 1px; background: var(--border-subtle);">
+        <sc-for list="{{ chipRows }}" as="c" hint-placeholder-count="5">
+          <div style="background: var(--bg-elevated); padding: 11px 13px;">
+            <span style="display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em; color: {{ c.fg }}; background: {{ c.wash }}; border: 1px solid {{ c.line }}; border-radius: 3px; padding: 3px 7px;">
+              <i style="width: 5px; height: 5px; background: {{ c.dot }};"></i>{{ c.chip }}
+            </span>
+          </div>
+          <div style="background: var(--bg-elevated); padding: 11px 13px; font-family: var(--mono); font-size: 11px; color: var(--text-dim); line-height: 1.55;">{{ c.field }}</div>
+          <div style="background: var(--bg-elevated); padding: 11px 13px; font-size: 12.5px; color: var(--text-muted); line-height: 1.6;">{{ c.means }}</div>
+        </sc-for>
+      </div>
+    </div>
+
+    <div style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden;">
+      <div style="padding: 10px 13px; border-bottom: 1px solid var(--border-subtle); background: var(--surface-sunken); display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;">
+        <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">HARDWARE BADGE · THREE SOURCES</span>
+        <span style="font-size: 12px; color: var(--text-muted);">The badge degrades. It does not guess.</span>
+      </div>
+      <div style="display: grid; grid-template-columns: minmax(0, 1fr); gap: 1px; background: var(--border-subtle);">
+        <sc-for list="{{ badgeRows }}" as="b" hint-placeholder-count="3">
+          <div style="background: var(--bg-elevated); padding: 12px 13px; display: flex; gap: 13px; align-items: flex-start; flex-wrap: wrap;">
+            <span style="font-family: var(--mono); font-size: 11px; color: {{ b.color }}; border: 1px solid {{ b.line }}; border-radius: 3px; padding: 3px 8px; flex-shrink: 0;">{{ b.badge }}</span>
+            <div style="flex: 1; min-width: 240px;">
+              <div style="font-size: 12.5px; color: var(--text); font-weight: 500;">{{ b.when }}</div>
+              <p style="font-size: 12.5px; color: var(--text-muted); line-height: 1.6; margin-top: 3px; text-wrap: pretty;">{{ b.why }}</p>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 14px;">
+      <div data-theme="dark" style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden; background: var(--bg);">
+        <div style="padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; color: var(--text-faint); background: var(--surface-sunken);">GALLERY · DARK</div>
+        <div style="padding: 13px; display: flex; flex-direction: column; gap: 9px;">
+          <sc-for list="{{ galleryCards }}" as="g" hint-placeholder-count="4">
+            <div style="display: flex; flex-direction: column; gap: 9px; background: var(--surface); border: 1px solid var(--border); border-radius: 5px; padding: 12px 13px;" style-hover="border-color: var(--border-strong); background: var(--surface-hover);">
+              <div style="display: flex; align-items: flex-start; gap: 11px;">
+                <span style="font-size: 13px; font-weight: 500; color: var(--text); line-height: 1.45; flex: 1; min-width: 0; text-wrap: pretty;">{{ g.title }}</span>
+                <span style="display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em; color: {{ g.chipFg }}; background: {{ g.chipWash }}; border: 1px solid {{ g.chipLine }}; border-radius: 3px; padding: 3px 7px; flex-shrink: 0;">
+                  <i style="width: 5px; height: 5px; background: {{ g.chipDot }};"></i>{{ g.chip }}
+                </span>
+              </div>
+              <div style="display: flex; align-items: center; gap: 9px; flex-wrap: wrap; font-family: var(--mono); font-size: 11px;">
+                <span style="color: {{ g.badgeColor }}; border: 1px solid {{ g.badgeLine }}; border-radius: 3px; padding: 2px 7px;">{{ g.badge }}</span>
+                <span style="color: var(--text-faint);">{{ g.units }}</span>
+                <span style="color: var(--text-faint);">·</span>
+                <span style="color: var(--text-faint);">{{ g.age }}</span>
+              </div>
+              <div style="display: flex; align-items: center; gap: 8px; border-top: 1px solid var(--border-subtle); padding-top: 9px; font-family: var(--mono); font-size: 11px; min-width: 0;">
+                <span style="color: var(--text-faint); flex-shrink: 0;">{{ g.artifactKind }}</span>
+                <span style="color: {{ g.artifactColor }}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ g.artifact }}</span>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+      <div data-theme="light" style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden; background: var(--bg);">
+        <div style="padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; color: var(--text-faint); background: var(--surface-sunken);">GALLERY · LIGHT</div>
+        <div style="padding: 13px; display: flex; flex-direction: column; gap: 9px;">
+          <sc-for list="{{ galleryCards }}" as="g" hint-placeholder-count="4">
+            <div style="display: flex; flex-direction: column; gap: 9px; background: var(--surface); border: 1px solid var(--border); border-radius: 5px; padding: 12px 13px;" style-hover="border-color: var(--border-strong); background: var(--surface-hover);">
+              <div style="display: flex; align-items: flex-start; gap: 11px;">
+                <span style="font-size: 13px; font-weight: 500; color: var(--text); line-height: 1.45; flex: 1; min-width: 0; text-wrap: pretty;">{{ g.title }}</span>
+                <span style="display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em; color: {{ g.chipFg }}; background: {{ g.chipWash }}; border: 1px solid {{ g.chipLine }}; border-radius: 3px; padding: 3px 7px; flex-shrink: 0;">
+                  <i style="width: 5px; height: 5px; background: {{ g.chipDot }};"></i>{{ g.chip }}
+                </span>
+              </div>
+              <div style="display: flex; align-items: center; gap: 9px; flex-wrap: wrap; font-family: var(--mono); font-size: 11px;">
+                <span style="color: {{ g.badgeColor }}; border: 1px solid {{ g.badgeLine }}; border-radius: 3px; padding: 2px 7px;">{{ g.badge }}</span>
+                <span style="color: var(--text-faint);">{{ g.units }}</span>
+                <span style="color: var(--text-faint);">·</span>
+                <span style="color: var(--text-faint);">{{ g.age }}</span>
+              </div>
+              <div style="display: flex; align-items: center; gap: 8px; border-top: 1px solid var(--border-subtle); padding-top: 9px; font-family: var(--mono); font-size: 11px; min-width: 0;">
+                <span style="color: var(--text-faint); flex-shrink: 0;">{{ g.artifactKind }}</span>
+                <span style="color: {{ g.artifactColor }}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ g.artifact }}</span>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 14px;">
+      <div data-theme="dark" style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden; background: var(--bg);">
+        <div style="padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; color: var(--text-faint); background: var(--surface-sunken);">PROJECTS · DARK</div>
+        <div style="padding: 13px; display: flex; flex-direction: column; gap: 9px;">
+          <sc-for list="{{ projectCards }}" as="p" hint-placeholder-count="3">
+            <div style="display: flex; flex-direction: column; gap: 9px; background: var(--surface); border: 1px solid var(--border); border-radius: 5px; padding: 12px 13px;" style-hover="border-color: var(--border-strong); background: var(--surface-hover);">
+              <div style="display: flex; align-items: flex-start; gap: 11px;">
+                <span style="font-size: 13px; font-weight: 500; color: var(--text); line-height: 1.45; flex: 1; min-width: 0; text-wrap: pretty;">{{ p.title }}</span>
+                <span style="display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em; color: {{ p.chipFg }}; background: {{ p.chipWash }}; border: 1px solid {{ p.chipLine }}; border-radius: 3px; padding: 3px 7px; flex-shrink: 0;">
+                  <i style="width: 5px; height: 5px; background: {{ p.chipDot }};"></i>{{ p.chip }}
+                </span>
+              </div>
+              <div style="display: flex; align-items: center; gap: 9px; flex-wrap: wrap; font-family: var(--mono); font-size: 11px;">
+                <span style="color: {{ p.badgeColor }}; border: 1px solid {{ p.badgeLine }}; border-radius: 3px; padding: 2px 7px;">{{ p.badge }}</span>
+                <span style="color: var(--text-faint);">{{ p.age }}</span>
+              </div>
+              <div style="display: flex; align-items: center; gap: 6px; border-top: 1px solid var(--border-subtle); padding-top: 10px; flex-wrap: wrap;">
+                <sc-for list="{{ p.chain }}" as="i" hint-placeholder-count="4">
+                  <span style="display: inline-flex; align-items: center; gap: 5px; font-family: var(--mono); font-size: 11px; color: {{ i.color }};">
+                    <i style="width: 6px; height: 6px; background: {{ i.fill }}; border: 1px solid {{ i.line }};"></i>{{ i.n }}
+                  </span>
+                </sc-for>
+                <span style="font-family: var(--mono); font-size: 11px; color: var(--text-faint); margin-left: 4px;">{{ p.chainNote }}</span>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+      <div data-theme="light" style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden; background: var(--bg);">
+        <div style="padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; color: var(--text-faint); background: var(--surface-sunken);">PROJECTS · LIGHT</div>
+        <div style="padding: 13px; display: flex; flex-direction: column; gap: 9px;">
+          <sc-for list="{{ projectCards }}" as="p" hint-placeholder-count="3">
+            <div style="display: flex; flex-direction: column; gap: 9px; background: var(--surface); border: 1px solid var(--border); border-radius: 5px; padding: 12px 13px;" style-hover="border-color: var(--border-strong); background: var(--surface-hover);">
+              <div style="display: flex; align-items: flex-start; gap: 11px;">
+                <span style="font-size: 13px; font-weight: 500; color: var(--text); line-height: 1.45; flex: 1; min-width: 0; text-wrap: pretty;">{{ p.title }}</span>
+                <span style="display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em; color: {{ p.chipFg }}; background: {{ p.chipWash }}; border: 1px solid {{ p.chipLine }}; border-radius: 3px; padding: 3px 7px; flex-shrink: 0;">
+                  <i style="width: 5px; height: 5px; background: {{ p.chipDot }};"></i>{{ p.chip }}
+                </span>
+              </div>
+              <div style="display: flex; align-items: center; gap: 9px; flex-wrap: wrap; font-family: var(--mono); font-size: 11px;">
+                <span style="color: {{ p.badgeColor }}; border: 1px solid {{ p.badgeLine }}; border-radius: 3px; padding: 2px 7px;">{{ p.badge }}</span>
+                <span style="color: var(--text-faint);">{{ p.age }}</span>
+              </div>
+              <div style="display: flex; align-items: center; gap: 6px; border-top: 1px solid var(--border-subtle); padding-top: 10px; flex-wrap: wrap;">
+                <sc-for list="{{ p.chain }}" as="i" hint-placeholder-count="4">
+                  <span style="display: inline-flex; align-items: center; gap: 5px; font-family: var(--mono); font-size: 11px; color: {{ i.color }};">
+                    <i style="width: 6px; height: 6px; background: {{ i.fill }}; border: 1px solid {{ i.line }};"></i>{{ i.n }}
+                  </span>
+                </sc-for>
+                <span style="font-family: var(--mono); font-size: 11px; color: var(--text-faint); margin-left: 4px;">{{ p.chainNote }}</span>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 07 · port notes ═════════════════════════════════════════════ -->
+  <sc-if value="{{ showNotes }}" hint-placeholder-val="{{ true }}">
+  <section style="display: flex; flex-direction: column; gap: 20px;" data-screen-label="07 Port notes">
+    <div style="display: flex; flex-direction: column; gap: 7px;">
+      <div style="display: flex; align-items: baseline; gap: 10px;">
+        <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.16em; color: var(--text-faint);">07</span>
+        <h2 style="font-size: 18px; font-weight: 600; letter-spacing: -0.25px;">Where every value comes from</h2>
+      </div>
+      <p style="font-size: 12.5px; color: var(--text-muted); line-height: 1.7; max-width: 78ch; text-wrap: pretty;">Audited against master. Anything with no endpoint is listed under it as a gap with two options — extend the endpoint or drop the element. Nothing on this page is a number someone made up.</p>
+    </div>
+
+    <div style="border: 1px solid var(--border); border-radius: 5px; overflow: hidden;">
+      <div style="display: grid; grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr) minmax(0, 1.15fr); gap: 1px; background: var(--border-subtle);">
+        <div style="background: var(--surface-sunken); padding: 9px 12px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">ON SCREEN</div>
+        <div style="background: var(--surface-sunken); padding: 9px 12px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">SERVED BY</div>
+        <div style="background: var(--surface-sunken); padding: 9px 12px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">NOTE</div>
+        <sc-for list="{{ endpointRows }}" as="e" hint-placeholder-count="11">
+          <div style="background: var(--bg-elevated); padding: 10px 12px; font-size: 12.5px; color: var(--text); line-height: 1.5;">{{ e.what }}</div>
+          <div style="background: var(--bg-elevated); padding: 10px 12px; font-family: var(--mono); font-size: 11px; color: {{ e.srcColor }}; line-height: 1.55;">{{ e.src }}</div>
+          <div style="background: var(--bg-elevated); padding: 10px 12px; font-size: 12px; color: var(--text-muted); line-height: 1.6;">{{ e.note }}</div>
+        </sc-for>
+      </div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px;">
+      <sc-for list="{{ gapCards }}" as="g" hint-placeholder-count="4">
+        <div style="border: 1px solid var(--warn-line); border-radius: 5px; background: var(--warn-wash); padding: 14px 15px;">
+          <div style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--warn-text);">{{ g.tag }}</div>
+          <div style="font-size: 12.5px; font-weight: 500; color: var(--warn-text); margin-top: 7px; line-height: 1.5;">{{ g.title }}</div>
+          <p style="font-size: 12.5px; color: var(--warn-body); line-height: 1.65; margin-top: 5px; text-wrap: pretty;">{{ g.body }}</p>
+        </div>
+      </sc-for>
+    </div>
+
+    <div style="border: 1px solid var(--border); border-radius: 5px; background: var(--bg-elevated); padding: 14px 15px;">
+      <div style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">CONSTRAINTS THIS PAGE HOLDS ITSELF TO</div>
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 11px; margin-top: 10px;">
+        <sc-for list="{{ constraintRows }}" as="c" hint-placeholder-count="6">
+          <div style="display: flex; gap: 9px; align-items: flex-start;">
+            <i style="width: 5px; height: 5px; background: var(--accent); flex-shrink: 0; margin-top: 6px;"></i>
+            <p style="font-size: 12px; color: var(--text-dim); line-height: 1.6; text-wrap: pretty;">{{ c.v }}</p>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+  </section>
+  </sc-if>
+
+</div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;demoPollSeconds&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:1,&quot;min&quot;:1,&quot;max&quot;:5,&quot;unit&quot;:&quot;s&quot;,&quot;tsType&quot;:&quot;number&quot;,&quot;section&quot;:&quot;Live rig&quot;},&quot;showPortNotes&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Spec&quot;},&quot;ambientCorner&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;bottom-left&quot;,&quot;bottom-right&quot;],&quot;default&quot;:&quot;bottom-left&quot;,&quot;tsType&quot;:&quot;'bottom-left' | 'bottom-right'&quot;,&quot;section&quot;:&quot;Ambient indicator&quot;}}">
+const OK = 'var(--accent)';
+const WARN = 'var(--warn)';
+const BAD = 'var(--danger)';
+const TXT = 'var(--text)';
+const DIM = 'var(--text-dim)';
+const MUTED = 'var(--text-muted)';
+const FAINT = 'var(--text-faint)';
+const IDLE = 'var(--border-strong)';
+const HOLLOW = 'transparent';
+
+// Shipped intervals and dwell, in the units the port will use. The rig below
+// ticks once per second and calls that one 5 s poll, so a 15 s threshold is
+// three ticks — the thresholds are real, the wall clock is compressed.
+const POLL_SEC = 5;
+const CONFIRM_BAD = 2;    // polls of a probe saying no
+const CONFIRM_GOOD = 2;   // polls of yes before green returns
+const MISS_LIMIT = 2;     // polls with no answer before hollow
+const SILENT_SEC = 15;    // or this long since the last answer
+const BANNER_SEC = 60;    // silence that earns words
+
+// What each scenario's transport does on a given poll. `null` is no answer at
+// all — the case the four existing indicators cannot distinguish from a
+// healthy one, because none of them look at the poll, only at its payload.
+const TRANSPORT = {
+  healthy:  () => ({}),
+  dead:     () => null,
+  flapping: (n) => (n % 2 === 0 ? null : {}),
+  offline:  () => ({ inference: 'probe_no' }),
+  nocommit: () => ({ commit: 'stated_no' }),
+  failopen: () => ({ gate: 'stated_no' }),
+};
+
+const SCENARIO_LABELS = [
+  ['healthy', 'coordinator healthy'],
+  ['dead', 'backend dies'],
+  ['flapping', 'flapping link'],
+  ['offline', 'inference offline'],
+  ['nocommit', 'commit unavailable'],
+  ['failopen', 'no viewer key'],
+];
+
+const freshFacet = () => ({ v: 'good', good: 0, bad: 0, miss: 0, lastGood: 0, recovering: false });
+
+class Component extends DCLogic {
+  state = {
+    mode: 'healthy',
+    poll: 0,
+    facets: { link: freshFacet(), inference: freshFacet(), commit: freshFacet(), gate: freshFacet() },
+    log: [{ t: 't+0', text: 'first answer accepted — lamp filled, age 0s', color: OK }],
+  };
+
+  componentDidMount() {
+    const every = Math.max(1, Number(this.props.demoPollSeconds ?? 1)) * 1000;
+    this.timer = setInterval(() => this.tick(), every);
+  }
+
+  componentWillUnmount() { clearInterval(this.timer); }
+
+  // One poll. `verdict` per facet: good | probe_no (needs confirming) |
+  // stated_no (the server said so, believe it at once) | miss (no answer).
+  tick() {
+    this.setState((s) => {
+      const poll = s.poll + 1;
+      const reading = TRANSPORT[s.mode](poll);
+      const facets = {};
+      const notes = [];
+
+      const step = (key, verdict) => {
+        const f = { ...s.facets[key] };
+        f.recovering = false;
+        if (verdict === 'miss') {
+          f.miss += 1; f.good = 0; f.bad = 0;
+          const silentFor = (poll - f.lastGood) * POLL_SEC;
+          if (f.v !== 'unknown' && (f.miss >= MISS_LIMIT || silentFor >= SILENT_SEC)) {
+            f.v = 'unknown';
+            if (key === 'link') notes.push({ text: 'no answer for ' + silentFor + 's — every served fact is now not-heard-back, not bad', color: MUTED });
+          } else if (f.v !== 'unknown' && key === 'link') {
+            notes.push({ text: 'no answer (miss ' + f.miss + ' of ' + MISS_LIMIT + ') — values held, lamp unchanged', color: WARN });
+          }
+          return (facets[key] = f);
+        }
+        f.miss = 0;
+        if (verdict === 'good') {
+          f.bad = 0; f.good += 1; f.lastGood = poll;
+          if (f.v !== 'good') {
+            if (f.good >= CONFIRM_GOOD) {
+              f.v = 'good';
+              notes.push({ text: key + ' back for ' + CONFIRM_GOOD + ' polls — cleared', color: OK });
+            } else {
+              f.recovering = true;
+              notes.push({ text: key + ' answered once — recovering, not green yet', color: WARN });
+            }
+          }
+          return (facets[key] = f);
+        }
+        f.good = 0; f.bad += 1;
+        if (verdict === 'stated_no') {
+          if (f.v !== 'bad') notes.push({ text: key + ' refused in the payload — believed on the first poll', color: BAD });
+          f.v = 'bad';
+        } else if (f.bad >= CONFIRM_BAD) {
+          if (f.v !== 'bad') notes.push({ text: key + ' probe said no ' + f.bad + 'x — confirmed bad', color: BAD });
+          f.v = 'bad';
+        } else {
+          notes.push({ text: key + ' probe said no once — holding, a probe can time out', color: WARN });
+        }
+        return (facets[key] = f);
+      };
+
+      if (reading === null) {
+        // The dependency rule: a silent coordinator reports on nothing.
+        ['link', 'inference', 'commit', 'gate'].forEach((k) => step(k, 'miss'));
+      } else {
+        step('link', 'good');
+        step('inference', reading.inference || 'good');
+        step('commit', reading.commit || 'good');
+        step('gate', reading.gate || 'good');
+      }
+
+      const log = notes.length
+        ? [...s.log, ...notes.map((n) => ({ t: 't+' + poll * POLL_SEC + 's', ...n }))].slice(-7)
+        : s.log;
+      return { poll, facets, log };
+    });
+  }
+
+  pick(mode) {
+    return () => this.setState({
+      mode,
+      poll: 0,
+      facets: { link: freshFacet(), inference: freshFacet(), commit: freshFacet(), gate: freshFacet() },
+      log: [{ t: 't+0s', text: 'reset · ' + mode, color: FAINT }],
+    });
+  }
+
+  // ── derivation: facets -> one severity. Worst wins, and the word is the
+  // condition's own name. "degraded" is never shown; it says nothing.
+  severity(f) {
+    if (f.gate.v === 'bad') return { word: 'unprotected', fill: BAD, line: BAD, text: 'var(--danger-text)' };
+    if (f.commit.v === 'bad') return { word: 'not committing', fill: BAD, line: BAD, text: 'var(--danger-text)' };
+    if (f.inference.v === 'bad') return { word: 'inference offline', fill: WARN, line: WARN, text: 'var(--warn-text)' };
+    if (Object.values(f).some((x) => x.v === 'unknown')) return { word: 'no answer', fill: HOLLOW, line: FAINT, text: MUTED };
+    if (Object.values(f).some((x) => x.recovering)) return { word: 'recovering', fill: WARN, line: WARN, text: 'var(--warn-text)' };
+    return { word: 'ok', fill: OK, line: OK, text: OK };
+  }
+
+  renderVals() {
+    const f = this.state.facets;
+    const sev = this.severity(f);
+    const silentFor = (this.state.poll - f.link.lastGood) * POLL_SEC;
+    const unheard = f.link.v === 'unknown';
+    const dot = (state) => {
+      if (state === 'unknown') return { dotFill: HOLLOW, dotLine: FAINT };
+      if (state === 'bad') return { dotFill: BAD, dotLine: BAD };
+      return { dotFill: OK, dotLine: OK };
+    };
+    const cell = (k, v, state, color) => ({ k, v, color: state === 'unknown' ? FAINT : (color || TXT), ...dot(state) });
+
+    const liveCells = [
+      cell('INFERENCE', f.inference.v === 'bad' ? 'offline · qwen3.5:4b' : 'ready · qwen3.5:4b',
+        unheard ? 'unknown' : (f.inference.v === 'bad' ? 'bad' : 'good'),
+        f.inference.v === 'bad' ? 'var(--danger-text)' : TXT),
+      cell('NODES', '3', unheard ? 'unknown' : 'good'),
+      cell('RUNNING', '1', unheard ? 'unknown' : 'good'),
+      cell('QUEUED', '0', unheard ? 'unknown' : 'good', MUTED),
+    ];
+
+    const bannerFor = () => {
+      if (f.gate.v === 'bad') return {
+        bannerShown: true, bannerLine: 'var(--danger-line)', bannerWash: 'var(--danger-wash)', bannerDot: BAD,
+        bannerTitleColor: 'var(--danger-text)', bannerBodyColor: 'var(--danger-body)',
+        bannerTitle: 'Anyone who can reach this address can read runs, machines and projects',
+        bannerBody: 'No viewer key is set, so the gate is letting every request through. Set viewer_key and restart before this host is reachable by anyone else.',
+      };
+      if (f.commit.v === 'bad') return {
+        bannerShown: true, bannerLine: 'var(--danger-line)', bannerWash: 'var(--danger-wash)', bannerDot: BAD,
+        bannerTitleColor: 'var(--danger-text)', bannerBodyColor: 'var(--danger-body)',
+        bannerTitle: 'Finished work cannot be written down right now',
+        bannerBody: 'A run counts once it is recorded, so nothing will be published until this clears. Work already recorded is unaffected.',
+      };
+      if (f.inference.v === 'bad') return {
+        bannerShown: true, bannerLine: 'var(--warn-line)', bannerWash: 'var(--warn-wash)', bannerDot: BAD,
+        bannerTitleColor: 'var(--warn-text)', bannerBodyColor: 'var(--warn-body)',
+        bannerTitle: 'Ollama is not reachable — nothing can be built right now',
+        bannerBody: 'Start it with ollama serve and this clears on its own. Connected machines stay registered and pick work up again.',
+      };
+      if (unheard && silentFor >= BANNER_SEC) return {
+        bannerShown: true, bannerLine: 'var(--border-strong)', bannerWash: 'var(--surface)', bannerDot: FAINT,
+        bannerTitleColor: TXT, bannerBodyColor: MUTED,
+        bannerTitle: 'No answer from the coordinator for ' + silentFor + 's',
+        bannerBody: 'Every count below is the last one it gave. Nothing here is current, and nothing here is a claim that the swarm is idle.',
+      };
+      return { bannerShown: false };
+    };
+
+    return {
+      showNotes: this.props.showPortNotes ?? true,
+      cornerLeft: (this.props.ambientCorner ?? 'bottom-left') === 'bottom-left',
+      cornerRight: (this.props.ambientCorner ?? 'bottom-left') === 'bottom-right',
+
+      headerFacts: [
+        { k: 'AUDITED AGAINST', v: 'master · docs/design/HANDOFF-DELTA.md is the normative contract' },
+        { k: 'REPLACES', v: 'four independently-derived indicators with one poller and one derivation' },
+        { k: 'NEVER RENDERS', v: 'a quality percentage, agreement as correctness, evidence as routing' },
+        { k: 'HOLDS', v: 'tokens only · 11px floor · 44px targets on public pages' },
+      ],
+
+      facetRows: [
+        { key: 'link', good: 'up', bad: 'refused', badTone: BAD, badText: 'var(--danger-text)', unknown: 'silent', src: 'the poll itself — a status code, or nothing' },
+        { key: 'inference', good: 'ready', bad: 'offline', badTone: BAD, badText: 'var(--danger-text)', unknown: 'unheard', src: 'GET /health · ollama: connected | unavailable' },
+        { key: 'commit', good: 'durable', bad: 'unavailable', badTone: BAD, badText: 'var(--danger-text)', unknown: 'unheard', src: '503 execution_persistence_unavailable on a write' },
+        { key: 'gate', good: 'protected', bad: 'open', badTone: BAD, badText: 'var(--danger-text)', unknown: 'unheard', src: 'GET /health · private_routes_protected' },
+      ],
+
+      hystRows: [
+        { change: 'good → bad', cond: 'Two consecutive polls of a probe saying no — a probe has a 5 s timeout and one miss is not an outage.', dwell: '10s', dwellColor: WARN },
+        { change: 'good → bad', cond: 'One poll, when the payload states it: private_routes_protected false, or a 503 from a write. A statement about configuration needs no second opinion.', dwell: 'at once', dwellColor: BAD },
+        { change: 'good → unknown', cond: 'Two consecutive misses, or 15 s since the last answer, whichever comes first.', dwell: '10–15s', dwellColor: MUTED },
+        { change: 'bad → good', cond: 'Two consecutive good polls. One good poll after a bad one reads recovering, never green.', dwell: '10s', dwellColor: OK },
+        { change: 'unknown → words', cond: 'Sixty seconds with no answer. Before that the lamp and the age say it without a banner.', dwell: '60s', dwellColor: MUTED },
+        { change: 'link leaves up', cond: 'Every facet the coordinator serves follows it to unknown, immediately and unconditionally.', dwell: 'at once', dwellColor: MUTED },
+      ],
+
+      sevRows: [
+        { word: 'unprotected', fill: BAD, line: BAD, text: 'var(--danger-text)', when: 'gate open — no viewer key, so private routes answer anyone. Ranked first because the console looks perfectly fine in this state.', banner: 'banner · every view' },
+        { word: 'not committing', fill: BAD, line: BAD, text: 'var(--danger-text)', when: 'commit unavailable — a finished run cannot be written down, so it will not be published.', banner: 'banner · every view' },
+        { word: 'inference offline', fill: WARN, line: WARN, text: 'var(--warn-text)', when: 'Every agent calls the local model, so nothing can start. Past runs stay readable, which is why this is warn and not danger.', banner: 'banner · where you pitch' },
+        { word: 'no answer', fill: HOLLOW, line: FAINT, text: MUTED, when: 'Any facet not heard back. The counts on screen are the last ones given and are marked as such.', banner: 'banner after 60s' },
+        { word: 'recovering', fill: WARN, line: WARN, text: 'var(--warn-text)', when: 'One good poll after a bad or unknown one. Deliberately not green: a flapping backend must not flash.', banner: 'no banner' },
+        { word: 'ok', fill: OK, line: OK, text: OK, when: 'Every facet confirmed good within the last two polls.', banner: 'no banner' },
+      ],
+
+      outsideRows: [
+        { k: 'This browser\u2019s session', v: 'a 401 says the coordinator will not answer you, not that it is unwell. It keeps the locked screen and contributes nothing to the lamp.' },
+        { k: 'The coordinator lock', v: 'held for the life of the process, so a running console can never observe it lost. It is an at-load fact; the two-coordinator case arrives as a preflight warning instead.' },
+        { k: 'Quality', v: 'no percentage anywhere. The published figures rest on a check that counted a blank page as a working app.' },
+      ],
+
+      anatomyNotes: [
+        { n: '01', v: 'Lamp and one word: the worst facet, named. Filled means confirmed this poll.' },
+        { n: '02', v: 'Polled cells carry a dot. INFERENCE states the configured model, never the loaded one.' },
+        { n: '03', v: 'RUNNING and QUEUED are jobs, from /metrics — not the subtask queue.' },
+        { n: '04', v: 'Cells with no dot are read once at load: mode, lock, tracing, evidence.' },
+        { n: '05', v: 'Age of the last answer, always. This is the cell the reference implementation has no equivalent of.' },
+        { n: '06', v: 'Collapse chevron. Collapsed, the bar becomes the corner pill in 04.' },
+      ],
+
+      barStates: [
+        {
+          name: 'OK', note: 'every facet confirmed within two polls', captionColor: OK,
+          word: 'ok', lampFill: OK, lampLine: OK, lampText: OK, age: 'as of 3s', ageColor: FAINT,
+          live: [cell('INFERENCE', 'ready · qwen3.5:4b', 'good'), cell('NODES', '3', 'good'), cell('RUNNING', '1', 'good'), cell('QUEUED', '0', 'good', MUTED)],
+        },
+        {
+          name: 'ONE MISSED POLL', note: 'nothing changes but the age — this is the hysteresis working', captionColor: WARN,
+          word: 'ok', lampFill: OK, lampLine: OK, lampText: OK, age: 'as of 10s', ageColor: 'var(--warn-text)',
+          live: [cell('INFERENCE', 'ready · qwen3.5:4b', 'good'), cell('NODES', '3', 'good'), cell('RUNNING', '1', 'good'), cell('QUEUED', '0', 'good', MUTED)],
+        },
+        {
+          name: 'NOT HEARD BACK', note: 'two misses · lamps hollow, last-known counts greyed', captionColor: MUTED,
+          word: 'no answer', lampFill: HOLLOW, lampLine: FAINT, lampText: MUTED, age: 'no answer for 15s', ageColor: 'var(--warn-text)',
+          live: [cell('INFERENCE', 'ready · qwen3.5:4b', 'unknown'), cell('NODES', '3', 'unknown'), cell('RUNNING', '1', 'unknown'), cell('QUEUED', '0', 'unknown')],
+        },
+        {
+          name: 'RECOVERING', note: 'answered once — held out of green until it answers twice', captionColor: WARN,
+          word: 'recovering', lampFill: WARN, lampLine: WARN, lampText: 'var(--warn-text)', age: 'as of 0s', ageColor: FAINT,
+          live: [cell('INFERENCE', 'ready · qwen3.5:4b', 'good'), cell('NODES', '3', 'good'), cell('RUNNING', '0', 'good'), cell('QUEUED', '1', 'good')],
+        },
+        {
+          name: 'INFERENCE OFFLINE', note: 'confirmed twice · queue holds, past runs readable', captionColor: 'var(--warn-text)',
+          word: 'inference offline', lampFill: WARN, lampLine: WARN, lampText: 'var(--warn-text)', age: 'as of 4s', ageColor: FAINT,
+          live: [cell('INFERENCE', 'offline · qwen3.5:4b', 'bad', 'var(--danger-text)'), cell('NODES', '3', 'good'), cell('RUNNING', '0', 'good'), cell('QUEUED', '1', 'good')],
+        },
+        {
+          name: 'NOT COMMITTING', note: '503 on a write · believed on the first poll', captionColor: 'var(--danger-text)',
+          word: 'not committing', lampFill: BAD, lampLine: BAD, lampText: 'var(--danger-text)', age: 'as of 2s', ageColor: FAINT,
+          live: [cell('INFERENCE', 'ready · qwen3.5:4b', 'good'), cell('NODES', '3', 'good'), cell('RUNNING', '1', 'good'), cell('QUEUED', '0', 'good', MUTED)],
+        },
+        {
+          name: 'UNPROTECTED', note: 'no viewer key · the state that looks healthiest and is worst', captionColor: 'var(--danger-text)',
+          word: 'unprotected', lampFill: BAD, lampLine: BAD, lampText: 'var(--danger-text)', age: 'as of 3s', ageColor: FAINT,
+          live: [cell('INFERENCE', 'ready · qwen3.5:4b', 'good'), cell('NODES', '3', 'good'), cell('RUNNING', '1', 'good'), cell('QUEUED', '0', 'good', MUTED)],
+        },
+      ],
+
+      shellNav: [
+        { k: 'Overview', color: TXT, bg: 'var(--surface-hover)' },
+        { k: 'Runs', color: DIM, bg: 'transparent' },
+        { k: 'Nodes', color: DIM, bg: 'transparent' },
+        { k: 'Gallery', color: DIM, bg: 'transparent' },
+        { k: 'Projects', color: DIM, bg: 'transparent' },
+        { k: 'Config', color: DIM, bg: 'transparent' },
+      ],
+      shellRows: [1, 2, 3],
+
+      scenarios: SCENARIO_LABELS.map(([mode, label]) => ({
+        label,
+        pick: this.pick(mode),
+        bg: this.state.mode === mode ? 'var(--surface-hover)' : 'transparent',
+        fg: this.state.mode === mode ? TXT : MUTED,
+        line: this.state.mode === mode ? 'var(--border-strong)' : 'var(--border)',
+      })),
+
+      live: {
+        clock: 'poll ' + this.state.poll + ' · t+' + this.state.poll * POLL_SEC + 's · 1s here = one 5s poll',
+        word: sev.word, lampFill: sev.fill, lampLine: sev.line, lampText: sev.text,
+        cells: liveCells,
+        age: unheard ? 'no answer for ' + silentFor + 's' : 'as of ' + silentFor + 's',
+        ageColor: silentFor >= 10 ? 'var(--warn-text)' : FAINT,
+        log: this.state.log,
+        ...bannerFor(),
+      },
+
+      ambientStates: [
+        { word: 'ok', fill: OK, line: OK, text: OK, age: '4s', ageColor: FAINT, note: 'the resting state — 28px tall, no shadow of doubt and no shout' },
+        { word: 'recovering', fill: WARN, line: WARN, text: 'var(--warn-text)', age: '0s', ageColor: FAINT, note: 'one good poll in; green is two polls away' },
+        { word: 'no answer', fill: HOLLOW, line: FAINT, text: MUTED, age: '15s', ageColor: 'var(--warn-text)', note: 'hollow lamp, and the age becomes the loudest thing in the pill' },
+        { word: 'inference offline', fill: WARN, line: WARN, text: 'var(--warn-text)', age: '3s', ageColor: FAINT, note: 'the pill grows to fit the words rather than abbreviating them' },
+        { word: 'not committing', fill: BAD, line: BAD, text: 'var(--danger-text)', age: '2s', ageColor: FAINT, note: 'paired with a banner on every view, so the pill can stay short' },
+        { word: 'unprotected', fill: BAD, line: BAD, text: 'var(--danger-text)', age: '3s', ageColor: FAINT, note: 'the only state where a healthy-looking console is the problem' },
+      ],
+
+      banners: [
+        {
+          trigger: 'GATE OPEN', scope: 'every view, not dismissible',
+          line: 'var(--danger-line)', wash: 'var(--danger-wash)', dot: BAD, titleColor: 'var(--danger-text)', bodyColor: 'var(--danger-body)',
+          title: 'Anyone who can reach this address can read runs, machines and projects',
+          body: 'No viewer key is set, so the gate is letting every request through. Set viewer_key and restart before this host is reachable by anyone but you.',
+        },
+        {
+          trigger: 'COMMIT UNAVAILABLE', scope: 'every view',
+          line: 'var(--danger-line)', wash: 'var(--danger-wash)', dot: BAD, titleColor: 'var(--danger-text)', bodyColor: 'var(--danger-body)',
+          title: 'Finished work cannot be written down right now',
+          body: 'A run counts once it is recorded, so nothing will be published until this clears. Anything already recorded is unaffected, and pitches will be refused rather than lost.',
+        },
+        {
+          trigger: 'INFERENCE OFFLINE', scope: 'Overview and Try only',
+          line: 'var(--warn-line)', wash: 'var(--warn-wash)', dot: BAD, titleColor: 'var(--warn-text)', bodyColor: 'var(--warn-body)',
+          title: 'Ollama is not reachable — nothing can be built right now',
+          body: 'Start it with ollama serve and this clears on its own. Connected machines stay registered and pick work up again by themselves.',
+        },
+        {
+          trigger: 'SILENT 60s', scope: 'every view, replaces nothing',
+          line: 'var(--border-strong)', wash: 'var(--surface)', dot: FAINT, titleColor: TXT, bodyColor: MUTED,
+          title: 'No answer from the coordinator for 1m 12s',
+          body: 'Every count on screen is the last one it gave. Nothing here is current, and an empty queue on this screen is not a claim that the swarm is idle.',
+        },
+      ],
+
+      noBanner: [
+        { k: 'one missed poll', v: 'the age moves, nothing else does. A banner here trains people to close banners.' },
+        { k: 'session expired', v: 'the locked screen already says it, and it is about this browser rather than the coordinator.' },
+        { k: 'evidence off, tracing off', v: 'both are defaults, not faults. They live in the bar\u2019s static cells and in Config.' },
+      ],
+
+      cardNotes: [
+        { n: '01', v: 'Task text, two lines maximum, 13px sans — the one non-mono thing on the card, because it is prose someone typed.' },
+        { n: '02', v: 'Status chip, from the run\u2019s own rating. Five values, no percentage.' },
+        { n: '03', v: 'Hardware badge from the node\u2019s capability descriptor — claimed values, and only where a machine is actually named.' },
+        { n: '04', v: 'Unit count and age, from the plan length and the timestamp.' },
+        { n: '05', v: 'Gallery only: the code file names, because the artifact is the point and it is what separates Gallery from Runs.' },
+      ],
+
+      chipRows: [
+        { chip: 'PASS', fg: OK, wash: 'var(--accent-wash)', line: 'var(--accent-dim)', dot: OK, field: 'rating: PASS', means: 'The reviewer passed it and the mechanical check found no defects.' },
+        { chip: 'NEEDS WORK', fg: 'var(--warn-text)', wash: 'var(--warn-wash)', line: 'var(--warn-line)', dot: WARN, field: 'rating: NEEDS_WORK', means: 'Returned with named problems. Still downloadable.' },
+        { chip: 'FAIL', fg: 'var(--danger-text)', wash: 'var(--danger-wash)', line: 'var(--danger-line)', dot: BAD, field: 'rating: FAIL', means: 'Reached a terminal state without a usable deliverable.' },
+        { chip: 'UNCHECKED', fg: MUTED, wash: 'transparent', line: 'var(--border-strong)', dot: IDLE, field: 'code_precheck_error set', means: 'The mechanical check did not run to a verdict, so these files are unchecked rather than known good. An empty problem list is not a pass.' },
+        { chip: 'NO VERDICT', fg: MUTED, wash: 'transparent', line: 'var(--border-strong)', dot: IDLE, field: 'rating: "?"', means: 'No rating was recorded. Says nothing about the work.' },
+      ],
+
+      badgeRows: [
+        { badge: '8 CPU · 16 GB · Apple M2', color: DIM, line: 'var(--border)', when: 'Work a machine is holding now', why: 'The node reports its current task, so the descriptor can be read in the direction the API actually serves: machine to task. Claimed at registration, not measured.' },
+        { badge: '3 machines', color: DIM, line: 'var(--border)', when: 'Finished work', why: 'mode and nodes_used give placement and a count, and that is all that is recorded. The badge states placement rather than implying it knows which machine did what.' },
+        { badge: 'machine not recorded', color: FAINT, line: 'var(--border-subtle)', when: 'Finished distributed work with no node list', why: 'Per-unit assignment is not served — handoff gap 8.2. The badge says so in words instead of borrowing a plausible machine from /nodes.' },
+      ],
+
+      galleryCards: [
+        {
+          title: 'Add a --since flag so the summary can cover a date range',
+          chip: 'PASS', chipFg: OK, chipWash: 'var(--accent-wash)', chipLine: 'var(--accent-dim)', chipDot: OK,
+          badge: '8 CPU · 16 GB · Apple M2', badgeColor: DIM, badgeLine: 'var(--border)',
+          units: '4 units', age: '2h 14m ago', artifactKind: 'code', artifact: 'summary.py · cli.py · test_summary.py', artifactColor: MUTED,
+        },
+        {
+          title: 'Build a CLI todo app with add, list and remove',
+          chip: 'NEEDS WORK', chipFg: 'var(--warn-text)', chipWash: 'var(--warn-wash)', chipLine: 'var(--warn-line)', chipDot: WARN,
+          badge: '3 machines', badgeColor: DIM, badgeLine: 'var(--border)',
+          units: '6 units', age: '1d ago', artifactKind: 'code', artifact: 'todo.py · storage.py · README.md', artifactColor: MUTED,
+        },
+        {
+          title: 'Labelled bar chart from a CSV, rendered to PNG',
+          chip: 'UNCHECKED', chipFg: MUTED, chipWash: 'transparent', chipLine: 'var(--border-strong)', chipDot: IDLE,
+          badge: 'machine not recorded', badgeColor: FAINT, badgeLine: 'var(--border-subtle)',
+          units: '3 units', age: '2d ago', artifactKind: 'code', artifact: 'chart.py · sample.csv', artifactColor: MUTED,
+        },
+        {
+          title: 'Playable Snake game in a single HTML file',
+          chip: 'FAIL', chipFg: 'var(--danger-text)', chipWash: 'var(--danger-wash)', chipLine: 'var(--danger-line)', chipDot: BAD,
+          badge: 'this machine', badgeColor: DIM, badgeLine: 'var(--border)',
+          units: '5 units', age: '4d ago', artifactKind: 'code', artifact: 'no files published', artifactColor: FAINT,
+        },
+      ],
+
+      projectCards: [
+        {
+          title: 'Weekly standup summariser',
+          chip: 'PASS', chipFg: OK, chipWash: 'var(--accent-wash)', chipLine: 'var(--accent-dim)', chipDot: OK,
+          badge: '8 CPU · 16 GB · Apple M2', badgeColor: DIM, badgeLine: 'var(--border)',
+          age: 'last run 2h 14m ago',
+          chain: [
+            { n: '01', color: MUTED, fill: OK, line: OK },
+            { n: '02', color: MUTED, fill: WARN, line: WARN },
+            { n: '03', color: MUTED, fill: OK, line: OK },
+            { n: '04', color: TXT, fill: OK, line: OK },
+          ],
+          chainNote: 'memory carried forward each time',
+        },
+        {
+          title: 'Expense tracker',
+          chip: 'NEEDS WORK', chipFg: 'var(--warn-text)', chipWash: 'var(--warn-wash)', chipLine: 'var(--warn-line)', chipDot: WARN,
+          badge: '2 machines', badgeColor: DIM, badgeLine: 'var(--border)',
+          age: 'last run 1d ago',
+          chain: [
+            { n: '01', color: MUTED, fill: OK, line: OK },
+            { n: '02', color: MUTED, fill: BAD, line: BAD },
+            { n: '03', color: TXT, fill: WARN, line: WARN },
+          ],
+          chainNote: '02 timed out at the reviewer',
+        },
+        {
+          title: 'Repo README rewrite',
+          chip: 'NO VERDICT', chipFg: MUTED, chipWash: 'transparent', chipLine: 'var(--border-strong)', chipDot: IDLE,
+          badge: 'machine not recorded', badgeColor: FAINT, badgeLine: 'var(--border-subtle)',
+          age: 'last run derived from /history',
+          chain: [{ n: '01', color: TXT, fill: HOLLOW, line: FAINT }],
+          chainNote: 'one iteration, no rating recorded',
+        },
+      ],
+
+      endpointRows: [
+        { what: 'inference ready / offline', src: 'GET /health · ollama', srcColor: DIM, note: 'The coordinator\u2019s own 5 s probe of Ollama /api/tags. A probe, so it confirms twice.' },
+        { what: 'model name', src: 'config · model', srcColor: WARN, note: 'The configured model, read at load. /health.models lists everything installed and /status.json.model is whichever tag came back first — neither is the model this coordinator will use.' },
+        { what: 'nodes online', src: 'GET /health · nodes_online', srcColor: DIM, note: 'Registered and not yet aged out by the stale-node sweep.' },
+        { what: 'running now', src: 'GET /metrics · jobs_running', srcColor: DIM, note: 'Jobs, not subtasks.' },
+        { what: 'queued', src: 'GET /metrics · jobs_queued', srcColor: DIM, note: 'Also jobs. /health.tasks_pending is the subtask queue and is a different number; showing it under this label would be wrong.' },
+        { what: 'coordinator lock', src: 'GET /v1/operator/health · single_coordinator_lock', srcColor: DIM, note: 'True for the life of the process. At-load fact, no lamp.' },
+        { what: 'deployment mode', src: 'GET /v1/operator/health · deployment_mode', srcColor: DIM, note: 'Set at startup; cannot change while running.' },
+        { what: 'preflight warnings', src: 'GET /v1/operator/health · preflight_warnings', srcColor: DIM, note: 'Where the two-coordinator and bind-host cases actually surface.' },
+        { what: 'tracing on / off', src: 'config · tracing_enabled, tracing_export', srcColor: WARN, note: 'Three states in the module — off, propagating, exporting. No endpoint serves them; read at load.' },
+        { what: 'capability evidence', src: 'config · capability_evidence_mode', srcColor: DIM, note: 'off or shadow, nothing else. Shadow never affects routing and the bar says only which mode is set.' },
+        { what: 'gate protected / open', src: 'GET /health · private_routes_protected', srcColor: DIM, note: 'Stated in the payload, so believed on the first poll.' },
+        { what: 'card title, chip, units, age', src: 'GET /gallery · task, rating, plan, timestamp', srcColor: DIM, note: 'rating "?" renders NO VERDICT rather than an empty chip.' },
+        { what: 'card unchecked state', src: 'GET /history/{id} · code_precheck_error', srcColor: DIM, note: 'Distinct from an empty code_problems list. The dashboard reads neither field today.' },
+        { what: 'placement badge', src: 'GET /gallery · mode, nodes_used', srcColor: DIM, note: 'A count and a placement. Never a machine identity.' },
+      ],
+
+      gapCards: [
+        { tag: 'GAP · 8.2', title: 'Per-unit node assignment is not served', body: 'So the hardware badge on finished work states placement, or says the machine was not recorded. Extend the run record with the node that ran each unit, or keep the degraded badge — do not fill it from /nodes.' },
+        { tag: 'GAP', title: 'Projects have no updated_at', body: 'The age line is derived from the newest /history run carrying that project_id, and the third card labels it as derived. Add updated_at to the project record, or keep the label.' },
+        { tag: 'GAP', title: 'Tracing and evidence are config-only', body: 'Neither is on an endpoint, so both cells are read at page load and carry no lamp. If they should be live, add them to /v1/operator/health rather than inventing a poll.' },
+        { tag: 'GAP', title: 'No live utilization exists', body: 'Descriptors claim CPU, memory and GPU; nothing samples them. There is no graph on this page and there should not be one until something measures.' },
+      ],
+
+      constraintRows: [
+        { v: 'Every colour is a var(--token) from the console theme. Both panes render from the same markup, so a value picked for dark is caught in light.' },
+        { v: 'Nothing below 11px, including the bar\u2019s cell labels — the console is filmed at the nodes-connected glance.' },
+        { v: 'Public pill is 44px tall; the console pill is 28px and mouse-only.' },
+        { v: 'Green is status. The brand mark stays neutral, and no green appears as decoration anywhere on this page.' },
+        { v: 'No percentage, no score, no agreement presented as correctness, nothing implying evidence affects routing.' },
+        { v: 'Filled versus hollow carries the third value, so the states survive greyscale and a colour-blind reader.' },
+      ],
+    };
+  }
+}
+
+</script>
+</body>
+</html>

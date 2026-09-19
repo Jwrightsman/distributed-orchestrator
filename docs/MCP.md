@@ -61,9 +61,17 @@ Point at any orchestrator you can reach (LAN, Tailscale, or a public VM from
 ```json
 "env": {
   "ORCHESTRATOR_URL": "http://100.64.0.7:8000",
-  "PITCH_KEY": "the-pitch-key-if-one-is-set"
+  "PITCH_KEY": "the-pitch-key-if-one-is-set",
+  "VIEWER_KEY": "the-viewer-key-if-one-is-set"
 }
 ```
+
+`PITCH_KEY` lets the app submit. `VIEWER_KEY` lets it read the job back:
+`/jobs/{id}` and `/projects` are private routes, so with `viewer_key` set and
+no `VIEWER_KEY` here, `pitch_task` succeeds and every read after it is refused.
+Neither key is scoped to one app. The viewer key reads every run, machine and
+project on the coordinator, and changing either key cuts off every app that
+holds it at once.
 
 The MCP server itself can also run as a network service (streamable HTTP on
 `127.0.0.1:8765/mcp`) instead of stdio:
@@ -87,5 +95,6 @@ python mcp_server.py --http
 |---|---|
 | "Could not reach the orchestrator" | Start it: `python -m uvicorn server:app --host 127.0.0.1 --port 8000` |
 | "requires a pitch key" | Set `PITCH_KEY` in the `env` block to the orchestrator's `pitch_key` |
+| Pitching works but status and results are refused (401) | Set `VIEWER_KEY` in the `env` block to the orchestrator's `viewer_key` |
 | Tools don't appear in Claude Desktop | Check the config file path and JSON syntax; fully quit and reopen the app |
 | Rate limited | 5 pitches/minute per IP — wait a minute |

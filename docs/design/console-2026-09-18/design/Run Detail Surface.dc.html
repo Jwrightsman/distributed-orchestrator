@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mycelium — run detail surface</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
+<script>
+  (function () {
+    try {
+      var saved = localStorage.getItem('mycelium-theme');
+      var system = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', saved || system);
+    } catch (e) {
+      document.documentElement.setAttribute('data-theme', 'dark');
+    }
+  })();
+</script>
+<style>
+  /* Token values copied verbatim from the console design file. The only change
+     is the selector: the console declares light as :root[data-theme], this page
+     declares it as [data-theme] so a light pane can sit inside a dark page and
+     be judged beside it. templates/_theme.html keeps :root. */
+  :root, [data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #030405;
+    --bg-elevated: #0D0F12;
+    --surface: #15181C;
+    --surface-hover: #1D2126;
+    --surface-sunken: #08090B;
+    --border-subtle: #1A1D21;
+    --border: #262A30;
+    --border-strong: #333841;
+    --text: #E8E9EB;
+    --text-dim: #9CA1A8;
+    --text-muted: #949BA3;
+    --text-faint: #878E97;
+    --mark: #E8E9EB;
+    --accent: #3FB950;
+    --accent-dim: #2C8C3C;
+    --accent-strong: #4ACB5D;
+    --accent-wash: rgba(63,185,80,0.08);
+    --on-accent: #06210C;
+    --warn: #C9922B;
+    --warn-text: #E8C88A;
+    --warn-body: #B5A681;
+    --warn-wash: #14100A;
+    --warn-line: #3B3222;
+    --danger: #E5534B;
+    --danger-text: #F0938C;
+    --danger-body: #C29691;
+    --danger-wash: rgba(229,83,75,0.10);
+    --danger-line: rgba(229,83,75,0.28);
+    --info: #5B8DEF;
+    --info-wash: rgba(91,141,239,0.08);
+    --violet: #9A7BE0;
+    --slate: #949AA2;
+    --scrim: rgba(4,5,6,0.72);
+    --lift: 0 24px 64px rgba(0,0,0,0.6);
+    --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    --sans: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+  [data-theme="light"] {
+    color-scheme: light;
+    --bg: #F1F3F5;
+    --bg-elevated: #FFFFFF;
+    --surface: #F7F8FA;
+    --surface-hover: #EDEFF3;
+    --surface-sunken: #F0F2F5;
+    --border-subtle: #E7EAEE;
+    --border: #D4D9DF;
+    --border-strong: #B7BEC6;
+    --text: #16181D;
+    --text-dim: #4A5057;
+    --text-muted: #656C74;
+    --text-faint: #6E747C;
+    --mark: #16181D;
+    --accent: #1A7F37;
+    --accent-dim: #157030;
+    --accent-strong: #12692E;
+    --accent-wash: rgba(26,127,55,0.07);
+    --on-accent: #FFFFFF;
+    --warn: #9A6700;
+    --warn-text: #6B4A00;
+    --warn-body: #6E5A28;
+    --warn-wash: #FFF8E6;
+    --warn-line: #E8D9A8;
+    --danger: #CF222E;
+    --danger-text: #A0111B;
+    --danger-body: #7A2E33;
+    --danger-wash: rgba(207,34,46,0.08);
+    --danger-line: rgba(207,34,46,0.30);
+    --info: #0969DA;
+    --info-wash: rgba(9,105,218,0.07);
+    --violet: #8250DF;
+    --slate: #57606A;
+    --scrim: rgba(20,24,31,0.42);
+    --lift: 0 20px 52px rgba(16,22,26,0.18);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--text); font-family: var(--sans);
+    font-size: 13px; -webkit-font-smoothing: antialiased; font-variant-numeric: tabular-nums;
+  }
+  a { color: var(--text); text-decoration: none; border-bottom: 1px solid var(--border-strong); }
+  a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+  button { font-family: inherit; color: inherit; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: var(--border-strong); border: 3px solid var(--bg); border-radius: 6px; }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+  body { padding: 18px; }
+</style>
+</helmet>
+
+<div style="background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 5px; overflow: hidden;">
+
+  <div style="display: flex; align-items: baseline; gap: 9px; padding: 8px 14px; border-bottom: 1px solid var(--border-subtle); background: var(--surface-sunken); flex-wrap: wrap;">
+    <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em; color: var(--text-dim);">{{ surfaceLabel }}</span>
+    <span style="font-family: var(--mono); font-size: 11px; color: var(--text-faint); min-width: 0;">{{ surfaceRoute }}</span>
+  </div>
+
+  <div style="display: flex; align-items: flex-start; flex-wrap: wrap; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--border-subtle);">
+    <div style="flex: 1 1 250px; min-width: 0; display: flex; flex-direction: column; gap: 7px;">
+      <div style="display: flex; align-items: center; gap: 9px; flex-wrap: wrap;">
+        <span style="display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em; color: var(--accent); background: var(--accent-wash); border: 1px solid var(--accent-dim); border-radius: 3px; padding: 2px 7px;">
+          <i style="width: 6px; height: 6px; background: var(--accent);"></i>PASS
+        </span>
+        <span style="font-family: var(--mono); font-size: 11px; color: var(--text-dim); border: 1px solid var(--border); border-radius: 3px; padding: 2px 7px;">3 machines</span>
+        <span style="font-family: var(--mono); font-size: 11px; color: var(--text-faint);">2h 14m ago</span>
+      </div>
+      <h3 style="font-size: 15px; font-weight: 600; line-height: 1.4; color: var(--text); min-width: 0; overflow-wrap: anywhere; text-wrap: pretty;">Add a --since flag so the summary can cover a date range</h3>
+      <span style="font-family: var(--mono); font-size: 11px; color: var(--text-faint); min-width: 0; overflow-wrap: anywhere;">exec_9f4c21e8 · project proj_1c04de · 2 deliverables · 5 audit records</span>
+    </div>
+    <div style="margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap;">
+      <sc-for list="{{ actions }}" as="a" hint-placeholder-count="3">
+        <button style="display: inline-flex; align-items: center; background: {{ a.bg }}; color: {{ a.fg }}; border: 1px solid {{ a.line }}; border-radius: 4px; padding: 0 12px; height: {{ hitHeight }}; font-family: var(--sans); font-size: 12px; cursor: pointer;" style-hover="border-color: var(--border-strong);">{{ a.label }}</button>
+      </sc-for>
+    </div>
+  </div>
+
+  <div style="display: grid; grid-template-columns: 7px minmax(0, 1fr); gap: 11px; align-items: start; padding: 10px 14px; border-bottom: 1px solid var(--border-subtle); background: var(--info-wash);">
+    <span style="width: 7px; height: 7px; background: var(--info); margin-top: 4px;"></span>
+    <span style="font-size: 12px; color: var(--text-dim); line-height: 1.6; text-wrap: pretty;">Returned, not re-run: this task was pitched again under the same idempotency key, so nothing was built twice. The same key with a changed task is refused instead.</span>
+  </div>
+
+  <div style="display: flex; flex-wrap: wrap; border-bottom: 1px solid var(--border-subtle);">
+    <sc-for list="{{ triad }}" as="t" hint-placeholder-count="3">
+      <div style="flex: 1 1 180px; min-width: 0; padding: 12px 14px; border-right: 1px solid var(--border-subtle);">
+        <div style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-muted);">{{ t.label }}</div>
+        <div style="display: flex; align-items: center; gap: 8px; margin-top: 7px;">
+          <i style="width: 7px; height: 7px; flex-shrink: 0; background: {{ t.fill }}; border: 1px solid {{ t.line }};"></i>
+          <span style="font-family: var(--mono); font-size: 13.5px; color: {{ t.color }};">{{ t.value }}</span>
+        </div>
+        <div style="font-size: 11.5px; color: var(--text-muted); line-height: 1.55; margin-top: 6px; text-wrap: pretty;">{{ t.note }}</div>
+      </div>
+    </sc-for>
+  </div>
+
+  <div style="display: flex; align-items: center; gap: 10px 16px; flex-wrap: wrap; padding: 10px 14px; border-bottom: 1px solid var(--border-subtle);">
+    <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-muted);">PLACEMENT</span>
+    <span style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-family: var(--mono); font-size: 11px; color: var(--text-faint);">
+      <span>asked for <span style="color: var(--text-dim);">any</span></span><span>→</span>
+      <span>planned <span style="color: var(--text-dim);">distributed</span></span><span>→</span>
+      <span>ran <span style="color: var(--text);">distributed</span></span>
+    </span>
+    <span style="display: flex; align-items: center; gap: 7px; margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text-muted);">
+      <i style="width: 6px; height: 6px; background: var(--accent); flex-shrink: 0;"></i>consent recorded to leave this machine
+    </span>
+  </div>
+
+  <div style="display: flex; flex-wrap: wrap; border-bottom: 1px solid var(--border-subtle);">
+    <sc-for list="{{ metrics }}" as="m" hint-placeholder-count="4">
+      <div style="flex: 1 1 130px; min-width: 0; padding: 11px 14px; border-right: 1px solid var(--border-subtle);">
+        <div style="font-family: var(--mono); font-size: 15px; color: var(--text);">{{ m.value }}</div>
+        <div style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; color: var(--text-muted); margin-top: 5px;">{{ m.label }}</div>
+      </div>
+    </sc-for>
+  </div>
+
+  <div style="display: flex; flex-wrap: wrap; gap: 16px; padding: 16px 14px; align-items: flex-start;">
+    <div style="flex: 100 1 400px; min-width: 0; display: flex; flex-direction: column; gap: 16px;">
+
+      <section style="border: 1px solid var(--border); border-radius: 5px; background: var(--surface); overflow: hidden;">
+        <div style="display: flex; align-items: baseline; gap: 10px; padding: 10px 13px; border-bottom: 1px solid var(--border-subtle); flex-wrap: wrap;">
+          <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-muted);">DELIVERABLE</span>
+          <span style="margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text-faint);">2 files · deliverable role</span>
+        </div>
+        <div style="padding: 12px 13px 0;">
+          <p style="font-size: 12.5px; line-height: 1.7; color: var(--text-dim); text-wrap: pretty;">A <span style="font-family: var(--mono); font-size: 12px;">--since</span> argument on the summary command, validated as an ISO date before anything reads the file, with the printed summary now stating the range it covers.</p>
+        </div>
+        <div style="padding: 12px 13px;">
+          <div style="display: flex; align-items: center; gap: 8px; padding: 7px 11px; border: 1px solid var(--border); border-bottom: none; border-radius: 4px 4px 0 0; background: var(--surface-hover); flex-wrap: wrap;">
+            <span style="font-family: var(--mono); font-size: 11.5px; color: var(--text-dim);">code/summary.py</span>
+            <span style="margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text-faint);">3.1 KB · parses · imports clean</span>
+          </div>
+          <pre style="margin: 0; padding: 12px; background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 0 0 4px 4px; font-family: var(--mono); font-size: 11.5px; line-height: 1.7; color: var(--text-dim); white-space: pre; overflow-x: auto;">def parse_since(raw):
+    try:
+        return date.fromisoformat(raw)
+    except ValueError:
+        raise SystemExit(
+            f"--since must be YYYY-MM-DD, got {raw!r}"
+        )</pre>
+        </div>
+      </section>
+
+      <section style="border: 1px solid var(--border); border-radius: 5px; background: var(--surface); overflow: hidden;">
+        <div style="display: flex; align-items: baseline; gap: 10px; padding: 10px 13px; border-bottom: 1px solid var(--border-subtle); flex-wrap: wrap;">
+          <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-muted);">HOW IT WAS SPLIT</span>
+          <span style="margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text-faint);">4 units · 2 waves · from depends_on</span>
+        </div>
+        <sc-for list="{{ waves }}" as="w" hint-placeholder-count="2">
+          <div style="border-bottom: 1px solid var(--border-subtle);">
+            <div style="display: flex; align-items: baseline; gap: 9px; padding: 8px 13px; background: var(--surface-hover); flex-wrap: wrap;">
+              <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; color: var(--text-dim);">{{ w.label }}</span>
+              <span style="font-family: var(--mono); font-size: 11px; color: var(--text-muted);">{{ w.note }}</span>
+            </div>
+            <div style="display: flex; flex-wrap: wrap; gap: 9px; padding: 11px 13px;">
+              <sc-for list="{{ w.items }}" as="it" hint-placeholder-count="3">
+                <div style="flex: 1 1 190px; min-width: 0; border: 1px solid var(--border); border-radius: 4px; padding: 9px 10px; background: var(--bg);">
+                  <div style="display: flex; align-items: center; gap: 7px;">
+                    <span style="font-family: var(--mono); font-size: 11px; color: var(--text-faint);">{{ it.id }}</span>
+                    <span style="font-size: 12px; color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ it.title }}</span>
+                    <i style="width: 6px; height: 6px; flex-shrink: 0; margin-left: auto; background: {{ it.fill }}; border: 1px solid {{ it.line }};"></i>
+                  </div>
+                  <div style="font-size: 11.5px; color: var(--text-muted); line-height: 1.55; margin-top: 5px; text-wrap: pretty;">{{ it.prompt }}</div>
+                  <div style="font-family: var(--mono); font-size: 11px; color: {{ it.machineColor }}; margin-top: 7px;">{{ it.machine }}</div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </sc-for>
+        <div style="padding: 10px 13px; font-size: 11.5px; color: var(--text-muted); line-height: 1.65; text-wrap: pretty;">Wave 2 is the parallelism claim made visible: three units whose only dependency is unit 01, so they were offered at the same time. Which machine took each one is not served, and neither is per-unit or end-to-end time — the cards say so rather than borrowing a plausible machine from <span style="font-family: var(--mono); font-size: 11px;">/nodes</span>. No speed multiplier is shown, because computing one needs the durations that are missing.</div>
+      </section>
+    </div>
+
+    <div style="flex: 1 1 300px; min-width: 0; display: flex; flex-direction: column; gap: 16px;">
+
+      <section style="border: 1px solid var(--border); border-radius: 5px; background: var(--surface); overflow: hidden;">
+        <div style="display: flex; align-items: center; gap: 8px; padding: 10px 13px; border-bottom: 1px solid var(--border-subtle); flex-wrap: wrap;">
+          <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-muted);">MANIFEST</span>
+          <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; color: var(--accent); border: 1px solid var(--accent-dim); border-radius: 3px; padding: 2px 6px;">SEALED</span>
+          <span style="margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text-faint);">7 files · 54.0 KB</span>
+        </div>
+        <div style="padding: 10px 13px; border-bottom: 1px solid var(--border-subtle); background: var(--surface-sunken);">
+          <div style="font-family: var(--mono); font-size: 11px; color: var(--text-faint); line-height: 1.55; overflow-wrap: anywhere;">manifest_hash sha256 6b1e9c04…8a7f2d · sealed 1.2s after the run ended</div>
+          <div style="font-size: 11.5px; color: var(--text-muted); line-height: 1.6; margin-top: 5px; text-wrap: pretty;">The file list, the sizes and the hashes were frozen when the run ended. Local evidence that these bytes are the bytes that were sealed — not a signature, not a time anyone else vouches for, and no claim about what the files do.</div>
+        </div>
+        <sc-for list="{{ artifactGroups }}" as="g" hint-placeholder-count="2">
+          <div>
+            <div style="display: flex; align-items: baseline; gap: 8px; padding: 8px 13px; background: var(--surface-hover); border-bottom: 1px solid var(--border-subtle); flex-wrap: wrap;">
+              <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; color: var(--text-dim);">{{ g.label }}</span>
+              <span style="margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text-faint);">{{ g.meta }}</span>
+            </div>
+            <sc-for list="{{ g.rows }}" as="a" hint-placeholder-count="2">
+              <div style="display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; padding: 8px 13px; border-bottom: 1px solid var(--border-subtle);">
+                <span style="font-family: var(--mono); font-size: 11.5px; color: var(--text-dim); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ a.name }}</span>
+                <span style="font-family: var(--mono); font-size: 11px; color: var(--text-faint);">{{ a.size }}</span>
+                <span style="grid-column: 1 / -1; display: flex; gap: 9px; flex-wrap: wrap; font-family: var(--mono); font-size: 11px; line-height: 1.5;">
+                  <span style="color: var(--text-muted);">{{ a.role }}</span>
+                  <span style="color: var(--text-faint);">{{ a.hash }}</span>
+                </span>
+              </div>
+            </sc-for>
+          </div>
+        </sc-for>
+        <div style="padding: 10px 13px; font-size: 11.5px; color: var(--text-muted); line-height: 1.65; text-wrap: pretty;">Two lists because there are two endpoints. The plain download hands over deliverables; the run's own paperwork has to be asked for by name, so a handoff never carries it by accident. Either way the bytes come through this run's authenticated route and are re-hashed against the sealed row on the way out.</div>
+      </section>
+
+      <dc-import name="Provenance Envelope" mode="summary" hint-size="100%,190px"></dc-import>
+
+      <section style="border: 1px solid var(--border); border-radius: 5px; background: var(--surface); overflow: hidden;">
+        <div style="display: flex; align-items: baseline; gap: 10px; padding: 10px 13px; border-bottom: 1px solid var(--border-subtle); flex-wrap: wrap;">
+          <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-muted);">TIMELINE</span>
+          <span style="margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text-faint);">full_log.json</span>
+        </div>
+        <sc-for list="{{ timeline }}" as="t" hint-placeholder-count="5">
+          <div style="display: grid; grid-template-columns: 50px minmax(0, 1fr); gap: 10px; align-items: start; padding: 7px 13px; border-bottom: 1px solid var(--border-subtle); font-family: var(--mono); font-size: 11px; line-height: 1.5;">
+            <span style="color: var(--text-faint);">{{ t.at }}</span>
+            <span style="color: {{ t.color }}; overflow-wrap: anywhere;">{{ t.what }}</span>
+          </div>
+        </sc-for>
+      </section>
+    </div>
+  </div>
+
+  <div style="display: grid; grid-template-columns: 7px minmax(0, 1fr); gap: 11px; align-items: start; padding: 11px 14px; border-top: 1px solid var(--border-subtle); background: var(--surface-sunken);">
+    <span style="width: 7px; height: 7px; background: var(--slate); margin-top: 4px;"></span>
+    <div style="min-width: 0;">
+      <div style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-faint);">{{ differsLabel }}</div>
+      <p style="font-size: 12px; color: var(--text-muted); line-height: 1.65; margin-top: 5px; text-wrap: pretty;">{{ differs }}</p>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1000,&quot;height&quot;:900},&quot;surface&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;console&quot;,&quot;server&quot;],&quot;default&quot;:&quot;console&quot;,&quot;tsType&quot;:&quot;'console' | 'server'&quot;}}">
+class Component extends DCLogic {
+  renderVals() {
+    const server = (this.props.surface ?? 'console') === 'server';
+
+    const OK = { fill: 'var(--accent)', line: 'var(--accent)', color: 'var(--accent)' };
+    const NEUTRAL = { fill: 'var(--text-faint)', line: 'var(--border-strong)', color: 'var(--text)' };
+
+    const primary = { bg: 'var(--surface-hover)', fg: 'var(--text)', line: 'var(--border-strong)' };
+    const ghost = { bg: 'transparent', fg: 'var(--text-dim)', line: 'var(--border)' };
+
+    return {
+      surfaceLabel: server ? 'SERVER-RENDERED' : 'IN THE CONSOLE',
+      surfaceRoute: server
+        ? 'GET /run/{id} · templates/run.html · same structure, no client'
+        : '#view-run · replaces the dashboard\u2019s output modal',
+
+      // The public page is reached from a link in a post, so most visitors are
+      // on a phone: 44px there, compact in the console where the pointer is a
+      // mouse and vertical space is the scarce thing.
+      hitHeight: server ? '44px' : '28px',
+
+      actions: server
+        ? [
+            { label: 'Fork this run', ...primary },
+            { label: 'Download deliverables', ...ghost },
+            { label: 'See what else was built', ...ghost },
+          ]
+        : [
+            { label: 'Download deliverables', ...primary },
+            { label: 'Audit bundle', ...ghost },
+            { label: 'Share\u2026', ...ghost },
+            { label: 'Fork', ...ghost },
+          ],
+
+      // Three axes, deliberately not collapsed. `status` is a compatibility
+      // projection: completed + passed becomes "completed" and every other
+      // completed outcome becomes "unverified", which flattens exactly the
+      // distinction this strip exists to show.
+      triad: [
+        { label: 'LIFECYCLE', value: 'completed', note: 'It ran to a terminal state and that state was committed before anything was published.', ...OK },
+        { label: 'VALIDATION', value: 'passed', note: '5 checks run · 5 passed · 0 failed · 0 not run. Mechanical checks only.', ...OK },
+        { label: 'ASSURANCE', value: 'unverified', note: 'Nothing here establishes the output is correct. A run can be complete, checked, and still wrong.', ...NEUTRAL },
+      ],
+
+      metrics: [
+        { value: '4', label: 'UNITS' },
+        { value: '2', label: 'WAVES' },
+        { value: '2', label: 'DELIVERABLES' },
+        { value: '5', label: 'AUDIT RECORDS' },
+      ],
+
+      waves: [
+        {
+          label: 'WAVE 1',
+          note: 'depends on nothing',
+          items: [
+            { id: '01', title: 'Parse --since', prompt: 'Add a --since argument taking an ISO date. Validate it and fail with a clear message if it does not parse.', machine: 'machine not recorded', machineColor: 'var(--text-faint)', ...OK },
+          ],
+        },
+        {
+          label: 'WAVE 2',
+          note: 'all three depend only on 01',
+          items: [
+            { id: '02', title: 'Filter rows by date', prompt: 'Filter loaded rows to those on or after the parsed date. Keep the existing column order.', machine: 'machine not recorded', machineColor: 'var(--text-faint)', ...OK },
+            { id: '03', title: 'Update summary output', prompt: 'State the date range the summary covers. If the range is empty, say so rather than printing an empty table.', machine: 'machine not recorded', machineColor: 'var(--text-faint)', ...OK },
+            { id: '04', title: 'Cover the parser', prompt: 'Add tests for a valid date, a malformed date and an empty range.', machine: 'machine not recorded', machineColor: 'var(--text-faint)', ...OK },
+          ],
+        },
+      ],
+
+      artifactGroups: [
+        {
+          label: 'DELIVERABLE', meta: 'GET /download',
+          rows: [
+            { name: 'code/summary.py', size: '3.1 KB', role: 'deliverable', hash: 'sha256 a91f…3c' },
+            { name: 'code/test_summary.py', size: '1.7 KB', role: 'deliverable', hash: 'sha256 44b2…e1' },
+          ],
+        },
+        {
+          label: 'AUDIT', meta: 'GET /audit-download',
+          rows: [
+            { name: 'mycelium-provenance.json', size: '4.2 KB', role: 'provenance', hash: 'sha256 3c9a…1e' },
+            { name: 'plan.json', size: '1.4 KB', role: 'provenance', hash: 'sha256 41dd…9a' },
+            { name: 'review.md', size: '3.1 KB', role: 'provenance', hash: 'sha256 c7e5…20' },
+            { name: 'full_log.json', size: '41.6 KB', role: 'log', hash: 'sha256 0e77…b4' },
+          ],
+        },
+      ],
+
+      timeline: [
+        { at: '+0.0s', what: 'submission committed to disk', color: 'var(--text-dim)' },
+        { at: '+1.4s', what: 'planner returned 4 units in 2 waves', color: 'var(--info)' },
+        { at: '+2.1s', what: 'wave 1 offered', color: 'var(--text-muted)' },
+        { at: '+—', what: 'per-unit timings not served for this run', color: 'var(--text-faint)' },
+        { at: 'end', what: 'terminal state committed, then manifest sealed', color: 'var(--accent)' },
+      ],
+
+      differsLabel: server ? 'WHERE THIS PAGE MUST DIFFER' : 'THE SAME STRUCTURE, THREE TIMES',
+      differs: server
+        ? 'Same structure, three differences. There is no client, so nothing polls: the page is a snapshot and must never show a live cell or an age that stops being true — a run still going renders as still going, with its own timestamp. It is shareable and carries an OG title and description, so the one-line summary has to survive being pasted with no page around it. And it is viewer-gated, so it is indexed by nobody: no sitemap, no assumption a crawler ever resolves it.'
+        : 'The dashboard\u2019s output modal, this view, and the server-rendered page are one structure with three shells. The modal is this surface in a panel; the view is this surface in the console shell with the status bar beneath it; the server page is this surface with no client. Porting means moving the structure into templates/run.html, not writing a second layout that drifts from it.',
+    };
+  }
+}
+</script>
+</body>
+</html>

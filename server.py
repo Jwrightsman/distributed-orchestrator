@@ -12,6 +12,7 @@ The implementation lives in focused modules:
   routes_projects.py  — /projects*
   routes_evals.py     — /evals (the console's Evals view)
   routes_config.py    — /v1/operator/config (the console's Config view)
+  routes_invite.py    — /v1/operator/invite (the console's Connect view)
   routes_events.py    — /health, /events, /ws/events, /standings, /metrics, /ledger
   dashboard.py        — /dashboard (HTML in templates/dashboard.html)
 
@@ -33,6 +34,7 @@ from fastapi.responses import JSONResponse
 
 import routes_config
 import routes_evals
+import routes_invite
 import routes_events
 import routes_executions
 import routes_access
@@ -247,6 +249,7 @@ app.include_router(dashboard_router)
 app.include_router(routes_events.router)
 app.include_router(routes_evals.router)
 app.include_router(routes_config.router)
+app.include_router(routes_invite.router)
 app.include_router(routes_executions.router)
 app.include_router(routes_access.router)
 app.include_router(routes_pitch.router)

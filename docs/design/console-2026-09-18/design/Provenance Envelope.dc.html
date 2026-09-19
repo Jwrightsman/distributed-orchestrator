@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mycelium — provenance envelope</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
+<script>
+  (function () {
+    try {
+      var saved = localStorage.getItem('mycelium-theme');
+      var system = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', saved || system);
+    } catch (e) {
+      document.documentElement.setAttribute('data-theme', 'dark');
+    }
+  })();
+</script>
+<style>
+  /* Token values copied verbatim from the console design file. The only change
+     is the selector: the console declares light as :root[data-theme], this page
+     declares it as [data-theme] so a light pane can sit inside a dark page and
+     be judged beside it. templates/_theme.html keeps :root. */
+  :root, [data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #030405;
+    --bg-elevated: #0D0F12;
+    --surface: #15181C;
+    --surface-hover: #1D2126;
+    --surface-sunken: #08090B;
+    --border-subtle: #1A1D21;
+    --border: #262A30;
+    --border-strong: #333841;
+    --text: #E8E9EB;
+    --text-dim: #9CA1A8;
+    --text-muted: #949BA3;
+    --text-faint: #878E97;
+    --mark: #E8E9EB;
+    --accent: #3FB950;
+    --accent-dim: #2C8C3C;
+    --accent-strong: #4ACB5D;
+    --accent-wash: rgba(63,185,80,0.08);
+    --on-accent: #06210C;
+    --warn: #C9922B;
+    --warn-text: #E8C88A;
+    --warn-body: #B5A681;
+    --warn-wash: #14100A;
+    --warn-line: #3B3222;
+    --danger: #E5534B;
+    --danger-text: #F0938C;
+    --danger-body: #C29691;
+    --danger-wash: rgba(229,83,75,0.10);
+    --danger-line: rgba(229,83,75,0.28);
+    --info: #5B8DEF;
+    --info-wash: rgba(91,141,239,0.08);
+    --violet: #9A7BE0;
+    --slate: #949AA2;
+    --scrim: rgba(4,5,6,0.72);
+    --lift: 0 24px 64px rgba(0,0,0,0.6);
+    --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    --sans: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+  [data-theme="light"] {
+    color-scheme: light;
+    --bg: #F1F3F5;
+    --bg-elevated: #FFFFFF;
+    --surface: #F7F8FA;
+    --surface-hover: #EDEFF3;
+    --surface-sunken: #F0F2F5;
+    --border-subtle: #E7EAEE;
+    --border: #D4D9DF;
+    --border-strong: #B7BEC6;
+    --text: #16181D;
+    --text-dim: #4A5057;
+    --text-muted: #656C74;
+    --text-faint: #6E747C;
+    --mark: #16181D;
+    --accent: #1A7F37;
+    --accent-dim: #157030;
+    --accent-strong: #12692E;
+    --accent-wash: rgba(26,127,55,0.07);
+    --on-accent: #FFFFFF;
+    --warn: #9A6700;
+    --warn-text: #6B4A00;
+    --warn-body: #6E5A28;
+    --warn-wash: #FFF8E6;
+    --warn-line: #E8D9A8;
+    --danger: #CF222E;
+    --danger-text: #A0111B;
+    --danger-body: #7A2E33;
+    --danger-wash: rgba(207,34,46,0.08);
+    --danger-line: rgba(207,34,46,0.30);
+    --info: #0969DA;
+    --info-wash: rgba(9,105,218,0.07);
+    --violet: #8250DF;
+    --slate: #57606A;
+    --scrim: rgba(20,24,31,0.42);
+    --lift: 0 20px 52px rgba(16,22,26,0.18);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--text); font-family: var(--sans);
+    font-size: 13px; -webkit-font-smoothing: antialiased; font-variant-numeric: tabular-nums;
+  }
+  a { color: var(--text); text-decoration: none; border-bottom: 1px solid var(--border-strong); }
+  a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+  button { font-family: inherit; color: inherit; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: var(--border-strong); border: 3px solid var(--bg); border-radius: 6px; }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+  body { padding: 18px; }
+</style>
+</helmet>
+
+<div style="border: 1px solid var(--border); border-radius: 5px; background: var(--surface); overflow: hidden;">
+
+  <div style="display: flex; align-items: baseline; gap: 10px; padding: 10px 13px; border-bottom: 1px solid var(--border-subtle); background: var(--surface-sunken); flex-wrap: wrap;">
+    <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-muted);">PRODUCED BY</span>
+    <span style="font-family: var(--mono); font-size: 11px; color: var(--text-faint); min-width: 0; overflow-wrap: anywhere;">{{ digestLine }}</span>
+  </div>
+
+  <div style="padding: 12px 13px; display: flex; flex-direction: column; gap: 7px;">
+    <div style="font-size: 12.5px; color: var(--text-dim); line-height: 1.6; text-wrap: pretty;">{{ summaryLine }}</div>
+    <div style="font-size: 12px; color: var(--text-muted); line-height: 1.65; text-wrap: pretty;">Binds who produced these files, under which enrolled identity, with which model, and which validators ran. It does not establish that the output is correct, useful, or honest.</div>
+  </div>
+
+  <sc-if value="{{ isSummary }}" hint-placeholder-val="{{ true }}">
+    <div style="display: flex; align-items: center; gap: 12px; padding: 9px 13px; border-top: 1px solid var(--border-subtle); flex-wrap: wrap;">
+      <a href="#envelope" style="font-family: var(--mono); font-size: 11px; color: var(--text-dim); border-bottom: 1px solid var(--border-strong);">Open the envelope</a>
+      <span style="display: flex; align-items: center; gap: 7px; margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text-muted);">
+        <i style="width: 7px; height: 7px; flex-shrink: 0; background: transparent; border: 1px solid var(--text-faint);"></i>{{ unknownCount }}
+      </span>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ isFull }}" hint-placeholder-val="{{ false }}">
+    <sc-for list="{{ groups }}" as="g" hint-placeholder-count="4">
+      <div>
+        <div style="display: flex; align-items: baseline; gap: 10px; padding: 8px 13px; background: var(--surface-hover); border-top: 1px solid var(--border-subtle); border-bottom: 1px solid var(--border-subtle); flex-wrap: wrap;">
+          <span style="font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; color: var(--text-dim);">{{ g.label }}</span>
+          <span style="margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text-faint);">{{ g.meta }}</span>
+        </div>
+        <sc-for list="{{ g.rows }}" as="r" hint-placeholder-count="3">
+          <div style="display: grid; grid-template-columns: 15px minmax(0, 172px) minmax(0, 1fr); gap: 4px 10px; padding: 8px 13px; border-bottom: 1px solid var(--border-subtle); align-items: start;">
+            <i style="width: 7px; height: 7px; margin-top: 4px; flex-shrink: 0; background: {{ r.fill }}; border: 1px solid {{ r.line }};"></i>
+            <span style="font-family: var(--mono); font-size: 11px; color: var(--text-muted);">{{ r.k }}</span>
+            <span style="font-family: var(--mono); font-size: 11.5px; color: {{ r.color }}; line-height: 1.55; overflow-wrap: anywhere;">{{ r.v }}</span>
+            <span style="grid-column: 3; font-size: 11.5px; color: var(--text-muted); line-height: 1.6; text-wrap: pretty;">{{ r.note }}</span>
+          </div>
+        </sc-for>
+      </div>
+    </sc-for>
+    <div style="padding: 10px 13px; font-size: 11.5px; color: var(--text-muted); line-height: 1.65; text-wrap: pretty;">{{ closingNote }}</div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:560,&quot;height&quot;:420},&quot;mode&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;summary&quot;,&quot;full&quot;],&quot;default&quot;:&quot;summary&quot;,&quot;tsType&quot;:&quot;'summary' | 'full'&quot;},&quot;plural&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;}}">
+class Component extends DCLogic {
+  renderVals() {
+    const mode = this.props.mode ?? 'summary';
+    const plural = this.props.plural ?? false;
+
+    // Absence is a value, never a blank. A recorded fact gets a filled marker,
+    // an unrecorded one gets a hollow marker in muted ink — never warn or
+    // danger, because "we did not write this down" is not a fault and is not
+    // fine either. The shape carries it, so it survives greyscale.
+    const known = { fill: 'var(--text-faint)', line: 'var(--text-faint)', color: 'var(--text-dim)' };
+    const gap = { fill: 'transparent', line: 'var(--text-faint)', color: 'var(--text-muted)' };
+    const row = (k, v, note, tone) => ({ k, v, note: note || '', ...(tone || known) });
+
+    const producerRows = plural
+      ? [
+          row('producers', '3 accepted receipts', 'The ensemble path settles more than one receipt. Each carries its own identity chain; the envelope keeps all three rather than electing one.'),
+          row('attempt_id', 'not applicable', 'Left null deliberately: with several accepted receipts there is no single attempt to name, and picking one would be a choice the record did not make.', gap),
+          row('receipt_id', 'not applicable', '', gap),
+          row('unit_id', 'not applicable', '', gap),
+        ]
+      : [
+          row('producers', '1 accepted receipt', ''),
+          row('attempt_id', 'att_5b19c7e0', ''),
+          row('receipt_id', 'att_5b19c7e0', 'The receipt is keyed by the attempt that produced it.'),
+          row('unit_id', 'unit_02', ''),
+        ];
+
+    const identityRows = plural
+      ? [
+          row('01 · enrollment_id', 'enr_7c22a4 · node-7c22 · enrolled', ''),
+          row('02 · enrollment_id', 'enr_a1f3d9 · node-a1f3 · enrolled', ''),
+          row('03 · enrollment_id', 'not recorded · node-legacy-1 · legacy', 'A session that predates enrolment. The label is display metadata and is never a trust key, so it identifies the machine without authenticating it.', gap),
+        ]
+      : [
+          row('enrollment_id', 'enr_7c22a4', 'Immutable. Distinct from the label and from the session.'),
+          row('node_id', 'node-7c22', 'The label as it was at settlement. Display metadata, never a trust key.'),
+          row('identity_class', 'enrolled', ''),
+        ];
+
+    return {
+      isSummary: mode === 'summary',
+      isFull: mode === 'full',
+
+      digestLine: plural
+        ? 'envelope v1 · digest sha256 8d40f1a2…c7be'
+        : 'envelope v1 · digest sha256 3c9ab7d0…f21e',
+
+      // The one line for a reader who will never open the envelope. It names
+      // the producer, the model and the checking, then states the limit in the
+      // same breath — because this line travels into places the rest of the
+      // panel does not. No lamp and no chip on purpose: a coloured badge here
+      // would sit beside the manifest's SEALED chip and read as a second tick
+      // in a row of ticks. A sentence cannot be added up.
+      summaryLine: plural
+        ? 'Built by 3 enrolled machines on qwen3.5:4b, checked by 2 validators. One of the three has no enrolment recorded.'
+        : 'Built by 1 enrolled machine on qwen3.5:4b, checked by 2 validators.',
+
+      unknownCount: plural ? '6 facts not recorded' : '4 facts not recorded',
+
+      groups: [
+        { label: 'EXECUTION', meta: 'exec_9f4c21e8', rows: producerRows },
+        {
+          label: plural ? 'PRODUCER IDENTITY · 3 ENTRIES' : 'PRODUCER IDENTITY · 1 ENTRY',
+          meta: 'accepted_result_receipts',
+          rows: identityRows,
+        },
+        {
+          label: 'CAPABILITY AND EXECUTOR',
+          meta: 'node_capability_snapshots',
+          rows: [
+            row('descriptor_version', '1', ''),
+            row('descriptor_hash', 'sha256 b41c8e77…09da', 'The immutable snapshot the claim was read from.'),
+            row('executor.kind', 'ollama', ''),
+            row('executor.version', '0.3.14', ''),
+            row('worker_protocol_version', '2', ''),
+          ],
+        },
+        {
+          label: 'MODEL',
+          meta: 'as recorded on the receipt',
+          rows: [
+            row('model.provider', 'ollama', ''),
+            row('model.name', 'qwen3.5:4b', ''),
+            row('model.digest', 'not recorded', 'The receipt carried no digest for this attempt, so which weights answered cannot be established from this record.', gap),
+            row('model.variant', 'not recorded', 'Variant is a capability-evidence scope field resolved from the descriptor\u2019s model list. Reading it back here would be a guess.', gap),
+          ],
+        },
+        {
+          label: 'VALIDATORS · IN ORDER',
+          meta: '2 ran',
+          rows: [
+            row('parse_precheck', 'v3 · passed', 'A mechanical check ran and did not fail. Not a claim that the artifact does what its requester wanted.'),
+            row('import_check', 'v1 · passed', ''),
+          ],
+        },
+        {
+          label: 'ARTIFACTS',
+          meta: '7 files · sealed',
+          rows: [
+            row('manifest_digest', 'sha256 6b1e9c04…8a7f2d', 'The same digest the manifest panel shows. Recorded here so the envelope and the file list can be checked against each other offline.'),
+            row('integrity_mode', 'sealed', ''),
+            row('file_count', '7', 'Every entry carries its own sha256, size and role.'),
+          ],
+        },
+        {
+          label: 'SAMPLING',
+          meta: 'coordinator scope',
+          rows: [
+            row('temperature', '0.7', ''),
+            row('seed', 'not pinned', 'Nothing was fixed, so the shipping default applies and the runner chooses.', gap),
+            row('scope', 'coordinator configuration at sealing', 'A distributed producer applies its own configuration and does not report it, so this pins the locally executed path only.'),
+            row('producer_sampling', 'not recorded', 'There is a producer, and the worker protocol does not carry its sampling back.', gap),
+          ],
+        },
+        {
+          label: 'RESERVED',
+          meta: 'not implemented',
+          rows: [
+            row('signature', 'reserved · empty', 'A slot, not a feature. Nothing here is signed: no key, no key management, no transparency log, no third party. Shown so that adding signing later is not a schema break for anyone already reading these bundles.', gap),
+          ],
+        },
+      ],
+
+      closingNote: plural
+        ? 'Three accepted receipts means three producers, not one producer with two footnotes. The singular fields stay null rather than electing a winner, and single_producer is listed as a fact not recorded — which is what it is.'
+        : 'One producer is a list of one. The panel is built for several because the ensemble path settles several accepted receipts, and a layout that assumes one would have to invent a rule for choosing between them.',
+    };
+  }
+}
+</script>
+</body>
+</html>

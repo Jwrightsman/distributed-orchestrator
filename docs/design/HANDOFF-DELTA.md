@@ -886,3 +886,77 @@ theme, panel labels (`--text-muted` on `--surface`); 5.67:1 dark, the banner
 body. Both were computed against each element's composited ground. The three
 longest keys (36–39 characters) wrap after an underscore at 1024px and above.
 That is left: widening the key column to hold them costs every note its width.
+
+---
+
+## 11. The Connect view — joining, pitching, and what each one costs
+
+The archived brief (`HANDOFF-UI.md` §3, "Invite — new view") is two sentences:
+static copy plus config flags for the warning panel, with consent bullets lifted
+from `AGENTS.md`. The design file calls the view **Connect** in its sidebar and
+`invite` internally. The console follows it: the tab reads Connect and the ids
+are `invite`. `invite_view.py` builds the fragment and `GET /v1/operator/invite`
+serves it with its record, the same arrangement Config uses.
+
+### 11.1 Decision: the route, and why its gate is the operator prefix
+
+The static copy could be a template. The warning panel can't be. It says which
+of the three authorities are off, whether HTTPS is declared, and whether a
+machine may join without an enrolment. That is a subset of what
+`/v1/operator/config` serves, so the route sits under the same prefix, is
+refused at the edge by `deploy/Caddyfile.public` and calls `require_viewer`
+itself. A key becomes a word through `config_view.credential_state`, so the
+two views cannot disagree about whether a key is short.
+
+### 11.2 What the archived design states that source contradicts
+
+| The design says | Source says |
+|---|---|
+| `python join.py https://mycelium.jw.dev` is the command | `worker_installer.py` replaced it (#74, #75). `docs/JOIN.md` gives clone, `cd`, `python worker_installer.py`. The installer asks for the address and reads the invitation code with the echo off, so the command carries neither. The view prints no address, because the coordinator can't know the one visitors reach it at. |
+| The address is sent as-is | Plain `http://` is refused for any host that isn't loopback, and nothing overrides that. The panel says so and warns when `https_enabled` is false. |
+| "Nothing is installed until they press a key" | They must type `yes`. `join.py` has `--yes`; the installer's `--yes` is for uninstall only, so the installer can't skip its consent. |
+| "No cloud inference, no API keys, no telemetry" | Prohibited by the handoff's own §7, and `provider` exists. The item now says what the installer's paragraph says: nothing is reported to anybody but this coordinator. |
+| Warning: "Two settings are off right now: `node_secret`, `pitch_key`" | Read from settings. It lists every authority that is off (reading included), any that is short, `https_enabled` when false, and `node_enrollment_mode` when not `required`. With none of those it says the coordinator is ready to share. With `node_secret` off the installer still asks for a code, but it accepts anything typed. |
+| `/status.json` — "node count, tasks completed, uptime and active model" | Also inference status, runs built and contributors. It serves no task text and no hostnames. |
+| "They all present the same `pitch_key` … there is one lever" | **Two keys, two levers.** `mcp_server.py` sends `VIEWER_KEY` as well, because `/jobs/{id}` and `/projects` are private. An app that can read its result back can read every run, machine and project. Changing `viewer_key` also ends every browser session. `docs/MCP.md` did not mention `VIEWER_KEY` either, so with a viewer key set `pitch_task` worked and every read after it was refused. It now names it and lists that failure under troubleshooting. |
+| "Every machine on this network has its own enrolment" | Only with `node_enrollment_mode` at `required`. In `compat` an older worker may register on the shared code alone. The installer always enrols. |
+| "Five pitches a minute, per address" | `pitch_rate_max` / `pitch_rate_window`, read from settings. |
+
+Unchanged and still true: nothing records which door a pitch came through
+(handoff §8.6).
+
+### 11.3 Tied to source
+
+`tests/test_invite_view.py` checks each consent item against a phrase in
+`worker_installer.consent_text`, with the rich markup stripped and the
+whitespace collapsed. It checks that the tool list matches the tools
+`mcp_server.py` registers, in both directions. It checks that the MCP server
+still sends a viewer key, that the routes it reads are still private, and that
+the join commands are the ones `docs/JOIN.md` gives. Any one of those changing
+fails a test that names the sentence it undermines.
+
+The Nodes view's empty state said `python join.py http://YOUR_IP:8000`, which
+is refused for any host that isn't loopback. It now links to Connect, and the
+Nodes header carries the design's "Invite a machine" button. `templates/index.html`
+still offers `python join.py <origin>` as a copy button. The landing page has
+its own port in the handoff's order, so it is recorded here and not changed.
+
+### 11.4 What opening the page found
+
+Measured in Chromium at 1440px and 375px, in both themes, with the default
+settings (every authority off). The page does not overflow at either width, no
+element sticks out of its panel, and nothing renders below 11px. Copy, "Open
+config" and the Nodes "Invite a machine" button were each clicked and did what
+they say.
+
+- **"WHAT IT CAN THEN DO" measured 4.44:1** in the light theme: `--text-faint`
+  on `--surface`, below AA. It is `--text-muted` now. The lowest ratio left in
+  the view is 4.72:1, the section dividers on `--bg` in the light theme.
+
+### 11.5 The Sept 18 design carries the same copy
+
+The Sept 18 bundle (`docs/design/console-2026-09-18/`) redraws this view with
+sans section labels and 10px corners, but every sentence in it is the one
+§11.2 corrects. Those two style changes belong to the shell pass (that
+handoff's §15.1–15.2), which moves every view's panel labels at once. They are
+left for that pass so this view matches its neighbours until then.
