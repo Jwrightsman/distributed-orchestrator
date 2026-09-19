@@ -53,8 +53,14 @@ def test_every_panel_on_a_drawn_scale_says_it_is_drawn():
     assert rows >= 6, "the drawn scales lost their inspectable subjects"
     assert len(data) == rows, f"{rows} panels but {len(data)} DATA rows"
     for value in data:
-        assert "live" not in value, f"a drawn panel claims to be live: {value}"
-        assert "simulated" in value or "drawn, not measured" in value or "you are here" in value, value
+        # A DATA row may be a conditional, so every branch of it is checked:
+        # "you are here" is allowed as a cue, but never on its own. The machine
+        # is real and the run drawn around it is not, and the row must say so.
+        branches = re.findall(r"'([^']*)'", value)
+        assert branches, f"a DATA row with no readable value: {value}"
+        for branch in branches:
+            assert "live" not in branch, f"a drawn panel claims to be live: {branch}"
+            assert "simulated" in branch or "drawn, not measured" in branch, branch
 
 
 def _drawn_words() -> str:

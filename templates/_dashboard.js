@@ -1276,7 +1276,7 @@ function swarmModel() {
     const oid = mine ? 'this machine' : hex(id++);
     nodes.push({key: ok, kind: 'coordinator', label: oid, tone: 'work', d: mine ? 28 : 22, mine, drawn: !mine, gx: cx, gy: cy, lz: 0,
       rows: [['ROLE', 'coordinator'], ['STRATEGY', STRAT[sh.s]], ['BUILDERS', String(sh.n)],
-             ['IF IT GOES DOWN', 'its run stops'], ['DATA', mine ? 'you are here' : 'drawn, not measured']],
+             ['IF IT GOES DOWN', 'its run stops'], ['DATA', mine ? 'drawn, not measured · you are here' : 'drawn, not measured']],
       note: mine ? 'You are one swarm in a field of them, not the centre of anything. Your coordinator runs its own plan and knows nothing about the others.'
         : 'Somebody else’s coordinator, running its own plan. Nothing connects it to yours: that federation does not exist.'});
     const keys = [];
@@ -1308,7 +1308,7 @@ function swarmModel() {
       title: mine ? 'Your run — ' + STRAT[sh.s] : 'Another swarm’s run — ' + STRAT[sh.s], prompt: PITCH[sh.s],
       rows: [['COORDINATOR', oid], ['STRATEGY', STRAT[sh.s]], ['BUILDERS', String(sh.n)],
              ['SHAPE', sh.s === 'dag' ? 'two tiers' : (sh.s === 'tries' ? 'three attempts at one subtask' : 'one plan fanned out')],
-             ['DATA', mine ? 'you are here' : 'drawn, not measured']],
+             ['DATA', mine ? 'drawn, not measured · you are here' : 'drawn, not measured']],
       note: mine ? 'Your whole run, and its edge is its reach. The machines on the rim are connected to nobody’s plan, and the other grounds are other coordinators entirely.'
         : 'Somebody else’s run. No coordinator here knows about the others, which is why the grounds never touch.'});
   });
