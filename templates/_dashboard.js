@@ -324,7 +324,7 @@ const PALETTE_COMMANDS = () => [
   {kind: 'RUN', label: 'Pitch a task', hint: 'overview', run: () => focusPitch()},
   {kind: 'THEME', label: document.documentElement.getAttribute('data-theme') === 'dark'
       ? 'Switch to the light theme' : 'Switch to the dark theme', hint: '', run: () => toggleTheme()},
-  {kind: 'PAGE', label: 'Open the public status page', hint: '/status', run: () => { location.href = '/status'; }},
+  {kind: 'PAGE', label: 'Open the status page', hint: '/status', run: () => { location.href = '/status'; }},
 ];
 let _paletteActive = 0;
 let _paletteReturn = null;
