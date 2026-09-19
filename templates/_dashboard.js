@@ -2060,17 +2060,12 @@ async function loadStandings() {
     }
 
     el.innerHTML = data.standings.map((s, i) => `
-      <div class="node-card">
-        <div class="standing">
-          <div>
-            <div class="node-name">
-              <span class="standing-rank ${i === 0 ? 'is-first' : i === 1 ? 'is-second' : ''}">#${i + 1}</span>
-              ${escHtml(s.contributor)}
-            </div>
-            <div class="node-meta">${s.compute_tasks} tasks / ${s.pitches} pitches</div>
-          </div>
-          <div class="standing-credits">${s.total_credits.toFixed(0)}</div>
-        </div>
+      <div class="guild-grid guild-row">
+        <span class="mono-cell is-quiet">${i + 1}</span>
+        <span class="guild-name mono">${escHtml(s.contributor)}</span>
+        <span class="mono-cell">${escHtml(String(s.compute_tasks))}</span>
+        <span class="mono-cell">${escHtml(String(s.pitches))}</span>
+        <span class="guild-points mono is-num">${escHtml(Number(s.total_credits).toFixed(0))}</span>
       </div>`).join('');
   } catch (e) {}
 }
@@ -2152,30 +2147,66 @@ async function loadProjects() {
   try {
     const data = await apiJson('/projects');
     const el = $('projects-list');
+    const list = data.projects || [];
     const navProjects = $('nav-project-count');
     if (navProjects) {
-      const n = (data.projects || []).length;
-      navProjects.textContent = n;
-      navProjects.hidden = n === 0;
+      navProjects.textContent = list.length;
+      navProjects.hidden = list.length === 0;
     }
 
-    if (!data.projects || data.projects.length === 0) {
+    if (!list.length) {
+      setText('projects-summary', 'no projects');
       el.innerHTML = '<div class="empty-state"><p>No projects yet.<br>A project carries memory from one pitch to the next.</p></div>';
       return;
     }
+    const iterations = list.reduce((a, p) => a + (Number(p.iteration_count) || 0), 0);
+    setText('projects-summary', `${list.length} ${list.length === 1 ? 'project' : 'projects'} · ${iterations} iterations · memory per project`);
 
-    el.innerHTML = data.projects.map(p => `
-      <div class="node-card">
-        <div class="project-row">
-          <div class="project-main">
-            <div class="node-name">${escHtml(p.name)}</div>
-            <div class="node-meta">${escHtml(p.project_id)}</div>
-            <div class="node-meta">${p.iteration_count} iteration${p.iteration_count !== 1 ? 's' : ''}</div>
+    // The chain is the loaded runs that carry this project's id, newest first.
+    const runsFor = (id) => historyRuns.filter(r => r.project_id === id);
+    el.innerHTML = list.map(p => {
+      const runs = runsFor(p.project_id);
+      const chain = runs.length ? runs.map((r, i) => {
+        const v = VERDICTS[runVerdict(r.rating, r.code_precheck_error)];
+        return `<a class="proj-iter" href="/run/${encodeURIComponent(r.timestamp)}" data-run-row="${escHtml(r.timestamp)}"
+                   title="Open this run's detail">
+          <span class="mono-cell is-quiet">${String(runs.length - i).padStart(2, '0')}</span>
+          <i class="proj-dot ${v.cls}" aria-hidden="true"></i>
+          <span class="proj-task">${escHtml(r.task)}</span>
+          <span class="proj-verdict ${v.cls}">${v.label}</span>
+          <span class="mono-cell is-quiet is-num">${escHtml(relativeTime(r.timestamp))}</span>
+        </a>`;
+      }).join('') : `<p class="proj-none">${Number(p.iteration_count) === 0
+        ? 'No runs yet. Continue to pitch the first one.'
+        : `None of this project's runs are among the ${historyRuns.length} loaded.`}</p>`;
+      return `
+        <section class="proj" data-project="${escHtml(p.project_id)}">
+          <div class="proj-head">
+            <div class="proj-titles">
+              <div class="proj-name">${escHtml(p.name)}</div>
+              <div class="proj-meta mono">${escHtml(p.project_id)} · ${escHtml(String(p.iteration_count))} iteration${p.iteration_count !== 1 ? 's' : ''}</div>
+            </div>
+            <button type="button" class="btn-quiet proj-continue" data-continue-project="${escHtml(p.project_id)}"
+                    data-project-name="${escHtml(p.name)}" title="Pitch the next iteration on this project">Continue &rarr;</button>
           </div>
-          <button type="button" class="btn-accent is-sm" data-continue-project="${escHtml(p.project_id)}"
-                  data-project-name="${escHtml(p.name)}">Continue</button>
-        </div>
-      </div>`).join('');
+          <div class="proj-chain">${chain}</div>
+          <p class="proj-memory" id="proj-memory-${escHtml(p.project_id)}">Reading this project's memory…</p>
+        </section>`;
+    }).join('');
+
+    // The memory each project carries into its next pitch, read from the
+    // project itself rather than described.
+    list.forEach(async (p) => {
+      try {
+        const d = await apiJson(`/projects/${encodeURIComponent(p.project_id)}`);
+        const bytes = new Blob([d.memory_context || '']).size;
+        setText(`proj-memory-${p.project_id}`, bytes
+          ? `${(bytes / 1024).toFixed(1)} KB of memory goes into the prompt of the next pitch on this project.`
+          : 'No memory recorded yet. The first finished run on this project writes it.');
+      } catch (e) {
+        setText(`proj-memory-${p.project_id}`, 'This project’s memory could not be read.');
+      }
+    });
   } catch (e) {}
 }
 
@@ -2231,30 +2262,31 @@ async function loadGallery() {
 
     el.innerHTML = data.cards.map(c => {
       const ts = encodeURIComponent(c.timestamp);
-      const nodesHtml = c.nodes_used > 0
-        ? `<span class="mono-info">${c.nodes_used} node${c.nodes_used > 1 ? 's' : ''}</span>`
-        : '';
+      const v = VERDICTS[runVerdict(c.rating, c.code_precheck_error)];
+      const meta = [`${c.subtask_count} tasks`, c.nodes_used > 0 ? `${c.nodes_used} node${c.nodes_used > 1 ? 's' : ''}` : null,
+                    relativeTime(c.timestamp)].filter(Boolean).join(' · ');
+      const files = (c.code_files || []);
       return `
-        <div class="gallery-card">
-          <a class="gallery-task" href="/run/${ts}">${escHtml(c.task)}</a>
-          <div class="gallery-meta">
-            ${distBadge(c.mode)}${verdictChip(c.rating, c.code_precheck_error)}
-            <span class="mono-dim">${c.subtask_count} tasks</span>
-            ${nodesHtml}
-            <span class="mono-dim">${relativeTime(c.timestamp)}</span>
+        <article class="gallery-card">
+          <div class="gallery-head">
+            <i class="proj-dot ${v.cls}" aria-hidden="true"></i>
+            <span class="proj-verdict ${v.cls}">${v.label}</span>
+            <span class="gallery-meta mono">${escHtml(meta)}</span>
           </div>
-          ${c.preview ? `<div class="gallery-preview">${escHtml(c.preview)}</div>` : ''}
-          ${c.code_files && c.code_files.length
-            ? `<div class="gallery-files">${c.code_files.map(f => `<span class="gallery-file-chip">${escHtml(f)}</span>`).join('')}</div>`
-            : ''}
+          <a class="gallery-task" href="/run/${ts}" title="Open the run page">${escHtml(c.task)}</a>
+          ${c.preview ? `<div class="gallery-code">
+              <div class="gallery-code-head mono">final output · first 300 characters</div>
+              <pre class="gallery-code-body">${escHtml(c.preview)}</pre>
+            </div>` : ''}
+          ${files.length ? `<div class="gallery-files">${files.map(f => `<span class="gallery-file-chip mono">${escHtml(f)}</span>`).join('')}</div>` : ''}
           <div class="gallery-actions">
-            <a class="gallery-btn open" href="/run/${ts}">Open run</a>
-            <button type="button" class="gallery-btn" data-fork="${escHtml(c.task)}"
-                    data-project="${escHtml(c.project_id || '')}">Fork &amp; continue</button>
-            <button type="button" class="gallery-btn share" data-share="${escHtml(c.timestamp)}"
-                    title="Copy a link to this run">Share &#x2197;</button>
+            <button type="button" class="btn-quiet gallery-fork" data-fork="${escHtml(c.task)}"
+                    data-project="${escHtml(c.project_id || '')}" title="Put this task back in the composer, in its project">Fork &amp; continue</button>
+            <a class="ov-link gallery-out" href="/run/${ts}" data-run-row="${escHtml(c.timestamp)}" title="Open the run that produced this">output</a>
+            <button type="button" class="ov-link" data-share="${escHtml(c.timestamp)}"
+                    title="Copy a link to this run's page">share</button>
           </div>
-        </div>`;
+        </article>`;
     }).join('');
   } catch (e) {}
 }
@@ -2415,6 +2447,12 @@ $('runs-clear').addEventListener('click', () => {
 });
 // A plain click opens the run in the console; a modified click still opens
 // the run's own page, because the row is a real link to it.
+['projects-list', 'gallery-grid'].forEach(id => $(id).addEventListener('click', (e) => {
+  const row = e.target.closest('[data-run-row]');
+  if (!row || e.ctrlKey || e.metaKey || e.shiftKey || e.button !== 0) return;
+  e.preventDefault();
+  viewRun(row.dataset.runRow);
+}));
 $('history-list').addEventListener('click', (e) => {
   const row = e.target.closest('[data-run-row]');
   if (!row || e.ctrlKey || e.metaKey || e.shiftKey || e.button !== 0) return;
@@ -2522,9 +2560,8 @@ connectWebSocket();
 pollStatus();
 pollOperator();
 refresh();
-loadHistory();
+loadHistory().then(loadProjects);
 loadStandings();
-loadProjects();
 
 setInterval(pollStatus, STATUS_POLL_MS);
 setInterval(pollOperator, OPERATOR_POLL_MS);

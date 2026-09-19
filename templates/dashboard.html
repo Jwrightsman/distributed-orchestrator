@@ -412,9 +412,11 @@
         </div>
       </section>
 
-      <!-- ── GALLERY ── -->
+      <!-- ── GALLERY ──
+           Previews output, not prose about it: that is what separates Gallery
+           from Runs (README, "Screens"). -->
       <section id="view-gallery" aria-labelledby="tab-gallery" hidden>
-        <div class="view-head"><h2>Swarm gallery</h2><span class="view-sub">Tasks completed by the network — every card has its own page</span></div>
+        <div class="view-head"><h2>Gallery</h2><span class="view-sub">Work the network finished, with the code it produced</span></div>
         <div id="gallery-grid" class="gallery-grid">
           <div class="empty-state is-grid"><p>No completed tasks yet.</p></div>
         </div>
@@ -488,25 +490,44 @@
         </div>
       </section>
 
-      <!-- ── PROJECTS ── -->
+      <!-- ── PROJECTS ──
+           The iteration chain, not a count (README, "Screens"): memory across
+           runs is the feature, and a number hides it. The chain is the runs
+           /history carries with this project's id. -->
       <section id="view-projects" aria-labelledby="tab-projects" hidden>
         <div class="view-head"><h2>Projects</h2><span class="view-sub">Work that remembers what it already built</span></div>
-        <div class="section-head">
-          <h2 id="projects-heading">All projects</h2>
-          <button type="button" class="btn-accent is-sm" id="new-project">+ New</button>
-        </div>
-        <div id="projects-list" aria-labelledby="projects-heading">
-          <div class="empty-state">
-            <p>No projects yet.<br>A project carries memory from one pitch to the next.</p>
+        <div class="card">
+          <div class="card-tools">
+            <span class="card-summary" id="projects-summary">&mdash;</span>
+            <button type="button" class="btn-quiet nodes-invite" id="new-project"
+                    title="Start a project · POST /projects">New project</button>
+          </div>
+          <div id="projects-list" class="projects-list" aria-label="Projects">
+            <div class="empty-state">
+              <p>No projects yet.<br>A project carries memory from one pitch to the next.</p>
+            </div>
           </div>
         </div>
       </section>
 
       <!-- ── GUILD ── -->
       <section id="view-guild" aria-labelledby="tab-guild" hidden>
-        <div class="view-head"><h2>Guild standings</h2><span class="view-sub">Points earned for compute, pitches and reviews</span></div>
-        <div id="standings-list">
-          <div class="empty-state"><p>No contributions yet.</p></div>
+        <div class="view-head"><h2>Guild standings</h2><span class="view-sub">Compute contribution points — accepted work, not payment</span></div>
+        <div class="card">
+          <div class="table-scroll">
+            <div class="guild-grid runs-head">
+              <span>#</span><span>CONTRIBUTOR</span><span title="Reviewer passes are logged as compute, so they share this column">COMPUTE + REVIEW</span><span>PITCHES</span><span class="is-num">POINTS</span>
+            </div>
+            <div id="standings-list">
+              <div class="empty-state"><p>No contributions yet.</p></div>
+            </div>
+          </div>
+          <p class="card-note">These are compute contribution points, and they mean one thing: a
+            machine returned work that the server accepted from an attempt it had itself issued. They
+            do not mean the output was chosen, that it passed its checks, or that it was correct, and
+            they are not money, a token, a chain, or a claim on anything later. Reviewer passes are
+            logged as compute, so the two share one column rather than being split into a number the
+            ledger cannot produce.</p>
         </div>
       </section>
 

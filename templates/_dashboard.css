@@ -124,7 +124,7 @@ body {
 
 .nav-count {
   margin-left: auto; display: none; align-items: center; gap: 5px;
-  font-family: var(--mono); font-size: 11px; color: var(--text-faint);
+  font-family: var(--mono); font-size: 11px; color: var(--text-muted);
 }
 .app.rail-open .nav-count:not([hidden]) { display: inline-flex; }
 .nav-lamp { width: 5px; height: 5px; flex-shrink: 0; background: var(--border-strong); }
@@ -805,18 +805,8 @@ button.node-card:hover { border-color: var(--border-strong); background: var(--s
 
 
 /* ── Standings ───────────────────────────────────────────────── */
-.standing { display: flex; justify-content: space-between; align-items: center; }
-.standing-rank { margin-right: 6px; color: var(--text-dim); }
-.standing-rank.is-first  { color: var(--warn); }
-.standing-rank.is-second { color: var(--accent-text); }
-.standing-credits {
-  font-family: var(--mono); font-size: 16px; font-weight: 700;
-  color: var(--warn); font-variant-numeric: tabular-nums;
-}
 
 /* ── Projects ────────────────────────────────────────────────── */
-.project-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
-.project-main { flex: 1; min-width: 0; }
 
 /* ── Key/value grid, used by the node detail panel ───────────── */
 .kv { display: grid; grid-template-columns: 120px 1fr; gap: 8px 16px; line-height: 1.7; }
@@ -897,77 +887,7 @@ button.node-card:hover { border-color: var(--border-strong); background: var(--s
    how two drawings of one structure quietly start again. */
 
 /* ── Gallery ─────────────────────────────────────────────────── */
-.gallery-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 14px;
-}
-.gallery-card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 16px 18px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  transition: border-color .12s ease, background .12s ease;
-}
-.gallery-card:hover { border-color: var(--border-strong); background: var(--surface-hover); }
-.gallery-task {
-  font-size: 14px; font-weight: 700; color: var(--text); line-height: 1.4;
-  text-decoration: none;
-}
 a.gallery-task:hover { color: var(--accent-text); }
-.gallery-meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.gallery-preview {
-  font-family: var(--mono);
-  font-size: 12.5px;
-  color: var(--text-muted);
-  line-height: 1.5;
-  max-height: 120px;
-  overflow: hidden;
-  position: relative;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-.gallery-preview::after {
-  content: '';
-  position: absolute;
-  bottom: 0; left: 0; right: 0;
-  height: 24px;
-  background: linear-gradient(transparent, var(--surface));
-}
-.gallery-files { display: flex; flex-wrap: wrap; gap: 4px; }
-.gallery-file-chip {
-  background: var(--accent-wash);
-  border: 1px solid var(--accent-wash-mid);
-  border-radius: 4px;
-  padding: 2px 8px;
-  font-family: var(--mono);
-  font-size: 12px;
-  color: var(--accent-text);
-}
-.gallery-actions { display: flex; gap: 8px; margin-top: 2px; flex-wrap: wrap; }
-.gallery-btn {
-  flex: 1 1 auto;
-  background: none;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 6px 10px;
-  font-family: var(--sans);
-  font-size: 13px;
-  color: var(--text-muted);
-  cursor: pointer;
-  text-align: center;
-  text-decoration: none;
-  transition: border-color .12s ease, color .12s ease, background .12s ease;
-  font-weight: 600;
-}
-.gallery-btn:hover { border-color: var(--accent-border); color: var(--accent-text); }
-.gallery-btn.open { border-color: var(--accent-wash-mid); color: var(--accent-text); }
-.gallery-btn.open:hover { background: var(--accent-wash); }
-.gallery-btn.share { border-color: var(--info-line); color: var(--info); }
-.gallery-btn.share:hover { background: var(--info-wash); }
 
 /* ── Toast ───────────────────────────────────────────────────── */
 .toast {
@@ -2039,3 +1959,83 @@ a.gallery-task:hover { color: var(--accent-text); }
 .node-act[aria-disabled="true"] { cursor: default; color: var(--text-muted); }
 .node-act[aria-disabled="true"]:hover { border-color: var(--border); color: var(--text-muted); }
 .card-note .mono { font-family: var(--mono); }
+
+/* ── Gallery ──────────────────────────────────────────────────────── */
+.gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
+.gallery-card {
+  display: flex; flex-direction: column; overflow: hidden;
+  border: 1px solid var(--border-subtle); border-radius: 10px; background: var(--surface);
+}
+.gallery-card:hover { border-color: var(--border-strong); }
+.gallery-head { display: flex; align-items: center; gap: 8px; padding: 9px 13px; border-bottom: 1px solid var(--border-subtle); }
+.gallery-meta { margin-left: auto; font-size: 11px; color: var(--text-muted); }
+.gallery-task {
+  display: block; padding: 13px 13px 11px;
+  font-size: 13px; font-weight: 500; line-height: 1.45; color: var(--text); text-decoration: none; text-wrap: pretty;
+}
+.gallery-task:hover { color: var(--text); text-decoration: underline; text-underline-offset: 3px; }
+.gallery-code { padding: 0 13px 13px; }
+.gallery-code-head {
+  padding: 6px 11px; font-size: 11px; color: var(--text-muted);
+  border: 1px solid var(--border); border-bottom: none; border-radius: 10px 4px 0 0;
+  background: var(--surface-hover);
+}
+.gallery-code-body {
+  margin: 0; padding: 11px; max-height: 100px; overflow: hidden;
+  background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 0 0 4px 4px;
+  font-family: var(--mono); font-size: 11px; line-height: 1.65; color: var(--text-muted);
+  white-space: pre-wrap; word-break: break-word;
+  mask-image: linear-gradient(to bottom, black 62px, transparent);
+  -webkit-mask-image: linear-gradient(to bottom, black 62px, transparent);
+}
+.gallery-files { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 13px 12px; }
+.gallery-file-chip {
+  font-size: 11px; color: var(--text-dim);
+  border: 1px solid var(--border-subtle); border-radius: 8px; padding: 2px 8px;
+}
+.gallery-actions {
+  margin-top: auto; display: flex; align-items: center; gap: 8px;
+  padding: 11px 13px; border-top: 1px solid var(--border-subtle);
+}
+.gallery-fork { padding: 6px 12px; font-size: 12px; }
+.gallery-out { margin-left: auto; }
+.gallery-actions .ov-link { padding: 4px; font-size: 11px; }
+
+/* A verdict word and its square, reused by Gallery and Projects. */
+.proj-dot { width: 7px; height: 7px; flex-shrink: 0; background: var(--border-strong); }
+.proj-dot.is-pass { background: var(--accent); }
+.proj-dot.is-needs-work { background: var(--warn); }
+.proj-dot.is-fail { background: var(--danger); }
+.proj-dot.is-unchecked, .proj-dot.is-no-verdict { background: transparent; box-shadow: inset 0 0 0 1px var(--text-faint); }
+.proj-verdict { font-family: var(--mono); font-size: 11px; letter-spacing: 0.05em; color: var(--text-muted); }
+.proj-verdict.is-pass { color: var(--accent-text); }
+.proj-verdict.is-needs-work { color: var(--warn-text); }
+.proj-verdict.is-fail { color: var(--danger-text); }
+
+/* ── Projects ─────────────────────────────────────────────────────── */
+.projects-list { display: flex; flex-direction: column; gap: 20px; padding: 20px; }
+.proj { border: 1px solid var(--border); border-radius: 10px; background: var(--surface); overflow: hidden; }
+.proj-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 14px; border-bottom: 1px solid var(--border-subtle); }
+.proj-titles { min-width: 0; }
+.proj-name { font-size: 13.5px; font-weight: 500; color: var(--text); }
+.proj-meta { font-size: 11px; color: var(--text-muted); margin-top: 3px; }
+.proj-continue { margin-left: auto; padding: 6px 12px; font-size: 12px; }
+.proj-iter {
+  display: grid; grid-template-columns: 30px 7px minmax(0, 1fr) 90px 58px;
+  gap: 11px; align-items: center; padding: 10px 14px;
+  border-bottom: 1px solid var(--border-subtle); color: var(--text); text-decoration: none;
+}
+.proj-iter:hover { background: var(--surface-hover); color: var(--text); }
+.proj-task { font-size: 12.5px; color: var(--text-dim); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proj-none { padding: 11px 14px; border-bottom: 1px solid var(--border-subtle); font-size: 12px; color: var(--text-muted); }
+.proj-memory { padding: 11px 14px; font-size: 12px; color: var(--text-muted); line-height: 1.6; }
+
+/* ── Guild ────────────────────────────────────────────────────────── */
+.guild-grid {
+  display: grid; grid-template-columns: 36px minmax(180px, 1fr) 128px 74px 84px;
+  gap: 14px; align-items: center; min-width: 600px;
+}
+.guild-row { padding: 11px 20px; border-bottom: 1px solid var(--border-subtle); }
+.guild-row:hover { background: var(--surface); }
+.guild-name { font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.guild-points { font-size: 12.5px; color: var(--text); text-align: right; }
