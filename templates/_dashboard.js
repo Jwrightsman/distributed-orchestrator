@@ -1115,6 +1115,26 @@ let _nodemapPan = {x: 0, y: 0};
 let _nodemapPinned = null;
 let _nodemapObserver = null;
 
+/* The map has three scales (section 16.6, 19). Only the first is measured:
+
+   live    this coordinator right now, from /nodes
+   demo    one run at its widest, 18 machines: drawn, not measured
+   swarm   three runs in a field of 125: drawn, not measured
+
+   The two drawn scales are pictures of an argument, not data. Every panel on
+   them ends with a DATA row that says so, the caption under the map says so in
+   the warning colour, and neither carries points, task counts or weights:
+   those mean something specific in the ledger, and invented ones are the one
+   thing this map must never show. Platform, model and hardware are derived
+   from the index so a bubble reads the same on every paint.
+
+   Two claims the design file made about this repo were corrected here: the
+   circuit breaker opens after three consecutive failures and holds
+   /tasks/next at 429 for 60s (server_state._BLACKLIST_DURATION), and the
+   planner is *asked* for 3-5 subtasks, which is a ceiling, not a count. */
+let _nodemapScale = 'live';
+const _nodemapDrawn = {};
+
 function nodemapModel(list) {
   const nodes = [{key: 'coord', kind: 'coordinator', label: 'this coordinator', tone: 'work', d: 26, gx: 0, gy: 0.5,
     rows: [['ROLE', 'coordinator'], ['DOES', 'planning and review'], ['IF IT GOES DOWN', 'the run stops'], ['DATA', 'live']],
@@ -1138,7 +1158,7 @@ function nodemapModel(list) {
   });
   place(busy, 1);
   place(rest, busy.length ? 2 : 1);
-  const edges = busy.map(n => ({a: 'coord', b: n.node_id, title: n.current_task,
+  const edges = busy.map(n => ({a: 'coord', b: n.node_id, title: n.current_task, tone: 'busy',
     rows: [['HANDED TO', n.node_id], ['STATE', 'building'], ['DATA', 'live, from /nodes']]}));
   const faces = busy.length >= 2 ? [{keys: ['coord', ...busy.map(n => n.node_id)],
     title: 'Work in progress on this coordinator',
@@ -1146,26 +1166,245 @@ function nodemapModel(list) {
   return {nodes, edges, faces};
 }
 
+const SIM_SPEC = (i) => {
+  const PLAT = ['Linux / x86_64', 'Darwin / arm64', 'Windows / AMD64', 'Linux / aarch64'];
+  const MODEL = ['qwen3.5:4b', 'gemma4:4b', 'llama4:8b', 'qwen3.5:4b'];
+  const HW = ['12 CPU · 32 GB · RTX 3060', '8 CPU · 16 GB · M2', '4 CPU · 8 GB', '16 CPU · 64 GB · RTX 4070', '6 CPU · 16 GB'];
+  return [['PLATFORM', PLAT[i % 4]], ['MODEL', MODEL[(i * 3 + 1) % 4]], ['HARDWARE', HW[(i * 5 + 2) % 5]]];
+};
+
+function demoModel() {
+  const ids = ['a1f3', '7c22', 'e910', 'b4d1', '3f8c', 'c012', '9ab7', 'd53e', '61fa', '2e94',
+               '8c1d', 'f470', '5b2a', 'a8e6', '14c3', 'e7d9', '90b5', 'cc21'];
+  const W1 = 2, W2 = 3;
+  const nodes = [{key: 'orch', kind: 'coordinator', label: 'this machine', tone: 'work', d: 30, gx: 0.15, gy: 1.78, lz: 0,
+    rows: [['ROLE', 'coordinator'], ['PLAN', '5 subtasks in 2 waves'], ['BUILDING NOW', '3 machines'],
+           ['FINISHED, NOW FREE', '2 machines'], ['HOLDING NOTHING', '13 machines'], ['DATA', 'simulated']],
+    note: 'One run, at its widest. The planner is asked for 3-5 subtasks, so five is the most machines one run can keep busy. The rest are idle because the plan ran out of work, not because they are slow.'}];
+  const edges = [];
+  const W1Y = [0.42, 0.98], W2Y = [2.02, 2.58, 3.14];
+  const bowX = (y) => 1.15 + 0.34 * (1 - Math.abs(y - 1.78) / 1.5);
+  const W1T = ['Read the CSV and normalise its headers', 'Parse the --since argument'];
+  const W2T = ['Filter rows by date', 'Recompute the totals', 'Update the printed summary'];
+  const W1P = [
+    'Load the CSV and normalise the header row: lowercase, strip spaces, fail loudly on a duplicate column. Return rows as dicts.',
+    'Add a --since argument taking an ISO date. Validate it and fail with a clear message if it does not parse.',
+  ];
+  const W2P = [
+    'Filter the loaded rows to those on or after the parsed --since date. Keep the existing column order.',
+    'Recompute the totals over the filtered rows only. Do not change how they are formatted.',
+    'Update the printed summary so it states the date range it covers. If the range is empty, say so rather than printing an empty table.',
+  ];
+  const ROWS = [5, 4, 4], GAPX = 0.42, FX = 2.35;
+  const slot = [];
+  ROWS.forEach((n, r) => {
+    const x0 = FX + (5 - n) * GAPX / 2;
+    for (let i = 0; i < n; i++) slot.push({x: x0 + i * GAPX, y: 1.24 + r * 0.66});
+  });
+  ids.forEach((id, i) => {
+    const w1 = i < W1, w2 = i >= W1 && i < W1 + W2;
+    const k = 'm' + id, s = slot[i - (W1 + W2)] || {x: FX, y: 1.78};
+    nodes.push({key: k, kind: 'machine', label: 'node-' + id, drawn: true,
+      tone: w2 ? 'busy' : 'ok', d: w2 ? 24 : (w1 ? 22 : 15), lz: (w1 || w2) ? 0 : 1.8,
+      gx: w1 || w2 ? bowX(w1 ? W1Y[i] : W2Y[i - W1]) : s.x, gy: w1 ? W1Y[i] : (w2 ? W2Y[i - W1] : s.y),
+      rows: [['STATE', w2 ? 'building' : (w1 ? 'built wave 1, now free' : 'holding nothing')],
+             ['IN THIS RUN', w2 ? 'wave 2 · ' + W2T[i - W1] : (w1 ? 'wave 1 · ' + W1T[i] : 'nothing — the plan ran out of work')],
+             ['DEPENDS ON', w2 ? 'wave 1' : (w1 ? 'nothing' : '—')], ...SIM_SPEC(i), ['DATA', 'simulated']],
+      note: w2 ? 'A drawn machine. This scale is a layout, not a measurement.'
+        : (w1 ? 'Finished its wave-1 subtask and went free. It is idle because the plan ran out of work, not because it is slow.'
+          : 'Holding nothing: the plan had five subtasks and they are all placed. Adding machines would not make this run any wider.')});
+    if (w1) edges.push({a: 'orch', b: k, tone: 'done', title: W1T[i], prompt: W1P[i],
+      rows: [['HANDED TO', 'node-' + id], ['WAVE', '1 of 2'], ['DEPENDS ON', 'nothing'], ['DATA', 'simulated']],
+      note: 'Wave 1 has no dependencies, so both of its subtasks went out at once. The machine that built this one is now free.'});
+    if (w2) edges.push({a: 'orch', b: k, tone: 'busy', title: W2T[i - W1], prompt: W2P[i - W1],
+      rows: [['HANDED TO', 'node-' + id], ['WAVE', '2 of 2'], ['DEPENDS ON', 'wave 1'], ['DATA', 'simulated']],
+      note: 'Handed out by the coordinator, not by the machine that built wave 1: there is no peer-to-peer path. It could not start before wave 1 returned.'});
+  });
+  const faces = [{keys: ['orch'].concat(ids.slice(0, W1 + W2).map(x => 'm' + x)),
+    title: 'One run at its widest — 5 subtasks in 2 waves',
+    prompt: 'Summarise the sales CSV, and add a --since flag so the summary can cover a date range.',
+    rows: [['PLAN', '5 subtasks in 2 waves'], ['SPREAD OVER', '5 machines + this one'], ['WAVE 1', 'built, both machines free'],
+           ['WAVE 2', 'building on 3 machines'], ['DATA', 'simulated']],
+    note: 'Everything inside this ground belongs to one run. Its edge is the ceiling: no plan grows past five machines however many are connected, and the thirteen outside it are the proof.'}];
+  return {nodes, edges, faces, uniform: true, height: 430};
+}
+
+function swarmModel() {
+  const R = 1.15, LOOSE = 112;
+  const hex = (i) => 'node-' + (0x1000 + i).toString(16);
+  const rnd = (i) => { const x = Math.sin(i * 12.9898) * 43758.5453; return x - Math.floor(x); };
+  const nodes = [], edges = [], faces = [];
+  let id = 0;
+  const STRAT = {
+    fan: 'plan & split · one plan across machines',
+    dag: 'plan & split · second wave held on depends_on',
+    tries: 'several tries · same subtask, three machines',
+  };
+  const SHAPES = [['fan', 3], ['dag', 4], ['tries', 3]].map((sp, i) => ({
+    s: sp[0], n: sp[1], r: 0.52, a: -Math.PI / 2 + (i / 3) * Math.PI * 2, lr: 0.34}));
+  const TASKS = {
+    fan: ['Write the CSV loader', 'Write the date filter', 'Write the summary printer'],
+    dag: ['Sketch the schema', 'Write the migration', 'Port the read path', 'Port the write path'],
+    tries: ['Make the flaky test deterministic', 'Make the flaky test deterministic', 'Make the flaky test deterministic'],
+  };
+  const PROMPTS = {
+    fan: ['Read the CSV from the path given on argv and return its rows as dicts. Normalise the header row.',
+          'Filter the loaded rows to those on or after the given ISO date. Validate the date. Keep the column order.',
+          'Print the summary table for the rows you are handed, including the date range it covers.'],
+    dag: ['Sketch the table schema for the new store as plain SQL: columns, types, and the one index the read path needs.',
+          'Write the forward migration for that schema, plus its reverse. It must be safe to run twice.',
+          'Port the read path onto the new schema defined by the first tier. Do not rename anything.',
+          'Port the write path onto the new schema defined by the first tier, keeping the existing validation.'],
+    tries: Array(3).fill('This test fails about one run in five. Find the source of the nondeterminism and make it deterministic without loosening what it asserts.'),
+  };
+  const HANDING = {
+    fan: 'One slice of a three-way split. Nothing in it depends on the other two, which is why all three went out at once.',
+    dag: 'Two tiers: the far one names the first tier’s output as its input, so depends_on holds it at the coordinator until that tier returns.',
+    tries: 'The same prompt, handed to three machines at once. The result that passes review is kept and the other two are discarded.',
+  };
+  const PITCH = {
+    fan: 'Write a small CSV summariser: load a file, filter it by date, print the totals.',
+    dag: 'Move the job store off the flat file onto SQLite, without changing the API.',
+    tries: 'A test in the suite fails about one run in five. Make it deterministic.',
+  };
+  const centres = [];
+  SHAPES.forEach((sh, ci) => {
+    const cx = R + Math.cos(sh.a) * sh.r, cy = R + Math.sin(sh.a) * sh.r;
+    const mine = ci === 0;
+    centres.push({x: cx, y: cy, mine, reach: sh.lr + 0.12});
+    const ok = 'c' + ci;
+    const oid = mine ? 'this machine' : hex(id++);
+    nodes.push({key: ok, kind: 'coordinator', label: oid, tone: 'work', d: mine ? 28 : 22, mine, drawn: !mine, gx: cx, gy: cy, lz: 0,
+      rows: [['ROLE', 'coordinator'], ['STRATEGY', STRAT[sh.s]], ['BUILDERS', String(sh.n)],
+             ['IF IT GOES DOWN', 'its run stops'], ['DATA', mine ? 'you are here' : 'drawn, not measured']],
+      note: mine ? 'You are one swarm in a field of them, not the centre of anything. Your coordinator runs its own plan and knows nothing about the others.'
+        : 'Somebody else’s coordinator, running its own plan. Nothing connects it to yours: that federation does not exist.'});
+    const keys = [];
+    for (let j = 0; j < sh.n; j++) {
+      const k = ok + 'b' + j;
+      keys.push(k);
+      let th = sh.a, rr = sh.lr;
+      if (sh.s === 'tries') { th = sh.a + (j - 1) * 0.34; rr = sh.lr * (j === 1 ? 1.12 : 0.9); }
+      else if (sh.s === 'dag') { th = sh.a + (j - 1.5) * 0.62; rr = sh.lr * (j < 2 ? 0.72 : 1.1); }
+      else { th = sh.a + (j - (sh.n - 1) / 2) * 0.8; }
+      const waiting = sh.s === 'dag' && j >= 2;
+      const building = waiting ? false : (sh.s === 'dag' ? true : (sh.s === 'tries' ? j !== 2 : j === sh.n - 1));
+      const bid = hex(id++);
+      const task = TASKS[sh.s][j];
+      const title = sh.s === 'tries' ? `${task} · attempt ${j + 1}` : task;
+      const sstate = waiting ? 'waiting on the tier before it' : (building ? 'building' : 'built, now free');
+      nodes.push({key: k, kind: 'machine', label: bid, drawn: true, tone: waiting ? 'wait' : (building ? 'busy' : 'ok'),
+        d: building ? 17 : 14, gx: cx + Math.cos(th) * rr, gy: cy + Math.sin(th) * rr, lz: 1.8,
+        rows: [['STATE', sstate], ['COORDINATOR', mine ? 'this machine' : oid], ['HOLDING', title],
+               ['DEPENDS ON', waiting ? 'the first tier' : 'nothing'], ...SIM_SPEC(id + ci), ['DATA', 'drawn, not measured']],
+        note: waiting ? 'It has the task and cannot start: depends_on names an output the first tier has not returned yet. A held machine is not a slow one.'
+          : (building ? 'Building somebody else’s subtask. A worker holds one task until it submits a result or its lease expires.'
+            : 'It finished its subtask and went free. Idle here means the plan ran out of work.')});
+      edges.push({a: ok, b: k, tone: waiting ? 'wait' : (building ? 'busy' : 'done'), title, prompt: PROMPTS[sh.s][j],
+        rows: [['HANDED TO', bid], ['STRATEGY', STRAT[sh.s]], ['DEPENDS ON', waiting ? 'the first tier' : 'nothing'], ['DATA', 'drawn, not measured']],
+        note: HANDING[sh.s] + ' Every line runs between a coordinator and one of its builders, because that is the only path work takes.'});
+    }
+    faces.push({keys: [ok].concat(keys),
+      title: mine ? 'Your run — ' + STRAT[sh.s] : 'Another swarm’s run — ' + STRAT[sh.s], prompt: PITCH[sh.s],
+      rows: [['COORDINATOR', oid], ['STRATEGY', STRAT[sh.s]], ['BUILDERS', String(sh.n)],
+             ['SHAPE', sh.s === 'dag' ? 'two tiers' : (sh.s === 'tries' ? 'three attempts at one subtask' : 'one plan fanned out')],
+             ['DATA', mine ? 'you are here' : 'drawn, not measured']],
+      note: mine ? 'Your whole run, and its edge is its reach. The machines on the rim are connected to nobody’s plan, and the other grounds are other coordinators entirely.'
+        : 'Somebody else’s run. No coordinator here knows about the others, which is why the grounds never touch.'});
+  });
+  const loose = [];
+  const clear = (x, y, sep) => {
+    for (const c of centres) {
+      const dx = x - c.x, dy = y - c.y, need = c.mine ? c.reach + 0.03 : c.reach;
+      if (dx * dx + dy * dy < need * need) return false;
+    }
+    for (const q of loose) { const dx = x - q.x, dy = y - q.y; if (dx * dx + dy * dy < sep * sep) return false; }
+    return true;
+  };
+  let seed = 0;
+  for (let pass = 0; pass < 6 && loose.length < LOOSE; pass++) {
+    const sep = [0.15, 0.128, 0.106, 0.085, 0.066, 0.052][pass];
+    for (let t = 0; t < 2400 && loose.length < LOOSE; t++) {
+      seed++;
+      const rr = Math.sqrt(rnd(seed * 3 + 1)) * R, th = rnd(seed * 7 + 5) * Math.PI * 2;
+      const x = R + Math.cos(th) * rr, y = R + Math.sin(th) * rr;
+      if (clear(x, y, sep)) loose.push({x, y});
+    }
+  }
+  loose.forEach((pt, i) => {
+    const open = i % 37 === 11;
+    nodes.push({key: 'l' + i, kind: 'machine', label: hex(id++), drawn: true, tone: open ? 'bad' : 'ok', d: open ? 9 : 8,
+      gx: pt.x, gy: pt.y, lz: 2.4,
+      rows: [['STATE', open ? 'circuit open · 429 for 60s' : 'connected, never given a task'], ['IN A RUN', 'no'],
+             ['WHY IDLE', open ? 'three failures in a row' : 'no plan is wide enough'], ...SIM_SPEC(i + 7), ['DATA', 'drawn, not measured']],
+      note: open ? 'Three consecutive failures, so /tasks/next answers 429 for 60s, then lets it back in on its own. Nobody has to intervene.'
+        : 'Connected and holding nothing. The planner is asked for 3-5 subtasks, so no single run can grow to cover this field.'});
+  });
+  return {nodes, edges, faces, uniform: true, height: 560};
+}
+
+const NODEMAP_TEXT = {
+  live: {
+    keys: [['is-work', 'coordinator'], ['is-busy', 'building'], ['is-ok', 'holding nothing'], ['is-bad', 'revoked']],
+    hint: 'Hover a machine or a line to inspect it. Click a machine for its own page; click a line or the ground to keep its panel open.',
+    note: 'Work goes out and comes back: the coordinator plans, machines build, the coordinator reviews what returns. '
+      + 'Nothing passes machine to machine, so every line runs to the coordinator.',
+  },
+  demo: {
+    head: 'One run at its widest, 18 machines', meta: 'simulated · no run behind this',
+    keys: [['is-work', 'coordinator'], ['is-busy', 'building'], ['is-ok', 'holding nothing']],
+    hint: 'One run at its widest. The bundle fanning up is wave 1, already built; the bundle fanning down is wave 2, '
+      + 'building now on three machines. Hover a machine, a line for the subtask and its prompt, or the shaded ground for '
+      + 'the run. Click to keep the panel open. The block on the right is thirteen machines this plan could never reach.',
+    note: 'Simulated: 18 machines, one run, five subtasks in two waves. Five is the ceiling, because the planner is asked '
+      + 'for 3-5 subtasks, so that is as many machines as one run can occupy. More hardware does not make one plan wider. '
+      + 'None of these machines or their specs are real.',
+  },
+  swarm: {
+    head: 'Three runs in a field of 125 machines', meta: 'drawn, not measured · needs federation, which does not exist',
+    keys: [['is-work', 'coordinator'], ['is-busy', 'building'], ['is-wait', 'waiting on a dependency'],
+           ['is-ok', 'holding nothing'], ['is-bad', 'circuit open']],
+    hint: 'Every bubble and line here can be read, the same as on the live scale. Hover a coordinator for its plan, a '
+      + 'builder for what it holds, a line for the subtask and its prompt, or a shaded ground for the whole run. Shape is '
+      + 'the strategy: a fan, two tiers, three attempts. The small dashed machines on the rim are hardware no plan is wide '
+      + 'enough to reach. Zoom in to read their names.',
+    note: 'Drawn, not measured, and the shape is an argument, not a forecast. One coordinator can only keep about five '
+      + 'machines busy, and it is a single point of failure with no standby. So 125 machines could not be one swarm: they '
+      + 'would have to be many small swarms side by side, each with its own coordinator, which is federation, and this '
+      + 'repo does not do it. Your machine is the one with the ring: one swarm among them, not the centre.',
+  },
+};
+
 function nodemapPositions(model, W, H) {
-  const pad = 70, maxGx = Math.max(1, ...model.nodes.map(n => n.gx));
   const pos = {};
+  if (model.uniform) {
+    // A drawn model is a picture: its two axes have to keep their ratio, or the
+    // bowed wave and the round field would stretch with the card.
+    const xs = model.nodes.map(n => n.gx), ys = model.nodes.map(n => n.gy);
+    const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+    const pad = 54, w = Math.max(0.001, x1 - x0), h = Math.max(0.001, y1 - y0);
+    const s = Math.min((W - pad * 2) / w, (H - pad * 2) / h);
+    const ox = (W - w * s) / 2, oy = (H - h * s) / 2;
+    model.nodes.forEach(n => { pos[n.key] = {x: ox + (n.gx - x0) * s, y: oy + (n.gy - y0) * s}; });
+    return pos;
+  }
+  const pad = 70, maxGx = Math.max(1, ...model.nodes.map(n => n.gx));
   model.nodes.forEach(n => {
     pos[n.key] = {x: pad + (W - pad * 2) * (n.gx / maxGx), y: 44 + (H - 100) * n.gy};
   });
   return pos;
 }
 
+function nodemapCurrent() {
+  if (_nodemapScale === 'live') return nodemapModel(_nodemapList);
+  if (!_nodemapDrawn[_nodemapScale]) {
+    _nodemapDrawn[_nodemapScale] = _nodemapScale === 'demo' ? demoModel() : swarmModel();
+  }
+  return _nodemapDrawn[_nodemapScale];
+}
+
 function renderNodeMap(nodes) {
   _nodemapList = (nodes.nodes || []).slice().sort((a, b) => String(a.node_id).localeCompare(String(b.node_id)));
-  const busy = _nodemapList.filter(n => n.current_task).length;
-  setText('nodemap-meta', _nodemapList.length
-    ? `live · ${_nodemapList.length} machine${_nodemapList.length === 1 ? '' : 's'} · ${busy} building`
-    : 'live · nothing connected');
-  const run = $('nodemap-run');
-  if (run) {
-    const t = Object.values(typeof turns === 'object' ? turns : {}).filter(x => x.doneAt == null).pop();
-    run.innerHTML = t ? `<i aria-hidden="true"></i><span>${escHtml(t.task)}</span>` : '';
-  }
   paintNodeMap();
   const stage = $('nodemap-stage');
   if (stage && !_nodemapObserver && 'ResizeObserver' in window) {
@@ -1174,21 +1413,40 @@ function renderNodeMap(nodes) {
   }
 }
 
+function paintNodeMapHead() {
+  const busy = _nodemapList.filter(n => n.current_task).length;
+  const text = NODEMAP_TEXT[_nodemapScale];
+  setText('nodemap-meta', _nodemapScale !== 'live' ? text.meta
+    : (_nodemapList.length ? `live · ${_nodemapList.length} machine${_nodemapList.length === 1 ? '' : 's'} · ${busy} building`
+      : 'live · nothing connected'));
+  const run = $('nodemap-run');
+  if (!run) return;
+  if (_nodemapScale !== 'live') { run.innerHTML = `<span>${escHtml(text.head)}</span>`; return; }
+  const t = Object.values(typeof turns === 'object' ? turns : {}).filter(x => x.doneAt == null).pop();
+  run.innerHTML = t ? `<i aria-hidden="true"></i><span>${escHtml(t.task)}</span>` : '';
+}
+
 function paintNodeMap() {
   const stage = $('nodemap-stage');
   const legend = $('nodemap-legend');
   const note = $('nodemap-note');
   if (!stage) return;
-  if (!_nodemapList.length) {
+  paintNodeMapHead();
+  if (_nodemapScale === 'live' && !_nodemapList.length) {
     stage.innerHTML = '<div class="nodemap-empty"><p class="nodemap-empty-title">Nothing is connected, so there is no flow to draw.</p>'
-      + '<p>The coordinator still runs work on itself, one builder at a time. A machine appears here the moment it registers.</p></div>';
+      + '<p>The coordinator still runs work on itself, one builder at a time. A machine appears here the moment it registers.</p>'
+      + '<p>The two drawn scales above still open: they are pictures of how work spreads, not measurements of this network.</p></div>';
+    stage._model = null;
     if (legend) legend.innerHTML = '';
-    if (note) note.textContent = '';
+    if (note) { note.textContent = ''; note.classList.remove('is-drawn'); }
+    paintNodePick(null);
     return;
   }
+  const model = nodemapCurrent();
   const W = Math.max(320, stage.clientWidth || 720);
-  const H = Math.max(240, Math.min(380, 120 + _nodemapList.length * 52));
-  const model = nodemapModel(_nodemapList);
+  const H = model.height
+    ? Math.max(280, Math.min(model.height, Math.round(W * 0.78)))
+    : Math.max(240, Math.min(380, 120 + _nodemapList.length * 52));
   const pos = nodemapPositions(model, W, H);
   const z = _nodemapZoom;
   // Marks grow as z^0.62 while distances grow as z, so zooming in opens the
@@ -1208,36 +1466,70 @@ function paintNodeMap() {
       <title>${escHtml(f.title)} — the area is the work in flight</title></polygon>`;
   }).join('');
   const edges = model.edges.map((e, i) => {
-    const p = pos[e.a], q = pos[e.b];
+    const p = pos[e.a], q = pos[e.b], tone = e.tone || 'busy';
+    const word = tone === 'done' ? 'built' : tone === 'wait' ? 'held on a dependency' : 'building';
     return `<line class="nm-band" x1="${p.x}" y1="${p.y}" x2="${q.x}" y2="${q.y}" data-pick="e:${i}" style="stroke-width:${18 * inv}">
-        <title>${escHtml(e.title)} — building · the task this machine reports holding</title></line>
-      <line class="nm-edge is-busy" x1="${p.x}" y1="${p.y}" x2="${q.x}" y2="${q.y}" style="stroke-width:${1.6 * inv}"></line>`;
+        <title>${escHtml(e.title)} — ${word}</title></line>
+      <line class="nm-edge is-${tone}" x1="${p.x}" y1="${p.y}" x2="${q.x}" y2="${q.y}" style="stroke-width:${1.6 * inv}"></line>`;
   }).join('');
+
+  /* A name is only drawn when the zoom has opened enough room for it: each mark
+     carries the zoom it earns its label at, and a label that would land on a
+     bubble, or on a name already placed, is dropped rather than overlapped.
+     Bigger marks are offered the space first, so the machines that matter keep
+     their names. Everything here is measured in screen pixels after the pan and
+     zoom, because that is where the collision would actually be seen. */
+  const hits = (a, b) => a[0] < b[2] && a[2] > b[0] && a[1] < b[3] && a[3] > b[1];
+  const screen = (k) => ({x: (pos[k].x - cx) * z + cx + _nodemapPan.x, y: (pos[k].y - cy) * z + cy + _nodemapPan.y});
+  const taken = model.nodes.map(n => {
+    const s = screen(n.key), r = (n.d / 2) * mark * z;
+    return [s.x - r, s.y - r, s.x + r, s.y + r];
+  });
+  const named = new Set();
+  model.nodes.slice().sort((a, b) => (b.d || 0) - (a.d || 0)).forEach(n => {
+    if (z < (n.lz || 0)) return;
+    const s = screen(n.key), r = (n.d / 2) * mark * z;
+    const sx = s.x, sy = s.y + r + 14;
+    if (sx < -60 || sx > W + 60 || sy < -24 || sy > H + 24) return;
+    const w = String(n.label).length * 6.4;
+    const box = [sx - w / 2 - 3, sy - 12, sx + w / 2 + 3, sy + 4];
+    if (taken.some(b => hits(box, b))) return;
+    taken.push(box);
+    named.add(n.key);
+  });
+
   const marks = model.nodes.map(n => {
     const p = pos[n.key], r = (n.d / 2) * mark;
-    const shape = `<circle class="nm-node is-${n.tone}${n.kind === 'coordinator' ? ' is-coord' : ''}" cx="${p.x}" cy="${p.y}" r="${r}"
+    const cls = ['nm-node', 'is-' + n.tone, n.kind === 'coordinator' ? 'is-coord' : '',
+                 n.drawn ? 'is-drawn' : '', n.mine ? 'is-mine' : ''].filter(Boolean).join(' ');
+    const shape = `<circle class="${cls}" cx="${p.x}" cy="${p.y}" r="${r}"
         data-pick="n:${escHtml(n.key)}" style="stroke-width:${1.5 * inv}">
         <title>${escHtml(n.label)} — ${escHtml(n.rows[0][1])}${n.page ? ' · click for this machine’s own page' : ''}</title></circle>`;
-    const label = `<text class="nm-label" x="${p.x}" y="${p.y + r + 14 * inv}" style="font-size:${11 * inv}px">${escHtml(n.label)}</text>`;
+    const label = named.has(n.key)
+      ? `<text class="nm-label" x="${p.x}" y="${p.y + r + 14 * inv}" style="font-size:${11 * inv}px">${escHtml(n.label)}</text>`
+      : '';
     return n.page
       ? `<a href="/node/${encodeURIComponent(n.page)}" class="nm-link">${shape}${label}</a>`
       : shape + label;
   }).join('');
 
+  const text = NODEMAP_TEXT[_nodemapScale];
+  const alt = _nodemapScale === 'live'
+    ? `${_nodemapList.length} machines connected to this coordinator`
+    : `${text.head} — drawn, not measured`;
   stage.innerHTML = `<svg class="nm-svg" width="100%" height="${H}" viewBox="0 0 ${W} ${H}" role="img"
-      aria-label="${_nodemapList.length} machines connected to this coordinator">
+      aria-label="${escHtml(alt)}">
       <g transform="${tf}">${faces}${edges}${marks}</g></svg>`;
-  stage.dataset.model = '';
   stage._model = model;
   setText('nodemap-zoom-label', Math.round(z * 100) + '%');
 
   if (legend) {
-    legend.innerHTML = [['is-work', 'coordinator'], ['is-busy', 'building'], ['is-ok', 'holding nothing'], ['is-bad', 'revoked']]
+    legend.innerHTML = text.keys
       .map(([cls, label]) => `<span class="nodemap-key"><i class="nm-swatch ${cls}" aria-hidden="true"></i>${label}</span>`).join('');
   }
   if (note) {
-    note.textContent = 'Work goes out and comes back: the coordinator plans, machines build, the coordinator '
-      + 'reviews what returns. Nothing passes machine to machine, so every line runs to the coordinator.';
+    note.textContent = text.note;
+    note.classList.toggle('is-drawn', _nodemapScale !== 'live');
   }
   paintNodePick(_nodemapPinned);
 }
@@ -1246,9 +1538,20 @@ function nodemapSubject(ref) {
   const model = $('nodemap-stage')?._model;
   if (!model || !ref) return null;
   const [t, k] = [ref.slice(0, 1), ref.slice(2)];
-  if (t === 'n') { const n = model.nodes.find(x => x.key === k); return n && {title: n.label, kind: n.kind === 'coordinator' ? 'COORDINATOR' : 'MACHINE', rows: n.rows, note: n.note, tone: n.tone}; }
-  if (t === 'e') { const e = model.edges[+k]; return e && {title: e.title, kind: 'TASK', rows: e.rows, note: 'The line runs from the coordinator to the machine holding this task. That handoff is what makes the run distributed.', tone: 'busy'}; }
-  if (t === 'f') { const f = model.faces[+k]; return f && {title: f.title, kind: 'WORK IN FLIGHT', rows: f.rows, note: 'Every corner is a machine this work reached.', tone: 'busy'}; }
+  if (t === 'n') {
+    const n = model.nodes.find(x => x.key === k);
+    return n && {title: n.label, kind: n.kind === 'coordinator' ? 'COORDINATOR' : 'MACHINE', rows: n.rows, note: n.note, tone: n.tone};
+  }
+  if (t === 'e') {
+    const e = model.edges[+k];
+    return e && {title: e.title, kind: 'SUBTASK', rows: e.rows, prompt: e.prompt, tone: e.tone || 'busy',
+      note: e.note || 'The line runs from the coordinator to the machine holding this task. That handoff is what makes the run distributed.'};
+  }
+  if (t === 'f') {
+    const f = model.faces[+k];
+    return f && {title: f.title, kind: model.uniform ? 'RUN' : 'WORK IN FLIGHT', rows: f.rows, prompt: f.prompt, tone: 'busy',
+      note: f.note || 'Every corner is a machine this work reached.'};
+  }
   return null;
 }
 
@@ -1257,21 +1560,38 @@ function paintNodePick(ref) {
   if (!el) return;
   const s = nodemapSubject(ref);
   if (!s) {
-    el.innerHTML = '<p class="nodemap-hint">Hover a machine or a line to inspect it. Click a machine for its own page.</p>';
+    el.innerHTML = `<p class="nodemap-hint">${escHtml(NODEMAP_TEXT[_nodemapScale].hint)}</p>`;
     return;
   }
+  // The prompt is the text actually handed to the machine, shown whole: a
+  // subtask you cannot read is a subtask you have to take on trust.
+  const prompt = s.prompt
+    ? `<div class="nodemap-pick-prompt"><span class="card-k">PROMPT AS HANDED OUT</span><p>${escHtml(s.prompt)}</p></div>`
+    : '';
   el.innerHTML = `
     <div class="nodemap-pick-head"><i class="nm-swatch is-${escHtml(s.tone)}" aria-hidden="true"></i>
       <span class="nodemap-pick-title">${escHtml(s.title)}</span><span class="card-k">${escHtml(s.kind)}</span>
       ${_nodemapPinned ? '<button type="button" class="card-clear" data-nodemap-unpin title="Close this panel">close &#10005;</button>' : ''}</div>
     <div class="nodemap-pick-rows">${s.rows.map(([k, v]) => `<div class="nodemap-pick-row"><span class="card-k">${escHtml(k)}</span>
       <span class="nodemap-pick-v">${escHtml(v)}</span></div>`).join('')}</div>
+    ${prompt}
     <p class="nodemap-pick-note">${escHtml(s.note)}</p>`;
 }
 
 function zoomNodeMap(how) {
   if (how === 'reset') { _nodemapZoom = 1; _nodemapPan = {x: 0, y: 0}; }
   else _nodemapZoom = Math.max(0.6, Math.min(3, _nodemapZoom * (how === 'in' ? 1.25 : 0.8)));
+  paintNodeMap();
+}
+
+function setNodemapScale(scale) {
+  if (!NODEMAP_TEXT[scale]) return;
+  _nodemapScale = scale;
+  _nodemapZoom = 1;
+  _nodemapPan = {x: 0, y: 0};
+  _nodemapPinned = null;
+  document.querySelectorAll('[data-nodemap-scale]').forEach(b =>
+    b.setAttribute('aria-checked', b.dataset.nodemapScale === scale ? 'true' : 'false'));
   paintNodeMap();
 }
 
@@ -2503,6 +2823,8 @@ $('nav-toggle').addEventListener('click', toggleNav);
 $('rail-toggle').addEventListener('click', toggleNav);
 document.querySelectorAll('[data-zoom]').forEach(b =>
   b.addEventListener('click', () => zoomNodeMap(b.dataset.zoom)));
+document.querySelectorAll('[data-nodemap-scale]').forEach(b =>
+  b.addEventListener('click', () => setNodemapScale(b.dataset.nodemapScale)));
 (function wireNodeMap() {
   const stage = $('nodemap-stage');
   if (!stage) return;

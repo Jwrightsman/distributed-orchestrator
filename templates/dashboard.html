@@ -444,16 +444,31 @@
             <span class="ov-vital-v">&mdash;</span><span class="ov-vital-k" title="What the machines say about themselves at registration. Nothing samples it">memory claimed</span></div>
         </div>
 
-        <!-- The map. Live scale: this coordinator right now, from /nodes. The
-             coordinator sits at the edge because planning and review are its
-             work, first and last. A line runs from it to a machine only while
-             that machine holds work, because that is the only path work takes;
-             nothing passes machine to machine. -->
+        <!-- The map, at three scales. Live is this coordinator right now, from
+             /nodes: the coordinator sits at the edge because planning and review
+             are its work, first and last, and a line runs from it to a machine
+             only while that machine holds work, because that is the only path
+             work takes; nothing passes machine to machine.
+
+             The other two are drawn, not measured: one run at its widest, and
+             three runs in a field of 125. They carry no points, no task counts
+             and no rates, every panel on them ends with a DATA row saying what
+             they are, and the caption under the map says so in the warning
+             colour. They are pictures of how work spreads, and the swarm scale
+             draws a federation this repo does not have. -->
         <div class="card" id="nodemap">
           <div class="card-tools nodemap-head">
             <span class="card-k">MAP</span>
             <span class="nodemap-run" id="nodemap-run"></span>
             <span class="nodemap-meta" id="nodemap-meta">&mdash;</span>
+            <div class="seg nodemap-scale" role="radiogroup" aria-label="Map scale">
+              <button type="button" role="radio" aria-checked="true" data-nodemap-scale="live"
+                      title="This coordinator right now, from /nodes">live</button>
+              <button type="button" role="radio" aria-checked="false" data-nodemap-scale="demo"
+                      title="One run at its widest, drawn rather than measured">simulated <span class="seg-n">18</span></button>
+              <button type="button" role="radio" aria-checked="false" data-nodemap-scale="swarm"
+                      title="Three runs in a field of 125, drawn rather than measured">swarm <span class="seg-n">125</span></button>
+            </div>
             <div class="seg nodemap-zoom" role="group" aria-label="Zoom">
               <button type="button" data-zoom="out" title="Zoom out" aria-label="Zoom out">&minus;</button>
               <button type="button" data-zoom="reset" id="nodemap-zoom-label" title="Reset the view">100%</button>
@@ -463,7 +478,8 @@
           <div class="nodemap-stage" id="nodemap-stage"></div>
           <div class="nodemap-legend" id="nodemap-legend"></div>
           <div class="nodemap-pick" id="nodemap-pick">
-            <p class="nodemap-hint">Hover a machine or a line to inspect it. Click a machine for its own page.</p>
+            <p class="nodemap-hint">Hover a machine or a line to inspect it. Click a machine for its own page;
+              click a line or the ground to keep its panel open.</p>
           </div>
           <p class="nodemap-note" id="nodemap-note"></p>
         </div>
