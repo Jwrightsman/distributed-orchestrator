@@ -187,6 +187,13 @@ function distBadge(mode) {
 }
 
 function relativeTime(ts) {
+  if (ts instanceof Date) {
+    const delta = Math.floor((Date.now() - ts.getTime()) / 1000);
+    if (delta < 60) return 'just now';
+    if (delta < 3600) return `${Math.floor(delta / 60)}m ago`;
+    if (delta < 86400) return `${Math.floor(delta / 3600)}h ago`;
+    return `${Math.floor(delta / 86400)}d ago`;
+  }
   // ts format: 20240101_120000, UTC
   try {
     const s = String(ts);
@@ -1729,40 +1736,171 @@ async function pollEvents() {
 // ── History ──────────────────────────────────────────────────────
 let _historySearchTimer = null;
 
+let historyRuns = [];
+let runsFilter = 'all';
+let runsSort = {k: 'when', dir: 'desc'};
+
+function runBucket(r) {
+  const v = runVerdict(r.rating, r.code_precheck_error);
+  return v === 'PASS' ? 'passed' : v === 'FAIL' ? 'failed' : 'partial';
+}
+
+/* 20260917_134501 is UTC, as the run directory names it. */
+function runDate(ts) {
+  const m = String(ts).match(/^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/);
+  return m ? new Date(Date.UTC(+m[1], m[2] - 1, +m[3], +m[4], +m[5], +m[6])) : null;
+}
+function dayLabel(d) {
+  if (!d) return 'undated';
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const that = new Date(d); that.setHours(0, 0, 0, 0);
+  const days = Math.round((today - that) / 86400000);
+  if (days === 0) return 'Today';
+  if (days === 1) return 'Yesterday';
+  return d.toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric'});
+}
+
+const VERDICT_RANK = {FAIL: 0, NEEDS_WORK: 1, UNCHECKED: 2, NO_VERDICT: 3, PASS: 4};
+
+function runRowHtml(r) {
+  const v = VERDICTS[runVerdict(r.rating, r.code_precheck_error)];
+  return `
+    <a class="runs-grid runs-row" href="/run/${encodeURIComponent(r.timestamp)}" data-run-row="${escHtml(r.timestamp)}"
+       title="Open this run's detail">
+      <span class="runs-task">${escHtml(r.task)}</span>
+      <span class="runs-verdict ${v.cls}"><i class="lamp" aria-hidden="true"></i>${v.label}
+        ${r.project_id ? `<span class="runs-sub">${escHtml(r.project_id)}</span>` : ''}</span>
+      <span class="mono-cell">${escHtml(String(r.subtask_count))}</span>
+      <span class="mono-cell ${r.mode === 'distributed' ? 'is-dist' : 'is-quiet'}">${escHtml(r.mode || 'local')}</span>
+      <span class="mono-cell is-quiet">${escHtml(relativeTime(r.timestamp))}</span>
+      <span class="runs-go" aria-hidden="true">&rarr;</span>
+    </a>`;
+}
+
+function renderRuns() {
+  const el = $('history-list');
+  const q = ($('history-search')?.value || '').trim();
+  const counts = {all: historyRuns.length, passed: 0, partial: 0, failed: 0};
+  historyRuns.forEach(r => { counts[runBucket(r)] += 1; });
+  Object.keys(counts).forEach(k => setText(`runs-n-${k}`, counts[k]));
+  document.querySelectorAll('[data-runs-filter]').forEach(b =>
+    b.setAttribute('aria-checked', b.dataset.runsFilter === runsFilter ? 'true' : 'false'));
+
+  const shown = historyRuns.filter(r => runsFilter === 'all' || runBucket(r) === runsFilter);
+  const filtered = runsFilter !== 'all' || !!q;
+  $('runs-clear').hidden = !filtered;
+  const cap = historyRuns.length >= 50 ? 'newest 50 loaded' : `${historyRuns.length} loaded`;
+  setText('runs-count', filtered ? `${shown.length} of ${cap}` : `newest first · ${cap}`);
+
+  document.querySelectorAll('[data-runs-sort]').forEach(b => {
+    const on = b.dataset.runsSort === runsSort.k;
+    b.classList.toggle('is-on', on);
+    b.textContent = b.dataset.runsSort.toUpperCase() + (on ? (runsSort.dir === 'desc' ? ' ↓' : ' ↑') : '');
+    b.title = (on ? 'Sorted by ' : 'Sort by ') + b.dataset.runsSort + (on ? ' · click to reverse' : '');
+  });
+
+  if (!historyRuns.length) {
+    el.innerHTML = q
+      ? `<div class="empty-state"><p>Nothing matches “${escHtml(q)}”.</p></div>`
+      : '<div class="empty-state"><p>No past runs yet.<br>A completed pitch lands here with a permanent link you can share.</p></div>';
+    return;
+  }
+  if (!shown.length) {
+    el.innerHTML = '<div class="empty-state"><p>No loaded run matches. The chips count the runs on this page, not every run ever made.</p></div>';
+    return;
+  }
+
+  const dir = runsSort.dir === 'desc' ? -1 : 1;
+  const key = {
+    task: r => r.task.toLowerCase(),
+    verdict: r => VERDICT_RANK[runVerdict(r.rating, r.code_precheck_error)],
+    subtasks: r => r.subtask_count,
+    mode: r => r.mode || 'local',
+    when: r => r.timestamp,
+  }[runsSort.k];
+  const sorted = shown.slice().sort((x, y) => (key(x) < key(y) ? -1 : key(x) > key(y) ? 1 : 0) * dir);
+
+  if (runsSort.k !== 'when') {
+    el.innerHTML = `<div class="runs-day">sorted by ${escHtml(runsSort.k)} · day headings dropped</div>`
+      + sorted.map(runRowHtml).join('');
+    return;
+  }
+  const groups = [];
+  sorted.forEach(r => {
+    const label = dayLabel(runDate(r.timestamp));
+    if (!groups.length || groups[groups.length - 1].label !== label) groups.push({label, runs: []});
+    groups[groups.length - 1].runs.push(r);
+  });
+  el.innerHTML = groups.map(g => {
+    const passed = g.runs.filter(r => runBucket(r) === 'passed').length;
+    return `<div class="runs-day"><span class="runs-day-k">${escHtml(g.label)}</span>
+      <span>${g.runs.length} ${g.runs.length === 1 ? 'run' : 'runs'} · ${passed} passed</span></div>`
+      + g.runs.map(runRowHtml).join('');
+  }).join('');
+}
+
 async function loadHistory() {
   const q = ($('history-search')?.value || '').trim();
   const url = q ? `/history?search=${encodeURIComponent(q)}` : '/history';
   try {
     const data = await apiJson(url);
-    const el = $('history-list');
+    historyRuns = data.runs || [];
     // /history returns at most 50, so a full page is a lower bound, not a total.
     if (!q) {
+      const label = data.count >= 50 ? '50+' : String(data.count);
       const navRuns = $('nav-runs-count');
       if (navRuns) {
-        navRuns.textContent = data.count >= 50 ? '50+' : String(data.count);
+        navRuns.textContent = label;
         navRuns.hidden = data.count === 0;
       }
+      setText('runs-tab-pitched-n', data.count ? label : '');
     }
-
-    if (data.count === 0) {
-      el.innerHTML = q
-        ? `<div class="empty-state"><p>Nothing matches “${escHtml(q)}”.</p></div>`
-        : '<div class="empty-state"><p>No past runs yet.<br>A completed pitch lands here with a permanent link you can share.</p></div>';
-      return;
-    }
-
-    el.innerHTML = data.runs.map(r => `
-      <a class="history-card" href="/run/${encodeURIComponent(r.timestamp)}">
-        <span class="history-task">${escHtml(r.task)}</span>
-        <span class="history-meta">
-          ${distBadge(r.mode)}
-          ${verdictChip(r.rating, r.code_precheck_error)}
-          <span class="mono-dim">${r.subtask_count} tasks</span>
-          <span class="mono-dim">${relativeTime(r.timestamp)}</span>
-          <span class="history-view">view &#8594;</span>
-        </span>
-      </a>`).join('');
+    renderRuns();
   } catch (e) {}
+}
+
+/* This machine's work: the ledger rows whose contributor is this
+   coordinator, the same id /metrics names it by. */
+const WORK_KINDS = {
+  compute: {label: 'COMPUTE', cls: 'is-compute'},
+  review: {label: 'REVIEW', cls: 'is-review'},
+  pitch: {label: 'PITCH', cls: 'is-pitch'},
+};
+async function loadMachineWork() {
+  const who = ($('credit-host')?.textContent || '').trim();
+  const list = $('machine-work-list');
+  if (!who || who === 'this coordinator') {
+    list.innerHTML = '<div class="empty-state"><p>Waiting to learn this coordinator’s id from /metrics.</p></div>';
+    return;
+  }
+  try {
+    const data = await apiJson(`/ledger?contributor=${encodeURIComponent(who)}&limit=100`);
+    const entries = (data.entries || []).slice().reverse();
+    const points = entries.reduce((a, e) => a + Number(e.points ?? e.credits ?? 0), 0);
+    setText('runs-tab-machine-n', entries.length || '');
+    setText('machine-work-summary', `${who} · ${entries.length} ${entries.length === 1 ? 'contribution' : 'contributions'} · ${points} points`
+      + (entries.length >= 100 ? ' · newest 100' : ''));
+    list.innerHTML = entries.length ? entries.map(e => {
+      const k = WORK_KINDS[e.type] || {label: String(e.type || 'other').toUpperCase(), cls: 'is-other'};
+      const when = e.timestamp ? relativeTime(new Date(e.timestamp * 1000)) : '—';
+      return `<div class="work-grid work-row">
+        <span class="work-kind ${k.cls}"><i aria-hidden="true"></i>${escHtml(k.label)}</span>
+        <span class="work-what">${escHtml(e.task || e.details || '')}</span>
+        <span class="mono-cell is-num">${escHtml(String(e.points ?? e.credits ?? 0))}</span>
+        <span class="mono-cell is-quiet is-num">${escHtml(when)}</span>
+      </div>`;
+    }).join('') : '<div class="empty-state"><p>No contributions recorded for this coordinator yet.</p></div>';
+  } catch (e) {
+    if (e instanceof ViewerLocked) return;
+    list.innerHTML = '<div class="empty-state"><p>The ledger could not be read.</p></div>';
+  }
+}
+
+function showRunsTab(name) {
+  document.querySelectorAll('[data-runs-tab]').forEach(b =>
+    b.setAttribute('aria-selected', b.dataset.runsTab === name ? 'true' : 'false'));
+  document.querySelectorAll('[data-runs-pane]').forEach(p => { p.hidden = p.dataset.runsPane !== name; });
+  if (name === 'machine') loadMachineWork();
 }
 
 // ── Standings ────────────────────────────────────────────────────
@@ -2083,6 +2221,33 @@ $('statusbar-collapse').addEventListener('click', toggleStatusBar);
 
 $('nav-toggle').addEventListener('click', toggleNav);
 $('rail-toggle').addEventListener('click', toggleNav);
+document.querySelectorAll('[data-runs-tab]').forEach(b =>
+  b.addEventListener('click', () => showRunsTab(b.dataset.runsTab)));
+document.querySelectorAll('[data-runs-filter]').forEach(b =>
+  b.addEventListener('click', () => { runsFilter = b.dataset.runsFilter; renderRuns(); }));
+document.querySelectorAll('[data-runs-sort]').forEach(b =>
+  b.addEventListener('click', () => {
+    const k = b.dataset.runsSort;
+    runsSort = runsSort.k === k
+      ? {k, dir: runsSort.dir === 'desc' ? 'asc' : 'desc'}
+      // Task and mode read A to Z; verdict reads worst first; counts and time
+      // read biggest and newest first.
+      : {k, dir: (k === 'task' || k === 'mode' || k === 'verdict') ? 'asc' : 'desc'};
+    renderRuns();
+  }));
+$('runs-clear').addEventListener('click', () => {
+  runsFilter = 'all';
+  const q = $('history-search');
+  if (q.value) { q.value = ''; loadHistory(); } else renderRuns();
+});
+// A plain click opens the run in the console; a modified click still opens
+// the run's own page, because the row is a real link to it.
+$('history-list').addEventListener('click', (e) => {
+  const row = e.target.closest('[data-run-row]');
+  if (!row || e.ctrlKey || e.metaKey || e.shiftKey || e.button !== 0) return;
+  e.preventDefault();
+  viewRun(row.dataset.runRow);
+});
 document.querySelectorAll('.ov-strategy [data-strategy]').forEach(b =>
   b.addEventListener('click', () => setStrategy(b.dataset.strategy)));
 document.querySelectorAll('.ov-tab').forEach(b =>

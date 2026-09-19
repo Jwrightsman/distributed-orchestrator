@@ -339,17 +339,75 @@
         </div>
       </section>
 
-      <!-- ── RUNS ── -->
+      <!-- ── RUNS ──
+           A hairline table, grouped by day (README, "Screens"). The chips count
+           the runs this page loaded, never a ledger total: /history serves the
+           newest 50 and nothing serves verdict totals, so a chip reading "35"
+           over a page of 50 would be a number with nothing under it. Any sort
+           other than WHEN drops the day headings and says so, because a list
+           grouped by day and ordered by something else is two orderings
+           claiming to be one (HANDOFF-UI section 19.7). WALL stays dropped:
+           HANDOFF-DELTA section 8.1 records the decision. -->
       <section id="view-runs" aria-labelledby="tab-runs" hidden>
         <div class="view-head"><h2>Runs</h2><span class="view-sub">Every pipeline this orchestrator has completed</span></div>
-        <div class="section-head">
-          <h2 id="history-heading">History</h2>
-          <label class="sr-only" for="history-search">Search past runs</label>
-          <input id="history-search" class="search-input" type="search" placeholder="search…">
-        </div>
-        <div id="history-list" aria-labelledby="history-heading">
-          <div class="empty-state">
-            <p>No past runs yet.<br>A completed pitch lands here with a permanent link you can share.</p>
+        <div class="card">
+          <div class="card-tabs" role="tablist" aria-label="Which runs">
+            <button type="button" role="tab" class="card-tab" id="runs-tab-pitched" data-runs-tab="pitched"
+                    aria-selected="true" title="Runs this orchestrator pitched">Pitched here<span class="card-tab-n" id="runs-tab-pitched-n"></span></button>
+            <button type="button" role="tab" class="card-tab" id="runs-tab-machine" data-runs-tab="machine"
+                    aria-selected="false" title="What this coordinator itself computed, read from the ledger">This machine's work<span class="card-tab-n" id="runs-tab-machine-n"></span></button>
+          </div>
+
+          <div class="runs-pane" data-runs-pane="pitched">
+            <div class="card-tools">
+              <div class="seg" role="radiogroup" aria-label="Filter by verdict" id="runs-filters">
+                <button type="button" role="radio" aria-checked="true" data-runs-filter="all"
+                        title="Every loaded run">all <span class="seg-n" id="runs-n-all"></span></button>
+                <button type="button" role="radio" aria-checked="false" data-runs-filter="passed"
+                        title="Loaded runs the reviewer passed and whose mechanical check found nothing">passed <span class="seg-n" id="runs-n-passed"></span></button>
+                <button type="button" role="radio" aria-checked="false" data-runs-filter="partial"
+                        title="Loaded runs that did not pass: needs work, unchecked, or no verdict recorded">partial <span class="seg-n" id="runs-n-partial"></span></button>
+                <button type="button" role="radio" aria-checked="false" data-runs-filter="failed"
+                        title="Loaded runs the reviewer failed">failed <span class="seg-n" id="runs-n-failed"></span></button>
+              </div>
+              <label class="sr-only" for="history-search">Search past runs</label>
+              <input id="history-search" class="search-input" type="search" placeholder="filter runs…"
+                     title="Searches every run's task text on the server · GET /history?search=">
+              <button type="button" class="card-clear" id="runs-clear" hidden
+                      title="Show every loaded run again">clear &#10005;</button>
+              <span class="card-count" id="runs-count"></span>
+            </div>
+            <div class="table-scroll">
+              <div class="runs-grid runs-head" id="runs-head">
+                <button type="button" data-runs-sort="task" title="Sort by task">TASK</button>
+                <button type="button" data-runs-sort="verdict" title="Sort by verdict, worst first">VERDICT</button>
+                <button type="button" data-runs-sort="subtasks" title="Sort by the number of subtasks">SUBTASKS</button>
+                <button type="button" data-runs-sort="mode" title="Sort by placement">MODE</button>
+                <button type="button" data-runs-sort="when" title="Sort by when it ran">WHEN</button>
+                <span aria-hidden="true"></span>
+              </div>
+              <div id="history-list" aria-label="Past runs">
+                <div class="empty-state">
+                  <p>No past runs yet.<br>A completed pitch lands here with a permanent link you can share.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="runs-pane" data-runs-pane="machine" hidden>
+            <div class="card-tools">
+              <span class="card-summary" id="machine-work-summary">&mdash;</span>
+              <button type="button" class="ov-link" data-tab="guild" title="Guild standings — points per machine">guild standings &rarr;</button>
+            </div>
+            <p class="card-note">What this coordinator itself computed, from its rows in the ledger. The
+              grain is one contribution, a builder subtask, a reviewer pass or a pitch, not a whole
+              run, because that is what the ledger records.</p>
+            <div class="table-scroll">
+              <div class="work-grid runs-head">
+                <span>KIND</span><span>WHAT IT DID</span><span class="is-num">POINTS</span><span class="is-num">WHEN</span>
+              </div>
+              <div id="machine-work-list"></div>
+            </div>
           </div>
         </div>
       </section>
