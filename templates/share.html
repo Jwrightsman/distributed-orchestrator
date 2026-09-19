@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex">
+<title><!--SLOT:SHARE_TITLE--> — shared from Mycelium</title>
+<meta name="description" content="A run shared deliberately from a Mycelium coordinator, with a link that expires and can be revoked.">
+<meta property="og:title" content="<!--SLOT:SHARE_TITLE-->">
+<meta property="og:description" content="<!--SLOT:SHARE_VERDICT--> · shared from Mycelium">
+<!-- THEME -->
+<style>
+  /* The share card (HANDOFF-UI section 5). What someone without a viewer key
+     sees: one run, deliberately shared, and nothing else on the coordinator.
+     Written phone-first; every tappable control is at least 44px. */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font-family: var(--sans); line-height: 1.55; min-height: 100vh; -webkit-font-smoothing: antialiased; }
+  :where(a, button):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 8px; }
+  .page { width: 100%; max-width: 640px; margin: 0 auto; padding: 40px 16px 56px; }
+  .top { display: flex; align-items: center; gap: 9px; margin-bottom: 18px; }
+  .top a { display: inline-flex; align-items: center; gap: 9px; min-height: 44px; }
+  .mark { width: 9px; height: 9px; background: var(--mark); }
+  .wordmark { font-size: 12px; font-weight: 600; letter-spacing: 0.1em; color: var(--mark); }
+  .expires { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text-muted); }
+  .theme-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 44px; min-height: 44px; background: none; border: none; cursor: pointer;
+    font-family: var(--mono); font-size: 11px; color: var(--text-muted);
+  }
+  .theme-btn span { border: 1px solid var(--border); border-radius: 10px; padding: 3px 8px; }
+  .theme-btn:hover span { border-color: var(--border-strong); color: var(--text); }
+
+  .card { border: 1px solid var(--border); border-radius: 10px; background: var(--surface); overflow: hidden; }
+  .verdict { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; padding: 13px 18px; border-bottom: 1px solid var(--border-subtle); }
+  .verdict i { width: 6px; height: 6px; flex-shrink: 0; background: var(--border-strong); }
+  .verdict b { font-family: var(--mono); font-size: 11.5px; font-weight: 400; letter-spacing: 0.05em; color: var(--text-muted); }
+  .verdict.is-ok i { background: var(--accent); }
+  .verdict.is-ok b { color: var(--accent-text); }
+  .verdict.is-warn i { background: var(--warn); }
+  .verdict.is-warn b { color: var(--warn-text); }
+  .verdict.is-bad i { background: var(--danger); }
+  .verdict.is-bad b { color: var(--danger-text); }
+  .verdict .meta { font-family: var(--mono); font-size: 11px; color: var(--text-muted); }
+  .body { padding: 18px 16px; }
+  h1 { font-size: 20px; font-weight: 600; line-height: 1.35; letter-spacing: -0.3px; text-wrap: pretty; overflow-wrap: anywhere; }
+  .preview { padding: 0 16px 16px; }
+  .code {
+    margin: 0; padding: 13px 14px; max-height: 320px; overflow: auto;
+    background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: 10px;
+    font-family: var(--mono); font-size: 11.5px; line-height: 1.7; color: var(--text-dim);
+    white-space: pre-wrap; word-break: break-word;
+  }
+  .empty { font-size: 12.5px; color: var(--text-muted); }
+  .figs { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); border-top: 1px solid var(--border-subtle); }
+  .fig { padding: 16px 18px; border-right: 1px solid var(--border-subtle); min-width: 0; }
+  .fig:last-child { border-right: none; }
+  .fig-v { font-family: var(--mono); font-size: 13px; color: var(--text); overflow-wrap: anywhere; }
+  .fig-k { font-size: 11px; font-weight: 600; letter-spacing: 0.09em; color: var(--text-muted); margin-top: 5px; }
+  .checks { display: grid; grid-template-columns: 7px minmax(0, 1fr); gap: 11px; padding: 16px 18px; border-top: 1px solid var(--border-subtle); }
+  .checks i { width: 7px; height: 7px; margin-top: 5px; background: var(--info); }
+  .checks p { font-size: 12.5px; color: var(--text-muted); line-height: 1.6; }
+  .actions { display: flex; gap: 9px; padding: 18px; border-top: 1px solid var(--border-subtle); flex-wrap: wrap; }
+  .btn {
+    flex: 1 1 180px; display: inline-flex; align-items: center; justify-content: center;
+    min-height: 46px; padding: 12px 18px; border-radius: 10px; font-size: 13.5px; font-weight: 500; text-decoration: none;
+  }
+  .btn-primary { background: var(--accent); color: var(--on-accent); font-weight: 600; }
+  .btn-primary:hover { background: var(--accent-strong); color: var(--on-accent); }
+  .btn-ghost { color: var(--text-dim); border: 1px solid var(--border); }
+  .btn-ghost:hover { border-color: var(--border-strong); color: var(--text); }
+  .note { font-size: 12px; color: var(--text-muted); line-height: 1.6; margin-top: 14px; }
+  .foot { display: flex; align-items: center; gap: 4px 12px; margin-top: 12px; flex-wrap: wrap; font-family: var(--mono); font-size: 11px; color: var(--text-muted); }
+  .foot a { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; min-width: 44px; color: var(--text-muted); }
+  .foot a:hover { color: var(--text); }
+</style>
+</head>
+<body>
+<main class="page">
+  <div class="top">
+    <a href="/" title="What Mycelium is"><span class="mark" aria-hidden="true"></span><span class="wordmark">MYCELIUM</span></a>
+    <span class="expires">shared link · <!--SLOT:SHARE_EXPIRES--></span>
+    <button class="theme-btn" id="theme-toggle" type="button" title="Switch between the dark and light themes"
+            aria-label="Switch colour theme"><span><span id="theme-toggle-icon" aria-hidden="true"></span></span></button>
+  </div>
+
+  <article class="card">
+    <div class="verdict is-<!--SLOT:SHARE_TONE-->">
+      <i aria-hidden="true"></i><b><!--SLOT:SHARE_VERDICT--></b>
+      <span class="meta"><!--SLOT:SHARE_META--></span>
+    </div>
+    <div class="body"><h1><!--SLOT:SHARE_TASK--></h1></div>
+    <div class="preview"><!--SLOT:SHARE_PREVIEW--></div>
+    <div class="figs">
+      <div class="fig"><div class="fig-v"><!--SLOT:SHARE_PLACEMENT--></div><div class="fig-k">PLACEMENT</div></div>
+      <div class="fig"><div class="fig-v"><!--SLOT:SHARE_STRATEGY--></div><div class="fig-k">STRATEGY</div></div>
+      <div class="fig"><div class="fig-v"><!--SLOT:SHARE_FILES--></div><div class="fig-k">FILES</div></div>
+      <div class="fig"><div class="fig-v"><!--SLOT:SHARE_NODES--></div><div class="fig-k">MACHINES</div></div>
+    </div>
+    <div class="checks"><i aria-hidden="true"></i><p><!--SLOT:SHARE_CHECKS--></p></div>
+    <div class="actions">
+      <!--SLOT:SHARE_DOWNLOAD-->
+      <a class="btn btn-ghost" href="<!--SLOT:SHARE_REPO-->" target="_blank" rel="noopener"
+         title="How to run your own coordinator">Run your own &#8599;</a>
+    </div>
+  </article>
+
+  <p class="note">This link was created deliberately and can be revoked. It reaches this one run —
+    not the project it belongs to, not the machines that built it, and not anything else on the
+    coordinator.</p>
+
+  <nav class="foot" aria-label="More">
+    <span>built with Mycelium</span>
+    <a href="/" title="What Mycelium is">about</a>
+    <a href="<!--SLOT:SHARE_REPO-->" target="_blank" rel="noopener" title="The repository">source</a>
+  </nav>
+</main>
+<script>
+  /* This page supplies its own theme control, so the theme partial's floating
+     one stands down. */
+  (function () {
+    const icon = document.getElementById('theme-toggle-icon');
+    const paint = () => {
+      icon.textContent = document.documentElement.getAttribute('data-theme') === 'dark' ? '☀' : '☾';
+    };
+    paint();
+    document.getElementById('theme-toggle').addEventListener('click', () => {
+      const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+      try { localStorage.setItem('mycelium-theme', next); } catch (e) {}
+      document.documentElement.setAttribute('data-theme', next);
+      paint();
+    });
+  })();
+</script>
+</body>
+</html>

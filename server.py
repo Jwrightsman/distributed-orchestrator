@@ -12,6 +12,7 @@ The implementation lives in focused modules:
   routes_projects.py  — /projects*
   routes_evals.py     — /evals (the console's Evals view)
   routes_config.py    — /v1/operator/config (the console's Config view)
+  routes_share_page.py — /s/{token} (the public share card)
   routes_invite.py    — /v1/operator/invite (the console's Connect view)
   routes_events.py    — /health, /events, /ws/events, /standings, /metrics, /ledger
   dashboard.py        — /dashboard (HTML in templates/dashboard.html)
@@ -43,6 +44,7 @@ import routes_nodes
 import routes_pitch
 import routes_projects
 import routes_run
+import routes_share_page
 import routes_status
 import routes_try
 from tracing_middleware import TraceContextMiddleware
@@ -257,5 +259,6 @@ app.include_router(routes_nodes.router)
 app.include_router(routes_history.router)
 app.include_router(routes_projects.router)
 app.include_router(routes_run.router)
+app.include_router(routes_share_page.router)
 app.include_router(routes_status.router)
 app.include_router(routes_try.router)
