@@ -959,28 +959,71 @@ function evidenceLine(n) {
       and agreement between two runs is not correctness</span></div>`;
 }
 
+/* Admin actions exist only as a command on the coordinator
+   (scripts/node_enrollment_admin.py). They are shown so the operator can see
+   where the control lives, and marked unavailable here rather than looking
+   live (HANDOFF-UI section 19.7, rule 2). */
+function nodeActions(n) {
+  const enr = n.enrollment_id;
+  const out = [
+    `<button type="button" class="node-act" data-node="${escHtml(JSON.stringify(n))}"
+             title="Everything /nodes serves for this machine">details</button>`,
+    `<a class="node-act" href="/node/${encodeURIComponent(n.node_id)}"
+        title="This machine's own page, the one its owner can bookmark">machine page &#8599;</a>`,
+  ];
+  if (enr && n.enrollment_status !== 'revoked') {
+    out.push(`<button type="button" class="node-act" aria-disabled="true"
+      title="No HTTP route for this. On the coordinator: py scripts/node_enrollment_admin.py rotate ${escHtml(enr)} with --coordinator and --identity-output. Points, history and the name are untouched">rotate credential</button>`);
+    out.push(`<button type="button" class="node-act is-danger" aria-disabled="true"
+      title="No HTTP route for this. On the coordinator: py scripts/node_enrollment_admin.py revoke ${escHtml(enr)}. Finished work and points stay on the ledger, and the name is retired rather than freed">revoke</button>`);
+  } else if (!enr) {
+    out.push(`<button type="button" class="node-act" aria-disabled="true"
+      title="A compatibility session has no durable identity to revoke. Require enrollment in Configuration and this becomes a per-machine control">revoke</button>`);
+  }
+  return out.join('');
+}
+
+function paintNodeStats(list) {
+  const building = list.filter(n => n.current_task).length;
+  const enrolled = list.filter(n => n.enrollment_id && n.enrollment_status !== 'revoked').length;
+  const cpu = list.reduce((a, n) => a + (Number(n.cpu_count) || 0), 0);
+  const ram = list.reduce((a, n) => a + (Number(n.ram_gb) || 0), 0);
+  const put = (id, v, tone) => {
+    const el = $(id);
+    if (!el) return;
+    el.className = 'ov-vital is-' + tone;
+    el.querySelector('.ov-vital-v').textContent = v;
+  };
+  put('nstat-connected', String(list.length), list.length ? 'ok' : 'idle');
+  put('nstat-building', String(building), building ? 'warn' : 'idle');
+  put('nstat-enrolled', `${enrolled} of ${list.length}`, list.length && enrolled < list.length ? 'warn' : (list.length ? 'ok' : 'idle'));
+  put('nstat-cpu', String(cpu), 'idle');
+  put('nstat-ram', ram ? `${Math.round(ram)} GB` : '0', 'idle');
+}
+
 function renderNodes(nodes) {
   const nodesList = $('nodes-list');
   const summary = $('nodes-summary');
   if (!nodesList) return;
-
+  const list = nodes.nodes || [];
+  paintNodeStats(list);
   renderNodeMap(nodes);
 
   if (nodes.count === 0) {
-    if (summary) summary.textContent = 'No machines connected.';
+    if (summary) summary.textContent = 'none connected';
     nodesList.innerHTML = `
       <div class="empty-state">
-        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="18" r="2.2"/><path d="M10.5 6.8 6.5 15.8M13.5 6.8l4 9M7.4 18h9.2"/></svg></div>
-        <p>No machines connected yet.<br><button class="link-btn" type="button" data-tab="invite">How a machine joins →</button></p>
+        <p>No machines connected yet. The coordinator still works: builders run locally, one at a time.<br>
+        <button class="link-btn" type="button" data-tab="invite" title="How a machine joins">How a machine joins &rarr;</button></p>
       </div>`;
     return;
   }
 
-  const list = nodes.nodes || [];
+  const building = list.filter(n => n.current_task).length;
+  const revoked = list.filter(n => n.enrollment_status === 'revoked').length;
   if (summary) {
-    summary.textContent = list.length === 1
-      ? '1 machine connected'
-      : `${list.length} machines connected`;
+    summary.textContent = `${list.length} online · ${building} building`
+      + (revoked ? ` · ${revoked} revoked` : '');
   }
 
   /* Rows, not an eight-column table. There are 2-5 of these and each is an
@@ -992,7 +1035,7 @@ function renderNodes(nodes) {
     const enr = enrollmentLine(n);
 
     const spec = [
-      n.model, n.platform && n.machine ? `${n.platform} / ${n.machine}` : n.platform,
+      n.platform && n.machine ? `${n.platform} / ${n.machine}` : n.platform,
       n.cpu_count ? `${n.cpu_count} CPU` : null,
       n.ram_gb ? `${n.ram_gb} GB` : null,
       n.gpu && n.gpu !== 'none' ? n.gpu : 'no GPU',
@@ -1004,17 +1047,19 @@ function renderNodes(nodes) {
 
     // Served by /nodes; the descriptor body itself deliberately is not.
     const descriptor = n.capability_descriptor_hash
-      ? `<div class="node-kv"><span class="node-k">capability descriptor</span>
-           <span class="node-v mono">v${escHtml(n.capability_descriptor_version || '1')}
-             · ${escHtml(String(n.capability_descriptor_hash).slice(0, 16))}</span></div>`
-      : `<div class="node-kv"><span class="node-k">capability descriptor</span>
-           <span class="node-v is-absent">not reported by this machine</span></div>`;
+      ? `descriptor v${escHtml(n.capability_descriptor_version || '1')} · ${escHtml(String(n.capability_descriptor_hash).slice(0, 12))}`
+      : 'descriptor not reported by this machine';
+    const claims = [
+      descriptor,
+      n.model ? `ollama ${escHtml(n.model)}` : null,
+      ...(n.claimed_capabilities || n.capabilities || [])
+        .filter(c => !String(c).startsWith('model:')).map(c => escHtml(c)),
+    ].filter(Boolean).join(' · ');
 
-    const claims = (n.claimed_capabilities || n.capabilities || [])
-      .filter(c => !String(c).startsWith('model:'));
-    const claimsHtml = claims.length
-      ? claims.map(c => `<span class="chip">${escHtml(c)}</span>`).join('')
-      : '<span class="node-v is-absent">none declared</span>';
+    const session = n.session_id
+      ? `session ${escHtml(String(n.session_id).slice(0, 12))}`
+        + (n.session_started_at ? ` · started ${escHtml(relativeTime(new Date(n.session_started_at)))}` : '')
+      : 'no session recorded';
 
     return `
       <article class="node-row" id="nodecard-${escHtml(n.node_id)}">
@@ -1022,110 +1067,210 @@ function renderNodes(nodes) {
           <div class="node-ident">
             <span class="node-square is-${st.key}" aria-hidden="true"></span>
             <span class="node-id mono">${escHtml(n.node_id)}</span>
-            <span class="node-state is-${st.key}">${escHtml(st.word)}</span>
+            <span class="node-state node-pill is-${st.key}">${escHtml(st.word)}</span>
           </div>
           <div class="node-spec mono">${spec}</div>
           <div class="node-live">${live}</div>
-          <div class="node-kv"><span class="node-k">enrollment</span>
-            <span class="node-v ${enr.cls} mono">${enr.label}</span>
-            <span class="node-note">${escHtml(enr.note)}</span></div>
-          ${descriptor}
-          <div class="node-kv"><span class="node-k">claims</span>
-            <span class="node-v">${claimsHtml}</span></div>
+          <div class="node-line mono"><span class="node-enr ${enr.cls}">${enr.label}</span>
+            <span class="node-faint">${escHtml(enr.note)}</span></div>
+          <div class="node-line mono node-faint">${session}</div>
+          <div class="node-line mono node-claims">claims · ${claims}</div>
           ${evidenceLine(n)}
         </div>
         <div class="node-row-figures">
-          <div class="node-fig"><span class="node-fig-n mono">${escHtml(n.lifetime_tasks_completed ?? n.tasks_completed ?? 0)}</span>
-            <span class="node-fig-k">TASKS · LIFETIME</span></div>
-          <div class="node-fig"><span class="node-fig-n mono">${escHtml(n.lifetime_contribution_points ?? n.credits_earned ?? 0)}</span>
-            <span class="node-fig-k">POINTS · LIFETIME</span></div>
-          <div class="node-fig-actions">
-            <button type="button" class="btn-quiet is-sm"
-                    data-node="${escHtml(JSON.stringify(n))}">Details</button>
-            <a class="node-fig-link" href="/node/${encodeURIComponent(n.node_id)}">machine page →</a>
+          <div class="node-figs">
+            <div class="node-fig"><span class="node-fig-n mono">${escHtml(n.lifetime_tasks_completed ?? n.tasks_completed ?? 0)}</span>
+              <span class="node-fig-k">TASKS · LIFETIME</span></div>
+            <div class="node-fig"><span class="node-fig-n mono">${escHtml(n.lifetime_contribution_points ?? n.credits_earned ?? 0)}</span>
+              <span class="node-fig-k">POINTS · LIFETIME</span></div>
+            <div class="node-fig"><span class="node-fig-n mono">${escHtml(n.session_tasks_completed ?? 0)}</span>
+              <span class="node-fig-k">THIS SESSION</span></div>
           </div>
+          <div class="node-acts">${nodeActions(n)}</div>
         </div>
       </article>`;
   }).join('');
 }
 
-/* The map. Deterministic grid: gx is the pipeline column, gy the lane. Sorted
-   by node_id so the same fleet lays out identically on every open — a view that
-   settles differently each time is wrong for something being recorded.
+/* The map, live scale (HANDOFF-UI section 16.6, 19).
 
-   It draws machines and no task lines. Per-unit node assignment is not served
-   (handoff §8.2): `observed_placements` and per-unit `depends_on` exist, but
-   nothing says which machine holds which unit, so an edge here would be an
-   invented assignment. The note under the map says that rather than drawing a
-   plausible-looking lie. */
+   Left to right is the pipeline: the coordinator at the edge, the machines
+   holding work next to it, machines holding nothing further out. Positions are
+   a model in its own units, mapped onto the stage's current size on every paint
+   and re-fitted when the stage resizes, so the graph never sits in a corner.
+   Sorted by node_id, so the same fleet lays out the same way on every open.
+
+   Lines: coordinator to a machine, only while that machine holds work. That is
+   the only path work takes; nothing passes machine to machine. The line's label
+   is the task the machine itself reports holding, from /nodes.
+
+   Ground: when two or more machines hold work, the polygon on the coordinator
+   and those machines says "one flow of work", with its vertices sorted by angle
+   around their centroid so it can never cross itself (section 19.2). */
+let _nodemapList = [];
+let _nodemapZoom = 1;
+let _nodemapPan = {x: 0, y: 0};
+let _nodemapPinned = null;
+let _nodemapObserver = null;
+
+function nodemapModel(list) {
+  const nodes = [{key: 'coord', kind: 'coordinator', label: 'this coordinator', tone: 'work', d: 26, gx: 0, gy: 0.5,
+    rows: [['ROLE', 'coordinator'], ['DOES', 'planning and review'], ['IF IT GOES DOWN', 'the run stops'], ['DATA', 'live']],
+    note: 'Planning and review are coordinator work, so it sits at both ends of the flow. There is no failover.'}];
+  const busy = list.filter(n => n.current_task && n.enrollment_status !== 'revoked');
+  const rest = list.filter(n => !(n.current_task && n.enrollment_status !== 'revoked'));
+  const place = (group, gx) => group.forEach((n, i) => {
+    const st = nodeState(n);
+    const tone = st.key === 'building' ? 'busy' : st.key === 'revoked' ? 'bad' : 'ok';
+    const hw = [n.cpu_count ? `${n.cpu_count} CPU` : null, n.ram_gb ? `${n.ram_gb} GB` : null,
+                n.gpu && n.gpu !== 'none' ? n.gpu : null].filter(Boolean).join(' · ') || 'not claimed';
+    nodes.push({key: n.node_id, kind: 'machine', label: n.node_id, tone, d: tone === 'busy' ? 22 : 18,
+      gx, gy: group.length === 1 ? 0.5 : i / (group.length - 1), page: n.node_id,
+      rows: [['STATE', st.word], ['HOLDING', n.current_task || 'nothing'], ['COORDINATOR', 'this one'],
+             ['PLATFORM', [n.platform, n.machine].filter(Boolean).join(' / ') || 'not claimed'],
+             ['MODEL', n.model || 'not claimed'], ['HARDWARE', hw], ['DATA', 'live, from /nodes']],
+      note: tone === 'busy'
+        ? 'Holding one task. A worker takes one at a time, so it is busy until it returns a result or its lease expires.'
+        : tone === 'bad' ? 'Its enrolment is revoked. Its finished work and points stay on the ledger.'
+        : 'Somebody else’s computer, lent to this network, waiting to be handed work.'});
+  });
+  place(busy, 1);
+  place(rest, busy.length ? 2 : 1);
+  const edges = busy.map(n => ({a: 'coord', b: n.node_id, title: n.current_task,
+    rows: [['HANDED TO', n.node_id], ['STATE', 'building'], ['DATA', 'live, from /nodes']]}));
+  const faces = busy.length >= 2 ? [{keys: ['coord', ...busy.map(n => n.node_id)],
+    title: 'Work in progress on this coordinator',
+    rows: [['SPREAD OVER', `${busy.length} machines + this one`], ['DATA', 'live, from /nodes']]}] : [];
+  return {nodes, edges, faces};
+}
+
+function nodemapPositions(model, W, H) {
+  const pad = 70, maxGx = Math.max(1, ...model.nodes.map(n => n.gx));
+  const pos = {};
+  model.nodes.forEach(n => {
+    pos[n.key] = {x: pad + (W - pad * 2) * (n.gx / maxGx), y: 44 + (H - 100) * n.gy};
+  });
+  return pos;
+}
+
 function renderNodeMap(nodes) {
-  const stage = $('nodemap-stage');
-  const meta = $('nodemap-meta');
-  const note = $('nodemap-note');
-  const legend = $('nodemap-legend');
-  if (!stage) return;
-
-  const list = (nodes.nodes || []).slice().sort((a, b) =>
-    String(a.node_id).localeCompare(String(b.node_id)));
-
-  if (meta) {
-    meta.textContent = list.length
-      ? `live · ${list.length} machine${list.length === 1 ? '' : 's'}`
-      : 'live · nothing connected';
+  _nodemapList = (nodes.nodes || []).slice().sort((a, b) => String(a.node_id).localeCompare(String(b.node_id)));
+  const busy = _nodemapList.filter(n => n.current_task).length;
+  setText('nodemap-meta', _nodemapList.length
+    ? `live · ${_nodemapList.length} machine${_nodemapList.length === 1 ? '' : 's'} · ${busy} building`
+    : 'live · nothing connected');
+  const run = $('nodemap-run');
+  if (run) {
+    const t = Object.values(typeof turns === 'object' ? turns : {}).filter(x => x.doneAt == null).pop();
+    run.innerHTML = t ? `<i aria-hidden="true"></i><span>${escHtml(t.task)}</span>` : '';
   }
+  paintNodeMap();
+  const stage = $('nodemap-stage');
+  if (stage && !_nodemapObserver && 'ResizeObserver' in window) {
+    _nodemapObserver = new ResizeObserver(() => paintNodeMap());
+    _nodemapObserver.observe(stage);
+  }
+}
 
-  if (!list.length) {
-    stage.innerHTML = '<div class="nodemap-empty">No machines are connected, so there is no flow to draw. '
-      + 'The coordinator still runs work on itself.</div>';
+function paintNodeMap() {
+  const stage = $('nodemap-stage');
+  const legend = $('nodemap-legend');
+  const note = $('nodemap-note');
+  if (!stage) return;
+  if (!_nodemapList.length) {
+    stage.innerHTML = '<div class="nodemap-empty"><p class="nodemap-empty-title">Nothing is connected, so there is no flow to draw.</p>'
+      + '<p>The coordinator still runs work on itself, one builder at a time. A machine appears here the moment it registers.</p></div>';
     if (legend) legend.innerHTML = '';
     if (note) note.textContent = '';
     return;
   }
+  const W = Math.max(320, stage.clientWidth || 720);
+  const H = Math.max(240, Math.min(380, 120 + _nodemapList.length * 52));
+  const model = nodemapModel(_nodemapList);
+  const pos = nodemapPositions(model, W, H);
+  const z = _nodemapZoom;
+  // Marks grow as z^0.62 while distances grow as z, so zooming in opens the
+  // graph up; labels and strokes divide that back out to hold their size
+  // (section 19.4).
+  const mark = Math.pow(z, 0.62) / z;
+  const inv = 1 / z;
+  const cx = W / 2, cy = H / 2;
+  const tf = `translate(${cx + _nodemapPan.x} ${cy + _nodemapPan.y}) scale(${z}) translate(${-cx} ${-cy})`;
 
-  const LANE = 46, TOP = 34, COORD_X = 62, WORKER_X = 300;
-  const height = Math.max(140, TOP + list.length * LANE + 24);
-  const parts = [];
+  const faces = model.faces.map((f, i) => {
+    const pts = f.keys.map(k => pos[k]);
+    const mx = pts.reduce((a, p) => a + p.x, 0) / pts.length, my = pts.reduce((a, p) => a + p.y, 0) / pts.length;
+    const poly = pts.slice().sort((p, q) => Math.atan2(p.y - my, p.x - mx) - Math.atan2(q.y - my, q.x - mx))
+      .map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+    return `<polygon class="nm-face" points="${poly}" data-pick="f:${i}" style="stroke-width:${1.2 * inv}">
+      <title>${escHtml(f.title)} — the area is the work in flight</title></polygon>`;
+  }).join('');
+  const edges = model.edges.map((e, i) => {
+    const p = pos[e.a], q = pos[e.b];
+    return `<line class="nm-band" x1="${p.x}" y1="${p.y}" x2="${q.x}" y2="${q.y}" data-pick="e:${i}" style="stroke-width:${18 * inv}">
+        <title>${escHtml(e.title)} — building · the task this machine reports holding</title></line>
+      <line class="nm-edge is-busy" x1="${p.x}" y1="${p.y}" x2="${q.x}" y2="${q.y}" style="stroke-width:${1.6 * inv}"></line>`;
+  }).join('');
+  const marks = model.nodes.map(n => {
+    const p = pos[n.key], r = (n.d / 2) * mark;
+    const shape = `<circle class="nm-node is-${n.tone}${n.kind === 'coordinator' ? ' is-coord' : ''}" cx="${p.x}" cy="${p.y}" r="${r}"
+        data-pick="n:${escHtml(n.key)}" style="stroke-width:${1.5 * inv}">
+        <title>${escHtml(n.label)} — ${escHtml(n.rows[0][1])}${n.page ? ' · click for this machine’s own page' : ''}</title></circle>`;
+    const label = `<text class="nm-label" x="${p.x}" y="${p.y + r + 14 * inv}" style="font-size:${11 * inv}px">${escHtml(n.label)}</text>`;
+    return n.page
+      ? `<a href="/node/${encodeURIComponent(n.page)}" class="nm-link">${shape}${label}</a>`
+      : shape + label;
+  }).join('');
 
-  // Coordinator at the edge, not the centre. Planning and review are its work;
-  // the hardware doing the building belongs to other people.
-  parts.push(`<line class="nodemap-spine" x1="${COORD_X}" y1="${TOP}" x2="${COORD_X}" y2="${height - 30}"></line>`);
-  parts.push(`<rect class="nodemap-square is-coordinator" x="${COORD_X - 6}" y="${TOP - 6}" width="12" height="12"></rect>`);
-  parts.push(`<text class="nodemap-label-text" x="${COORD_X + 14}" y="${TOP + 4}">this machine · plans and reviews</text>`);
-
-  list.forEach((n, i) => {
-    const y = TOP + (i + 1) * LANE;
-    const st = nodeState(n);
-    // A hairline from the coordinator column to each machine: the coordinator
-    // brokers every handoff, so this is "connected to the coordinator" and not
-    // a task edge. Machines never connect to each other directly.
-    parts.push(`<line class="nodemap-link" x1="${COORD_X}" y1="${y}" x2="${WORKER_X - 10}" y2="${y}"></line>`);
-    parts.push(`<rect class="nodemap-square is-${st.key}" x="${WORKER_X - 6}" y="${y - 6}" width="12" height="12"></rect>`);
-    parts.push(`<text class="nodemap-label-text" x="${WORKER_X + 14}" y="${y + 4}">${escHtml(n.node_id)} · ${escHtml(st.word)}</text>`);
-  });
-
-  stage.innerHTML =
-    `<svg viewBox="0 0 720 ${height}" role="img" preserveAspectRatio="xMinYMin meet"
-          aria-label="${escHtml(list.length)} machines connected to this coordinator">
-       ${parts.join('\n')}
-     </svg>`;
+  stage.innerHTML = `<svg class="nm-svg" width="100%" height="${H}" viewBox="0 0 ${W} ${H}" role="img"
+      aria-label="${_nodemapList.length} machines connected to this coordinator">
+      <g transform="${tf}">${faces}${edges}${marks}</g></svg>`;
+  stage.dataset.model = '';
+  stage._model = model;
+  setText('nodemap-zoom-label', Math.round(z * 100) + '%');
 
   if (legend) {
-    legend.innerHTML = [
-      ['is-coordinator', 'coordinator'],
-      ['is-building', 'building'],
-      ['is-idle', 'holding nothing'],
-      ['is-revoked', 'revoked'],
-    ].map(([cls, label]) =>
-      `<span class="nodemap-key"><i class="nodemap-swatch ${cls}" aria-hidden="true"></i>${label}</span>`
-    ).join('');
+    legend.innerHTML = [['is-work', 'coordinator'], ['is-busy', 'building'], ['is-ok', 'holding nothing'], ['is-bad', 'revoked']]
+      .map(([cls, label]) => `<span class="nodemap-key"><i class="nm-swatch ${cls}" aria-hidden="true"></i>${label}</span>`).join('');
   }
-
   if (note) {
-    note.textContent = 'Lines run to the coordinator because it brokers every handoff — '
-      + 'machines never connect to each other directly. No line is drawn between machines '
-      + 'for a task: which machine holds which unit of work is not served by the API, and '
-      + 'drawing it would mean inventing the assignment.';
+    note.textContent = 'Work goes out and comes back: the coordinator plans, machines build, the coordinator '
+      + 'reviews what returns. Nothing passes machine to machine, so every line runs to the coordinator.';
   }
+  paintNodePick(_nodemapPinned);
+}
+
+function nodemapSubject(ref) {
+  const model = $('nodemap-stage')?._model;
+  if (!model || !ref) return null;
+  const [t, k] = [ref.slice(0, 1), ref.slice(2)];
+  if (t === 'n') { const n = model.nodes.find(x => x.key === k); return n && {title: n.label, kind: n.kind === 'coordinator' ? 'COORDINATOR' : 'MACHINE', rows: n.rows, note: n.note, tone: n.tone}; }
+  if (t === 'e') { const e = model.edges[+k]; return e && {title: e.title, kind: 'TASK', rows: e.rows, note: 'The line runs from the coordinator to the machine holding this task. That handoff is what makes the run distributed.', tone: 'busy'}; }
+  if (t === 'f') { const f = model.faces[+k]; return f && {title: f.title, kind: 'WORK IN FLIGHT', rows: f.rows, note: 'Every corner is a machine this work reached.', tone: 'busy'}; }
+  return null;
+}
+
+function paintNodePick(ref) {
+  const el = $('nodemap-pick');
+  if (!el) return;
+  const s = nodemapSubject(ref);
+  if (!s) {
+    el.innerHTML = '<p class="nodemap-hint">Hover a machine or a line to inspect it. Click a machine for its own page.</p>';
+    return;
+  }
+  el.innerHTML = `
+    <div class="nodemap-pick-head"><i class="nm-swatch is-${escHtml(s.tone)}" aria-hidden="true"></i>
+      <span class="nodemap-pick-title">${escHtml(s.title)}</span><span class="card-k">${escHtml(s.kind)}</span>
+      ${_nodemapPinned ? '<button type="button" class="card-clear" data-nodemap-unpin title="Close this panel">close &#10005;</button>' : ''}</div>
+    <div class="nodemap-pick-rows">${s.rows.map(([k, v]) => `<div class="nodemap-pick-row"><span class="card-k">${escHtml(k)}</span>
+      <span class="nodemap-pick-v">${escHtml(v)}</span></div>`).join('')}</div>
+    <p class="nodemap-pick-note">${escHtml(s.note)}</p>`;
+}
+
+function zoomNodeMap(how) {
+  if (how === 'reset') { _nodemapZoom = 1; _nodemapPan = {x: 0, y: 0}; }
+  else _nodemapZoom = Math.max(0.6, Math.min(3, _nodemapZoom * (how === 'in' ? 1.25 : 0.8)));
+  paintNodeMap();
 }
 
 // ── The thread ───────────────────────────────────────────────────
@@ -2221,6 +2366,34 @@ $('statusbar-collapse').addEventListener('click', toggleStatusBar);
 
 $('nav-toggle').addEventListener('click', toggleNav);
 $('rail-toggle').addEventListener('click', toggleNav);
+document.querySelectorAll('[data-zoom]').forEach(b =>
+  b.addEventListener('click', () => zoomNodeMap(b.dataset.zoom)));
+(function wireNodeMap() {
+  const stage = $('nodemap-stage');
+  if (!stage) return;
+  stage.addEventListener('mouseover', (e) => {
+    const t = e.target.closest('[data-pick]');
+    if (t && !_nodemapPinned) paintNodePick(t.dataset.pick);
+  });
+  stage.addEventListener('mouseleave', () => { if (!_nodemapPinned) paintNodePick(null); });
+  // A line or a ground pins its panel on click; a machine is a link to its page.
+  stage.addEventListener('click', (e) => {
+    const t = e.target.closest('[data-pick]');
+    if (t && !t.closest('a')) { _nodemapPinned = t.dataset.pick; paintNodePick(_nodemapPinned); }
+  });
+  $('nodemap-pick').addEventListener('click', (e) => {
+    if (e.target.closest('[data-nodemap-unpin]')) { _nodemapPinned = null; paintNodePick(null); }
+  });
+  // Drag to pan once zoomed in.
+  let drag = null;
+  stage.addEventListener('mousedown', (e) => { if (e.button === 0 && !e.target.closest('a')) drag = {x: e.clientX, y: e.clientY, p: {..._nodemapPan}}; });
+  window.addEventListener('mousemove', (e) => {
+    if (!drag) return;
+    _nodemapPan = {x: drag.p.x + e.clientX - drag.x, y: drag.p.y + e.clientY - drag.y};
+    paintNodeMap();
+  });
+  window.addEventListener('mouseup', () => { drag = null; });
+})();
 document.querySelectorAll('[data-runs-tab]').forEach(b =>
   b.addEventListener('click', () => showRunsTab(b.dataset.runsTab)));
 document.querySelectorAll('[data-runs-filter]').forEach(b =>
