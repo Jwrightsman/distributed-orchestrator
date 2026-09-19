@@ -53,49 +53,116 @@
 <div class="shell">
 <div class="app" id="app">
   <aside class="nav" id="nav">
-    <a class="nav-brand" href="/" title="Mycelium home">
-      <span class="nav-mark" aria-hidden="true"></span>
-      <span class="nav-label nav-brand-name">Mycelium</span>
-    </a>
+    <div class="nav-head">
+      <a class="nav-brand" href="/" title="Mycelium home — the public landing page">
+        <span class="nav-mark" aria-hidden="true"></span>
+        <span class="nav-label nav-brand-name">MYCELIUM</span>
+      </a>
+      <button class="nav-rail-toggle" id="rail-toggle" type="button" aria-controls="nav"
+              aria-expanded="false" title="Expand the rail" aria-label="Expand the rail">&raquo;</button>
+    </div>
     <nav class="nav-items" id="nav-items" aria-label="Dashboard sections">
-      <button class="nav-item" id="tab-overview" type="button" data-tab="overview" aria-current="page" title="Overview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 13h5v8H3zM10 3h5v18h-5zM17 9h4v12h-4z"/></svg><span class="nav-label">Overview</span></button>
-      <button class="nav-item" id="tab-runs" type="button" data-tab="runs" title="Runs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8v4l3 2"/><circle cx="12" cy="12" r="9"/></svg><span class="nav-label">Runs</span></button>
-      <button class="nav-item" id="tab-gallery" type="button" data-tab="gallery" title="Gallery"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span class="nav-label">Gallery</span></button>
-      <button class="nav-item" id="tab-nodes" type="button" data-tab="nodes" title="Nodes"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="18" r="2.2"/><path d="M10.5 6.8 6.5 15.8M13.5 6.8l4 9M7.4 18h9.2"/></svg><span class="nav-label">Nodes</span><span class="nav-badge" id="nav-node-count" hidden></span></button>
-      <button class="nav-item" id="tab-projects" type="button" data-tab="projects" title="Projects"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span class="nav-label">Projects</span></button>
-      <button class="nav-item" id="tab-guild" type="button" data-tab="guild" title="Guild"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l2.6 5.6 6.4.8-4.7 4.3 1.2 6.3L12 17l-5.5 3 1.2-6.3L3 9.4l6.4-.8z"/></svg><span class="nav-label">Guild</span></button>
-      <button class="nav-item" id="tab-evals" type="button" data-tab="evals" title="Evals"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 3h6M10 3v6.5L4.6 18.3A1.8 1.8 0 0 0 6.2 21h11.6a1.8 1.8 0 0 0 1.6-2.7L14 9.5V3M7.5 14h9"/></svg><span class="nav-label">Evals</span></button>
-      <button class="nav-item" id="tab-invite" type="button" data-tab="invite" title="Connect"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="6" width="18" height="12.6" rx="1.8"/><path d="M3.9 7.5 12 13.2l8.1-5.7"/></svg><span class="nav-label">Connect</span></button>
-      <button class="nav-item" id="tab-config" type="button" data-tab="config" title="Config"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></svg><span class="nav-label">Config</span></button>
+      <div class="nav-section" aria-hidden="true">MONITOR</div>
+      <button class="nav-item" id="tab-overview" type="button" data-tab="overview" aria-current="page" title="Overview — pitch work and watch the machines answer" aria-label="Overview"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><path d="M2 9.5h3.2v4.2H2zM6.4 2.3h3.2v11.4H6.4zM10.8 6.3H14v7.4h-3.2z"/></svg><span class="nav-label">Overview</span></button>
+      <button class="nav-item" id="tab-runs" type="button" data-tab="runs" title="Runs — every pipeline this orchestrator has completed" aria-label="Runs"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 5v3.2l2 1.3"/></svg><span class="nav-label">Runs</span><span class="nav-count" id="nav-runs-count" hidden></span></button>
+      <button class="nav-item" id="tab-nodes" type="button" data-tab="nodes" title="Nodes — machines offering compute, and the work moving between them" aria-label="Nodes"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="3.4" r="1.6"/><circle cx="3.2" cy="12.4" r="1.6"/><circle cx="12.8" cy="12.4" r="1.6"/><path d="M6.9 4.7 4.3 10.9M9.1 4.7l2.6 6.2M4.9 12.4h6.2"/></svg><span class="nav-label">Nodes</span><span class="nav-count" id="nav-node-wrap" hidden><i class="nav-lamp" id="nav-node-lamp"></i><span id="nav-node-count"></span></span></button>
+      <div class="nav-section" aria-hidden="true">LIBRARY</div>
+      <button class="nav-item" id="tab-gallery" type="button" data-tab="gallery" title="Gallery — the code past runs produced" aria-label="Gallery"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><rect x="2.2" y="2.2" width="4.8" height="4.8" rx="1"/><rect x="9" y="2.2" width="4.8" height="4.8" rx="1"/><rect x="2.2" y="9" width="4.8" height="4.8" rx="1"/><rect x="9" y="9" width="4.8" height="4.8" rx="1"/></svg><span class="nav-label">Gallery</span></button>
+      <button class="nav-item" id="tab-projects" type="button" data-tab="projects" title="Projects — runs that iterate on each other" aria-label="Projects"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><path d="M2 4.6a1.4 1.4 0 0 1 1.4-1.4h2.8l1.4 1.4h5A1.4 1.4 0 0 1 14 6v5.4a1.4 1.4 0 0 1-1.4 1.4H3.4A1.4 1.4 0 0 1 2 11.4z"/></svg><span class="nav-label">Projects</span><span class="nav-count" id="nav-project-count" hidden></span></button>
+      <button class="nav-item" id="tab-guild" type="button" data-tab="guild" title="Guild standings — points earned per machine" aria-label="Guild"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><path stroke-linejoin="round" d="M8 2.4l1.7 3.7 4.1.5-3 2.8.8 4.1L8 11.5l-3.6 2 .8-4.1-3-2.8 4.1-.5z"/></svg><span class="nav-label">Guild</span></button>
+      <div class="nav-section" aria-hidden="true">QUALITY</div>
+      <button class="nav-item" id="tab-evals" type="button" data-tab="evals" title="Output quality — what the eval harness recorded" aria-label="Evals"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><path d="M2.4 13.2h11.2M4.2 13.2V8.4M7.4 13.2V4.6M10.6 13.2V9.8M13 13.2V6.8"/></svg><span class="nav-label">Evals</span></button>
+      <div class="nav-section" aria-hidden="true">SYSTEM</div>
+      <button class="nav-item" id="tab-invite" type="button" data-tab="invite" title="Connect — how a machine joins, and how an app asks for work" aria-label="Connect"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><rect x="2" y="4" width="12" height="8.4" rx="1.2"/><path d="M2.6 5 8 8.8 13.4 5"/></svg><span class="nav-label">Connect</span></button>
+      <button class="nav-item" id="tab-config" type="button" data-tab="config" title="Configuration — what this coordinator is running with" aria-label="Config"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><path d="M2.4 4.6h11.2M2.4 8h11.2M2.4 11.4h11.2"/></svg><span class="nav-label">Config</span><i class="nav-warn-dot" id="nav-config-dot" hidden title="A key is off"></i></button>
     </nav>
+
+    <!-- The machine identity block. Shaped like the account menu chat apps put
+         in this corner, but Mycelium has no accounts, so it shows the only
+         identity there is: this coordinator. Nothing here is asserted that the
+         repo cannot back -- there is no release feed, so it names the version
+         and never says "up to date". HANDOFF-UI section 18. -->
+    <div class="ident" id="ident">
+      <button class="ident-scrim" id="ident-scrim" type="button" aria-label="Close this menu"
+              title="Close this menu" hidden></button>
+      <div class="ident-menu" id="ident-menu" role="menu" hidden>
+        <div class="ident-menu-head">
+          <div class="ident-menu-name" id="ident-menu-name">this coordinator</div>
+          <div class="ident-menu-origin" id="ident-origin"></div>
+          <p class="ident-menu-note">Mycelium has no accounts. This is the coordinator you are
+            reading, named by the id it records contributions under.</p>
+        </div>
+        <div class="ident-version">
+          <i class="ident-version-dot" aria-hidden="true"></i>
+          <span>
+            <span class="ident-version-title">Version <span class="mono"><!--SLOT:SERVER_VERSION--></span></span>
+            <span class="ident-version-note">Workers declare a protocol version and are refused
+              outside this coordinator's window, so when both need updating, update the
+              coordinator first.</span>
+          </span>
+        </div>
+        <div class="ident-items">
+          <button class="ident-item" type="button" role="menuitem" data-tab="config"
+                  title="Everything this coordinator is running with, as config.json holds it">
+            <span class="ident-icon" aria-hidden="true">&#9881;</span><span class="ident-label">Settings</span>
+            <span class="ident-meta">config.json</span></button>
+          <button class="ident-item" type="button" role="menuitem" data-tab="invite"
+                  title="<!--SLOT:IDENT_INVITE_TITLE-->">
+            <span class="ident-icon" aria-hidden="true">+</span><span class="ident-label">Invite a machine</span>
+            <span class="ident-meta<!--SLOT:IDENT_ENROLL_TONE-->"><!--SLOT:IDENT_ENROLL_META--></span></button>
+          <button class="ident-item" type="button" role="menuitem" data-tab="config"
+                  title="<!--SLOT:IDENT_VIEWER_TITLE-->">
+            <span class="ident-icon" aria-hidden="true">&#9678;</span><span class="ident-label">Viewer key</span>
+            <span class="ident-meta<!--SLOT:IDENT_VIEWER_TONE-->"><!--SLOT:IDENT_VIEWER_META--></span></button>
+          <button class="ident-item" type="button" role="menuitem" data-tab="guild"
+                  title="Points this coordinator has earned, from the contribution ledger">
+            <span class="ident-icon" aria-hidden="true">&#9733;</span><span class="ident-label">Points earned</span>
+            <span class="ident-meta" id="ident-points">&mdash;</span></button>
+          <button class="ident-item theme-toggle" id="theme-toggle" type="button" role="menuitem"
+                  title="Switch between light and dark" aria-label="Switch colour theme">
+            <span class="ident-icon" id="theme-toggle-icon" aria-hidden="true"></span><span class="ident-label">Appearance</span>
+            <span class="ident-meta" id="theme-toggle-label"></span></button>
+        </div>
+        <div class="ident-pages">
+          <div class="ident-pages-head">PUBLIC PAGES</div>
+          <nav class="ident-pages-links" aria-label="Site">
+            <a class="global-link" href="/" title="The public landing page">landing &#8599;</a>
+            <a class="global-link" href="/try" title="The public pitch page — one attempt, on this machine">try &#8599;</a>
+            <a class="global-link" href="/status" title="The public status page">status &#8599;</a>
+          </nav>
+        </div>
+      </div>
+
+      <button class="ident-trigger" id="ident-toggle" type="button" aria-expanded="false"
+              aria-controls="ident-menu" title="This coordinator, settings and version">
+        <span class="ident-avatar" id="ident-initials" aria-hidden="true">&middot;</span>
+        <span class="ident-text">
+          <span class="ident-name" id="credit-host">this coordinator</span>
+          <span class="ident-sub">v<!--SLOT:SERVER_VERSION--></span>
+        </span>
+        <span class="ident-chev" id="ident-chev" aria-hidden="true">&#8963;</span>
+      </button>
+    </div>
   </aside>
 
   <div class="app-body">
     <header class="topbar">
-      <button class="icon-btn" id="nav-toggle" type="button" aria-label="Toggle sidebar"
-              aria-controls="nav" aria-expanded="false" title="Toggle sidebar">
+      <button class="icon-btn" id="nav-toggle" type="button" aria-label="Open navigation"
+              aria-controls="nav" aria-expanded="false" title="Open navigation">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
       </button>
-      <h1 class="topbar-title" id="view-title">Overview</h1>
-
-      <!-- Global context: where this page sits in the rest of the site. The
-           sidebar handles in-app sections; these two links are the way out. -->
-      <nav class="global-nav" aria-label="Site">
-        <a class="global-link" href="/">Home</a>
-        <a class="global-link is-secondary" href="/try">Try it</a>
-        <a class="global-link is-secondary" href="/status">Status</a>
-      </nav>
+      <div class="topbar-head">
+        <h1 class="topbar-title" id="view-title">Overview</h1>
+        <p class="topbar-sub" id="view-sub">Pitch work, and watch the machines answer</p>
+      </div>
 
       <div class="topbar-actions">
         <span class="credit-chip" id="credit-chip" title="Contribution points earned by this orchestrator for pitches, local builds and reviews">
-          <span id="credit-host">—</span><span class="credit-sep" aria-hidden="true">·</span><span id="credit-value">0</span> points
+          <span class="credit-k">points</span><span id="credit-value">0</span>
         </span>
-        <button class="btn-primary" id="focus-pitch" type="button">Pitch a task</button>
-        <button class="theme-toggle" id="theme-toggle" type="button"
-                title="Switch between light and dark" aria-label="Switch colour theme">
-          <span id="theme-toggle-icon" aria-hidden="true"></span>
-          <span id="theme-toggle-label"></span>
-        </button>
+        <button class="palette-btn" id="palette-open" type="button"
+                title="Command palette — jump to any view (Ctrl+K)" aria-label="Open the command palette">&#8984;K</button>
+        <button class="btn-primary" id="focus-pitch" type="button" title="Go to Overview and pitch a task">Pitch a task</button>
       </div>
     </header>
 
@@ -330,25 +397,56 @@
      truth and could disagree.
 
      Two kinds of cell:
-       * polled  — INFERENCE, NODES, RUNNING, QUEUED. Each carries a lamp,
-                   because each is a claim about this second.
-       * at-load — MODE, LOCK, TRACING, EVIDENCE. No lamp, on purpose: none of
-                   them can change while the process runs, so a lamp beside
-                   them would be a freshness claim about a constant.
+       * polled  — INFERENCE, NODES, RUNNING, QUEUED. In the strip, each with a
+                   lamp, because each is a claim about this second.
+       * at-load — MODE, LOCK, TRACING, EVIDENCE. In the drawer, with no lamp:
+                   none of them can change while the process runs, so a lamp
+                   would be a freshness claim about a constant. Each carries a
+                   sentence saying what its value means, which is the reason to
+                   show it at all and the reason it no longer fits the strip
+                   (HANDOFF-UI section 17.1).
 
-     The age of the last answer is in the row at all times and is never
-     hidden by a narrow window. There is no utilization figure anywhere:
-     capability descriptors *claim* CPU, memory and GPU at registration and
-     nothing samples them, so a load line here would be a drawing rather than
-     a measurement. -->
+     The age of the last answer is in the strip at all times and is the
+     drawer's toggle: "how old is this" and "where does it come from" are one
+     gesture. There is no utilization figure anywhere: capability descriptors
+     *claim* CPU, memory and GPU at registration and nothing samples them. -->
 <div class="statusbar" id="statusbar">
   <!-- The collapsed form. Same derived state, nothing new. -->
   <button class="statuspill" id="statuspill" type="button"
-          title="Expand the status bar" aria-expanded="false" aria-controls="statusbar">
+          title="Show the status bar" aria-expanded="false" aria-controls="statusbar">
     <i class="lamp is-unknown" id="statuspill-lamp" aria-hidden="true"></i>
     <span class="statuspill-word is-unknown" id="statuspill-word">no answer</span>
     <span class="statuspill-age" id="statuspill-age">no answer for 0s</span>
   </button>
+
+  <div class="statusbar-drawer" id="statusbar-drawer" hidden>
+    <div class="statusbar-source">
+      <span class="statusbar-k">POLLED FROM</span>
+      <span class="statusbar-v">/health &middot; every 5s</span>
+      <span class="statusbar-why">And /v1/operator/health every 30s for the two cells beside
+        this. Every lamp in the strip reads from one derived state, so no two can disagree.</span>
+    </div>
+    <div class="statusbar-cell is-atload">
+      <span class="statusbar-k">MODE</span>
+      <span class="statusbar-v" id="cell-mode-v">&mdash;</span>
+      <span class="statusbar-why" id="cell-mode-why">Read from /v1/operator/health.</span>
+    </div>
+    <div class="statusbar-cell is-atload">
+      <span class="statusbar-k">LOCK</span>
+      <span class="statusbar-v" id="cell-lock-v">&mdash;</span>
+      <span class="statusbar-why" id="cell-lock-why">Read from /v1/operator/health.</span>
+    </div>
+    <div class="statusbar-cell is-atload">
+      <span class="statusbar-k">TRACING</span>
+      <span class="statusbar-v"><!--SLOT:STATUS_TRACING--></span>
+      <span class="statusbar-why"><!--SLOT:STATUS_TRACING_WHY--></span>
+    </div>
+    <div class="statusbar-cell is-atload">
+      <span class="statusbar-k">EVIDENCE</span>
+      <span class="statusbar-v"><!--SLOT:STATUS_EVIDENCE--></span>
+      <span class="statusbar-why"><!--SLOT:STATUS_EVIDENCE_WHY--></span>
+    </div>
+  </div>
 
   <div class="statusbar-severity">
     <i class="lamp is-lg is-unknown" id="statusbar-lamp" aria-hidden="true"></i>
@@ -377,31 +475,15 @@
       <span class="statusbar-k">QUEUED</span>
       <span class="statusbar-v is-quiet" id="cell-queued-v">&mdash;</span>
     </div>
-
-    <!-- No lamp below this line. -->
-    <div class="statusbar-cell is-atload">
-      <span class="statusbar-k">MODE</span>
-      <span class="statusbar-v" id="cell-mode-v">&mdash;</span>
-    </div>
-    <div class="statusbar-cell is-atload">
-      <span class="statusbar-k">LOCK</span>
-      <span class="statusbar-v" id="cell-lock-v">&mdash;</span>
-    </div>
-    <div class="statusbar-cell is-atload">
-      <span class="statusbar-k">TRACING</span>
-      <span class="statusbar-v"><!--SLOT:STATUS_TRACING--></span>
-    </div>
-    <div class="statusbar-cell is-atload">
-      <span class="statusbar-k">EVIDENCE</span>
-      <span class="statusbar-v"><!--SLOT:STATUS_EVIDENCE--></span>
-    </div>
   </div>
 
-  <div class="statusbar-age" id="statusbar-age">
+  <button class="statusbar-age" id="statusbar-age" type="button" aria-expanded="false"
+          aria-controls="statusbar-drawer" title="Where these values come from">
     <span id="statusbar-age-text">no answer for 0s</span>
-    <button class="statusbar-collapse" id="statusbar-collapse" type="button"
-            title="Collapse the status bar" aria-expanded="true" aria-controls="statusbar">&#8964;</button>
-  </div>
+    <span class="statusbar-chev" id="statusbar-chev" aria-hidden="true">&#8963;</span>
+  </button>
+  <button class="statusbar-collapse" id="statusbar-collapse" type="button"
+          title="Collapse to the corner" aria-expanded="true" aria-controls="statusbar">&ndash;</button>
 </div>
 </div>
 
@@ -437,6 +519,22 @@
       </div>
     </div>
     <div id="modal-run-detail"></div>
+  </div>
+</div>
+
+<!-- Command palette. Jumps to a view or runs one of the few actions every
+     view shares. Nothing here is a new capability: each command is a control
+     that already exists somewhere on the page. -->
+<div class="palette" id="palette" role="dialog" aria-modal="true" aria-label="Command palette" hidden>
+  <div class="palette-panel">
+    <div class="palette-head">
+      <span class="palette-prompt" aria-hidden="true">&gt;</span>
+      <label class="sr-only" for="palette-input">Jump to a view or run a command</label>
+      <input class="palette-input" id="palette-input" type="text" autocomplete="off" spellcheck="false"
+             placeholder="Jump to a view, pitch a task, switch theme…">
+      <span class="palette-esc" aria-hidden="true">esc</span>
+    </div>
+    <div class="palette-list" id="palette-list" role="listbox" aria-label="Commands"></div>
   </div>
 </div>
 

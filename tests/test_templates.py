@@ -238,7 +238,10 @@ def test_modals_return_focus_to_whatever_opened_them(client):
     assert "_lastFocused = document.activeElement" in js
     assert "_lastFocused.focus()" in js
     body = client.get("/dashboard").text
-    assert body.count('aria-modal="true"') == 2, "dialogs are not announced as modal"
+    # The run and node dialogs, and the command palette.
+    assert body.count('aria-modal="true"') == 3, "dialogs are not announced as modal"
+    assert "_paletteReturn = document.activeElement" in js
+    assert "_paletteReturn.focus()" in js
 
 
 REACHES = {
@@ -306,10 +309,13 @@ def test_the_top_bar_has_something_that_can_give_up_its_width():
     ]:
         assert decl in block, f"{decl} is gone from .topbar-title — {why}"
 
-    # The rung that made room for it: the toggle keeps its icon, drops its word.
-    assert "#theme-toggle-label { display: none; }" in css, (
-        "the theme toggle carries its label down to phone widths again"
-    )
+    # The theme switch left the row for the identity menu (HANDOFF-UI §18), so
+    # it no longer competes with the title for width at any size.
+    html = (TEMPLATES / "dashboard.html").read_text(encoding="utf-8")
+    topbar = html[html.index('<header class="topbar">'):html.index("</header>")]
+    menu = html[html.index('id="ident-menu"'):html.index('id="ident-toggle"')]
+    assert 'id="theme-toggle"' not in topbar, "the theme switch is back in the top bar"
+    assert 'id="theme-toggle"' in menu, "the theme switch is not in the identity menu"
 
 
 @pytest.mark.skipif(

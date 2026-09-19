@@ -32,6 +32,7 @@ from fastapi.responses import HTMLResponse
 
 import tracing
 from config import get as get_config
+from worker_protocol import SERVER_VERSION
 
 router = APIRouter()
 
@@ -124,11 +125,57 @@ def status_bar_at_load() -> dict[str, str]:
     first; neither is the model this coordinator will use.
     """
     settings = get_config()
+    tracing_now = tracing_state()
+    evidence = str(settings.get("capability_evidence_mode", "off") or "off")
     return {
         "STATUS_MODEL_NAME": html.escape(str(settings.get("model", "") or "not configured")),
-        "STATUS_TRACING": html.escape(tracing_state()),
-        "STATUS_EVIDENCE": html.escape(
-            str(settings.get("capability_evidence_mode", "off") or "off")
+        "STATUS_TRACING": html.escape(tracing_now),
+        "STATUS_TRACING_WHY": _TRACING_WHY[tracing_now],
+        "STATUS_EVIDENCE": html.escape(evidence),
+        "STATUS_EVIDENCE_WHY": _EVIDENCE_WHY.get(evidence, _EVIDENCE_WHY["shadow"]),
+    }
+
+
+# What each drawer value means for the person reading it (HANDOFF-UI §17.1).
+# Each sentence is the behaviour of the module that owns the value, not the
+# design file's copy, which described a different system: its MODE sentence
+# was about where model calls go and its EVIDENCE one about manifests.
+_TRACING_WHY = {
+    "off": "No trace header is read or written and no span is built.",
+    "propagating": "Trace context is accepted and passed on. Nothing leaves this machine.",
+    "exporting": "Spans are sent to the collector this process was configured with.",
+}
+_EVIDENCE_WHY = {
+    "off": "Nothing is recorded about how machines behave after work is handed out.",
+    "shadow": "Recorded only. It never changes which machine is eligible, the order of work, "
+              "or who gets it.",
+}
+
+
+def identity_at_load() -> dict[str, str]:
+    """The machine identity block's config-backed rows (HANDOFF-UI §18).
+
+    A viewer key and the enrolment mode become words here, never values: the
+    block says whether the gate is open and never what the key is.
+    """
+    settings = get_config()
+    viewer_set = bool(str(settings.get("viewer_key", "") or "").strip())
+    required = settings.get("node_enrollment_mode") == "required"
+    return {
+        "SERVER_VERSION": html.escape(SERVER_VERSION),
+        "IDENT_VIEWER_META": "set" if viewer_set else "not set",
+        "IDENT_VIEWER_TONE": " is-ok" if viewer_set else " is-warn",
+        "IDENT_VIEWER_TITLE": (
+            "The key this console asks for before it shows anything" if viewer_set
+            else "No key is set, so anybody who can reach this address can read the console"
+        ),
+        "IDENT_ENROLL_META": "enrolment required" if required else "compat",
+        "IDENT_ENROLL_TONE": "" if required else " is-warn",
+        "IDENT_INVITE_TITLE": (
+            "The join command. Every machine enrols, so each can be revoked on its own"
+            if required else
+            "The join command. Enrolment is not required, so an older worker can join on "
+            "the shared secret alone and cannot be revoked on its own"
         ),
     }
 
@@ -140,5 +187,5 @@ async def landing():
 
 @router.get("/dashboard", response_class=HTMLResponse)
 async def dashboard():
-    return render("dashboard.html", **status_bar_at_load())
+    return render("dashboard.html", **status_bar_at_load(), **identity_at_load())
 

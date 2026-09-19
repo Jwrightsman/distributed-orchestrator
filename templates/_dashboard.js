@@ -257,32 +257,126 @@ function closeDrawer() {
   if (_navScrim) { _navScrim.remove(); _navScrim = null; }
 }
 
+function setRail(open) {
+  const app = $('app');
+  app.classList.toggle('rail-open', open);
+  const btn = $('rail-toggle');
+  if (btn) {
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    const word = open ? 'Collapse the rail' : 'Expand the rail';
+    btn.title = word;
+    btn.setAttribute('aria-label', word);
+    btn.textContent = open ? '\u00ab' : '\u00bb';
+  }
+}
+
 function toggleNav() {
   const app = $('app');
-  // Below 900px the sidebar is an overlay, so the same control has to mean
-  // "open" there and "collapse to icons" on a wide screen.
+  // Below 900px the rail is an overlay drawer, so the top bar's control opens
+  // it there. On a wide screen the rail's own control widens it.
   if (isDrawer()) {
     if (app.classList.contains('nav-open')) closeDrawer(); else openDrawer();
     return;
   }
-  app.classList.toggle('nav-collapsed');
-  const collapsed = app.classList.contains('nav-collapsed');
-  $('nav-toggle').setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-  try { localStorage.setItem('mycelium-nav', collapsed ? '1' : '0'); } catch (e) {}
+  const open = !app.classList.contains('rail-open');
+  setRail(open);
+  try { localStorage.setItem('mycelium-rail', open ? '1' : '0'); } catch (e) {}
 }
 
+/* A fresh session lands on the collapsed rail. Only a remembered choice
+   opens it: the rail is navigation, and the view is the page. */
 try {
-  if (localStorage.getItem('mycelium-nav') === '1') {
-    $('app').classList.add('nav-collapsed');
-  }
-} catch (e) {}
+  setRail(localStorage.getItem('mycelium-rail') === '1');
+} catch (e) { setRail(false); }
+
+// ── The machine identity block ──────────────────────────────────
+function setIdentMenu(open) {
+  $('ident-menu').hidden = !open;
+  $('ident-scrim').hidden = !open;
+  const t = $('ident-toggle');
+  t.setAttribute('aria-expanded', open ? 'true' : 'false');
+  t.title = open ? 'Hide this menu' : 'This coordinator, settings and version';
+  setText('ident-chev', open ? '\u2304' : '\u2303');
+}
+function identName(name) {
+  setText('ident-menu-name', name);
+  const parts = String(name).split(/[^A-Za-z0-9]+/).filter(Boolean);
+  const initials = parts.length > 1
+    ? parts[0][0] + parts[parts.length - 1][parts[parts.length - 1].length - 1]
+    : String(name).slice(0, 2);
+  setText('ident-initials', initials.toLowerCase());
+}
+setText('ident-origin', location.origin);
+
+// ── Command palette ─────────────────────────────────────────────
+/* Every command is a control that already exists somewhere on the page, so
+   the palette adds no capability of its own: it is a faster way to reach
+   them. Filtered as you type; Enter runs the highlighted one. */
+const PALETTE_COMMANDS = () => [
+  ...TABS.map(t => ({kind: 'VIEW', label: TAB_TITLES[t], hint: '#' + t, run: () => showTab(t)})),
+  {kind: 'RUN', label: 'Pitch a task', hint: 'overview', run: () => focusPitch()},
+  {kind: 'THEME', label: document.documentElement.getAttribute('data-theme') === 'dark'
+      ? 'Switch to the light theme' : 'Switch to the dark theme', hint: '', run: () => toggleTheme()},
+  {kind: 'PAGE', label: 'Open the public status page', hint: '/status', run: () => { location.href = '/status'; }},
+];
+let _paletteActive = 0;
+let _paletteReturn = null;
+
+function paletteMatches() {
+  const q = ($('palette-input').value || '').trim().toLowerCase();
+  return PALETTE_COMMANDS().filter(c => !q || (c.label + ' ' + c.kind + ' ' + c.hint).toLowerCase().includes(q));
+}
+function renderPalette() {
+  const list = $('palette-list');
+  const cmds = paletteMatches();
+  if (_paletteActive >= cmds.length) _paletteActive = Math.max(0, cmds.length - 1);
+  list.innerHTML = cmds.length ? cmds.map((c, i) => `
+    <button class="palette-cmd${i === _paletteActive ? ' is-active' : ''}" type="button"
+            role="option" aria-selected="${i === _paletteActive}" data-palette="${i}"
+            title="${escHtml(c.label)}">
+      <span class="palette-kind">${escHtml(c.kind)}</span>
+      <span class="palette-label">${escHtml(c.label)}</span>
+      <span class="palette-hint">${escHtml(c.hint)}</span>
+    </button>`).join('') : '<div class="palette-empty">Nothing matches.</div>';
+}
+function openPalette() {
+  _paletteReturn = document.activeElement;
+  _paletteActive = 0;
+  $('palette-input').value = '';
+  $('palette').hidden = false;
+  renderPalette();
+  $('palette-input').focus();
+}
+function closePalette() {
+  if ($('palette').hidden) return;
+  $('palette').hidden = true;
+  if (_paletteReturn && _paletteReturn.focus) _paletteReturn.focus();
+}
+function runPalette(i) {
+  const cmd = paletteMatches()[i];
+  closePalette();
+  if (cmd) cmd.run();
+}
 
 // ── Views ────────────────────────────────────────────────────────
 const TABS = ['overview', 'runs', 'gallery', 'nodes', 'projects', 'guild', 'evals', 'invite', 'config'];
 const TAB_TITLES = {
   overview: 'Overview', runs: 'Runs', gallery: 'Gallery',
-  nodes: 'Network nodes', projects: 'Projects', guild: 'Guild standings',
-  evals: 'Evals', invite: 'Connect', config: 'Config',
+  nodes: 'Nodes', projects: 'Projects', guild: 'Guild standings',
+  evals: 'Output quality', invite: 'Connect', config: 'Configuration',
+};
+/* The line under the title. Each is a claim about the view, so each says only
+   what the view shows: no counts that a capped endpoint cannot back. */
+const TAB_SUBS = {
+  overview: 'Pitch work, and watch the machines answer',
+  runs: 'Every pipeline this orchestrator has completed',
+  gallery: 'Work the network finished, with the code it produced',
+  nodes: 'Machines offering compute, and the work moving between them',
+  projects: 'Work that remembers what it already built',
+  guild: 'Compute contribution points — accepted work, not payment',
+  evals: 'What the eval harness recorded, and how much of it is chance',
+  invite: 'Machines that do the work, and apps that ask for it',
+  config: 'What this coordinator loaded when it started, and what each setting does',
 };
 
 function showTab(name, opts) {
@@ -303,6 +397,7 @@ function showTab(name, opts) {
   });
   const title = $('view-title');
   if (title) title.textContent = TAB_TITLES[name] || name;
+  setText('view-sub', TAB_SUBS[name] || '');
   // A deep link should survive a refresh; without this, "Runs" is unshareable.
   if (!opts || opts.pushHash !== false) {
     try { history.replaceState(null, '', '#' + name); } catch (e) {}
@@ -498,9 +593,13 @@ async function pollStatus() {
       ? met.avg_task_latency_seconds + 's' : '-';
     // Name whose balance this is — anyone can open this dashboard.
     const hostEl = $('credit-host');
-    if (hostEl && met.orchestrator_id) hostEl.textContent = met.orchestrator_id;
+    if (hostEl && met.orchestrator_id) {
+      hostEl.textContent = met.orchestrator_id;
+      identName(met.orchestrator_id);
+    }
     const credEl = $('credit-value');
     if (credEl) credEl.textContent = met.orchestrator_credits ?? 0;
+    setText('ident-points', met.orchestrator_credits ?? 0);
   } catch (e) {
     statusFresh.running = false;
     statusFresh.queued = false;
@@ -519,6 +618,12 @@ async function pollOperator() {
     const d = await apiJson('/v1/operator/health');
     setText('cell-mode-v', d.deployment_mode || '—');
     setText('cell-lock-v', d.single_coordinator_lock ? 'held' : 'not held');
+    setText('cell-mode-why', d.deployment_mode === 'trusted_alpha'
+      ? 'Startup refused to run on any preflight error, so every check held when this process started.'
+      : 'The compatibility default: preflight warns instead of refusing to start.');
+    setText('cell-lock-why', d.single_coordinator_lock
+      ? 'This process holds its state directory, so a second coordinator aimed at it fails at once.'
+      : 'This process has not finished starting.');
     const warnings = d.preflight_warnings || [];
     const lockCell = $('cell-lock-v');
     if (lockCell) {
@@ -662,6 +767,9 @@ function renderStatus() {
     tile.innerHTML = '<i aria-hidden="true"></i>' + escHtml(word);
   }
 
+  const cfgDot = $('nav-config-dot');
+  if (cfgDot) cfgDot.hidden = d.values.gate !== 'bad';
+
   const lockedLamp = $('locked-lamp');
   if (lockedLamp) paintLamp(lockedLamp, d.tone);
   const lockedLine = $('locked-health-line');
@@ -679,6 +787,17 @@ function toggleStatusBar() {
   const pill = $('statuspill'), chev = $('statusbar-collapse');
   if (pill) pill.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
   if (chev) chev.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+  if (collapsed) setStatusDrawer(false);
+}
+
+function setStatusDrawer(open) {
+  const drawer = $('statusbar-drawer');
+  if (!drawer) return;
+  drawer.hidden = !open;
+  const age = $('statusbar-age');
+  age.setAttribute('aria-expanded', open ? 'true' : 'false');
+  age.title = open ? 'Hide what is behind these values' : 'Where these values come from';
+  setText('statusbar-chev', open ? '\u2304' : '\u2303');
 }
 
 // ── Nodes polling ────────────────────────────────────────────────
@@ -693,13 +812,16 @@ async function refresh() {
     ]);
     if (evidence) capabilityEvidence = evidence;
 
-    const navCount = $('nav-node-count');
-    if (navCount) {
-      // An empty pill reads as a rendering bug. Show the badge only once
-      // there is a count to put in it.
+    const navWrap = $('nav-node-wrap');
+    if (navWrap) {
+      // An empty count reads as a rendering bug. Show it only once there is
+      // a count to put in it, lit only when a machine is connected.
       const n = (nodes.nodes || []).length;
-      navCount.textContent = n;
-      navCount.hidden = n === 0;
+      setText('nav-node-count', n);
+      navWrap.hidden = n === 0;
+      navWrap.classList.toggle('is-ok', n > 0);
+      const lamp = $('nav-node-lamp');
+      if (lamp) lamp.classList.toggle('is-ok', n > 0);
     }
 
     renderNodes(nodes);
@@ -1408,6 +1530,14 @@ async function loadHistory() {
   try {
     const data = await apiJson(url);
     const el = $('history-list');
+    // /history returns at most 50, so a full page is a lower bound, not a total.
+    if (!q) {
+      const navRuns = $('nav-runs-count');
+      if (navRuns) {
+        navRuns.textContent = data.count >= 50 ? '50+' : String(data.count);
+        navRuns.hidden = data.count === 0;
+      }
+    }
 
     if (data.count === 0) {
       el.innerHTML = q
@@ -1534,6 +1664,12 @@ async function loadProjects() {
   try {
     const data = await apiJson('/projects');
     const el = $('projects-list');
+    const navProjects = $('nav-project-count');
+    if (navProjects) {
+      const n = (data.projects || []).length;
+      navProjects.textContent = n;
+      navProjects.hidden = n === 0;
+    }
 
     if (!data.projects || data.projects.length === 0) {
       el.innerHTML = '<div class="empty-state"><p>No projects yet.<br>A project carries memory from one pitch to the next.</p></div>';
@@ -1733,6 +1869,28 @@ $('statuspill').addEventListener('click', toggleStatusBar);
 $('statusbar-collapse').addEventListener('click', toggleStatusBar);
 
 $('nav-toggle').addEventListener('click', toggleNav);
+$('rail-toggle').addEventListener('click', toggleNav);
+$('ident-toggle').addEventListener('click', () => setIdentMenu($('ident-menu').hidden));
+$('ident-scrim').addEventListener('click', () => setIdentMenu(false));
+// Every item navigates and closes in one step, so none leaves the menu open
+// behind a view change (§18.3).
+$('ident-menu').addEventListener('click', (e) => {
+  if (e.target.closest('.ident-item, .global-link')) setIdentMenu(false);
+});
+$('statusbar-age').addEventListener('click', () => setStatusDrawer($('statusbar-drawer').hidden));
+$('palette-open').addEventListener('click', openPalette);
+$('palette').addEventListener('click', (e) => {
+  const cmd = e.target.closest('[data-palette]');
+  if (cmd) { runPalette(Number(cmd.dataset.palette)); return; }
+  if (e.target === $('palette')) closePalette();
+});
+$('palette-input').addEventListener('input', () => { _paletteActive = 0; renderPalette(); });
+$('palette-input').addEventListener('keydown', (e) => {
+  const n = paletteMatches().length;
+  if (e.key === 'ArrowDown') { e.preventDefault(); _paletteActive = Math.min(n - 1, _paletteActive + 1); renderPalette(); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); _paletteActive = Math.max(0, _paletteActive - 1); renderPalette(); }
+  else if (e.key === 'Enter') { e.preventDefault(); runPalette(_paletteActive); }
+});
 $('theme-toggle').addEventListener('click', toggleTheme);
 $('focus-pitch').addEventListener('click', focusPitch);
 $('pitch-btn').addEventListener('click', pitchTask);
@@ -1750,7 +1908,14 @@ $('history-search').addEventListener('input', () => {
 });
 
 document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
+    e.preventDefault();
+    if ($('palette').hidden) openPalette(); else closePalette();
+    return;
+  }
   if (e.key !== 'Escape') return;
+  if (!$('palette').hidden) { closePalette(); return; }
+  if (!$('ident-menu').hidden) { setIdentMenu(false); $('ident-toggle').focus(); return; }
   if (anyModalOpen()) { closeModal('output-modal'); closeModal('node-modal'); return; }
   if ($('app').classList.contains('nav-open')) closeDrawer();
 });

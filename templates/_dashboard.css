@@ -50,62 +50,90 @@ body {
 .skip-link:focus { top: 8px; }
 
 /* ── App shell ───────────────────────────────────────────────────
-   Persistent left nav + top bar, the layout every tool of this kind
-   converges on: navigation stays put, the top bar holds actions that apply
-   everywhere, and the content area does exactly one job at a time. The
-   previous version stacked every job onto one scrolling page, which is why
-   browsing history meant scrolling past a live pitch box. */
-.app { display: flex; min-height: 100vh; }
+   The shell is the app viewport (HANDOFF-UI §15.5): a column that is exactly
+   the window's height, holding a row (rail + view) and the status bar under
+   both. The page itself never scrolls; each view scrolls inside the row. That
+   is what lets the bar sit flush at the bottom without covering anything, and
+   what keeps Overview's floating window centred at every scroll position.
+
+   The rail starts collapsed at 58px, icons only (§15.4). Navigation is not
+   the page. It is borderless on the view side of its hairline, sits on --bg,
+   and its items are pills: the pill carries selection (§16.3). */
+.shell { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
+.app { display: flex; flex: 1 1 auto; min-height: 0; }
 
 .nav {
-  width: 232px; flex-shrink: 0;
+  width: 58px; flex-shrink: 0;
   display: flex; flex-direction: column;
-  border-right: 1px solid var(--border-subtle);
-  background: var(--bg-elevated);
-  position: sticky; top: 0; height: 100vh;
+  height: 100%;
+  background: var(--bg);
+  border-right: 1px solid var(--border);
   transition: width .16s ease;
 }
-.app.nav-collapsed .nav { width: 60px; }
-.app.nav-collapsed .nav-label { display: none; }
-.app.nav-collapsed .nav-item { justify-content: center; }
-.app.nav-collapsed .nav-brand { justify-content: center; }
+.app.rail-open .nav { width: 216px; }
 
-.nav-brand {
-  display: flex; align-items: center; gap: 10px;
-  padding: 18px 16px 16px; margin-bottom: 4px;
-  text-decoration: none;
+.nav-head {
+  display: flex; align-items: center; gap: 9px;
+  padding: 20px 16px 16px;
 }
-.nav-mark {
-  width: 18px; height: 18px; border-radius: 5px; flex-shrink: 0;
-  background: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-wash);
+.nav-brand { display: flex; align-items: center; gap: 9px; min-width: 0; text-decoration: none; }
+.nav-mark { width: 9px; height: 9px; flex-shrink: 0; background: var(--mark); }
+.nav-brand-name {
+  font-size: 12.5px; font-weight: 600; letter-spacing: 0.1em; color: var(--mark);
 }
-.nav-brand-name { font-size: 14px; font-weight: 650; color: var(--text); letter-spacing: -0.2px; }
+.nav-rail-toggle {
+  background: none; border: none; padding: 2px; line-height: 1;
+  font-family: var(--mono); font-size: 12px; color: var(--text-faint); cursor: pointer;
+}
+.nav-rail-toggle:hover { color: var(--text); }
+.app.rail-open .nav-rail-toggle { margin-left: auto; }
 
-.nav-items { display: flex; flex-direction: column; gap: 2px; padding: 0 8px; }
+.nav-items {
+  display: flex; flex-direction: column;
+  padding: 14px 8px 16px;
+  overflow-y: auto; overflow-x: hidden; scrollbar-width: thin;
+}
+/* Collapsed, a section label keeps a 13px gap in the icon column instead of
+   its words, so the groups still read as groups. */
+.nav-section {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.1em; color: var(--text-faint);
+  padding: 18px 8px 7px; overflow: hidden; white-space: nowrap;
+  height: 13px; visibility: hidden; box-sizing: content-box; padding-top: 0; padding-bottom: 0;
+}
+.nav-section:first-child { padding-top: 0; }
+.app.rail-open .nav-section {
+  height: auto; visibility: visible; padding: 18px 8px 7px;
+}
+.app.rail-open .nav-section:first-child { padding-top: 0; }
+
 .nav-item {
-  display: flex; align-items: center; gap: 10px;
-  width: 100%; padding: 8px 10px;
-  background: none; border: none; border-radius: var(--radius-sm);
-  color: var(--text-dim); font-family: var(--sans); font-size: 13.5px; font-weight: 500;
+  display: flex; align-items: center; gap: 9px;
+  width: 100%; height: 30px; padding: 0 8px; flex-shrink: 0;
+  background: none; border: none; border-radius: 10px;
+  color: var(--text-dim); font-family: var(--sans); font-size: 12.5px; font-weight: 450;
   cursor: pointer; text-align: left;
   transition: background .12s ease, color .12s ease;
 }
-.nav-item svg { width: 16px; height: 16px; flex-shrink: 0; opacity: .85; }
+.nav-item svg { width: 14px; height: 14px; flex-shrink: 0; }
 .nav-item:hover { background: var(--surface-hover); color: var(--text); }
-.nav-item[aria-current="page"] { background: var(--accent-wash); color: var(--accent-text); font-weight: 600; }
-.nav-item[aria-current="page"] svg { opacity: 1; }
+.nav-item[aria-current="page"] { background: var(--surface-hover); color: var(--text); }
 .nav-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.nav-badge {
-  margin-left: auto; font-family: var(--mono); font-size: 11px;
-  color: var(--text-muted); background: var(--surface); border: 1px solid var(--border);
-  border-radius: 20px; padding: 1px 7px; min-width: 22px; text-align: center;
-}
 
-/* The rail's inference line used to live here. It was one of four indicators
-   deriving their own truth, and the only one whose disagreement with the
-   others was on screen at all times. The status bar replaced it; it was
-   deleted rather than duplicated, so there is no .nav-foot. */
+.nav-label { display: none; }
+.app.rail-open .nav-label { display: inline; }
+
+.nav-count {
+  margin-left: auto; display: none; align-items: center; gap: 5px;
+  font-family: var(--mono); font-size: 11px; color: var(--text-faint);
+}
+.app.rail-open .nav-count:not([hidden]) { display: inline-flex; }
+.nav-lamp { width: 5px; height: 5px; flex-shrink: 0; background: var(--border-strong); }
+.nav-lamp.is-ok { background: var(--accent); }
+.nav-count.is-ok { color: var(--accent-text); }
+.nav-warn-dot { margin-left: auto; width: 5px; height: 5px; flex-shrink: 0; background: var(--warn); }
+/* Collapsed, the dot rides the icon's corner so the warning is still visible. */
+.app:not(.rail-open) .nav-item { position: relative; }
+.app:not(.rail-open) .nav-warn-dot { position: absolute; top: 6px; right: 12px; margin: 0; }
 
 /* Scrim behind the mobile drawer. Without it the drawer floats over live
    content with no way back except picking a destination. */
@@ -116,86 +144,164 @@ body {
   cursor: pointer;
 }
 
-.app-body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+/* ── The machine identity block (HANDOFF-UI §18) ─────────────────── */
+.ident { margin-top: auto; padding: 8px 8px 10px; position: relative; }
+.ident-trigger {
+  display: flex; align-items: center; gap: 9px;
+  width: 100%; min-height: 44px; padding: 5px 8px;
+  border: none; border-radius: 12px; background: transparent;
+  text-align: left; cursor: pointer;
+}
+.ident-trigger:hover, .ident-trigger[aria-expanded="true"] { background: var(--surface-hover); }
+.ident-avatar {
+  flex-shrink: 0; width: 26px; height: 26px; border-radius: 9px;
+  background: var(--surface); border: 1px solid var(--border);
+  display: inline-flex; align-items: center; justify-content: center;
+  font-family: var(--mono); font-size: 11px; color: var(--text-dim);
+}
+.ident-text { display: none; flex: 1 1 auto; min-width: 0; }
+.app.rail-open .ident-text { display: block; }
+.ident-name, .ident-sub {
+  display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ident-name { font-size: 12.5px; color: var(--text); }
+.ident-sub { font-family: var(--mono); font-size: 11px; color: var(--text-faint); margin-top: 2px; }
+.ident-chev { display: none; flex-shrink: 0; font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
+.app.rail-open .ident-chev { display: inline; }
+
+/* Click-away: a full-viewport transparent button behind the menu, so any
+   outside click closes it (§18.3). */
+.ident-scrim {
+  position: fixed; inset: 0; z-index: 60;
+  background: none; border: none; cursor: default;
+}
+.ident-menu {
+  position: absolute; left: 8px; bottom: calc(100% - 2px); z-index: 61;
+  width: 274px; max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 124px); overflow-y: auto;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: var(--lift);
+}
+.ident-menu-head { padding: 13px 14px; border-bottom: 1px solid var(--border-subtle); }
+.ident-menu-name { font-size: 12.5px; font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
+.ident-menu-origin {
+  font-family: var(--mono); font-size: 11px; color: var(--text-faint);
+  margin-top: 4px; line-height: 1.5; word-break: break-all;
+}
+.ident-menu-note { font-size: 11.5px; color: var(--text-faint); line-height: 1.5; margin-top: 6px; text-wrap: pretty; }
+.ident-version {
+  display: flex; align-items: flex-start; gap: 9px;
+  padding: 11px 14px; border-bottom: 1px solid var(--border-subtle);
+}
+.ident-version-dot { width: 6px; height: 6px; margin-top: 5px; flex-shrink: 0; background: var(--border-strong); }
+.ident-version-title { display: block; font-size: 12.5px; color: var(--text-dim); }
+.ident-version-title .mono { font-family: var(--mono); }
+.ident-version-note { display: block; font-size: 11.5px; color: var(--text-faint); line-height: 1.5; margin-top: 3px; text-wrap: pretty; }
+.ident-items { padding: 6px; }
+.ident-item {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%; height: 32px; padding: 0 9px;
+  border: none; border-radius: 9px; background: none;
+  font-size: 12.5px; color: var(--text-dim); text-align: left; cursor: pointer;
+}
+.ident-item:hover { background: var(--surface-hover); color: var(--text); }
+.ident-icon { width: 14px; flex-shrink: 0; font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
+.ident-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ident-meta { flex-shrink: 0; font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
+.ident-meta.is-warn { color: var(--warn-text); }
+.ident-meta.is-ok { color: var(--accent-text); }
+.ident-pages { padding: 8px 14px 11px; border-top: 1px solid var(--border-subtle); }
+.ident-pages-head {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.1em; color: var(--text-faint);
+  padding-bottom: 7px;
+}
+.ident-pages-links { display: flex; flex-wrap: wrap; gap: 5px 14px; }
+.global-link {
+  font-family: var(--mono); font-size: 11px; color: var(--text-muted);
+  text-decoration: none; white-space: nowrap;
+}
+.global-link:hover { color: var(--text); }
+
+.app-body {
+  flex: 1; min-width: 0; min-height: 0; height: 100%;
+  display: flex; flex-direction: column; overflow: hidden;
+}
 
 /* ── Top bar ─────────────────────────────────────────────────────
-   Sidebar = primary in-app sections. Top bar = global context: where this
-   page sits relative to the rest of the site, and actions that apply
-   everywhere. Keeping those two jobs separate is why the combination works. */
+   Contextual, not global (README, "Screens"): it carries the view's title and
+   subtitle, so no view names itself twice. No hairline, 68px, a 17px title
+   (§16.3). */
 .topbar {
-  display: flex; align-items: center; gap: 12px;
-  padding: 0 20px; height: 56px; flex-shrink: 0;
-  border-bottom: 1px solid var(--border-subtle);
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  padding: 0 24px; min-height: 68px; flex-shrink: 0;
   background: var(--bg);
-  position: sticky; top: 0; z-index: 20;
+  z-index: 20;
 }
+.topbar-head { flex: 1 1 0%; min-width: 0; padding: 9px 0; }
 /* The one item in the row that gives up space. Everything else here is a
    fixed-size control, so without a shrinkable title a long view name ("Guild
    standings") pushed the whole page wider than the window on a phone. */
 .topbar-title {
-  font-size: 15px; font-weight: 620; color: var(--text); letter-spacing: -0.2px;
+  font-size: 17px; font-weight: 550; letter-spacing: -0.25px; line-height: 1.25;
+  color: var(--text);
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
-
-.global-nav { display: flex; align-items: center; gap: 2px; margin-left: 6px; }
-.global-link {
-  padding: 6px 10px; border-radius: var(--radius-sm);
-  color: var(--text-muted); text-decoration: none;
-  font-size: 13px; font-weight: 500; white-space: nowrap;
-  transition: background .12s ease, color .12s ease;
+.topbar-sub {
+  font-size: 12.5px; color: var(--text-muted); line-height: 1.45; margin-top: 3px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.global-link:hover { background: var(--surface-hover); color: var(--text); }
+.topbar-actions {
+  margin-left: auto; flex-shrink: 0;
+  display: flex; align-items: center; gap: 8px; padding: 9px 0;
+}
 
 .icon-btn {
-  display: inline-flex; align-items: center; justify-content: center;
+  display: none; align-items: center; justify-content: center;
   width: 30px; height: 30px; flex-shrink: 0;
-  background: none; border: 1px solid transparent; border-radius: var(--radius-sm);
+  background: none; border: 1px solid transparent; border-radius: 10px;
   color: var(--text-dim); cursor: pointer;
   transition: background .12s ease, color .12s ease;
 }
 .icon-btn svg { width: 17px; height: 17px; }
 .icon-btn:hover { background: var(--surface-hover); color: var(--text); }
 
-.theme-toggle {
-  display: inline-flex; align-items: center; gap: 7px;
-  background: var(--surface); color: var(--text-dim);
-  border: 1px solid var(--border); border-radius: var(--radius-sm);
-  padding: 7px 12px; cursor: pointer;
-  font-family: var(--sans); font-size: 12px; font-weight: 500;
-  transition: background .12s ease, color .12s ease, border-color .12s ease;
-  flex-shrink: 0;
-}
-.theme-toggle:hover { background: var(--surface-hover); color: var(--text); border-color: var(--border-strong); }
-
 .credit-chip {
-  font-family: var(--mono);
-  font-size: 12px;
-  color: var(--text-dim);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 4px 10px;
+  display: inline-flex; align-items: center; gap: 7px;
+  height: 30px; padding: 0 10px;
+  font-family: var(--mono); font-size: 11.5px;
+  border: 1px solid var(--border); border-radius: 10px;
   white-space: nowrap;
 }
-.credit-chip #credit-value { color: var(--accent-text); font-weight: 600; }
-.credit-sep { color: var(--text-muted); margin: 0 6px; }
+.credit-k { color: var(--text-muted); }
+.credit-chip #credit-value { color: var(--text); }
+
+.palette-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  height: 30px; padding: 0 10px;
+  font-family: var(--mono); font-size: 11.5px; color: var(--text-muted);
+  background: none; border: 1px solid var(--border); border-radius: 10px;
+  white-space: nowrap; cursor: pointer;
+}
+.palette-btn:hover { border-color: var(--border-strong); color: var(--text-dim); }
 
 /* ── Buttons ─────────────────────────────────────────────────── */
 .btn-primary {
-  background: var(--accent); color: var(--bg);
-  border: none; border-radius: var(--radius-sm);
-  padding: 7px 14px; font-family: var(--sans); font-size: 13px; font-weight: 600;
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: 30px;
+  background: var(--accent); color: var(--on-accent);
+  border: none; border-radius: 10px;
+  padding: 0 13px; font-family: var(--sans); font-size: 12.5px; font-weight: 600;
   cursor: pointer; white-space: nowrap;
   transition: background .12s ease;
 }
-.btn-primary:hover { background: var(--accent-dim); }
+.btn-primary:hover { background: var(--accent-strong); }
 
 /* Quiet button — the neutral action in a pair (Close, Copy link). */
 .btn-quiet {
   background: none; color: var(--text-dim);
-  border: 1px solid var(--border); border-radius: var(--radius-sm);
-  padding: 6px 14px; font-family: var(--sans); font-size: 13px; font-weight: 600;
+  border: 1px solid var(--border); border-radius: 10px;
+  padding: 6px 13px; font-family: var(--sans); font-size: 12.5px; font-weight: 500;
   cursor: pointer; white-space: nowrap;
   transition: background .12s ease, color .12s ease, border-color .12s ease;
 }
@@ -222,18 +328,30 @@ body {
 .link-btn:hover { color: var(--text); }
 
 /* ── Content area ────────────────────────────────────────────── */
-.content { padding: 24px 28px 56px; max-width: 1180px; width: 100%; }
+/* Each view scrolls here, inside the shell (§15.5). The design's page
+   padding, 34px 40px 30px; Overview alone is full-bleed. */
+.content {
+  flex: 1 1 auto; min-height: 0; width: 100%;
+  overflow-y: auto; overflow-x: hidden;
+  padding: 34px 40px 30px;
+}
 
-.view-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
-.view-head h2 { margin: 0; }
-.view-sub { font-size: 13px; color: var(--text-muted); }
+/* The top bar names the view (README, "Screens": no view names itself
+   twice), so each view's own heading is kept for screen readers and hidden. */
+.view-head {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap;
+}
 
+/* Section labels: the sans at 11px, uppercase, with weight carrying what
+   mono's width used to (§15.1). */
 .content h2 {
-  font-size: 13px;
-  color: var(--text-dim);
-  letter-spacing: 2px;
+  font-family: var(--sans);
+  font-size: 11px;
+  color: var(--text-faint);
+  letter-spacing: 0.1em;
   text-transform: uppercase;
-  margin-bottom: 14px;
+  margin-bottom: 12px;
   font-weight: 600;
 }
 
@@ -844,20 +962,32 @@ a.gallery-task:hover { color: var(--accent-text); }
    screen. Most links to this page are opened on a phone. */
 @media (max-width: 900px) {
   .nav {
-    position: fixed; z-index: 40;
+    position: fixed; z-index: 40; top: 0; left: 0;
+    width: 216px; height: 100vh;
     transform: translateX(-100%);
     transition: transform .16s ease;
     box-shadow: 0 0 40px var(--shadow);
   }
   .app.nav-open .nav { transform: translateX(0); }
-  .content { padding: 18px 16px 48px; }
+  /* In the drawer the rail is always open: labels, counts, section names. */
+  .nav .nav-label { display: inline; }
+  .nav .nav-count:not([hidden]) { display: inline-flex; }
+  .nav .nav-section { height: auto; visibility: visible; padding: 18px 8px 7px; }
+  .nav .nav-section:first-child { padding-top: 0; }
+  .nav .ident-text { display: block; }
+  .nav .ident-chev { display: inline; }
+  .nav-rail-toggle { display: none; }
+  .icon-btn { display: inline-flex; }
+  .content { padding: 22px 16px 28px; }
+  .topbar { padding: 0 16px; gap: 10px; }
   .topbar-actions .credit-chip { display: none; }
-  .global-nav { margin-left: 0; }
 }
 
 @media (max-width: 768px) {
-  .topbar { padding: 0 12px; gap: 8px; }
-  .topbar-title { font-size: 14px; }
+  .topbar { padding: 0 12px; gap: 8px; min-height: 56px; }
+  .topbar-title { font-size: 15px; }
+  .topbar-sub { display: none; }
+  .palette-btn { display: none; }
   .stats-bar { gap: 12px 20px; padding: 12px 14px; }
   .stat-value { font-size: 18px; }
   .stat-label { font-size: 11px; }
@@ -875,14 +1005,6 @@ a.gallery-task:hover { color: var(--accent-text); }
 }
 
 @media (max-width: 560px) {
-  /* Global links collapse to the home mark only — the sidebar already
-     carries in-app navigation, so this row is context, not the main path. */
-  .global-link.is-secondary { display: none; }
-  /* The theme toggle drops to its icon. The word is the cheapest thing in the
-     row to lose: the button keeps its title and aria-label, and a 30px square
-     still clears the 28px console target. */
-  #theme-toggle-label { display: none; }
-  .theme-toggle { width: 30px; height: 30px; padding: 0; gap: 0; justify-content: center; }
   .pitch-form { flex-direction: column; }
   .pitch-btn { width: 100%; padding: 12px 20px; }
   .history-card { flex-direction: column; align-items: flex-start; gap: 8px; }
@@ -890,17 +1012,8 @@ a.gallery-task:hover { color: var(--accent-text); }
   .section-head { flex-wrap: wrap; }
   .search-input { width: 100%; }
   .stats-bar { gap: 10px 16px; }
-  .content h2 { letter-spacing: 1.4px; }
 }
 
-/* The last rung, and the only one taken from a measurement rather than a
-   device: furniture plus the longest view name ("Guild standings") plus "Home"
-   needs 381px, so below that the row cannot hold both the name and a second
-   navigation. The name wins — the drawer's brand mark is still the way home,
-   at two taps instead of one. */
-@media (max-width: 430px) {
-  .global-nav { display: none; }
-}
 
 /* ── Locked screen and server-state banners ──────────────────────────────
    Both exist so a private server reads as *locked* and a server that cannot
@@ -1288,8 +1401,8 @@ a.gallery-task:hover { color: var(--accent-text); }
 }
 
 .statusbar {
-  position: fixed;
-  left: 0; right: 0; bottom: 0;
+  position: relative;
+  flex-shrink: 0;
   z-index: 45;
   display: flex;
   align-items: stretch;
@@ -1301,9 +1414,6 @@ a.gallery-task:hover { color: var(--accent-text); }
   font-size: 11px;
 }
 
-/* Nothing in the app hides behind the bar. */
-.app { padding-bottom: 30px; }
-.nav { height: calc(100vh - 30px); }
 
 .statusbar-severity {
   display: flex; align-items: center; gap: 7px;
@@ -1330,7 +1440,8 @@ a.gallery-task:hover { color: var(--accent-text); }
   border-right: 1px solid var(--border-subtle);
   white-space: nowrap;
 }
-.statusbar-k { letter-spacing: 0.1em; color: var(--text-faint); }
+.statusbar-k { font-family: var(--sans); font-weight: 600; letter-spacing: 0.1em; color: var(--text-faint); }
+#cell-model { font-family: var(--mono); font-weight: 400; letter-spacing: 0; }
 .statusbar-v { color: var(--text); }
 .statusbar-v.is-quiet { color: var(--text-muted); }
 /* A polled cell whose value is not current greys out with its lamp: the
@@ -1343,23 +1454,56 @@ a.gallery-task:hover { color: var(--accent-text); }
    configuration, not weather. */
 .statusbar-cell.is-atload .statusbar-v { color: var(--text-dim); }
 
+/* The age is the drawer's toggle (§17.1): "how old is this" and "where does
+   it come from" are one gesture, so they are one button. */
 .statusbar-age {
-  display: flex; align-items: center; gap: 10px;
-  margin-left: auto; padding: 0 11px; flex-shrink: 0;
-  border-left: 1px solid var(--border-subtle);
-  white-space: nowrap;
+  display: flex; align-items: center; gap: 9px;
+  margin-left: auto; padding: 0 12px; flex-shrink: 0; height: 100%;
+  border: none; border-left: 1px solid var(--border-subtle);
+  white-space: nowrap; cursor: pointer;
+  font-family: var(--mono); font-size: 11px;
   color: var(--text-faint);
   background: var(--bg-elevated);
 }
-.statusbar-age.is-stale { color: var(--warn-text); }
+.statusbar-age:hover { color: var(--text); background: var(--surface-hover); }
+.statusbar-age.is-stale #statusbar-age-text { color: var(--warn-text); }
 
 .statusbar-collapse {
-  background: none; border: none; cursor: pointer;
-  padding: 0 2px; line-height: 1;
+  display: flex; align-items: center; flex-shrink: 0; height: 100%;
+  padding: 0 11px;
+  background: var(--bg-elevated); border: none; border-left: 1px solid var(--border-subtle);
+  cursor: pointer; line-height: 1;
   font-family: var(--mono); font-size: 11px;
-  color: var(--text-muted);
+  color: var(--text-faint);
 }
-.statusbar-collapse:hover { color: var(--text); }
+.statusbar-collapse:hover { color: var(--text); background: var(--surface-hover); }
+
+/* The drawer: configuration, each value with what it means for you. It opens
+   above the bar and takes its height from the content row, so expanding never
+   scrolls the view (§17.3). */
+.statusbar-drawer {
+  position: absolute; left: 0; right: 0; bottom: 100%;
+  display: flex; flex-wrap: wrap; gap: 10px 40px;
+  padding: 14px 18px 16px;
+  background: var(--bg-elevated);
+  border-top: 1px solid var(--border);
+}
+.statusbar-drawer .statusbar-cell, .statusbar-source {
+  display: block; padding: 0; border: none; white-space: normal; min-width: 0;
+}
+.statusbar-drawer .statusbar-k {
+  color: var(--text-faint); letter-spacing: 0.1em; font-size: 11px;
+  display: block; font-family: var(--sans); font-weight: 600;
+}
+.statusbar-drawer .statusbar-v {
+  font-family: var(--mono); color: var(--text-dim);
+  display: block; margin-top: 4px; font-size: 12px;
+}
+.statusbar-why {
+  display: block; max-width: 34ch; margin-top: 3px;
+  font-family: var(--sans); font-size: 11.5px; line-height: 1.5;
+  color: var(--text-faint); text-wrap: pretty;
+}
 
 /* ── The lamp ────────────────────────────────────────────────────────────
    One class per state, and the hollow one is the only one with no fill. That
@@ -1412,27 +1556,23 @@ a.gallery-task:hover { color: var(--accent-text); }
 /* Collapsed: the bar becomes the pill, in the bar's own left corner. */
 .statusbar.is-collapsed {
   background: none; border-top: none;
-  /* 28px pill + 2px sits inside the 30px the app already reserves, so the
-     collapsed bar covers no content either. */
-  height: auto; padding: 0 0 2px 12px;
+  height: 0; padding: 0;
   pointer-events: none;
 }
 .statusbar.is-collapsed .statusbar-cells,
 .statusbar.is-collapsed .statusbar-severity,
-.statusbar.is-collapsed .statusbar-age { display: none; }
-.statusbar.is-collapsed .statuspill { pointer-events: auto; }
-.statusbar:not(.is-collapsed) .statuspill { display: none; }
-
-@media (max-width: 900px) {
-  /* The drawer slides over a full-height rail again once the bar is not
-     sitting under it. */
-  .nav { height: 100vh; }
+.statusbar.is-collapsed .statusbar-age,
+.statusbar.is-collapsed .statusbar-collapse,
+.statusbar.is-collapsed .statusbar-drawer { display: none; }
+.statusbar.is-collapsed .statuspill {
+  pointer-events: auto; position: fixed; left: 14px; bottom: 14px;
 }
+.statusbar:not(.is-collapsed) .statuspill { display: none; }
 
 @media (max-width: 560px) {
   /* The lamp, the word and the age keep their room; the cells give theirs up
      to the scroll strip. */
-  .statusbar-severity, .statusbar-cell, .statusbar-age { padding: 0 8px; }
+  .statusbar-severity, .statusbar-cells .statusbar-cell, .statusbar-age { padding: 0 8px; }
 }
 
 /* ── Run verdict chips ───────────────────────────────────────────────────
@@ -1777,3 +1917,43 @@ a.gallery-task:hover { color: var(--accent-text); }
 @media (max-width: 520px) {
   .iv-tool { grid-template-columns: minmax(0, 1fr); gap: 2px; }
 }
+
+/* ── Command palette ─────────────────────────────────────────────── */
+.palette {
+  position: fixed; inset: 0; z-index: 90;
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 96px 20px 20px;
+  background: var(--scrim);
+}
+.palette-panel {
+  width: 100%; max-width: 520px; overflow: hidden;
+  background: var(--surface); border: 1px solid var(--border-strong);
+  border-radius: 10px; box-shadow: var(--lift);
+}
+.palette-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 0 13px; height: 44px; border-bottom: 1px solid var(--border-subtle);
+}
+.palette-prompt { font-family: var(--mono); font-size: 13px; color: var(--accent-text); }
+.palette-input {
+  flex: 1; min-width: 0; background: none; border: none; outline: none;
+  font-size: 13px; color: var(--text);
+}
+.palette-esc { font-family: var(--mono); font-size: 11px; color: var(--text-faint); flex-shrink: 0; }
+.palette-list { max-height: 328px; overflow-y: auto; overflow-x: hidden; }
+.palette-cmd {
+  display: flex; align-items: center; gap: 11px; width: 100%;
+  padding: 10px 14px; border: none; border-bottom: 1px solid var(--border-subtle);
+  background: none; text-align: left; cursor: pointer;
+}
+.palette-cmd:hover, .palette-cmd.is-active { background: var(--surface-hover); }
+.palette-kind {
+  width: 46px; flex-shrink: 0;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.09em; color: var(--text-muted);
+}
+.palette-label {
+  font-size: 12.5px; color: var(--text);
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.palette-hint { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text-muted); flex-shrink: 0; }
+.palette-empty { padding: 14px; font-size: 12.5px; color: var(--text-muted); }
