@@ -1482,7 +1482,7 @@ a.gallery-task:hover { color: var(--accent-text); }
 }
 .rd-panel-head + .ev-facts { border-top: none; }
 .ev-facts dt {
-  font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em;
+  font-family: var(--sans); font-weight: 600; font-size: 11px; letter-spacing: 0.09em;
   color: var(--text-muted);
 }
 .ev-facts dd {
@@ -1585,12 +1585,16 @@ a.gallery-task:hover { color: var(--accent-text); }
    drops beneath it when the two stop fitting side by side. A warning panel
    takes the warn wash; its mark, its words and its border all say so, so a
    reader who does not see colour loses nothing. */
-.iv { display: flex; flex-direction: column; gap: 14px; }
+.iv {
+  display: flex; flex-direction: column; gap: 14px; padding: 20px;
+  background: var(--bg-elevated); border: 1px solid var(--border-subtle);
+  border-radius: 18px; box-shadow: var(--card-lift);
+}
 
 .iv-divider {
   display: flex; align-items: center; gap: 12px;
   margin-top: 10px;
-  font-family: var(--mono); font-size: 11px; letter-spacing: 0.13em;
+  font-family: var(--sans); font-weight: 600; font-size: 11px; letter-spacing: 0.1em;
   color: var(--text-faint);
 }
 .iv-divider:first-child { margin-top: 0; }
@@ -1670,7 +1674,7 @@ a.gallery-task:hover { color: var(--accent-text); }
 .iv-tools { border-top: 1px solid var(--border-subtle); }
 .iv-tools-head {
   padding: 11px 14px 4px;
-  font-family: var(--mono); font-size: 11px; letter-spacing: 0.11em; color: var(--text-muted);
+  font-family: var(--sans); font-weight: 600; font-size: 11px; letter-spacing: 0.09em; color: var(--text-muted);
 }
 .iv-tool {
   display: grid; grid-template-columns: minmax(120px, 168px) minmax(0, 1fr);
