@@ -3,263 +3,242 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Mycelium — one task, split across many computers</title>
-<meta name="description" content="Describe something you want built. Mycelium splits the work across ordinary computers running local AI models, then assembles the finished code. Local models by default; an external provider is optional and off.">
+<title>Mycelium — auditable AI jobs across computers you trust</title>
+<meta name="description" content="Run auditable AI jobs across computers you trust. Mycelium hands each piece of work to a local AI model on a machine whose owner agreed to run it, applies the checks you asked for, and records how the result was produced. Local models by default; an external provider is optional and off.">
 <!-- THEME -->
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
-  /* Design tokens come from templates/_theme.html — see dashboard.py
+  /* Design tokens come from templates/_theme.html — see dashboard.py.
 
      Written phone-first. Most visitors arrive from a link in a post, on a
      phone, knowing nothing, and leave in seconds — so everything above the
      fold answers "what is this", "is it actually running", "what do I do
-     next", in that order, and everything else is below it. */
+     next", in that order. Every tappable thing is at least 44px. */
 
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: var(--sans);
-    line-height: 1.55;
-    -webkit-font-smoothing: antialiased;
-  }
-  .wrap { width: 100%; max-width: 760px; margin: 0 auto; padding: 0 20px; }
+  body { background: var(--bg); color: var(--text); font-family: var(--sans); line-height: 1.55; -webkit-font-smoothing: antialiased; }
   [hidden] { display: none !important; }
-
-  /* ── Above the fold ─────────────────────────────────────────────── */
-  .hero { padding: 30px 0 32px; }
-  .eyebrow {
-    display: inline-flex; align-items: center; gap: 8px;
-    font-family: var(--mono); font-size: 12px; font-weight: 600;
-    letter-spacing: 2px; color: var(--accent-text); margin-bottom: 14px;
-  }
-  .eyebrow .mark {
-    width: 14px; height: 14px; border-radius: 4px;
-    background: var(--accent); box-shadow: 0 0 0 3px var(--accent-wash);
-  }
-  h1 {
-    font-size: clamp(26px, 6.6vw, 44px);
-    font-weight: 640; letter-spacing: -0.9px; line-height: 1.14;
-    color: var(--text);
-  }
-  .lede {
-    margin-top: 13px; font-size: clamp(15px, 4vw, 19px);
-    color: var(--text-dim); max-width: 34em;
-  }
-  .lede strong { color: var(--text); font-weight: 600; }
-
-  /* ── Live proof ─────────────────────────────────────────────────── */
-  .proof {
-    margin-top: 20px; border: 1px solid var(--border);
-    border-radius: var(--radius-lg); background: var(--surface); overflow: hidden;
-  }
-  .proof-head {
-    display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
-    padding: 11px 15px; border-bottom: 1px solid var(--border-subtle);
-  }
-  .pulse {
-    width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
-    box-shadow: 0 0 0 3px var(--accent-wash); flex-shrink: 0;
-    animation: pulse 2.4s ease-in-out infinite;
-  }
-  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .45 } }
-  @media (prefers-reduced-motion: reduce) { .pulse { animation: none } }
-  .proof-head .what { font-size: 13.5px; font-weight: 600; color: var(--text); }
-  .proof-head .when { font-family: var(--mono); font-size: 12px; color: var(--text-muted); margin-left: auto; }
-
-  .figs { display: grid; grid-template-columns: repeat(3, 1fr); }
-  .fig { padding: 12px 15px; border-right: 1px solid var(--border-subtle); }
-  .fig:last-child { border-right: none; }
-  .fig .n {
-    font-family: var(--mono); font-size: 21px; font-weight: 600;
-    color: var(--text); font-variant-numeric: tabular-nums; display: block;
-  }
-  .fig .n.live { color: var(--accent-text); }
-  .fig .k { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: var(--text-muted); }
-
-  .recent { border-top: 1px solid var(--border-subtle); padding: 10px 15px 12px; }
-  .recent-title { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: var(--text-muted); margin-bottom: 8px; }
-  .run { display: flex; gap: 10px; align-items: baseline; padding: 5px 0; font-size: 13.5px; }
-  .run .txt {
-    color: var(--text-dim); overflow: hidden; text-overflow: ellipsis;
-    white-space: nowrap; flex: 1; min-width: 0;
-  }
-  .run .tag { font-family: var(--mono); font-size: 11px; flex-shrink: 0; }
-  .tag.pass { color: var(--accent-text); }
-  .tag.when { color: var(--text-muted); }
-  .tag.work { color: var(--warn); }
-
-  /* The zero state is a designed state, not an absence. */
-  .zero {
-    border-top: 1px solid var(--border-subtle);
-    padding: 10px 15px 12px; font-size: 12.5px; color: var(--text-muted);
-  }
-  .zero b { color: var(--text-dim); font-weight: 600; }
-
-  /* ── Action ─────────────────────────────────────────────────────── */
-  .actions { margin-top: 18px; display: flex; gap: 10px; flex-wrap: wrap; }
-  .btn {
-    display: inline-flex; align-items: center; justify-content: center; gap: 7px;
-    min-height: 46px; padding: 12px 22px; border-radius: var(--radius);
-    font-size: 15px; font-weight: 600; text-decoration: none; cursor: pointer;
-    border: 1px solid transparent; transition: background .13s ease, border-color .13s ease;
-  }
-  .btn-primary { background: var(--accent); color: var(--bg); flex: 1 1 auto; }
-  .btn-primary:hover { background: var(--accent-dim); }
-  .btn-ghost { background: none; color: var(--text-dim); border-color: var(--border); }
-  .btn-ghost:hover { border-color: var(--border-strong); color: var(--text); }
-  .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-
-  /* ── Below the fold ─────────────────────────────────────────────── */
-  section { padding: 34px 0; border-top: 1px solid var(--border-subtle); }
-  h2 {
-    font-size: 12px; letter-spacing: 1.6px; text-transform: uppercase;
-    color: var(--text-muted); font-weight: 600; margin-bottom: 16px;
-  }
-  .steps { display: grid; gap: 14px; }
-  .step { display: flex; gap: 13px; }
-  .step .i {
-    font-family: var(--mono); font-size: 12px; font-weight: 600;
-    color: var(--accent-text); background: var(--accent-wash);
-    border: 1px solid var(--accent-wash-mid); border-radius: 6px;
-    width: 26px; height: 26px; flex-shrink: 0;
-    display: flex; align-items: center; justify-content: center;
-  }
-  .step p { font-size: 14.5px; color: var(--text-dim); }
-  .step b { color: var(--text); font-weight: 600; }
-
-  .facts { display: grid; gap: 11px; }
-  .fact { font-size: 14.5px; color: var(--text-dim); }
-  .fact b { color: var(--text); font-weight: 600; font-family: var(--mono); }
-
-  .cmd {
-    margin-top: 12px; font-family: var(--mono); font-size: 13px;
-    background: var(--surface); border: 1px solid var(--border);
-    border-radius: var(--radius); padding: 12px 14px; color: var(--text-dim);
-    cursor: pointer; word-break: break-all; min-height: 44px; width: 100%;
-    display: flex; align-items: center; gap: 8px; text-align: left;
-    transition: border-color .12s ease;
-  }
-  .cmd:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  .cmd:hover { border-color: var(--accent-line); }
-  .cmd .p { color: var(--accent-text); flex-shrink: 0; }
-  .note { margin-top: 9px; font-size: 12.5px; color: var(--text-muted); }
-  a.inline { color: var(--accent-text); text-decoration: none; border-bottom: 1px solid var(--accent-border); }
-  a.inline:hover { border-bottom-color: var(--accent); }
+  .wrap { width: 100%; max-width: 760px; margin: 0 auto; padding: 0 24px; }
 
   .skip-link {
-    position: absolute; left: 8px; top: -60px; z-index: 60;
-    padding: 9px 14px; border-radius: var(--radius-sm);
-    background: var(--surface); color: var(--text);
-    border: 1px solid var(--border-strong);
-    font-size: 13px; font-weight: 600; text-decoration: none;
+    position: absolute; left: 8px; top: -60px; z-index: 200;
+    padding: 9px 14px; border-radius: 10px;
+    background: var(--surface); color: var(--text); border: 1px solid var(--border-strong);
+    font-size: 13px; font-weight: 600;
   }
   .skip-link:focus { top: 8px; }
 
-  footer { padding: 26px 0 40px; font-size: 12.5px; color: var(--text-muted); }
-  footer a { color: var(--text-muted); text-decoration: none; }
-  footer a:hover { color: var(--accent-text); }
+  /* ── Header ─────────────────────────────────────────────────────── */
+  .site-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 0 20px; min-height: 47px; border-bottom: 1px solid var(--border-subtle);
+  }
+  .brand { display: inline-flex; align-items: center; gap: 10px; min-height: 44px; }
+  .mark { width: 9px; height: 9px; background: var(--mark); }
+  .wordmark { font-size: 12.5px; font-weight: 600; letter-spacing: 0.1em; color: var(--mark); }
+  .site-links { margin-left: auto; display: flex; align-items: center; gap: 4px; font-family: var(--mono); font-size: 11.5px; }
+  .site-links a { display: inline-flex; align-items: center; min-height: 44px; padding: 0 8px; color: var(--text-muted); }
+  .site-links a:hover { color: var(--text); }
+  .theme-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 44px; min-height: 44px; background: none; border: none; cursor: pointer;
+    font-family: var(--mono); font-size: 11px; color: var(--text-muted);
+  }
+  .theme-btn span {
+    border: 1px solid var(--border); border-radius: 10px; padding: 3px 8px;
+  }
+  .theme-btn:hover span { border-color: var(--border-strong); color: var(--text); }
 
-  @media (min-width: 700px) {
-    .hero { padding: 76px 0 48px; }
-    .actions .btn-primary { flex: 0 0 auto; }
+  /* ── Above the fold ─────────────────────────────────────────────── */
+  .hero { padding: 76px 0 0; }
+  .eyebrow { font-size: 11px; font-weight: 600; letter-spacing: 0.1em; color: var(--accent-text); }
+  h1 {
+    font-size: clamp(28px, 6.4vw, 38px); font-weight: 600;
+    letter-spacing: -0.8px; line-height: 1.14; margin-top: 16px; text-wrap: pretty;
   }
-  @media (max-width: 420px) {
-    .figs { grid-template-columns: repeat(2, 1fr); }
-    #recent-list .run:nth-child(3) { display: none; }
-    .fig:nth-child(2) { border-right: none; }
-    .fig:nth-child(3) { border-top: 1px solid var(--border-subtle); }
+  .lede { font-size: clamp(15px, 4vw, 16px); line-height: 1.6; color: var(--text-dim); margin-top: 16px; max-width: 34em; }
+
+  /* Live, from /status.json — never hardcoded. */
+  .proof {
+    border: 1px solid var(--border); border-radius: 10px; background: var(--surface);
+    margin-top: 28px; overflow: hidden;
   }
+  .proof-head {
+    display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
+    padding: 10px 14px; border-bottom: 1px solid var(--border-subtle);
+  }
+  .pulse { width: 6px; height: 6px; flex-shrink: 0; background: var(--text-faint); animation: liveBlink 2.6s steps(1, end) infinite; }
+  .pulse.is-ok { background: var(--accent); }
+  .pulse.is-warn { background: var(--warn); }
+  .pulse.is-bad { background: var(--danger); animation: none; }
+  @media (prefers-reduced-motion: reduce) { .pulse { animation: none } }
+  .proof-what { font-family: var(--mono); font-size: 11.5px; color: var(--text-dim); }
+  .proof-when { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text-muted); }
+  .figs { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
+  .fig { padding: 13px 14px; border-right: 1px solid var(--border-subtle); }
+  .fig:last-child { border-right: none; }
+  .fig .n { display: block; font-family: var(--mono); font-size: 21px; color: var(--text); }
+  .fig .n.live { color: var(--accent-text); }
+  .fig .k { display: block; font-size: 11px; font-weight: 600; letter-spacing: 0.09em; color: var(--text-muted); margin-top: 4px; }
+  .recent { border-top: 1px solid var(--border-subtle); padding: 11px 14px 6px; }
+  .recent-title { font-size: 11px; font-weight: 600; letter-spacing: 0.09em; color: var(--text-muted); margin-bottom: 6px; }
+  .run { display: grid; grid-template-columns: 6px minmax(0, 1fr) auto auto; gap: 10px; align-items: center; padding: 6px 0; }
+  .run i { width: 6px; height: 6px; background: var(--border-strong); }
+  .run i.is-pass { background: var(--accent); }
+  .run i.is-work { background: var(--warn); }
+  .run i.is-fail { background: var(--danger); }
+  .run .txt { font-size: 12.5px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .run .tag { font-family: var(--mono); font-size: 11px; color: var(--text-muted); }
+  .run .tag.is-pass { color: var(--accent-text); }
+  .run .tag.is-work { color: var(--warn-text); }
+  .run .tag.is-fail { color: var(--danger-text); }
+  .zero { border-top: 1px solid var(--border-subtle); padding: 11px 14px; font-size: 12.5px; color: var(--text-muted); line-height: 1.6; }
+  .zero b { color: var(--text-dim); font-weight: 500; }
+
+  .actions { display: flex; gap: 9px; margin-top: 20px; flex-wrap: wrap; }
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    min-height: 46px; padding: 12px 18px; border-radius: 10px;
+    font-size: 13.5px; font-weight: 500; flex: 1 1 auto; text-decoration: none;
+  }
+  .btn-primary { background: var(--accent); color: var(--on-accent); font-weight: 600; }
+  .btn-primary:hover { background: var(--accent-strong); color: var(--on-accent); }
+  .btn-ghost { color: var(--text-dim); border: 1px solid var(--border); }
+  .btn-ghost:hover { border-color: var(--border-strong); color: var(--text); }
+
+  /* ── Below the fold ─────────────────────────────────────────────── */
+  section.block { padding: 52px 0 0; }
+  h2 {
+    font-size: 11px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--text-muted); padding-bottom: 12px; border-bottom: 1px solid var(--border-subtle);
+  }
+  .line { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 14px; padding: 13px 0; border-bottom: 1px solid var(--border-subtle); }
+  .line.is-fact { grid-template-columns: 72px minmax(0, 1fr); align-items: baseline; }
+  .line .n { font-family: var(--mono); font-size: 11.5px; color: var(--accent-text); }
+  .line.is-fact .n { font-size: 13px; }
+  .line .n.is-warn { color: var(--warn-text); }
+  .line .n.is-quiet { color: var(--text-muted); }
+  .line p { font-size: 13.5px; line-height: 1.6; color: var(--text-dim); }
+  .line b { color: var(--text); font-weight: 500; }
+  .para { font-size: 13.5px; line-height: 1.65; color: var(--text-dim); padding: 14px 0 0; }
+  .inline { color: var(--accent-text); border-bottom: 1px solid var(--accent-dim); }
+  .cmd {
+    display: flex; align-items: center; gap: 10px; width: 100%; margin-top: 14px;
+    border: 1px solid var(--border); border-radius: 10px; background: var(--surface);
+    padding: 11px 13px; min-height: 44px; cursor: pointer; text-align: left;
+  }
+  .cmd .p { font-family: var(--mono); font-size: 12.5px; color: var(--accent-text); }
+  .cmd code { font-family: var(--mono); font-size: 12.5px; color: var(--text-dim); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cmd .copy { font-family: var(--mono); font-size: 11px; color: var(--text-dim); border: 1px solid var(--border); border-radius: 8px; padding: 4px 9px; }
+  .cmd:hover .copy { border-color: var(--border-strong); color: var(--text); }
+  .note { font-family: var(--mono); font-size: 11px; color: var(--text-muted); margin-top: 8px; }
+
+  .site-foot { padding: 52px 0 56px; }
+  .site-foot .row {
+    border-top: 1px solid var(--border-subtle); padding-top: 16px;
+    display: flex; gap: 4px 14px; flex-wrap: wrap; align-items: center;
+    font-family: var(--mono); font-size: 11px; color: var(--text-muted);
+  }
+  .site-foot a {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-height: 44px; min-width: 44px; color: var(--text-muted);
+  }
+  .site-foot a:hover { color: var(--text); }
+  .site-foot .end { margin-left: auto; }
 </style>
 </head>
 <body>
 
 <a class="skip-link" href="#main">Skip to content</a>
 
+<header class="site-head">
+  <a class="brand" href="/" title="Mycelium home"><span class="mark" aria-hidden="true"></span><span class="wordmark">MYCELIUM</span></a>
+  <nav class="site-links" aria-label="Site">
+    <a href="/dashboard" title="Open the console">console</a>
+    <a href="/try" title="Pitch one task on this machine">try it</a>
+    <button class="theme-btn" id="theme-toggle" type="button" title="Switch between the dark and light themes"
+            aria-label="Switch colour theme"><span><span id="theme-toggle-icon" aria-hidden="true"></span></span></button>
+  </nav>
+</header>
+
 <main class="wrap" id="main">
-  <header class="hero">
-    <div class="eyebrow"><span class="mark" aria-hidden="true"></span>MYCELIUM</div>
+  <div class="hero">
+    <div class="eyebrow">PHASE 0 · INVITED MACHINES ONLY</div>
+    <h1>Run auditable AI jobs across computers you trust.</h1>
+    <p class="lede">Break work into coordinated pieces, or generate several complete attempts and
+      pick one. Mycelium hands each piece to an AI model running locally on a machine whose owner
+      agreed to run it, applies the checks you asked for, and records how the result was produced.
+      Local models are the default; an external OpenAI-compatible provider is optional and off.</p>
 
-    <h1>Describe what you want built.<br>Computers you trust build it.</h1>
-
-    <p class="lede">
-      Each piece is written by an <strong>AI model running on someone's actual
-      laptop</strong>, then checked and assembled into working code. Local models are the default; an
-      external OpenAI-compatible provider is optional and off.
-    </p>
-
-    <!-- Live, from /status.json — never hardcoded. If this panel is stale or
-         wrong, a skeptical visitor is right to leave. -->
     <div class="proof" id="proof">
       <div class="proof-head">
-        <span class="pulse" id="pulse" aria-hidden="true"></span>
-        <span class="what" id="proof-what">Checking the network…</span>
-        <span class="when" id="proof-when"></span>
+        <i class="pulse" id="pulse" aria-hidden="true"></i>
+        <span class="proof-what" id="proof-what">checking the network…</span>
+        <span class="proof-when" id="proof-when"></span>
       </div>
       <div class="figs">
-        <div class="fig"><span class="n" id="f-nodes">–</span><span class="k">machines joined</span></div>
-        <div class="fig"><span class="n" id="f-pitches">–</span><span class="k">tasks built</span></div>
-        <div class="fig"><span class="n" id="f-model">–</span><span class="k">model</span></div>
+        <div class="fig"><span class="n" id="f-nodes">–</span><span class="k">MACHINES JOINED</span></div>
+        <div class="fig"><span class="n" id="f-pitches">–</span><span class="k">TASKS BUILT</span></div>
+        <div class="fig"><span class="n" id="f-model">–</span><span class="k">MODEL</span></div>
       </div>
       <div class="recent" id="recent" hidden>
-        <div class="recent-title">Recently built by this network</div>
+        <div class="recent-title">RECENTLY BUILT BY THIS NETWORK</div>
         <div id="recent-list"></div>
       </div>
       <div class="zero" id="zero" hidden>
-        <b>No machines connected right now.</b> The orchestrator is up and built the work
-        above. This network is small on purpose — testers are added a few at a time.
+        <b>No machines connected right now.</b> The orchestrator is up and built the work above.
+        This network is small on purpose; testers are added a few at a time.
       </div>
     </div>
 
     <div class="actions">
-      <a class="btn btn-primary" href="/dashboard">Watch it work →</a>
-      <a class="btn btn-ghost" href="/try">Pitch a task</a>
-      <a class="btn btn-ghost" href="https://github.com/Jwrightsman/distributed-orchestrator" target="_blank" rel="noopener">Read the code</a>
+      <a class="btn btn-primary" href="/dashboard" title="Open the console and watch a run">Watch it work &rarr;</a>
+      <a class="btn btn-ghost" href="https://github.com/Jwrightsman/distributed-orchestrator" target="_blank" rel="noopener"
+         title="The repository">Read the code</a>
     </div>
-  </header>
+  </div>
 
-  <section>
+  <section class="block">
     <h2>How it works</h2>
-    <div class="steps">
-      <div class="step"><span class="i">1</span><p><b>You pitch a task</b> in plain English — "build a CSV deduplication script".</p></div>
-      <div class="step"><span class="i">2</span><p><b>A planner splits it up</b> into a few smaller jobs that can be worked on at the same time.</p></div>
-      <div class="step"><span class="i">3</span><p><b>Invited machines build the pieces</b> in parallel, each running a local AI model.</p></div>
-      <div class="step"><span class="i">4</span><p><b>A reviewer assembles and grades</b> the result, and the code is checked to see whether it actually runs.</p></div>
-    </div>
+    <div class="line"><span class="n">01</span><p><b>You pitch a task</b> in plain English — “build a CSV deduplication script” — and say how you want it attempted.</p></div>
+    <div class="line"><span class="n">02</span><p><b>It is split up, or attempted whole</b>, depending on that choice. Only the planning strategy breaks work into pieces; the other two generate complete attempts and pick between them.</p></div>
+    <div class="line"><span class="n">03</span><p><b>Invited machines do the building</b> in parallel, each running an AI model locally. Every machine here belongs to someone who agreed to run it.</p></div>
+    <div class="line"><span class="n">04</span><p><b>A reviewer assembles and grades</b> the result, and the named checks run — it extracts, parses and imports. Whether it does what you asked is still yours to judge.</p></div>
   </section>
 
-  <section>
+  <section class="block">
     <h2>What it can and can't do</h2>
-    <div class="facts">
-      <div class="fact"><b>10/10</b> — a labelled bar chart, built correctly ten times out of ten.</div>
-      <div class="fact"><b>2/10</b> — a playable Snake game. Tightly-coupled code is where a small model falls over, and that number is published for the same reason as the good one.</div>
-      <div class="fact">Every figure is reproducible from the repo, and the raw logs are committed alongside them.</div>
-    </div>
+    <div class="line is-fact"><span class="n">10/10</span><p>a labelled bar chart, built correctly ten times out of ten.</p></div>
+    <div class="line is-fact"><span class="n is-warn">2/10</span><p>a playable Snake game. Tightly-coupled code is where a small model falls over, and that number is published for the same reason as the good one.</p></div>
+    <div class="line is-fact"><span class="n is-quiet">repro</span><p>every figure is reproducible from the repo, and the raw logs are committed alongside them.</p></div>
   </section>
 
-  <section>
+  <section class="block">
     <h2>Contributing a machine</h2>
-    <p class="fact">
-      Joining runs an AI model on your computer and uses spare CPU to build pieces of other
-      people's tasks. It asks before it installs anything, and you stop it by closing the window.
-      Joining is currently by invite —
-      <a class="inline" href="https://github.com/Jwrightsman/distributed-orchestrator/issues/new?template=join-the-network.yml" target="_blank" rel="noopener">ask for an invite</a>
-      and you'll get the address.
-    </p>
-    <button class="cmd" id="cmd" type="button" title="Click to copy"><span class="p" aria-hidden="true">$</span><span id="cmd-text">python join.py &lt;address&gt;</span></button>
-    <p class="note" id="cmd-note">Any machine with 8&nbsp;GB of RAM · tap to copy</p>
+    <p class="para">Joining runs an AI model on your computer and uses spare CPU to build pieces of
+      other people's tasks. The installer asks before it downloads or writes anything, and you stop
+      it by closing the window. Joining is currently by invite —
+      <a class="inline" href="https://github.com/Jwrightsman/distributed-orchestrator/issues/new?template=join-the-network.yml"
+         target="_blank" rel="noopener" title="Joining is invite-only for now">ask for an invite</a>
+      and you'll get the address and an invitation code.</p>
+    <button class="cmd" id="cmd" type="button" title="Copy the install commands">
+      <span class="p" aria-hidden="true">$</span><code id="cmd-text">python worker_installer.py</code><span class="copy">copy</span>
+    </button>
+    <p class="note" id="cmd-note">after cloning the repository · any machine with 8&nbsp;GB of RAM · py instead of python on Windows</p>
   </section>
-
 </main>
 
-  <footer class="wrap">
-    Phase 0 ·
-    <a href="/dashboard">dashboard</a> ·
-    <a href="/try">try it</a> ·
-    <a href="/status">status</a> ·
-    <a href="https://github.com/Jwrightsman/distributed-orchestrator" target="_blank" rel="noopener">source</a> ·
-    open protocol → contributor guild → marketplace
-  </footer>
+<footer class="wrap site-foot">
+  <div class="row">
+    <span>phase 0</span>
+    <a href="/dashboard">console</a>
+    <a href="/try">try it</a>
+    <a href="/status">status</a>
+    <a href="/status.json" title="The machine-readable status of this coordinator">status.json</a>
+    <a href="https://github.com/Jwrightsman/distributed-orchestrator" target="_blank" rel="noopener">source</a>
+    <span class="end">invited machines only</span>
+  </div>
+</footer>
 
 <script>
   function ago(ts) {
@@ -280,25 +259,25 @@
   }
 
   async function refresh() {
+    const pulse = document.getElementById('pulse');
     let s;
     try {
       s = await (await fetch('/status.json')).json();
     } catch (e) {
       // Say so plainly rather than leaving dashes that look like a bug.
-      document.getElementById('proof-what').textContent = 'Could not reach the orchestrator';
-      document.getElementById('pulse').style.background = 'var(--danger)';
+      document.getElementById('proof-what').textContent = 'could not reach the orchestrator';
+      pulse.className = 'pulse is-bad';
       return;
     }
 
     const live = s.nodes_online > 0;
     document.getElementById('proof-what').textContent =
       s.inference_available
-        ? (live ? `Live — ${s.nodes_online} machine${s.nodes_online === 1 ? '' : 's'} building`
-                : 'Orchestrator online, ready for work')
-        : 'Orchestrator online, inference offline';
-    document.getElementById('proof-when').textContent = uptime(s.uptime_seconds || 0);
-    document.getElementById('pulse').style.background =
-      s.inference_available ? 'var(--accent)' : 'var(--warn)';
+        ? (live ? `live · ${s.nodes_online} machine${s.nodes_online === 1 ? '' : 's'} connected`
+                : 'orchestrator online, ready for work')
+        : 'orchestrator online, inference offline';
+    document.getElementById('proof-when').textContent = uptime(s.uptime_seconds || 0) + ' · status.json';
+    pulse.className = 'pulse ' + (s.inference_available ? 'is-ok' : 'is-warn');
 
     const nodes = document.getElementById('f-nodes');
     nodes.textContent = s.nodes_online;
@@ -306,8 +285,18 @@
     document.getElementById('f-pitches').textContent = s.pitches_completed ?? '–';
     document.getElementById('f-model').textContent = (s.model || 'none').split(':')[0];
 
-    // An empty swarm is honest, not broken — but only if we say why.
+    // An empty network is honest, not broken — but only if we say why.
     document.getElementById('zero').hidden = live;
+  }
+
+  /* The same verdict rule the console uses: a reviewer PASS is only "checks
+     passed" when the mechanical check also reached a verdict. */
+  function verdict(r) {
+    const rating = (r.rating || '').toUpperCase();
+    if (rating === 'FAIL') return ['is-fail', 'failed'];
+    if (rating === 'NEEDS_WORK') return ['is-work', 'needed work'];
+    if (rating !== 'PASS') return ['', 'no verdict'];
+    return r.code_precheck_error ? ['', 'unchecked'] : ['is-pass', 'checks passed'];
   }
 
   async function loadRecent() {
@@ -315,16 +304,15 @@
       const h = await (await fetch('/history?limit=12')).json();
       // Skip throwaway pitches ("hello", "test") — this strip is the first
       // evidence a skeptic sees, and one-word junk undersells real work. Runs
-      // that NEEDED WORK still show: the honest rate is published on this page,
-      // so hiding failures here would contradict it.
+      // that NEEDED WORK still show: hiding failures here would contradict the
+      // figures published below.
       const runs = (h.runs || h.history || []).filter(r => (r.task || '').trim().length >= 25);
       if (!runs.length) return;
       document.getElementById('recent-list').innerHTML = runs.slice(0, 3).map(r => {
-        const pass = (r.rating || '').toUpperCase() === 'PASS';
+        const [cls, word] = verdict(r);
         const task = (r.task || '').replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
-        return `<div class="run"><span class="txt">${task}</span>` +
-               `<span class="tag ${pass ? 'pass' : 'work'}">${pass ? 'built' : 'needed work'}</span>` +
-               `<span class="tag when">${ago(r.timestamp)}</span></div>`;
+        return `<div class="run"><i class="${cls}" aria-hidden="true"></i><span class="txt">${task}</span>` +
+               `<span class="tag ${cls}">${word}</span><span class="tag">${ago(r.timestamp)}</span></div>`;
       }).join('');
       document.getElementById('recent').hidden = false;
     } catch (e) { /* the panel simply stays hidden */ }
@@ -333,11 +321,27 @@
   refresh(); loadRecent();
   setInterval(refresh, 5000);
 
+  // The theme partial labels #theme-toggle's icon when the page supplies one.
+  (function theme() {
+    const icon = document.getElementById('theme-toggle-icon');
+    const paint = () => {
+      icon.textContent = document.documentElement.getAttribute('data-theme') === 'dark' ? '☀' : '☾';
+    };
+    paint();
+    document.getElementById('theme-toggle').addEventListener('click', () => {
+      const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+      try { localStorage.setItem('mycelium-theme', next); } catch (e) {}
+      document.documentElement.setAttribute('data-theme', next);
+      paint();
+    });
+  })();
+
   const cmd = document.getElementById('cmd');
-  document.getElementById('cmd-text').textContent = `python join.py ${location.origin}`;
+  const commands = 'git clone https://github.com/Jwrightsman/distributed-orchestrator\n'
+    + 'cd distributed-orchestrator\npython worker_installer.py';
   cmd.addEventListener('click', () => {
-    navigator.clipboard?.writeText(`python join.py ${location.origin}`);
-    document.getElementById('cmd-note').textContent = 'Copied — it will ask before installing anything';
+    navigator.clipboard?.writeText(commands);
+    document.getElementById('cmd-note').textContent = 'Copied the three commands — the installer asks before it installs anything';
   });
 </script>
 </body>
