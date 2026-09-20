@@ -1113,12 +1113,22 @@ and zoom, against both the names already placed and the bubbles themselves.
 
 ### 13.5 Not done here
 
-Two of the bundle's six design files describe surfaces the console does not
-have: `Ledger Chain.dc.html` and `Provenance Envelope.dc.html`. Both back onto
-routes that exist and return JSON — `/v1/operator/ledger-chain` and
-`/v1/executions/{id}/provenance` — but neither has a page in the console, and
-adding one is a view, not a restyle. `Run Detail Surface.dc.html` is a second
-drawing of the run page, kept for reference; `f9b180e` ports its header only.
+The bundle's six design files are not ported to the same depth, and three of
+them are the remaining work. All three draw the run page, which the console
+already has.
+
+`Ledger Chain.dc.html` and `Provenance Envelope.dc.html` describe surfaces that
+exist: both are rendered by `run_detail.py` on `/run/{id}`, fed by
+`/v1/operator/ledger-chain` and `/v1/executions/{id}/provenance`. `c532529`
+moved them onto the design's cards, corners and section labels through the
+shared panel rules, so they are not on the old theme — but neither was compared
+against its own drawing element by element, which is what the other views got.
+`Run Detail Surface.dc.html` is a second drawing of the same page, and `f9b180e`
+ports its header only.
+
+So what is left is a restyle of one page against three drawings, not a new view.
+An earlier revision of this section claimed those surfaces did not exist at all;
+they do, and the claim was wrong.
 
 The design's own hardcoded figures are not ported anywhere. `support.js` in both
 folders is the design tool's React runtime, not data, and nothing in it runs
