@@ -191,24 +191,33 @@ def _reviser(log: dict) -> str:
     )
 
 
-def _credits(log: dict) -> str:
-    credits = log.get("credits")
-    if not credits:
+def _points(log: dict) -> str:
+    """The unit is POINTS, on the page as everywhere else.
+
+    `credits` is the ledger's field name and stays the field name -- it is an
+    API shape, not copy. What a reader sees is points, under a heading that
+    already said POINTS SETTLED while the column beneath it said Credits: the
+    exact contradiction the vocabulary rule exists to stop. `HANDOFF.md` fixes
+    the word, and `tests/test_console_language.py` now holds this route to it
+    along with the pages it already covered.
+    """
+    entries = log.get("credits")
+    if not entries:
         return _unrecorded(
             "This run's settlement was not itemised.",
-            "The ledger recorded the credits, but without a run id attached, so they cannot be "
+            "The ledger recorded the points, but without a run id attached, so they cannot be "
             "attributed back to this run specifically. The standings on the dashboard include them.",
         )
     rows = "".join(
         f'<tr><td class="who mono">{esc(c.get("contributor") or "unknown")}</td>'
         f'<td>{esc(c.get("for", c.get("type", "")))}</td>'
         f'<td class="num mono">+{esc(c.get("credits", 0))}</td></tr>'
-        for c in credits
+        for c in entries
     )
-    total = sum(float(c.get("credits", 0) or 0) for c in credits)
+    total = sum(float(c.get("credits", 0) or 0) for c in entries)
     return (
         '<div class="table-scroll"><table>'
-        '<thead><tr><th>Contributor</th><th>For</th><th class="num">Credits</th></tr></thead>'
+        '<thead><tr><th>Contributor</th><th>For</th><th class="num">Points</th></tr></thead>'
         f"<tbody>{rows}</tbody>"
         f'<tfoot><tr><td>Total</td><td></td><td class="num mono">{esc(f"{total:g}")}</td></tr></tfoot>'
         "</table></div>"
@@ -409,6 +418,6 @@ async def run_page(run_id: str, request: Request):
         RUN_DETAIL=run_surface(log, run, surface="server"),
         REVIEW=_review(log),
         REVISER=_reviser(log),
-        CREDITS=_credits(log),
+        CREDITS=_points(log),
         OUTPUT=_output(log),
     )

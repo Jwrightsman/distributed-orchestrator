@@ -67,6 +67,27 @@ VERDICTS = {
 }
 _RECORDED_RATINGS = ("PASS", "NEEDS_WORK", "FAIL")
 
+# The assurance vocabulary, in the reader's words rather than the contract's.
+#
+# `AssuranceLevelV1` has four values and they are storage identifiers, not
+# copy: `unverified` is the raw enum for "nothing checked this", and printing
+# it puts a word on the page that the vocabulary rules forbid and that reads
+# as a verdict rather than as an absence. `HANDOFF-UI` §7 fixes five labels,
+# and the fifth -- "Behavior tested" -- has no level yet, so it cannot appear
+# until something measures it. There is no sixth, and no percentage.
+#
+# This lives here rather than in a route because `run_detail.py` already holds
+# `VERDICTS`, the other vocabulary two surfaces must agree on.
+# `routes_share_page.py` imports it so the share card and the run page cannot
+# name the same axis two different ways; `tests/test_run_detail.py` holds the
+# page to the five and fails on the raw enum.
+ASSURANCE_LABELS = {
+    "unverified": "Not checked",
+    "structural": "Structure checked",
+    "deterministic": "Contract validated",
+    "model_judged": "AI reviewed",
+}
+
 # Manifest entries split into the two downloads, which are deliberately
 # different scopes: the plain download hands over deliverables, and the run's
 # own paperwork has to be asked for by name so a handoff never carries it by
@@ -304,7 +325,8 @@ def _triad(ctx: dict) -> str:
              _LIFECYCLE_NOTES.get(lifecycle, "A terminal state this page has no note for."),
              lifecycle_tone)}
       {_axis("VALIDATION", validation, validation_note, validation_tone)}
-      {_axis("ASSURANCE", str(durable.assurance_level),
+      {_axis("ASSURANCE",
+             ASSURANCE_LABELS.get(str(durable.assurance_level), "Not checked"),
              "Nothing here establishes the output is correct. A run can be "
              "complete, checked, and still wrong.", "is-neutral")}
     </div>"""
@@ -1383,7 +1405,13 @@ def chain_view(chain: dict) -> dict:
             legend = [("link walked", _CHAIN_LINKED), ("no link recorded", _CHAIN_PRECHAIN)]
         else:
             verdict = "LINKS INTACT"
-            legend = [("link walked", _CHAIN_LINKED), ("genesis boundary", _CHAIN_PRECHAIN)]
+            # One key, because one kind of cell is drawn. The design's intact
+            # state lists a "genesis boundary" swatch beside it, but a ledger
+            # with nothing predating the chain draws no hollow cell for that
+            # key to point at -- so it reads as a state the strip is in rather
+            # than one it is not, which is the opposite of what a legend is
+            # for. The key appears in the two states that do draw the cell.
+            legend = [("link walked", _CHAIN_LINKED)]
 
     report: list[tuple[str, str]] = []
     if state == "broken":

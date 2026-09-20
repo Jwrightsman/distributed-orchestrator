@@ -26,6 +26,9 @@ from routes_access import (
     _share_or_404,
 )
 from routes_run import esc
+# The five assurance labels. Imported rather than restated: the run page
+# names the same axis, and two copies of a vocabulary are two that drift.
+from run_detail import ASSURANCE_LABELS
 
 router = APIRouter()
 
@@ -54,14 +57,6 @@ def _expires_in(expires_at) -> str:
     return "expires in under a minute"
 
 
-# The five assurance labels HANDOFF-UI section 7 allows, keyed by the levels
-# the contract has. "Behavior tested" has no level yet, so it cannot appear.
-ASSURANCE_LABELS = {
-    "unverified": "Not checked",
-    "structural": "Structure checked",
-    "deterministic": "Contract validated",
-    "model_judged": "AI reviewed",
-}
 _OUTCOME_WORDS = {
     "passed": ("ok", "CHECKS PASSED"),
     "partial": ("warn", "SOME CHECKS FAILED"),
