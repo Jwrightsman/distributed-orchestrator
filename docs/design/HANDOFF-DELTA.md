@@ -1066,6 +1066,7 @@ one.
 | `fffbd04` | `/status` and each machine's page |
 | `f9b180e` | The run page's header |
 | `af42c09` | The map's two drawn scales |
+| this pass | The run page, against its three drawings |
 
 ### 13.2 Design claims about this repo that are false, and what replaced them
 
@@ -1080,6 +1081,9 @@ and each would have shipped as one.
 | `/status` answers "without a sign-in" | It sits behind the viewer key; only `/status.json` is public | The sentence is gone; the page says which of the two is public |
 | Nodes' empty state offers an `http://` join | The edge refuses it | The installer command, and `node.py --server` |
 | A "built" claim on unchecked runs | Assurance is one of five labels | The recent strip takes its verdict from the same derivation as everywhere else |
+| ASSURANCE reads **`unverified`** (`Run Detail Surface.dc.html`) | That is `AssuranceLevelV1`'s storage identifier, not copy; HANDOFF-UI §7 fixes five reader-facing labels and this is none of them | The five-label map moved to `run_detail.py` beside `VERDICTS`; `routes_share_page.py` imports it instead of keeping a second copy. The page says "Not checked" |
+| The intact ledger chain lists a **"genesis boundary"** key (`Ledger Chain.dc.html`) | With nothing predating the chain the strip draws no hollow cell, so the key points at nothing | The key appears only in the two states that draw the cell, pinned in both directions |
+| Sample ids are `exec_9f4c21e8` — 13 characters | `ExecutionResultV1.execution_id` has `min_length=16`; real ids run 29 | Nothing to ship, but the drawn header and the envelope's EXECUTION meta are laid out at roughly half their real width. Both were re-measured against a contract-valid id |
 
 ### 13.3 Deviations from the design, and why
 
@@ -1099,6 +1103,17 @@ and each would have shipped as one.
   its own caption rather than leaving it to be inferred from the shape.
 * **No drawn bubble links to `/node/{id}`.** A drawn machine has no page; a link
   to one would 404 at best.
+* **The run page has no surface strip.** Both `Run Detail Surface.dc.html`
+  variants open with a panel head naming the surface and its route —
+  `SERVER-RENDERED · GET /run/{id} · templates/run.html · same structure, no
+  client`. That is the design tool labelling which variant you are looking
+  at, not page content: it names source files, and `/run/{id}` is the one
+  surface here meant to be pasted into a post. The footer already carries
+  what a reader needs from it, in prose, under `WHERE THIS PAGE MUST DIFFER`.
+* **The replay line stays in the timeline panel**, where §8.11 put it, rather
+  than in the drawing's full-width band under the header. It is printed on a
+  different clock from every other row on the page and says so; a band across
+  the top reads as run-level state.
 
 ### 13.4 Measured, not eyeballed
 
@@ -1111,25 +1126,58 @@ fixed element looks guilty in an overflow report until you hide it and re-measur
 Label collision on the map is measured the same way: in screen pixels after pan
 and zoom, against both the names already placed and the bubbles themselves.
 
-### 13.5 Not done here
+The run page was measured last, and is the one surface whose measurement found
+nothing: 233 text elements per pass at 1280 and 375 in both themes, 0 failures,
+no overflow, no type below 11px, every server-surface control at or above
+44×44px. Its disclosure has to be opened first — the provenance envelope keeps
+89 of those 233 elements inside a closed `<details>`, and a run that skips them
+measures a third of the page and reports a clean result. Closing it again and
+re-measuring in the same synchronous task does not prove the harness saw them,
+because the rects are stale; counting how many checked elements are inside it
+does.
 
-The bundle's six design files are not ported to the same depth, and three of
-them are the remaining work. All three draw the run page, which the console
-already has.
+### 13.5 The run page against its three drawings — done
 
-`Ledger Chain.dc.html` and `Provenance Envelope.dc.html` describe surfaces that
-exist: both are rendered by `run_detail.py` on `/run/{id}`, fed by
-`/v1/operator/ledger-chain` and `/v1/executions/{id}/provenance`. `c532529`
-moved them onto the design's cards, corners and section labels through the
-shared panel rules, so they are not on the old theme — but neither was compared
-against its own drawing element by element, which is what the other views got.
-`Run Detail Surface.dc.html` is a second drawing of the same page, and `f9b180e`
-ports its header only.
+The three remaining bundle files all draw `/run/{id}`: `Run Detail Surface.dc.html`,
+`Provenance Envelope.dc.html` and `Ledger Chain.dc.html`. `c532529` had moved the
+page onto the design's cards, corners and section labels through the *shared*
+panel rules, and `f9b180e` ported the header, but none of the three had been
+compared against its own drawing element by element. That comparison is what
+this pass did, and the finding is worth stating plainly:
 
-So what is left is a restyle of one page against three drawings, not a new view.
-An earlier revision of this section claimed those surfaces did not exist at all;
-they do, and the claim was wrong.
+**The structure was already right; what was wrong was what it said.**
 
-The design's own hardcoded figures are not ported anywhere. `support.js` in both
-folders is the design tool's React runtime, not data, and nothing in it runs
-here.
+The layout matched its drawings closely enough that the measurement found
+nothing — 233 text elements per pass, at 1280 and 375, in both themes, with the
+envelope's disclosure opened so its 89 elements were measured rather than
+skipped: **0 contrast failures, 0 overflow, nothing below 11px, and every
+control on the server surface at or above 44×44px.** The lowest reading clears
+AA on its composited ground in both themes. The harness was checked against
+itself first — closing the disclosure and re-measuring in the same synchronous
+task returns a stale count, so the proof that the envelope rows were reached is
+that 89 of the 233 checked elements are inside it, not that the count changed.
+
+What the pass found instead were three claims the drawings make about this repo
+that are false, all three already rendering. They are in the 13.2 table. In
+short: the ASSURANCE cell printed `AssuranceLevelV1`'s raw storage identifier
+rather than one of the five labels §7 allows; the page served "credits" as a
+unit in prose *and* as a column header sitting directly under a "Points
+settled" heading; and the intact ledger chain advertised a legend key for a
+swatch the strip does not draw.
+
+The second is the one worth dwelling on. `tests/test_console_language.py` holds
+`/`, `/dashboard` and `/try` to the points/credits rule against the served page,
+and holds `run_detail.py` to the banned *words* — but its served-page test never
+covered `/run/{id}`, and its rendering-module test checks the word list without
+the credits-as-a-unit pattern. So the one route whose subject is what a machine
+earned was the one route the rule was not enforced on. The rename is a word on
+the page only: the ledger's field is still `credits`, and the figures still come
+from it.
+
+Two deliberate departures are in 13.3: the drawing's surface strip is not
+ported, and the replay line stays where §8.11 put it.
+
+`support.js` in both folders is the design tool's React runtime, not data, and
+nothing in it runs here. The design's own hardcoded figures are not ported
+anywhere — including its sample execution ids, which are shorter than the
+contract permits and made the drawn header look roomier than a real one is.
