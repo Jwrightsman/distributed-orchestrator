@@ -79,6 +79,54 @@ def test_missing_malformed_or_ambiguous_rating_is_unknown(text):
     assert orchestrator._extract_rating(text) == "UNKNOWN"
 
 
+@pytest.mark.parametrize("text", [
+    "```markdown\n## Quality Rating\nPASS\n## Issues Found\nNone\n```",
+    "## Final Assembled Output\n## Quality Rating\nPASS\n## Issues Found\nNone",
+    "The deliverable contains ## Quality Rating\nPASS\n## Issues Found\nNone",
+])
+def test_deliverable_heading_cannot_supply_missing_review_rating(text):
+    assert orchestrator._extract_rating(text) == "UNKNOWN"
+
+
+def test_deliverable_heading_does_not_override_actual_review_rating():
+    assert orchestrator._extract_rating(review_text("FAIL", "## Quality Rating\nPASS")) == "FAIL"
+
+
+@pytest.mark.asyncio
+async def test_revision_review_cannot_accept_its_own_replacement(monkeypatch, pipeline_fakes):
+    calls = []
+
+    async def review(*args, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return review_text("FAIL", BAD, "Fix the authored defect")
+        return review_text("PASS", GOOD + "A further reviewer correction")
+
+    async def revise(*args):
+        return GOOD
+
+    monkeypatch.setattr(orchestrator, "review", review)
+    monkeypatch.setattr(orchestrator, "revise", revise)
+    result = await orchestrator.run_pipeline("Build a deliverable")
+    assert calls[1]["assessment_only"] is True
+    assert result["rating"] == "FAIL"
+    assert result["final_output"] == GOOD
+
+
+@pytest.mark.asyncio
+async def test_revision_assessment_prompt_forbids_rewriting(monkeypatch):
+    captured = {}
+
+    async def generate(prompt, **kwargs):
+        captured.update(kwargs)
+        return "## Quality Rating\nPASS\n\n## Issues Found\nNone"
+
+    monkeypatch.setattr(orchestrator, "generate", generate)
+    await orchestrator.review("Authored task", PLAN, {1: GOOD}, assessment_only=True)
+    assert "Do not fix, rewrite, merge, or assemble" in captured["system"]
+    assert captured["role"] == "reviewer"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("revised, verdict, expected", [(BAD, "PASS", "FAIL"), (GOOD, "unrated", "FAIL"), (GOOD, "FAIL", "FAIL"), (GOOD, "PASS", "PASS"), ("tiny", "PASS", "FAIL")])
 async def test_revision_success_requires_changed_output_and_separate_review(monkeypatch, pipeline_fakes, revised, verdict, expected):
@@ -86,7 +134,10 @@ async def test_revision_success_requires_changed_output_and_separate_review(monk
 
     async def review(task, subtasks, results, **kwargs):
         reviews.append(results)
-        return review_text("FAIL", BAD, "Fix the authored defect") if len(reviews) == 1 else review_text(verdict, revised, "None" if verdict != "FAIL" else "Still defective")
+        if len(reviews) == 1:
+            return review_text("FAIL", BAD, "Fix the authored defect")
+        issues = "None" if verdict != "FAIL" else "Still defective"
+        return f"## Quality Rating\n{verdict}\n\n## Issues Found\n{issues}"
 
     async def revise(*args):
         return revised
@@ -103,6 +154,34 @@ async def test_revision_success_requires_changed_output_and_separate_review(monk
         assert len(reviews) == 2
         assert record["reviews"][0]["rating"] == "PASS"
         assert result["final_output"] == GOOD
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("heading", ["##Final Assembled Output", "  ## Final Assembled Output"])
+async def test_revision_review_rejects_replacement_heading_variants(
+        monkeypatch, pipeline_fakes, heading):
+    reviews = 0
+
+    async def review(*args, **kwargs):
+        nonlocal reviews
+        reviews += 1
+        if reviews == 1:
+            return review_text("FAIL", BAD, "Fix the authored defect")
+        return (
+            "## Quality Rating\nPASS\n\n## Issues Found\nNone\n\n"
+            f"{heading}\n{GOOD}"
+        )
+
+    monkeypatch.setattr(orchestrator, "review", review)
+    monkeypatch.setattr(orchestrator, "revise", lambda *args: asyncio.sleep(0, result=GOOD))
+    result = await orchestrator.run_pipeline("Build a deliverable")
+    record = json.loads(
+        (Path(result["project_dir"]) / "full_log.json").read_text(encoding="utf-8")
+    )["revision"]
+    assert result["rating"] == "FAIL"
+    assert result["final_output"] == GOOD
+    assert record["successful"] is False
+    assert record["cleared_the_rating"] is False
 
 
 @pytest.mark.asyncio

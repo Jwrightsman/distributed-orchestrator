@@ -68,10 +68,12 @@ Existing historical records are not migrated into it or reclassified.
 
 ## Required adapter and instrumentation
 
-Activation is blocked until a controlled adapter uses `ExecutionRequestV1` and
-the canonical service for all three arms, with local placement/local-only
-confidentiality and no enrollment. Direct-with-repair is a bounded composition
-of existing direct executions, not a new registered strategy. It must carry
+The controlled adapter uses `ExecutionRequestV1` and the canonical service for
+all three arms, with local placement/local-only confidentiality and no
+enrollment. It is implemented by the September 14 preflight addendum below;
+activation remains blocked on the unresolved identities and acceptance
+prerequisites. Direct-with-repair is a bounded composition of existing direct
+executions, not a new registered strategy. It must carry
 the prior candidate and public checker diagnostics within the existing request
 bounds. If they cannot fit, record unsupported repair and stop preflight;
 never silently truncate a repair input or hide it in an output schema.
@@ -88,8 +90,10 @@ status. Record every call, including rejected and abandoned work. Record
 elapsed cell latency, total per-call inference hardware-seconds, checker time,
 and optional energy separately. `unit_costs` plus `cost_capture_complete=true`
 is permitted only after the collector reconciles all started calls. A missing
-runtime counter is unknown, never zero or a text-length estimate. The current
-text-only model wrapper does not yet provide this complete collector.
+runtime counter is unknown, never zero or a text-length estimate. The legacy
+evaluation runner does not provide this complete collector. The experiment-only
+call capture described below instruments the canonical model wrapper without
+changing production strategy behavior.
 
 ## Acceptance and reporting
 
@@ -112,3 +116,102 @@ requires complete cost records under the declared hardware policy and is
 separate from quality. This small development pilot chooses a next question;
 it does not establish general model superiority, candidate independence,
 hardware-independent compute equality, or current production readiness.
+
+## September 14 preflight implementation and explicit resolutions
+
+The experiment-only adapter is `evals/canonical_pilot.py`; production strategy
+registration is unchanged. The command below only prepares unresolved identities:
+
+```powershell
+python scripts/canonical_pilot_preflight.py --output C:\TEMP\pilot-prepared.json
+```
+
+Offline controls, with authored fixture responses and mocked HTTP transport:
+
+```powershell
+python scripts/canonical_pilot_preflight.py --dry-run --output C:\TEMP\pilot-controls-new
+python -m pytest tests/test_canonical_pilot.py tests/test_call_capture.py -q
+```
+
+Use a new output location. The controls exercise all 36 planned cells and 84
+mock calls through the existing canonical direct and DAG implementations. The
+fixture checker is an exact-text control, **not the corpus acceptance checker**;
+no generated code is executed. Synthetic identities and cost counters are
+labelled offline controls and must never be used to activate a real study. The
+same dry run injects a checker-private sentinel and proves it is absent from
+direct, repair, planner, builder, and reviewer payloads. It also performs
+negative admission probes for every shared budget, rejects oversized/private
+repair inputs, and verifies that an omitted duration counter remains unknown.
+
+These implementation decisions resolve ambiguities without raising a ceiling:
+
+- DAG's named allowances sum to 3,584 tokens. Its remaining 512 tokens stay
+  unused: automatic planner/builder/schema retries and revision are disabled.
+  They are not permission for another call. The global ceiling remains 147,456.
+- Runtime calls are serialized on the one approved hardware profile, including
+  independent DAG builders. The DAG planner/dependencies/reviewer still use the
+  existing path. This avoids unreserved overlapping runtime work; serialization
+  is frozen as an experiment setting and changes no production default.
+- Per-call runtime `total_duration` is the reported inference hardware-duration
+  metric. Admission conservatively charges the larger of this and monotonic
+  request wall time. The latter includes transport/queue overhead and is recorded
+  separately; it never replaces the actual runtime counter in comparisons.
+- The 1,000-character canonical task bound also applies to the entire repair
+  request. A 2,048-token candidate is **not guaranteed to fit**. Unsupported
+  repair records an ungraded operational/preflight outcome and stops the pilot;
+  no truncation, schema transport, replacement cell, or enlarged request is used.
+  The full manifest remains intact. A design guaranteeing repair for longer
+  candidates would require a separately reviewed plan/protocol change.
+- There is no separate warm-up entry point. Record actual warm/cold state;
+  do not run uncounted calibration generation. Adding an explicit warm-up would
+  require extending the frozen accounting plan inside these same ceilings.
+- Checker time includes static canonical validation and the explicitly supplied
+  acceptance endpoint. Nested parser work is counted once. Unknown cleanup or
+  termination stops dispatch; cancellation does not imply zero runtime cost.
+  Run records and journal events preserve observed checker seconds separately
+  from the complete total, which remains null when termination is unknown.
+- Frozen identities include current commit, tracked diff, actual source/fixture
+  file hashes (including new adapter files), active prompt bytes/version,
+  strategy versions, measurement identity, and externally observed runtime,
+  model, hardware, settings, approval, rubric, and blinding identities. Before
+  every model dispatch the adapter compares them again. A source edit invalidates
+  an in-progress run. Fields named as digests must be 64 hexadecimal SHA-256
+  values (the model digest may use Ollama's `sha256:` prefix); tags and labels
+  are rejected. Seed honoring remains unknown.
+
+## Future explicitly authorized activation
+
+There is intentionally no live CLI flag. The remaining prerequisites are an
+owner-approved runtime with observed immutable identities, reviewed positive
+and broken fixtures for **each actual acceptance check**, an explicitly approved
+isolated evaluator, and a frozen rubric/blinding map with locked human judgments
+before unblinding. The repository-only preflight does not establish any of them.
+
+After explicit authorization, on that approved isolated machine:
+
+1. Finalize and freeze the reviewed checkout; rerun the offline controls first.
+   Obtain the real model digest, quantization, runtime version/binary digest,
+   hardware/OS identity and provider/settings digest without substituting tags.
+2. Supply a read-only `observed_identity()` function returning those observed
+   values and every `REQUIRED_IDENTITIES` field. It must re-observe drift, not
+   return guessed constants. Supply an approved bounded async checker accepting
+   `(item_id, candidate, deadline_monotonic=...)` and returning a measured boolean
+   plus only `syntax`, `artifact`, or `requirement`. Private checker data stays
+   inside that endpoint; it must enforce process cleanup on its deadline.
+3. Use `prepare_manifest(study_id, observed_identity())`, inspect it, and call
+   `validate_activation(manifest, observed_identity())`. Construct a private,
+   disposable `ExecutionService` with confined SQLite/artifact roots; no network
+   listener, enrollment, or production state is needed. Construct
+   `CanonicalPilot(service, manifest, observed_identity, checker, new_directory,
+   warm_cold="warm" or "cold")`. It writes the manifest before dispatch.
+4. In one async invocation, iterate `manifest["schedule"]` in order and await
+   `pilot.run_cell(cell)`. Stop on any exception or `pilot.ledger.stopped`.
+   Never resume an existing journal or rerun a cell. Preserve `manifest.json`,
+   `pilot-events.jsonl`, `runs.jsonl`, canonical artifacts, and unknown costs.
+5. Have the acceptance reviewer judge the blinded artifacts using the frozen
+   rubric. Keep human acceptance judgments distinct from the mechanical checker
+   booleans in `runs.jsonl`; the adapter does not infer human acceptance.
+   Lock judgments before unblinding. Only then report the planned denominators,
+   missing cells, endpoint distinctions and separate costs. The existing summary
+   rejects missing/ungraded cells; it must not be used to conceal an incomplete
+   pilot or relabel the fixture controls as benchmark evidence.

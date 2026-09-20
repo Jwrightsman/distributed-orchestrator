@@ -135,6 +135,10 @@ class RunRecord:
     measurement_series: str | None = None
     unit_costs: list[dict[str, Any]] | None = None
     cost_capture_complete: bool = False
+    checker_seconds_observed: float | None = None
+    checker_seconds_total: float | None = None
+    checker_capture_complete: bool | None = None
+    operational_stop_reason: str | None = None
 
     def as_record(self) -> dict[str, Any]:
         payload = asdict(self)

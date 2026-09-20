@@ -7,6 +7,7 @@ import httpx
 
 import sampling as sampling_mod
 from config import get as get_config
+from execution.call_capture import captured_post, captured_stream, current_collector
 
 
 def _sampling_options(cfg: dict) -> dict:
@@ -124,7 +125,7 @@ async def auto_detect_model() -> str | None:
     return models[0] if models else None
 
 
-async def _generate_provider(prompt: str, system: str, cfg: dict) -> str:
+async def _generate_provider(prompt: str, system: str, cfg: dict, role=None) -> str:
     """Call an OpenAI-compatible API (xai, openai, groq, together, etc.)."""
     base_url = cfg.get("provider_base_url") or "https://api.openai.com/v1"
     api_key = cfg["provider_api_key"]
@@ -149,7 +150,8 @@ async def _generate_provider(prompt: str, system: str, cfg: dict) -> str:
     }
 
     async with httpx.AsyncClient(timeout=timeout) as client:
-        resp = await client.post(f"{base_url}/chat/completions", json=payload, headers=headers)
+        resp = await captured_post(client, f"{base_url}/chat/completions",
+                                   payload=payload, headers=headers, provider="external", role=role)
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"]
 
@@ -183,7 +185,7 @@ async def generate(
         and role
         and role in cfg.get("provider_roles", [])
     ):
-        return await _generate_provider(prompt, system, cfg)
+        return await _generate_provider(prompt, system, cfg, role=role)
 
     # Default: Ollama
     if model is None:
@@ -207,12 +209,15 @@ async def generate(
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             await _apply_think(client, payload)
-            resp = await client.post(f"{OLLAMA_URL}/api/generate", json=payload)
-            if resp.status_code == 400 and format is not None:
+            resp = await captured_post(client, f"{OLLAMA_URL}/api/generate", payload=payload, role=role)
+            collector = current_collector()
+            if (resp.status_code == 400 and format is not None
+                    and (collector is None or collector.allow_schema_retry)):
                 # Ollama rejected the schema (older version or unsupported model) —
                 # retry unconstrained; the caller's text-parsing fallback handles it.
                 payload.pop("format")
-                resp = await client.post(f"{OLLAMA_URL}/api/generate", json=payload)
+                resp = await captured_post(client, f"{OLLAMA_URL}/api/generate",
+                                           payload=payload, role=role, attempt=1)
             resp.raise_for_status()
             return strip_thinking(resp.json()["response"])
     except httpx.TimeoutException as e:
@@ -255,7 +260,7 @@ async def generate_stream(prompt: str, system: str = "", model: str | None = Non
         and role
         and role in cfg.get("provider_roles", [])
     ):
-        result = await _generate_provider(prompt, system, cfg)
+        result = await _generate_provider(prompt, system, cfg, role=role)
         yield result
         return
 
@@ -278,7 +283,8 @@ async def generate_stream(prompt: str, system: str = "", model: str | None = Non
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             await _apply_think(client, payload)
-            async with client.stream("POST", f"{OLLAMA_URL}/api/generate", json=payload) as resp:
+            async with captured_stream(client, f"{OLLAMA_URL}/api/generate",
+                                       payload=payload, role=role) as (resp, capture_state):
                 resp.raise_for_status()
                 async for line in resp.aiter_lines():
                     if not line:
@@ -287,6 +293,8 @@ async def generate_stream(prompt: str, system: str = "", model: str | None = Non
                         chunk = _json.loads(line)
                     except _json.JSONDecodeError:
                         continue
+                    if chunk.get("done"):
+                        capture_state.update(data=chunk, confirmed=True, outcome="completed")
                     token = chunk.get("response", "")
                     if token:
                         yield token

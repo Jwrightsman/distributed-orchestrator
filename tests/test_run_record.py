@@ -43,12 +43,17 @@ def _stub(monkeypatch, review, revised=None):
             return PLAN_JSON
         if system == orchestrator.BUILDER_SYSTEM:
             return "```python\nprint('built')\n```"
-        if system == orchestrator.REVIEWER_SYSTEM:
+        if role == "reviewer":
             if isinstance(review, tuple):
                 response = review[min(review_count, len(review) - 1)]
                 review_count += 1
-                return response
-            return review
+            else:
+                response = review
+            if system != orchestrator.REVIEWER_SYSTEM:
+                # Assessment judges the retained candidate; it must not offer
+                # the unrelated assembled artifact from the initial fixture.
+                return response.split("## Final Assembled Output", 1)[0]
+            return response
         if system == orchestrator.REVISER_SYSTEM:
             return revised if revised is not None else review
         return ""

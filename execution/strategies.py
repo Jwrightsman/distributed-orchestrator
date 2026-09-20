@@ -18,6 +18,7 @@ from execution.dispatch import DispatchResult, Dispatcher, ExecutionUnit, Placem
 from execution.registry import ExecutionStrategy, StrategyOutcome
 from execution.validators import ValidatorRegistry
 from ollama_client import generate
+from execution.call_capture import call_identity
 
 
 @dataclass
@@ -134,12 +135,13 @@ class DagStrategy(ExecutionStrategy):
             async def local_executor():
                 on_token = context.callbacks.get("on_token")
                 token_callback = (lambda token: on_token(token, subtask)) if on_token else None
-                return await orchestrator.build(
-                    subtask,
-                    dependency_context,
-                    on_token=token_callback,
-                    task=brief,
-                )
+                with call_identity(role="builder", unit_id=unit.unit_id, candidate_id=None):
+                    return await orchestrator.build(
+                        subtask,
+                        dependency_context,
+                        on_token=token_callback,
+                        task=brief,
+                    )
 
             dispatched = await context.dispatcher.execute(
                 unit,
@@ -377,7 +379,8 @@ class EnsembleStrategy(ExecutionStrategy):
                 context.ensure_active()
 
                 async def local_executor():
-                    return await generate(prompt, system=unit.system)
+                    with call_identity(role="direct", unit_id=unit.unit_id, candidate_id=candidate_id):
+                        return await generate(prompt, system=unit.system)
 
                 failure_stage = "generation"
                 async with semaphore:

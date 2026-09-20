@@ -217,7 +217,14 @@ def _extract_final_output(review_text: str) -> str | None:
 
 def _extract_rating(review_text: str) -> str:
     """Return an unambiguous review rating; absent/malformed evidence is UNKNOWN."""
-    sections = re.findall(r"##\s*quality rating\s*\n(.*?)(?=\n##|\Z)", review_text, re.IGNORECASE | re.DOTALL)
+    # The frozen reviewer protocol requires this heading first. Searching the
+    # entire response can mistake a quoted/code-fenced deliverable for a verdict.
+    if not re.match(r"\A\s*##[ \t]+quality rating[ \t]*\r?\n", review_text, re.IGNORECASE):
+        return "UNKNOWN"
+    preamble = re.split(r"^##[ \t]+final assembled output[ \t]*\r?$", review_text,
+                        maxsplit=1, flags=re.IGNORECASE | re.MULTILINE)[0]
+    sections = re.findall(r"^##[ \t]+quality rating[ \t]*\r?\n(.*?)(?=\n##|\Z)", preamble,
+                          re.IGNORECASE | re.DOTALL | re.MULTILINE)
     if len(sections) != 1:
         return "UNKNOWN"
     rating = sections[0].strip()
@@ -342,6 +349,9 @@ async def plan(
     """Decompose a task into subtasks using the planner agent."""
     if max_retries is None:
         max_retries = get_config()["planner_retries"]
+    from execution.experiment_scope import single_attempt_enabled
+    if single_attempt_enabled():
+        max_retries = 1
     system = PLANNER_SYSTEM
     if memory_context:
         system = PLANNER_MEMORY_PREFIX.format(memory=memory_context) + PLANNER_SYSTEM
@@ -404,6 +414,9 @@ async def build(
     task — the overall project text, so the builder keeps to its constraints.
     """
     base_prompt = compose_builder_prompt(subtask, context, task)
+    from execution.experiment_scope import single_attempt_enabled
+    if single_attempt_enabled():
+        max_retries = 1
 
     prompt = base_prompt
     last_output = ""
@@ -553,7 +566,7 @@ async def extract_and_repair(
     )
 
 
-async def review(task: str, subtasks: list[dict], results: dict[int, str], memory_context: str = "") -> str:
+async def review(task: str, subtasks: list[dict], results: dict[int, str], memory_context: str = "", *, assessment_only: bool = False) -> str:
     """Review all builder outputs against the original task."""
     parts = []
     if memory_context:
@@ -571,7 +584,18 @@ async def review(task: str, subtasks: list[dict], results: dict[int, str], memor
         parts.append(f"### Output for Subtask {st['id']}: {st['title']}\n{output}\n")
 
     combined = "\n".join(parts)
-    return await generate(combined, system=REVIEWER_SYSTEM, role="reviewer")
+    system = REVIEWER_SYSTEM
+    if assessment_only:
+        # The normal reviewer fixes/assembles content before rating it. Repair
+        # verification must instead assess the bytes we will actually retain.
+        system = (
+            "Assess the exact supplied deliverable against the task and previous issues. "
+            "Do not fix, rewrite, merge, or assemble it. Rate only the supplied bytes. "
+            "Respond with exactly these sections, with no preamble:\n"
+            "## Quality Rating\nPASS, NEEDS_WORK, or FAIL\n\n"
+            "## Issues Found\nList remaining issues, or None."
+        )
+    return await generate(combined, system=system, role="reviewer")
 
 
 # ── Full pipeline ───────────────────────────────────────────────────────
@@ -908,6 +932,7 @@ async def run_pipeline(
             [{"id": 1, "title": "Revised deliverable", "prompt": "Assess this exact revised deliverable against the task and all previous issues: " + issues, "depends_on": []}],
             {1: revised},
             memory_context=memory_context,
+            assessment_only=True,
         )
         _review_seconds += round(time.time() - _revision_review_t0, 1)
         log_contribution(node_id, "compute", credits=3, task="pipeline_revision_review")
@@ -922,7 +947,11 @@ async def run_pipeline(
             "response": verification,
         })
         # A clipped candidate cannot support a claim about its unseen suffix.
-        complete_review = len(revised) <= _review_char_budget(1)
+        # Assessment-only responses must not carry a replacement deliverable;
+        # accept every heading spelling understood by the general parser here.
+        assembled = re.search(r"##[ \t]*final assembled output\b", verification,
+                              re.IGNORECASE)
+        complete_review = len(revised) <= _review_char_budget(1) and not assembled
         if checked_rating == "PASS" and not checked_issues and complete_review:
             rating = "PASS"
             revision["successful"] = True

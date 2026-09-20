@@ -1,0 +1,5 @@
+```python
+# Authored offline positive control. Never executed by the preflight.
+import json
+print(json.dumps([{"fixture": "positive"}]))
+```
