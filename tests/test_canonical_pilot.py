@@ -21,7 +21,13 @@ def test_plan_membership_bounds_and_unresolved_identities():
     assert len(manifest["schedule"]) == len({(c["item_id"], c["arm"]) for c in manifest["schedule"]}) == 36
     assert manifest["budget"] == BUDGET
     assert BUDGET["generated_tokens"] == 36 * 4096
-    assert manifest["identity"]["measurement_digest"] == "e4c78f84c67ea64a1ccf5ae2390c6bd15cc0423c5455978bcb2a53e1e7418ce5"
+    # Identity v2 deliberately binds the fixture bytes seen by the checker.
+    # Git's default Windows checkout uses CRLF while Linux/macOS use LF, so the
+    # two byte-distinct checkouts must not be mislabeled as one measurement.
+    assert manifest["identity"]["measurement_digest"] in {
+        "e4c78f84c67ea64a1ccf5ae2390c6bd15cc0423c5455978bcb2a53e1e7418ce5",  # CRLF
+        "1833a5834b15fc2242255615dcd3e1752082035297fb580fb69f8eba0b78ab38",  # LF
+    }
     assert manifest["identity"]["model_digest"] is None
     with pytest.raises(PreflightError, match="unresolved"):
         validate_activation(manifest, {})

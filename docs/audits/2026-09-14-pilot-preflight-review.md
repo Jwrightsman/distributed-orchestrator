@@ -71,7 +71,8 @@ active prompt bytes/version, strategy versions, corpus/checker identity and
 externally observed model/runtime/hardware/settings identities. Unavailable
 identities remain null in preparation. Digest fields require actual SHA-256
 values rather than tags or labels. Historical corpus identity v1 and the plan's
-measurement identity v2 are unchanged.
+measurement identity v2 semantics are unchanged. Its known CRLF and LF fixture
+byte identities are documented separately rather than relabeled as equivalent.
 
 The plan addendum explicitly resolves the unused DAG 512-token reserve,
 serialization, optional warm-up, repair-size incompatibility, admission versus

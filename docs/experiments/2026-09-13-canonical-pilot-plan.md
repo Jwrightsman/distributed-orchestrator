@@ -53,11 +53,15 @@ identity in the activation manifest. No runtime/cache/model changes mid-pilot.
 The prepared corpus has historical corpus identity version 1
 `b4fc182b0391ecd51eb52c0bfe4c52f007efc6059a26ae1ba067e65f9ef04f00`.
 With grader 3, measurement identity version 2 is
-`e4c78f84c67ea64a1ccf5ae2390c6bd15cc0423c5455978bcb2a53e1e7418ce5`.
-That digest binds task text, expectations, and referenced schema/fixture bytes.
-Recompute and verify it against the reviewed final checkout before activation;
-a difference requires a new frozen plan, not silent continuation. Also record
-the actual checker source SHA-256 and every acceptance fixture hash.
+`e4c78f84c67ea64a1ccf5ae2390c6bd15cc0423c5455978bcb2a53e1e7418ce5`
+for the reviewed CRLF Windows checkout and
+`1833a5834b15fc2242255615dcd3e1752082035297fb580fb69f8eba0b78ab38`
+for the byte-distinct LF checkout used by Linux/macOS CI. The identity binds
+task text, expectations, and the actual referenced schema/fixture bytes, so
+these values must not be collapsed into one cross-platform label. Recompute and
+freeze the value from the owner-approved activation checkout; any other value
+requires a new reviewed plan, not silent continuation. Also record the actual
+checker source SHA-256 and every acceptance fixture hash.
 
 Write `manifest.json` before the first call: version `1`, the exact item/arm
 lists above, replicates `[0]`, aggregation `single_replicate`, study ID,
