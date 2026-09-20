@@ -836,6 +836,13 @@ restart" item.
 stale comments in `config.py`. Whether to delete the dead keys or wire them
 again is a decision for a sprint, not for a view.
 
+**Since corrected, in prose only.** The two `config.py` comments now say nothing
+reads the key, `port`'s says only `status.py` does, and `status.py` shows a set
+`role_model_map` as ignored and an empty one not at all. README, `docs/DEPLOY.md`
+and `docs/OPERATIONS.md` no longer tell an operator to point `tracing_endpoint`
+at a collector. No key was removed and nothing was wired, so the scan above and
+`INERT_KEYS` are unchanged. The delete-or-rewire decision is still open.
+
 ### 10.4 The fail-open banner on Config
 
 The design suppressed the global fail-open banner on Config, "where the more
