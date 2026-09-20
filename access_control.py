@@ -199,6 +199,11 @@ def is_public_or_separately_authenticated(method: str, path: str) -> bool:
         return True
     if method == "GET" and path.startswith("/v1/shares/"):
         return True
+    # The human form of the same capability (routes_share_page.py). It renders
+    # only the redacted view /v1/shares/{token} serves, so it exposes nothing
+    # that route does not; the token is the credential either way.
+    if method == "GET" and path.startswith("/s/"):
+        return True
     if method == "POST" and path == "/nodes/register":
         return True
     if method == "GET" and path == "/tasks/next":

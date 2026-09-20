@@ -154,6 +154,14 @@ def _built_since(hours: int | None = None) -> int:
     return n
 
 
+# One machine's page is an operator page: it sits behind the viewer key.
+_OPERATOR_TAG = (
+    '<span class="head-tag"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" '
+    'stroke-width="1.3" aria-hidden="true"><path d="M4.5 7V5.2a3.5 3.5 0 0 1 7 0V7"/>'
+    '<rect x="3.2" y="7" width="9.6" height="6.2" rx="1.4"/></svg>operator page</span>'
+)
+
+
 def _fig(value, label: str, cls: str = "") -> str:
     return (f'<div class="fig"><span class="n {cls}">{esc(value)}</span>'
             f'<span class="k">{esc(label)}</span></div>')
@@ -175,9 +183,8 @@ async def status_page(request: Request):
     elif online:
         lamp, headline = "is-ok", f"Live — {len(online)} machine{'' if len(online) == 1 else 's'} connected"
         summary = ("Work pitched now is dispatched to the machines this orchestrator has "
-                   "invited. This page carries counts only: it is the one page here that "
-                   "answers without a sign-in, so it says how much has happened and not "
-                   "what any of it was.")
+                   "invited. This page carries counts only: it says how much has happened "
+                   "and not what any of it was.")
     else:
         lamp, headline = "is-warn", "Online, no machines connected"
         summary = ("The orchestrator is up and inference works, but no invited machines "
@@ -205,17 +212,19 @@ async def status_page(request: Request):
         nodes_html = (
             f'<div class="empty"><b>{count} {word} connected.</b> '
             "Which machines they are, what hardware they run, what each one is building and "
-            "what it has earned are private — that is the console's Nodes view, and it needs "
-            "an operator sign-in.</div>"
+            "what it has earned are private: that is the console's Nodes view, behind an "
+            "operator sign-in."
+            '<br><a href="/dashboard#nodes" title="Open Nodes in the console">open the console &#8594;</a></div>'
         )
     else:
         nodes_html = (
             '<div class="empty"><b>No machines are connected right now.</b> '
             "That is a real state of a small network, not a fault — the orchestrator still "
-            "runs work on itself. Joining takes one command on any machine with 8&nbsp;GB of RAM, "
-            "and an invitation — an enrolment token from whoever runs this orchestrator:"
-            f'<div class="cmd"><span class="p" aria-hidden="true">$</span>'
-            f'python join.py {esc(str(request.base_url).rstrip("/"))}</div></div>'
+            "runs work on itself. Joining takes the installer on any machine with 8&nbsp;GB "
+            "of RAM, this coordinator's https address, and an invitation code from whoever "
+            "runs it."
+            '<div class="cmd"><span class="p" aria-hidden="true">$</span>'
+            "python worker_installer.py</div></div>"
         )
 
     recent = _recent_runs()
@@ -255,6 +264,8 @@ async def status_page(request: Request):
         ),
         LAMP_CLASS=lamp,
         HEADLINE=esc(headline),
+        NODES_TITLE="Machines",
+        RECENT_TITLE="Recent work",
         UPTIME=esc(_uptime(uptime)),
         SUMMARY=esc(summary),
         FIGURES=figures,
@@ -355,9 +366,9 @@ async def node_page(node_id: str, request: Request):
         nodes_html = (
             '<div class="empty"><b>This machine is offline.</b> '
             "Hardware details are reported at registration, so they are only shown while it is "
-            "connected. Rejoin with:"
-            f'<div class="cmd"><span class="p" aria-hidden="true">$</span>'
-            f'python join.py {esc(str(request.base_url).rstrip("/"))}</div></div>'
+            "connected. Its owner starts it again, with the identity it enrolled with:"
+            '<div class="cmd"><span class="p" aria-hidden="true">$</span>'
+            f'python node.py --server {esc(str(request.base_url).rstrip("/"))}</div></div>'
         )
 
     return render(
@@ -366,12 +377,17 @@ async def node_page(node_id: str, request: Request):
                              f"and earned {credits:g} contribution points."),
         LAMP_CLASS=lamp,
         HEADLINE=esc(headline),
+        HEADLINE_CLASS="is-mono",
+        HEAD_TAG=_OPERATOR_TAG,
+        NODES_TITLE="This machine",
+        RECENT_TITLE="Ledger",
         UPTIME=esc(f"{builds} entries on the ledger"),
         SUMMARY=esc(summary),
         FIGURES=figures,
-        NODES_LEDE="What this machine reports about itself while it is connected.",
+        NODES_LEDE=("Reported by the machine itself at registration, so it is only shown "
+                    "while it is connected."),
         NODES=nodes_html,
-        RECENT_LEDE="What this machine has been handed, and what it earned for it.",
+        RECENT_LEDE="Append-only. Disconnecting does not undo any of it.",
         RECENT=recent_html,
         BUILD='<div class="cmd"><span class="p" aria-hidden="true">#</span>'
               f'{esc(BUILD)}</div>' if BUILD else "",

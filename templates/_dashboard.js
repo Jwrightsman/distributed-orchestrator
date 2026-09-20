@@ -187,6 +187,13 @@ function distBadge(mode) {
 }
 
 function relativeTime(ts) {
+  if (ts instanceof Date) {
+    const delta = Math.floor((Date.now() - ts.getTime()) / 1000);
+    if (delta < 60) return 'just now';
+    if (delta < 3600) return `${Math.floor(delta / 60)}m ago`;
+    if (delta < 86400) return `${Math.floor(delta / 3600)}h ago`;
+    return `${Math.floor(delta / 86400)}d ago`;
+  }
   // ts format: 20240101_120000, UTC
   try {
     const s = String(ts);
@@ -257,32 +264,127 @@ function closeDrawer() {
   if (_navScrim) { _navScrim.remove(); _navScrim = null; }
 }
 
+function setRail(open) {
+  const app = $('app');
+  app.classList.toggle('rail-open', open);
+  const btn = $('rail-toggle');
+  if (btn) {
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    const word = open ? 'Collapse the rail' : 'Expand the rail';
+    btn.title = word;
+    btn.setAttribute('aria-label', word);
+    btn.textContent = open ? '\u00ab' : '\u00bb';
+  }
+}
+
 function toggleNav() {
   const app = $('app');
-  // Below 900px the sidebar is an overlay, so the same control has to mean
-  // "open" there and "collapse to icons" on a wide screen.
+  // Below 900px the rail is an overlay drawer, so the top bar's control opens
+  // it there. On a wide screen the rail's own control widens it.
   if (isDrawer()) {
     if (app.classList.contains('nav-open')) closeDrawer(); else openDrawer();
     return;
   }
-  app.classList.toggle('nav-collapsed');
-  const collapsed = app.classList.contains('nav-collapsed');
-  $('nav-toggle').setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-  try { localStorage.setItem('mycelium-nav', collapsed ? '1' : '0'); } catch (e) {}
+  const open = !app.classList.contains('rail-open');
+  setRail(open);
+  try { localStorage.setItem('mycelium-rail', open ? '1' : '0'); } catch (e) {}
 }
 
+/* A fresh session lands on the collapsed rail. Only a remembered choice
+   opens it: the rail is navigation, and the view is the page. */
 try {
-  if (localStorage.getItem('mycelium-nav') === '1') {
-    $('app').classList.add('nav-collapsed');
-  }
-} catch (e) {}
+  setRail(localStorage.getItem('mycelium-rail') === '1');
+} catch (e) { setRail(false); }
+
+// ── The machine identity block ──────────────────────────────────
+function setIdentMenu(open) {
+  $('ident-menu').hidden = !open;
+  $('ident-scrim').hidden = !open;
+  const t = $('ident-toggle');
+  t.setAttribute('aria-expanded', open ? 'true' : 'false');
+  t.title = open ? 'Hide this menu' : 'This coordinator, settings and version';
+  setText('ident-chev', open ? '\u2304' : '\u2303');
+}
+function identName(name) {
+  setText('ident-menu-name', name);
+  const parts = String(name).split(/[^A-Za-z0-9]+/).filter(Boolean);
+  const initials = parts.length > 1
+    ? parts[0][0] + parts[parts.length - 1][parts[parts.length - 1].length - 1]
+    : String(name).slice(0, 2);
+  setText('ident-initials', initials.toLowerCase());
+}
+setText('ident-origin', location.origin);
+
+// ── Command palette ─────────────────────────────────────────────
+/* Every command is a control that already exists somewhere on the page, so
+   the palette adds no capability of its own: it is a faster way to reach
+   them. Filtered as you type; Enter runs the highlighted one. */
+const PALETTE_COMMANDS = () => [
+  ...TABS.map(t => ({kind: 'VIEW', label: TAB_TITLES[t], hint: '#' + t, run: () => showTab(t)})),
+  {kind: 'RUN', label: 'Pitch a task', hint: 'overview', run: () => focusPitch()},
+  {kind: 'THEME', label: document.documentElement.getAttribute('data-theme') === 'dark'
+      ? 'Switch to the light theme' : 'Switch to the dark theme', hint: '', run: () => toggleTheme()},
+  {kind: 'PAGE', label: 'Open the status page', hint: '/status', run: () => { location.href = '/status'; }},
+];
+let _paletteActive = 0;
+let _paletteReturn = null;
+
+function paletteMatches() {
+  const q = ($('palette-input').value || '').trim().toLowerCase();
+  return PALETTE_COMMANDS().filter(c => !q || (c.label + ' ' + c.kind + ' ' + c.hint).toLowerCase().includes(q));
+}
+function renderPalette() {
+  const list = $('palette-list');
+  const cmds = paletteMatches();
+  if (_paletteActive >= cmds.length) _paletteActive = Math.max(0, cmds.length - 1);
+  list.innerHTML = cmds.length ? cmds.map((c, i) => `
+    <button class="palette-cmd${i === _paletteActive ? ' is-active' : ''}" type="button"
+            role="option" aria-selected="${i === _paletteActive}" data-palette="${i}"
+            title="${escHtml(c.label)}">
+      <span class="palette-kind">${escHtml(c.kind)}</span>
+      <span class="palette-label">${escHtml(c.label)}</span>
+      <span class="palette-hint">${escHtml(c.hint)}</span>
+    </button>`).join('') : '<div class="palette-empty">Nothing matches.</div>';
+}
+function openPalette() {
+  _paletteReturn = document.activeElement;
+  _paletteActive = 0;
+  $('palette-input').value = '';
+  $('palette').hidden = false;
+  renderPalette();
+  $('palette-input').focus();
+}
+function closePalette() {
+  if ($('palette').hidden) return;
+  $('palette').hidden = true;
+  if (_paletteReturn && _paletteReturn.focus) _paletteReturn.focus();
+}
+function runPalette(i) {
+  const cmd = paletteMatches()[i];
+  closePalette();
+  if (cmd) cmd.run();
+}
 
 // ── Views ────────────────────────────────────────────────────────
-const TABS = ['overview', 'runs', 'gallery', 'nodes', 'projects', 'guild', 'evals', 'invite', 'config'];
+const TABS = ['overview', 'runs', 'gallery', 'nodes', 'projects', 'guild', 'evals', 'evidence', 'invite', 'config'];
 const TAB_TITLES = {
   overview: 'Overview', runs: 'Runs', gallery: 'Gallery',
-  nodes: 'Network nodes', projects: 'Projects', guild: 'Guild standings',
-  evals: 'Evals', invite: 'Connect', config: 'Config',
+  nodes: 'Nodes', projects: 'Projects', guild: 'Guild standings',
+  evals: 'Output quality', evidence: 'Observed evidence', invite: 'Connect', config: 'Configuration',
+};
+/* The line under the title. Each is a claim about the view, so each says only
+   what the view shows: no counts that a capped endpoint cannot back. */
+const TAB_SUBS = {
+  overview: 'Pitch work, and watch the machines answer',
+  runs: 'Every pipeline this orchestrator has completed',
+  gallery: 'Work the network finished, with the code it produced',
+  nodes: 'Machines offering compute, and the work moving between them',
+  projects: 'Work that remembers what it already built',
+  guild: 'Compute contribution points — accepted work, not payment',
+  evals: 'What the eval harness recorded, and how much of it is chance',
+  evidence: 'What the coordinator watched happen after it handed work out — recorded, never used to choose',
+  invite: 'Machines that do the work, and apps that ask for it',
+  config: 'What this coordinator loaded when it started, and what each setting does',
 };
 
 function showTab(name, opts) {
@@ -301,8 +403,11 @@ function showTab(name, opts) {
       else btn.removeAttribute('aria-current');
     }
   });
+  const main = $('main');
+  if (main) main.classList.toggle('is-bleed', name === 'overview');
   const title = $('view-title');
   if (title) title.textContent = TAB_TITLES[name] || name;
+  setText('view-sub', TAB_SUBS[name] || '');
   // A deep link should survive a refresh; without this, "Runs" is unshareable.
   if (!opts || opts.pushHash !== false) {
     try { history.replaceState(null, '', '#' + name); } catch (e) {}
@@ -313,6 +418,7 @@ function showTab(name, opts) {
   if (name === 'guild') loadStandings();
   if (name === 'runs') loadHistory();
   if (name === 'evals') loadEvals();
+  if (name === 'evidence') loadEvidenceView();
   if (name === 'invite') loadInvite();
   if (name === 'config') loadConfig();
   // Evidence is only fetched while this view is open, so opening it has to ask
@@ -465,15 +571,14 @@ async function pollStatus() {
     statusText.nodes = String(health.nodes_online);
     statusFresh.inference = true;
     statusFresh.nodes = true;
-    setText('stat-nodes', health.nodes_online);
+
     /* The subtask queue, under a label that says so. The archived handoff had
        Overview read "running now" and "queued" off /health: it has no running
        count at all, and its tasks_pending is this number rather than the job
        queue. Ported as written, one screen would have carried QUEUED over two
        different numbers. RUNNING and QUEUED are the status bar's, from
        /metrics, and there is exactly one of each. */
-    setText('stat-tasks', health.tasks_pending);
-    setText('stat-models', (health.models || []).length);
+
   } else {
     statusFresh.inference = false;
     statusFresh.nodes = false;
@@ -495,12 +600,16 @@ async function pollStatus() {
     setText('stat-done', met.tasks_completed_total);
     const latEl = $('stat-latency');
     if (latEl) latEl.textContent = met.avg_task_latency_seconds != null
-      ? met.avg_task_latency_seconds + 's' : '-';
+      ? met.avg_task_latency_seconds + 's' : '—';
     // Name whose balance this is — anyone can open this dashboard.
     const hostEl = $('credit-host');
-    if (hostEl && met.orchestrator_id) hostEl.textContent = met.orchestrator_id;
+    if (hostEl && met.orchestrator_id) {
+      hostEl.textContent = met.orchestrator_id;
+      identName(met.orchestrator_id);
+    }
     const credEl = $('credit-value');
     if (credEl) credEl.textContent = met.orchestrator_credits ?? 0;
+    setText('ident-points', met.orchestrator_credits ?? 0);
   } catch (e) {
     statusFresh.running = false;
     statusFresh.queued = false;
@@ -519,6 +628,12 @@ async function pollOperator() {
     const d = await apiJson('/v1/operator/health');
     setText('cell-mode-v', d.deployment_mode || '—');
     setText('cell-lock-v', d.single_coordinator_lock ? 'held' : 'not held');
+    setText('cell-mode-why', d.deployment_mode === 'trusted_alpha'
+      ? 'Startup refused to run on any preflight error, so every check held when this process started.'
+      : 'The compatibility default: preflight warns instead of refusing to start.');
+    setText('cell-lock-why', d.single_coordinator_lock
+      ? 'This process holds its state directory, so a second coordinator aimed at it fails at once.'
+      : 'This process has not finished starting.');
     const warnings = d.preflight_warnings || [];
     const lockCell = $('cell-lock-v');
     if (lockCell) {
@@ -662,12 +777,36 @@ function renderStatus() {
     tile.innerHTML = '<i aria-hidden="true"></i>' + escHtml(word);
   }
 
+  paintVital('vital-nodes', cellState('nodes', served), statusText.nodes,
+             Number(statusText.nodes) > 0 ? 'ok' : 'idle');
+  paintVital('vital-inference', cellState('inference', d.values.inference), statusText.inference,
+             d.values.inference === 'bad' ? 'bad' : 'ok', 'vital-inference-v');
+  paintVital('vital-running', cellState('running', served), statusText.running,
+             Number(statusText.running) > 0 ? 'warn' : 'idle', 'vital-running-v');
+  paintVital('vital-queued', cellState('queued', served), statusText.queued,
+             Number(statusText.queued) > 0 ? 'warn' : 'idle', 'vital-queued-v');
+
+  const cfgDot = $('nav-config-dot');
+  if (cfgDot) cfgDot.hidden = d.values.gate !== 'bad';
+
   const lockedLamp = $('locked-lamp');
   if (lockedLamp) paintLamp(lockedLamp, d.tone);
   const lockedLine = $('locked-health-line');
   if (lockedLine) lockedLine.textContent = d.severity + ' · ' + d.ageText;
 
   renderBanner(d);
+}
+
+/* One vital on Overview's line. `state` is the cell's freshness, exactly as
+   the bar's cell gets it; `tone` is what a fresh value means. A stale value
+   stays readable and stops claiming to be now, like the bar's. */
+function paintVital(id, state, text, tone, valueId) {
+  const el = $(id);
+  if (!el) return;
+  const known = text != null && text !== '';
+  el.className = 'ov-vital is-' + (state === 'unknown' || !known ? 'stale' : tone);
+  const v = valueId ? $(valueId) : el.querySelector('.ov-vital-v');
+  if (v) v.textContent = known ? text : '—';
 }
 
 /* Collapsed, the bar is the pill: same derived state, nothing new. */
@@ -679,6 +818,17 @@ function toggleStatusBar() {
   const pill = $('statuspill'), chev = $('statusbar-collapse');
   if (pill) pill.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
   if (chev) chev.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+  if (collapsed) setStatusDrawer(false);
+}
+
+function setStatusDrawer(open) {
+  const drawer = $('statusbar-drawer');
+  if (!drawer) return;
+  drawer.hidden = !open;
+  const age = $('statusbar-age');
+  age.setAttribute('aria-expanded', open ? 'true' : 'false');
+  age.title = open ? 'Hide what is behind these values' : 'Where these values come from';
+  setText('statusbar-chev', open ? '\u2304' : '\u2303');
 }
 
 // ── Nodes polling ────────────────────────────────────────────────
@@ -693,16 +843,20 @@ async function refresh() {
     ]);
     if (evidence) capabilityEvidence = evidence;
 
-    const navCount = $('nav-node-count');
-    if (navCount) {
-      // An empty pill reads as a rendering bug. Show the badge only once
-      // there is a count to put in it.
+    const navWrap = $('nav-node-wrap');
+    if (navWrap) {
+      // An empty count reads as a rendering bug. Show it only once there is
+      // a count to put in it, lit only when a machine is connected.
       const n = (nodes.nodes || []).length;
-      navCount.textContent = n;
-      navCount.hidden = n === 0;
+      setText('nav-node-count', n);
+      navWrap.hidden = n === 0;
+      navWrap.classList.toggle('is-ok', n > 0);
+      const lamp = $('nav-node-lamp');
+      if (lamp) lamp.classList.toggle('is-ok', n > 0);
     }
 
     renderNodes(nodes);
+    paintSwarmPanel(nodes);
   } catch (e) {
     // Deliberately silent. This used to paint "offline" on the shell from
     // here, which meant a request this browser was not authorised to make —
@@ -807,28 +961,71 @@ function evidenceLine(n) {
       and agreement between two runs is not correctness</span></div>`;
 }
 
+/* Admin actions exist only as a command on the coordinator
+   (scripts/node_enrollment_admin.py). They are shown so the operator can see
+   where the control lives, and marked unavailable here rather than looking
+   live (HANDOFF-UI section 19.7, rule 2). */
+function nodeActions(n) {
+  const enr = n.enrollment_id;
+  const out = [
+    `<button type="button" class="node-act" data-node="${escHtml(JSON.stringify(n))}"
+             title="Everything /nodes serves for this machine">details</button>`,
+    `<a class="node-act" href="/node/${encodeURIComponent(n.node_id)}"
+        title="This machine's own page, the one its owner can bookmark">machine page &#8599;</a>`,
+  ];
+  if (enr && n.enrollment_status !== 'revoked') {
+    out.push(`<button type="button" class="node-act" aria-disabled="true"
+      title="No HTTP route for this. On the coordinator: py scripts/node_enrollment_admin.py rotate ${escHtml(enr)} with --coordinator and --identity-output. Points, history and the name are untouched">rotate credential</button>`);
+    out.push(`<button type="button" class="node-act is-danger" aria-disabled="true"
+      title="No HTTP route for this. On the coordinator: py scripts/node_enrollment_admin.py revoke ${escHtml(enr)}. Finished work and points stay on the ledger, and the name is retired rather than freed">revoke</button>`);
+  } else if (!enr) {
+    out.push(`<button type="button" class="node-act" aria-disabled="true"
+      title="A compatibility session has no durable identity to revoke. Require enrollment in Configuration and this becomes a per-machine control">revoke</button>`);
+  }
+  return out.join('');
+}
+
+function paintNodeStats(list) {
+  const building = list.filter(n => n.current_task).length;
+  const enrolled = list.filter(n => n.enrollment_id && n.enrollment_status !== 'revoked').length;
+  const cpu = list.reduce((a, n) => a + (Number(n.cpu_count) || 0), 0);
+  const ram = list.reduce((a, n) => a + (Number(n.ram_gb) || 0), 0);
+  const put = (id, v, tone) => {
+    const el = $(id);
+    if (!el) return;
+    el.className = 'ov-vital is-' + tone;
+    el.querySelector('.ov-vital-v').textContent = v;
+  };
+  put('nstat-connected', String(list.length), list.length ? 'ok' : 'idle');
+  put('nstat-building', String(building), building ? 'warn' : 'idle');
+  put('nstat-enrolled', `${enrolled} of ${list.length}`, list.length && enrolled < list.length ? 'warn' : (list.length ? 'ok' : 'idle'));
+  put('nstat-cpu', String(cpu), 'idle');
+  put('nstat-ram', ram ? `${Math.round(ram)} GB` : '0', 'idle');
+}
+
 function renderNodes(nodes) {
   const nodesList = $('nodes-list');
   const summary = $('nodes-summary');
   if (!nodesList) return;
-
+  const list = nodes.nodes || [];
+  paintNodeStats(list);
   renderNodeMap(nodes);
 
   if (nodes.count === 0) {
-    if (summary) summary.textContent = 'No machines connected.';
+    if (summary) summary.textContent = 'none connected';
     nodesList.innerHTML = `
       <div class="empty-state">
-        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="18" r="2.2"/><path d="M10.5 6.8 6.5 15.8M13.5 6.8l4 9M7.4 18h9.2"/></svg></div>
-        <p>No machines connected yet.<br><button class="link-btn" type="button" data-tab="invite">How a machine joins →</button></p>
+        <p>No machines connected yet. The coordinator still works: builders run locally, one at a time.<br>
+        <button class="link-btn" type="button" data-tab="invite" title="How a machine joins">How a machine joins &rarr;</button></p>
       </div>`;
     return;
   }
 
-  const list = nodes.nodes || [];
+  const building = list.filter(n => n.current_task).length;
+  const revoked = list.filter(n => n.enrollment_status === 'revoked').length;
   if (summary) {
-    summary.textContent = list.length === 1
-      ? '1 machine connected'
-      : `${list.length} machines connected`;
+    summary.textContent = `${list.length} online · ${building} building`
+      + (revoked ? ` · ${revoked} revoked` : '');
   }
 
   /* Rows, not an eight-column table. There are 2-5 of these and each is an
@@ -840,7 +1037,7 @@ function renderNodes(nodes) {
     const enr = enrollmentLine(n);
 
     const spec = [
-      n.model, n.platform && n.machine ? `${n.platform} / ${n.machine}` : n.platform,
+      n.platform && n.machine ? `${n.platform} / ${n.machine}` : n.platform,
       n.cpu_count ? `${n.cpu_count} CPU` : null,
       n.ram_gb ? `${n.ram_gb} GB` : null,
       n.gpu && n.gpu !== 'none' ? n.gpu : 'no GPU',
@@ -852,17 +1049,19 @@ function renderNodes(nodes) {
 
     // Served by /nodes; the descriptor body itself deliberately is not.
     const descriptor = n.capability_descriptor_hash
-      ? `<div class="node-kv"><span class="node-k">capability descriptor</span>
-           <span class="node-v mono">v${escHtml(n.capability_descriptor_version || '1')}
-             · ${escHtml(String(n.capability_descriptor_hash).slice(0, 16))}</span></div>`
-      : `<div class="node-kv"><span class="node-k">capability descriptor</span>
-           <span class="node-v is-absent">not reported by this machine</span></div>`;
+      ? `descriptor v${escHtml(n.capability_descriptor_version || '1')} · ${escHtml(String(n.capability_descriptor_hash).slice(0, 12))}`
+      : 'descriptor not reported by this machine';
+    const claims = [
+      descriptor,
+      n.model ? `ollama ${escHtml(n.model)}` : null,
+      ...(n.claimed_capabilities || n.capabilities || [])
+        .filter(c => !String(c).startsWith('model:')).map(c => escHtml(c)),
+    ].filter(Boolean).join(' · ');
 
-    const claims = (n.claimed_capabilities || n.capabilities || [])
-      .filter(c => !String(c).startsWith('model:'));
-    const claimsHtml = claims.length
-      ? claims.map(c => `<span class="chip">${escHtml(c)}</span>`).join('')
-      : '<span class="node-v is-absent">none declared</span>';
+    const session = n.session_id
+      ? `session ${escHtml(String(n.session_id).slice(0, 12))}`
+        + (n.session_started_at ? ` · started ${escHtml(relativeTime(new Date(n.session_started_at)))}` : '')
+      : 'no session recorded';
 
     return `
       <article class="node-row" id="nodecard-${escHtml(n.node_id)}">
@@ -870,259 +1069,766 @@ function renderNodes(nodes) {
           <div class="node-ident">
             <span class="node-square is-${st.key}" aria-hidden="true"></span>
             <span class="node-id mono">${escHtml(n.node_id)}</span>
-            <span class="node-state is-${st.key}">${escHtml(st.word)}</span>
+            <span class="node-state node-pill is-${st.key}">${escHtml(st.word)}</span>
           </div>
           <div class="node-spec mono">${spec}</div>
           <div class="node-live">${live}</div>
-          <div class="node-kv"><span class="node-k">enrollment</span>
-            <span class="node-v ${enr.cls} mono">${enr.label}</span>
-            <span class="node-note">${escHtml(enr.note)}</span></div>
-          ${descriptor}
-          <div class="node-kv"><span class="node-k">claims</span>
-            <span class="node-v">${claimsHtml}</span></div>
+          <div class="node-line mono"><span class="node-enr ${enr.cls}">${enr.label}</span>
+            <span class="node-faint">${escHtml(enr.note)}</span></div>
+          <div class="node-line mono node-faint">${session}</div>
+          <div class="node-line mono node-claims">claims · ${claims}</div>
           ${evidenceLine(n)}
         </div>
         <div class="node-row-figures">
-          <div class="node-fig"><span class="node-fig-n mono">${escHtml(n.lifetime_tasks_completed ?? n.tasks_completed ?? 0)}</span>
-            <span class="node-fig-k">TASKS · LIFETIME</span></div>
-          <div class="node-fig"><span class="node-fig-n mono">${escHtml(n.lifetime_contribution_points ?? n.credits_earned ?? 0)}</span>
-            <span class="node-fig-k">POINTS · LIFETIME</span></div>
-          <div class="node-fig-actions">
-            <button type="button" class="btn-quiet is-sm"
-                    data-node="${escHtml(JSON.stringify(n))}">Details</button>
-            <a class="node-fig-link" href="/node/${encodeURIComponent(n.node_id)}">machine page →</a>
+          <div class="node-figs">
+            <div class="node-fig"><span class="node-fig-n mono">${escHtml(n.lifetime_tasks_completed ?? n.tasks_completed ?? 0)}</span>
+              <span class="node-fig-k">TASKS · LIFETIME</span></div>
+            <div class="node-fig"><span class="node-fig-n mono">${escHtml(n.lifetime_contribution_points ?? n.credits_earned ?? 0)}</span>
+              <span class="node-fig-k">POINTS · LIFETIME</span></div>
+            <div class="node-fig"><span class="node-fig-n mono">${escHtml(n.session_tasks_completed ?? 0)}</span>
+              <span class="node-fig-k">THIS SESSION</span></div>
           </div>
+          <div class="node-acts">${nodeActions(n)}</div>
         </div>
       </article>`;
   }).join('');
 }
 
-/* The map. Deterministic grid: gx is the pipeline column, gy the lane. Sorted
-   by node_id so the same fleet lays out identically on every open — a view that
-   settles differently each time is wrong for something being recorded.
+/* The map, live scale (HANDOFF-UI section 16.6, 19).
 
-   It draws machines and no task lines. Per-unit node assignment is not served
-   (handoff §8.2): `observed_placements` and per-unit `depends_on` exist, but
-   nothing says which machine holds which unit, so an edge here would be an
-   invented assignment. The note under the map says that rather than drawing a
-   plausible-looking lie. */
-function renderNodeMap(nodes) {
-  const stage = $('nodemap-stage');
-  const meta = $('nodemap-meta');
-  const note = $('nodemap-note');
-  const legend = $('nodemap-legend');
-  if (!stage) return;
+   Left to right is the pipeline: the coordinator at the edge, the machines
+   holding work next to it, machines holding nothing further out. Positions are
+   a model in its own units, mapped onto the stage's current size on every paint
+   and re-fitted when the stage resizes, so the graph never sits in a corner.
+   Sorted by node_id, so the same fleet lays out the same way on every open.
 
-  const list = (nodes.nodes || []).slice().sort((a, b) =>
-    String(a.node_id).localeCompare(String(b.node_id)));
+   Lines: coordinator to a machine, only while that machine holds work. That is
+   the only path work takes; nothing passes machine to machine. The line's label
+   is the task the machine itself reports holding, from /nodes.
 
-  if (meta) {
-    meta.textContent = list.length
-      ? `live · ${list.length} machine${list.length === 1 ? '' : 's'}`
-      : 'live · nothing connected';
+   Ground: when two or more machines hold work, the polygon on the coordinator
+   and those machines says "one flow of work", with its vertices sorted by angle
+   around their centroid so it can never cross itself (section 19.2). */
+let _nodemapList = [];
+let _nodemapZoom = 1;
+let _nodemapPan = {x: 0, y: 0};
+let _nodemapPinned = null;
+let _nodemapObserver = null;
+
+/* The map has three scales (section 16.6, 19). Only the first is measured:
+
+   live    this coordinator right now, from /nodes
+   demo    one run at its widest, 18 machines: drawn, not measured
+   swarm   three runs in a field of 125: drawn, not measured
+
+   The two drawn scales are pictures of an argument, not data. Every panel on
+   them ends with a DATA row that says so, the caption under the map says so in
+   the warning colour, and neither carries points, task counts or weights:
+   those mean something specific in the ledger, and invented ones are the one
+   thing this map must never show. Platform, model and hardware are derived
+   from the index so a bubble reads the same on every paint.
+
+   Two claims the design file made about this repo were corrected here: the
+   circuit breaker opens after three consecutive failures and holds
+   /tasks/next at 429 for 60s (server_state._BLACKLIST_DURATION), and the
+   planner is *asked* for 3-5 subtasks, which is a ceiling, not a count. */
+let _nodemapScale = 'live';
+const _nodemapDrawn = {};
+
+function nodemapModel(list) {
+  const nodes = [{key: 'coord', kind: 'coordinator', label: 'this coordinator', tone: 'work', d: 26, gx: 0, gy: 0.5,
+    rows: [['ROLE', 'coordinator'], ['DOES', 'planning and review'], ['IF IT GOES DOWN', 'the run stops'], ['DATA', 'live']],
+    note: 'Planning and review are coordinator work, so it sits at both ends of the flow. There is no failover.'}];
+  const busy = list.filter(n => n.current_task && n.enrollment_status !== 'revoked');
+  const rest = list.filter(n => !(n.current_task && n.enrollment_status !== 'revoked'));
+  const place = (group, gx) => group.forEach((n, i) => {
+    const st = nodeState(n);
+    const tone = st.key === 'building' ? 'busy' : st.key === 'revoked' ? 'bad' : 'ok';
+    const hw = [n.cpu_count ? `${n.cpu_count} CPU` : null, n.ram_gb ? `${n.ram_gb} GB` : null,
+                n.gpu && n.gpu !== 'none' ? n.gpu : null].filter(Boolean).join(' · ') || 'not claimed';
+    nodes.push({key: n.node_id, kind: 'machine', label: n.node_id, tone, d: tone === 'busy' ? 22 : 18,
+      gx, gy: group.length === 1 ? 0.5 : i / (group.length - 1), page: n.node_id,
+      rows: [['STATE', st.word], ['HOLDING', n.current_task || 'nothing'], ['COORDINATOR', 'this one'],
+             ['PLATFORM', [n.platform, n.machine].filter(Boolean).join(' / ') || 'not claimed'],
+             ['MODEL', n.model || 'not claimed'], ['HARDWARE', hw], ['DATA', 'live, from /nodes']],
+      note: tone === 'busy'
+        ? 'Holding one task. A worker takes one at a time, so it is busy until it returns a result or its lease expires.'
+        : tone === 'bad' ? 'Its enrolment is revoked. Its finished work and points stay on the ledger.'
+        : 'Somebody else’s computer, lent to this network, waiting to be handed work.'});
+  });
+  place(busy, 1);
+  place(rest, busy.length ? 2 : 1);
+  const edges = busy.map(n => ({a: 'coord', b: n.node_id, title: n.current_task, tone: 'busy',
+    rows: [['HANDED TO', n.node_id], ['STATE', 'building'], ['DATA', 'live, from /nodes']]}));
+  const faces = busy.length >= 2 ? [{keys: ['coord', ...busy.map(n => n.node_id)],
+    title: 'Work in progress on this coordinator',
+    rows: [['SPREAD OVER', `${busy.length} machines + this one`], ['DATA', 'live, from /nodes']]}] : [];
+  return {nodes, edges, faces};
+}
+
+const SIM_SPEC = (i) => {
+  const PLAT = ['Linux / x86_64', 'Darwin / arm64', 'Windows / AMD64', 'Linux / aarch64'];
+  const MODEL = ['qwen3.5:4b', 'gemma4:4b', 'llama4:8b', 'qwen3.5:4b'];
+  const HW = ['12 CPU · 32 GB · RTX 3060', '8 CPU · 16 GB · M2', '4 CPU · 8 GB', '16 CPU · 64 GB · RTX 4070', '6 CPU · 16 GB'];
+  return [['PLATFORM', PLAT[i % 4]], ['MODEL', MODEL[(i * 3 + 1) % 4]], ['HARDWARE', HW[(i * 5 + 2) % 5]]];
+};
+
+function demoModel() {
+  const ids = ['a1f3', '7c22', 'e910', 'b4d1', '3f8c', 'c012', '9ab7', 'd53e', '61fa', '2e94',
+               '8c1d', 'f470', '5b2a', 'a8e6', '14c3', 'e7d9', '90b5', 'cc21'];
+  const W1 = 2, W2 = 3;
+  const nodes = [{key: 'orch', kind: 'coordinator', label: 'this machine', tone: 'work', d: 30, gx: 0.15, gy: 1.78, lz: 0,
+    rows: [['ROLE', 'coordinator'], ['PLAN', '5 subtasks in 2 waves'], ['BUILDING NOW', '3 machines'],
+           ['FINISHED, NOW FREE', '2 machines'], ['HOLDING NOTHING', '13 machines'], ['DATA', 'simulated']],
+    note: 'One run, at its widest. The planner is asked for 3-5 subtasks, so five is the most machines one run can keep busy. The rest are idle because the plan ran out of work, not because they are slow.'}];
+  const edges = [];
+  const W1Y = [0.42, 0.98], W2Y = [2.02, 2.58, 3.14];
+  const bowX = (y) => 1.15 + 0.34 * (1 - Math.abs(y - 1.78) / 1.5);
+  const W1T = ['Read the CSV and normalise its headers', 'Parse the --since argument'];
+  const W2T = ['Filter rows by date', 'Recompute the totals', 'Update the printed summary'];
+  const W1P = [
+    'Load the CSV and normalise the header row: lowercase, strip spaces, fail loudly on a duplicate column. Return rows as dicts.',
+    'Add a --since argument taking an ISO date. Validate it and fail with a clear message if it does not parse.',
+  ];
+  const W2P = [
+    'Filter the loaded rows to those on or after the parsed --since date. Keep the existing column order.',
+    'Recompute the totals over the filtered rows only. Do not change how they are formatted.',
+    'Update the printed summary so it states the date range it covers. If the range is empty, say so rather than printing an empty table.',
+  ];
+  const ROWS = [5, 4, 4], GAPX = 0.42, FX = 2.35;
+  const slot = [];
+  ROWS.forEach((n, r) => {
+    const x0 = FX + (5 - n) * GAPX / 2;
+    for (let i = 0; i < n; i++) slot.push({x: x0 + i * GAPX, y: 1.24 + r * 0.66});
+  });
+  ids.forEach((id, i) => {
+    const w1 = i < W1, w2 = i >= W1 && i < W1 + W2;
+    const k = 'm' + id, s = slot[i - (W1 + W2)] || {x: FX, y: 1.78};
+    nodes.push({key: k, kind: 'machine', label: 'node-' + id, drawn: true,
+      tone: w2 ? 'busy' : 'ok', d: w2 ? 24 : (w1 ? 22 : 15), lz: (w1 || w2) ? 0 : 1.8,
+      gx: w1 || w2 ? bowX(w1 ? W1Y[i] : W2Y[i - W1]) : s.x, gy: w1 ? W1Y[i] : (w2 ? W2Y[i - W1] : s.y),
+      rows: [['STATE', w2 ? 'building' : (w1 ? 'built wave 1, now free' : 'holding nothing')],
+             ['IN THIS RUN', w2 ? 'wave 2 · ' + W2T[i - W1] : (w1 ? 'wave 1 · ' + W1T[i] : 'nothing — the plan ran out of work')],
+             ['DEPENDS ON', w2 ? 'wave 1' : (w1 ? 'nothing' : '—')], ...SIM_SPEC(i), ['DATA', 'simulated']],
+      note: w2 ? 'A drawn machine. This scale is a layout, not a measurement.'
+        : (w1 ? 'Finished its wave-1 subtask and went free. It is idle because the plan ran out of work, not because it is slow.'
+          : 'Holding nothing: the plan had five subtasks and they are all placed. Adding machines would not make this run any wider.')});
+    if (w1) edges.push({a: 'orch', b: k, tone: 'done', title: W1T[i], prompt: W1P[i],
+      rows: [['HANDED TO', 'node-' + id], ['WAVE', '1 of 2'], ['DEPENDS ON', 'nothing'], ['DATA', 'simulated']],
+      note: 'Wave 1 has no dependencies, so both of its subtasks went out at once. The machine that built this one is now free.'});
+    if (w2) edges.push({a: 'orch', b: k, tone: 'busy', title: W2T[i - W1], prompt: W2P[i - W1],
+      rows: [['HANDED TO', 'node-' + id], ['WAVE', '2 of 2'], ['DEPENDS ON', 'wave 1'], ['DATA', 'simulated']],
+      note: 'Handed out by the coordinator, not by the machine that built wave 1: there is no peer-to-peer path. It could not start before wave 1 returned.'});
+  });
+  const faces = [{keys: ['orch'].concat(ids.slice(0, W1 + W2).map(x => 'm' + x)),
+    title: 'One run at its widest — 5 subtasks in 2 waves',
+    prompt: 'Summarise the sales CSV, and add a --since flag so the summary can cover a date range.',
+    rows: [['PLAN', '5 subtasks in 2 waves'], ['SPREAD OVER', '5 machines + this one'], ['WAVE 1', 'built, both machines free'],
+           ['WAVE 2', 'building on 3 machines'], ['DATA', 'simulated']],
+    note: 'Everything inside this ground belongs to one run. Its edge is the ceiling: no plan grows past five machines however many are connected, and the thirteen outside it are the proof.'}];
+  return {nodes, edges, faces, uniform: true, height: 430};
+}
+
+function swarmModel() {
+  const R = 1.15, LOOSE = 112;
+  const hex = (i) => 'node-' + (0x1000 + i).toString(16);
+  const rnd = (i) => { const x = Math.sin(i * 12.9898) * 43758.5453; return x - Math.floor(x); };
+  const nodes = [], edges = [], faces = [];
+  let id = 0;
+  const STRAT = {
+    fan: 'plan & split · one plan across machines',
+    dag: 'plan & split · second wave held on depends_on',
+    tries: 'several tries · same subtask, three machines',
+  };
+  const SHAPES = [['fan', 3], ['dag', 4], ['tries', 3]].map((sp, i) => ({
+    s: sp[0], n: sp[1], r: 0.52, a: -Math.PI / 2 + (i / 3) * Math.PI * 2, lr: 0.34}));
+  const TASKS = {
+    fan: ['Write the CSV loader', 'Write the date filter', 'Write the summary printer'],
+    dag: ['Sketch the schema', 'Write the migration', 'Port the read path', 'Port the write path'],
+    tries: ['Make the flaky test deterministic', 'Make the flaky test deterministic', 'Make the flaky test deterministic'],
+  };
+  const PROMPTS = {
+    fan: ['Read the CSV from the path given on argv and return its rows as dicts. Normalise the header row.',
+          'Filter the loaded rows to those on or after the given ISO date. Validate the date. Keep the column order.',
+          'Print the summary table for the rows you are handed, including the date range it covers.'],
+    dag: ['Sketch the table schema for the new store as plain SQL: columns, types, and the one index the read path needs.',
+          'Write the forward migration for that schema, plus its reverse. It must be safe to run twice.',
+          'Port the read path onto the new schema defined by the first tier. Do not rename anything.',
+          'Port the write path onto the new schema defined by the first tier, keeping the existing validation.'],
+    tries: Array(3).fill('This test fails about one run in five. Find the source of the nondeterminism and make it deterministic without loosening what it asserts.'),
+  };
+  const HANDING = {
+    fan: 'One slice of a three-way split. Nothing in it depends on the other two, which is why all three went out at once.',
+    dag: 'Two tiers: the far one names the first tier’s output as its input, so depends_on holds it at the coordinator until that tier returns.',
+    tries: 'The same prompt, handed to three machines at once. The result that passes review is kept and the other two are discarded.',
+  };
+  const PITCH = {
+    fan: 'Write a small CSV summariser: load a file, filter it by date, print the totals.',
+    dag: 'Move the job store off the flat file onto SQLite, without changing the API.',
+    tries: 'A test in the suite fails about one run in five. Make it deterministic.',
+  };
+  const centres = [];
+  SHAPES.forEach((sh, ci) => {
+    const cx = R + Math.cos(sh.a) * sh.r, cy = R + Math.sin(sh.a) * sh.r;
+    const mine = ci === 0;
+    centres.push({x: cx, y: cy, mine, reach: sh.lr + 0.12});
+    const ok = 'c' + ci;
+    const oid = mine ? 'this machine' : hex(id++);
+    nodes.push({key: ok, kind: 'coordinator', label: oid, tone: 'work', d: mine ? 28 : 22, mine, drawn: !mine, gx: cx, gy: cy, lz: 0,
+      rows: [['ROLE', 'coordinator'], ['STRATEGY', STRAT[sh.s]], ['BUILDERS', String(sh.n)],
+             ['IF IT GOES DOWN', 'its run stops'], ['DATA', mine ? 'drawn, not measured · you are here' : 'drawn, not measured']],
+      note: mine ? 'You are one swarm in a field of them, not the centre of anything. Your coordinator runs its own plan and knows nothing about the others.'
+        : 'Somebody else’s coordinator, running its own plan. Nothing connects it to yours: that federation does not exist.'});
+    const keys = [];
+    for (let j = 0; j < sh.n; j++) {
+      const k = ok + 'b' + j;
+      keys.push(k);
+      let th = sh.a, rr = sh.lr;
+      if (sh.s === 'tries') { th = sh.a + (j - 1) * 0.34; rr = sh.lr * (j === 1 ? 1.12 : 0.9); }
+      else if (sh.s === 'dag') { th = sh.a + (j - 1.5) * 0.62; rr = sh.lr * (j < 2 ? 0.72 : 1.1); }
+      else { th = sh.a + (j - (sh.n - 1) / 2) * 0.8; }
+      const waiting = sh.s === 'dag' && j >= 2;
+      const building = waiting ? false : (sh.s === 'dag' ? true : (sh.s === 'tries' ? j !== 2 : j === sh.n - 1));
+      const bid = hex(id++);
+      const task = TASKS[sh.s][j];
+      const title = sh.s === 'tries' ? `${task} · attempt ${j + 1}` : task;
+      const sstate = waiting ? 'waiting on the tier before it' : (building ? 'building' : 'built, now free');
+      nodes.push({key: k, kind: 'machine', label: bid, drawn: true, tone: waiting ? 'wait' : (building ? 'busy' : 'ok'),
+        d: building ? 17 : 14, gx: cx + Math.cos(th) * rr, gy: cy + Math.sin(th) * rr, lz: 1.8,
+        rows: [['STATE', sstate], ['COORDINATOR', mine ? 'this machine' : oid], ['HOLDING', title],
+               ['DEPENDS ON', waiting ? 'the first tier' : 'nothing'], ...SIM_SPEC(id + ci), ['DATA', 'drawn, not measured']],
+        note: waiting ? 'It has the task and cannot start: depends_on names an output the first tier has not returned yet. A held machine is not a slow one.'
+          : (building ? 'Building somebody else’s subtask. A worker holds one task until it submits a result or its lease expires.'
+            : 'It finished its subtask and went free. Idle here means the plan ran out of work.')});
+      edges.push({a: ok, b: k, tone: waiting ? 'wait' : (building ? 'busy' : 'done'), title, prompt: PROMPTS[sh.s][j],
+        rows: [['HANDED TO', bid], ['STRATEGY', STRAT[sh.s]], ['DEPENDS ON', waiting ? 'the first tier' : 'nothing'], ['DATA', 'drawn, not measured']],
+        note: HANDING[sh.s] + ' Every line runs between a coordinator and one of its builders, because that is the only path work takes.'});
+    }
+    faces.push({keys: [ok].concat(keys),
+      title: mine ? 'Your run — ' + STRAT[sh.s] : 'Another swarm’s run — ' + STRAT[sh.s], prompt: PITCH[sh.s],
+      rows: [['COORDINATOR', oid], ['STRATEGY', STRAT[sh.s]], ['BUILDERS', String(sh.n)],
+             ['SHAPE', sh.s === 'dag' ? 'two tiers' : (sh.s === 'tries' ? 'three attempts at one subtask' : 'one plan fanned out')],
+             ['DATA', mine ? 'drawn, not measured · you are here' : 'drawn, not measured']],
+      note: mine ? 'Your whole run, and its edge is its reach. The machines on the rim are connected to nobody’s plan, and the other grounds are other coordinators entirely.'
+        : 'Somebody else’s run. No coordinator here knows about the others, which is why the grounds never touch.'});
+  });
+  const loose = [];
+  const clear = (x, y, sep) => {
+    for (const c of centres) {
+      const dx = x - c.x, dy = y - c.y, need = c.mine ? c.reach + 0.03 : c.reach;
+      if (dx * dx + dy * dy < need * need) return false;
+    }
+    for (const q of loose) { const dx = x - q.x, dy = y - q.y; if (dx * dx + dy * dy < sep * sep) return false; }
+    return true;
+  };
+  let seed = 0;
+  for (let pass = 0; pass < 6 && loose.length < LOOSE; pass++) {
+    const sep = [0.15, 0.128, 0.106, 0.085, 0.066, 0.052][pass];
+    for (let t = 0; t < 2400 && loose.length < LOOSE; t++) {
+      seed++;
+      const rr = Math.sqrt(rnd(seed * 3 + 1)) * R, th = rnd(seed * 7 + 5) * Math.PI * 2;
+      const x = R + Math.cos(th) * rr, y = R + Math.sin(th) * rr;
+      if (clear(x, y, sep)) loose.push({x, y});
+    }
   }
+  loose.forEach((pt, i) => {
+    const open = i % 37 === 11;
+    nodes.push({key: 'l' + i, kind: 'machine', label: hex(id++), drawn: true, tone: open ? 'bad' : 'ok', d: open ? 9 : 8,
+      gx: pt.x, gy: pt.y, lz: 2.4,
+      rows: [['STATE', open ? 'circuit open · 429 for 60s' : 'connected, never given a task'], ['IN A RUN', 'no'],
+             ['WHY IDLE', open ? 'three failures in a row' : 'no plan is wide enough'], ...SIM_SPEC(i + 7), ['DATA', 'drawn, not measured']],
+      note: open ? 'Three consecutive failures, so /tasks/next answers 429 for 60s, then lets it back in on its own. Nobody has to intervene.'
+        : 'Connected and holding nothing. The planner is asked for 3-5 subtasks, so no single run can grow to cover this field.'});
+  });
+  return {nodes, edges, faces, uniform: true, height: 560};
+}
 
-  if (!list.length) {
-    stage.innerHTML = '<div class="nodemap-empty">No machines are connected, so there is no flow to draw. '
-      + 'The coordinator still runs work on itself.</div>';
+const NODEMAP_TEXT = {
+  live: {
+    keys: [['is-work', 'coordinator'], ['is-busy', 'building'], ['is-ok', 'holding nothing'], ['is-bad', 'revoked']],
+    hint: 'Hover a machine or a line to inspect it. Click a machine for its own page; click a line or the ground to keep its panel open.',
+    note: 'Work goes out and comes back: the coordinator plans, machines build, the coordinator reviews what returns. '
+      + 'Nothing passes machine to machine, so every line runs to the coordinator.',
+  },
+  demo: {
+    head: 'One run at its widest, 18 machines', meta: 'simulated · no run behind this',
+    keys: [['is-work', 'coordinator'], ['is-busy', 'building'], ['is-ok', 'holding nothing']],
+    hint: 'One run at its widest. The bundle fanning up is wave 1, already built; the bundle fanning down is wave 2, '
+      + 'building now on three machines. Hover a machine, a line for the subtask and its prompt, or the shaded ground for '
+      + 'the run. Click to keep the panel open. The block on the right is thirteen machines this plan could never reach.',
+    note: 'Simulated: 18 machines, one run, five subtasks in two waves. Five is the ceiling, because the planner is asked '
+      + 'for 3-5 subtasks, so that is as many machines as one run can occupy. More hardware does not make one plan wider. '
+      + 'None of these machines or their specs are real.',
+  },
+  swarm: {
+    head: 'Three runs in a field of 125 machines', meta: 'drawn, not measured · needs federation, which does not exist',
+    keys: [['is-work', 'coordinator'], ['is-busy', 'building'], ['is-wait', 'waiting on a dependency'],
+           ['is-ok', 'holding nothing'], ['is-bad', 'circuit open']],
+    hint: 'Every bubble and line here can be read, the same as on the live scale. Hover a coordinator for its plan, a '
+      + 'builder for what it holds, a line for the subtask and its prompt, or a shaded ground for the whole run. Shape is '
+      + 'the strategy: a fan, two tiers, three attempts. The small dashed machines on the rim are hardware no plan is wide '
+      + 'enough to reach. Zoom in to read their names.',
+    note: 'Drawn, not measured, and the shape is an argument, not a forecast. One coordinator can only keep about five '
+      + 'machines busy, and it is a single point of failure with no standby. So 125 machines could not be one swarm: they '
+      + 'would have to be many small swarms side by side, each with its own coordinator, which is federation, and this '
+      + 'repo does not do it. Your machine is the one with the ring: one swarm among them, not the centre.',
+  },
+};
+
+function nodemapPositions(model, W, H) {
+  const pos = {};
+  if (model.uniform) {
+    // A drawn model is a picture: its two axes have to keep their ratio, or the
+    // bowed wave and the round field would stretch with the card.
+    const xs = model.nodes.map(n => n.gx), ys = model.nodes.map(n => n.gy);
+    const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+    const pad = 54, w = Math.max(0.001, x1 - x0), h = Math.max(0.001, y1 - y0);
+    const s = Math.min((W - pad * 2) / w, (H - pad * 2) / h);
+    const ox = (W - w * s) / 2, oy = (H - h * s) / 2;
+    model.nodes.forEach(n => { pos[n.key] = {x: ox + (n.gx - x0) * s, y: oy + (n.gy - y0) * s}; });
+    return pos;
+  }
+  const pad = 70, maxGx = Math.max(1, ...model.nodes.map(n => n.gx));
+  model.nodes.forEach(n => {
+    pos[n.key] = {x: pad + (W - pad * 2) * (n.gx / maxGx), y: 44 + (H - 100) * n.gy};
+  });
+  return pos;
+}
+
+function nodemapCurrent() {
+  if (_nodemapScale === 'live') return nodemapModel(_nodemapList);
+  if (!_nodemapDrawn[_nodemapScale]) {
+    _nodemapDrawn[_nodemapScale] = _nodemapScale === 'demo' ? demoModel() : swarmModel();
+  }
+  return _nodemapDrawn[_nodemapScale];
+}
+
+function renderNodeMap(nodes) {
+  _nodemapList = (nodes.nodes || []).slice().sort((a, b) => String(a.node_id).localeCompare(String(b.node_id)));
+  paintNodeMap();
+  const stage = $('nodemap-stage');
+  if (stage && !_nodemapObserver && 'ResizeObserver' in window) {
+    _nodemapObserver = new ResizeObserver(() => paintNodeMap());
+    _nodemapObserver.observe(stage);
+  }
+}
+
+function paintNodeMapHead() {
+  const busy = _nodemapList.filter(n => n.current_task).length;
+  const text = NODEMAP_TEXT[_nodemapScale];
+  setText('nodemap-meta', _nodemapScale !== 'live' ? text.meta
+    : (_nodemapList.length ? `live · ${_nodemapList.length} machine${_nodemapList.length === 1 ? '' : 's'} · ${busy} building`
+      : 'live · nothing connected'));
+  const run = $('nodemap-run');
+  if (!run) return;
+  if (_nodemapScale !== 'live') { run.innerHTML = `<span>${escHtml(text.head)}</span>`; return; }
+  const t = Object.values(typeof turns === 'object' ? turns : {}).filter(x => x.doneAt == null).pop();
+  run.innerHTML = t ? `<i aria-hidden="true"></i><span>${escHtml(t.task)}</span>` : '';
+}
+
+function paintNodeMap() {
+  const stage = $('nodemap-stage');
+  const legend = $('nodemap-legend');
+  const note = $('nodemap-note');
+  if (!stage) return;
+  paintNodeMapHead();
+  if (_nodemapScale === 'live' && !_nodemapList.length) {
+    stage.innerHTML = '<div class="nodemap-empty"><p class="nodemap-empty-title">Nothing is connected, so there is no flow to draw.</p>'
+      + '<p>The coordinator still runs work on itself, one builder at a time. A machine appears here the moment it registers.</p>'
+      + '<p>The two drawn scales above still open: they are pictures of how work spreads, not measurements of this network.</p></div>';
+    stage._model = null;
     if (legend) legend.innerHTML = '';
-    if (note) note.textContent = '';
+    if (note) { note.textContent = ''; note.classList.remove('is-drawn'); }
+    paintNodePick(null);
     return;
   }
+  const model = nodemapCurrent();
+  const W = Math.max(320, stage.clientWidth || 720);
+  const H = model.height
+    ? Math.max(280, Math.min(model.height, Math.round(W * 0.78)))
+    : Math.max(240, Math.min(380, 120 + _nodemapList.length * 52));
+  const pos = nodemapPositions(model, W, H);
+  const z = _nodemapZoom;
+  // Marks grow as z^0.62 while distances grow as z, so zooming in opens the
+  // graph up; labels and strokes divide that back out to hold their size
+  // (section 19.4).
+  const mark = Math.pow(z, 0.62) / z;
+  const inv = 1 / z;
+  const cx = W / 2, cy = H / 2;
+  const tf = `translate(${cx + _nodemapPan.x} ${cy + _nodemapPan.y}) scale(${z}) translate(${-cx} ${-cy})`;
 
-  const LANE = 46, TOP = 34, COORD_X = 62, WORKER_X = 300;
-  const height = Math.max(140, TOP + list.length * LANE + 24);
-  const parts = [];
+  const faces = model.faces.map((f, i) => {
+    const pts = f.keys.map(k => pos[k]);
+    const mx = pts.reduce((a, p) => a + p.x, 0) / pts.length, my = pts.reduce((a, p) => a + p.y, 0) / pts.length;
+    const poly = pts.slice().sort((p, q) => Math.atan2(p.y - my, p.x - mx) - Math.atan2(q.y - my, q.x - mx))
+      .map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+    return `<polygon class="nm-face" points="${poly}" data-pick="f:${i}" style="stroke-width:${1.2 * inv}">
+      <title>${escHtml(f.title)} — the area is the work in flight</title></polygon>`;
+  }).join('');
+  const edges = model.edges.map((e, i) => {
+    const p = pos[e.a], q = pos[e.b], tone = e.tone || 'busy';
+    const word = tone === 'done' ? 'built' : tone === 'wait' ? 'held on a dependency' : 'building';
+    return `<line class="nm-band" x1="${p.x}" y1="${p.y}" x2="${q.x}" y2="${q.y}" data-pick="e:${i}" style="stroke-width:${18 * inv}">
+        <title>${escHtml(e.title)} — ${word}</title></line>
+      <line class="nm-edge is-${tone}" x1="${p.x}" y1="${p.y}" x2="${q.x}" y2="${q.y}" style="stroke-width:${1.6 * inv}"></line>`;
+  }).join('');
 
-  // Coordinator at the edge, not the centre. Planning and review are its work;
-  // the hardware doing the building belongs to other people.
-  parts.push(`<line class="nodemap-spine" x1="${COORD_X}" y1="${TOP}" x2="${COORD_X}" y2="${height - 30}"></line>`);
-  parts.push(`<rect class="nodemap-square is-coordinator" x="${COORD_X - 6}" y="${TOP - 6}" width="12" height="12"></rect>`);
-  parts.push(`<text class="nodemap-label-text" x="${COORD_X + 14}" y="${TOP + 4}">this machine · plans and reviews</text>`);
-
-  list.forEach((n, i) => {
-    const y = TOP + (i + 1) * LANE;
-    const st = nodeState(n);
-    // A hairline from the coordinator column to each machine: the coordinator
-    // brokers every handoff, so this is "connected to the coordinator" and not
-    // a task edge. Machines never connect to each other directly.
-    parts.push(`<line class="nodemap-link" x1="${COORD_X}" y1="${y}" x2="${WORKER_X - 10}" y2="${y}"></line>`);
-    parts.push(`<rect class="nodemap-square is-${st.key}" x="${WORKER_X - 6}" y="${y - 6}" width="12" height="12"></rect>`);
-    parts.push(`<text class="nodemap-label-text" x="${WORKER_X + 14}" y="${y + 4}">${escHtml(n.node_id)} · ${escHtml(st.word)}</text>`);
+  /* A name is only drawn when the zoom has opened enough room for it: each mark
+     carries the zoom it earns its label at, and a label that would land on a
+     bubble, or on a name already placed, is dropped rather than overlapped.
+     Bigger marks are offered the space first, so the machines that matter keep
+     their names. Everything here is measured in screen pixels after the pan and
+     zoom, because that is where the collision would actually be seen. */
+  const hits = (a, b) => a[0] < b[2] && a[2] > b[0] && a[1] < b[3] && a[3] > b[1];
+  const screen = (k) => ({x: (pos[k].x - cx) * z + cx + _nodemapPan.x, y: (pos[k].y - cy) * z + cy + _nodemapPan.y});
+  const taken = model.nodes.map(n => {
+    const s = screen(n.key), r = (n.d / 2) * mark * z;
+    return [s.x - r, s.y - r, s.x + r, s.y + r];
+  });
+  const named = new Set();
+  model.nodes.slice().sort((a, b) => (b.d || 0) - (a.d || 0)).forEach(n => {
+    if (z < (n.lz || 0)) return;
+    const s = screen(n.key), r = (n.d / 2) * mark * z;
+    const sx = s.x, sy = s.y + r + 14;
+    if (sx < -60 || sx > W + 60 || sy < -24 || sy > H + 24) return;
+    const w = String(n.label).length * 6.4;
+    const box = [sx - w / 2 - 3, sy - 12, sx + w / 2 + 3, sy + 4];
+    if (taken.some(b => hits(box, b))) return;
+    taken.push(box);
+    named.add(n.key);
   });
 
-  stage.innerHTML =
-    `<svg viewBox="0 0 720 ${height}" role="img" preserveAspectRatio="xMinYMin meet"
-          aria-label="${escHtml(list.length)} machines connected to this coordinator">
-       ${parts.join('\n')}
-     </svg>`;
+  const marks = model.nodes.map(n => {
+    const p = pos[n.key], r = (n.d / 2) * mark;
+    const cls = ['nm-node', 'is-' + n.tone, n.kind === 'coordinator' ? 'is-coord' : '',
+                 n.drawn ? 'is-drawn' : '', n.mine ? 'is-mine' : ''].filter(Boolean).join(' ');
+    const shape = `<circle class="${cls}" cx="${p.x}" cy="${p.y}" r="${r}"
+        data-pick="n:${escHtml(n.key)}" style="stroke-width:${1.5 * inv}">
+        <title>${escHtml(n.label)} — ${escHtml(n.rows[0][1])}${n.page ? ' · click for this machine’s own page' : ''}</title></circle>`;
+    const label = named.has(n.key)
+      ? `<text class="nm-label" x="${p.x}" y="${p.y + r + 14 * inv}" style="font-size:${11 * inv}px">${escHtml(n.label)}</text>`
+      : '';
+    return n.page
+      ? `<a href="/node/${encodeURIComponent(n.page)}" class="nm-link">${shape}${label}</a>`
+      : shape + label;
+  }).join('');
+
+  const text = NODEMAP_TEXT[_nodemapScale];
+  const alt = _nodemapScale === 'live'
+    ? `${_nodemapList.length} machines connected to this coordinator`
+    : `${text.head} — drawn, not measured`;
+  stage.innerHTML = `<svg class="nm-svg" width="100%" height="${H}" viewBox="0 0 ${W} ${H}" role="img"
+      aria-label="${escHtml(alt)}">
+      <g transform="${tf}">${faces}${edges}${marks}</g></svg>`;
+  stage._model = model;
+  setText('nodemap-zoom-label', Math.round(z * 100) + '%');
 
   if (legend) {
-    legend.innerHTML = [
-      ['is-coordinator', 'coordinator'],
-      ['is-building', 'building'],
-      ['is-idle', 'holding nothing'],
-      ['is-revoked', 'revoked'],
-    ].map(([cls, label]) =>
-      `<span class="nodemap-key"><i class="nodemap-swatch ${cls}" aria-hidden="true"></i>${label}</span>`
-    ).join('');
+    legend.innerHTML = text.keys
+      .map(([cls, label]) => `<span class="nodemap-key"><i class="nm-swatch ${cls}" aria-hidden="true"></i>${label}</span>`).join('');
   }
-
   if (note) {
-    note.textContent = 'Lines run to the coordinator because it brokers every handoff — '
-      + 'machines never connect to each other directly. No line is drawn between machines '
-      + 'for a task: which machine holds which unit of work is not served by the API, and '
-      + 'drawing it would mean inventing the assignment.';
+    note.textContent = text.note;
+    note.classList.toggle('is-drawn', _nodemapScale !== 'live');
+  }
+  paintNodePick(_nodemapPinned);
+}
+
+function nodemapSubject(ref) {
+  const model = $('nodemap-stage')?._model;
+  if (!model || !ref) return null;
+  const [t, k] = [ref.slice(0, 1), ref.slice(2)];
+  if (t === 'n') {
+    const n = model.nodes.find(x => x.key === k);
+    return n && {title: n.label, kind: n.kind === 'coordinator' ? 'COORDINATOR' : 'MACHINE', rows: n.rows, note: n.note, tone: n.tone};
+  }
+  if (t === 'e') {
+    const e = model.edges[+k];
+    return e && {title: e.title, kind: 'SUBTASK', rows: e.rows, prompt: e.prompt, tone: e.tone || 'busy',
+      note: e.note || 'The line runs from the coordinator to the machine holding this task. That handoff is what makes the run distributed.'};
+  }
+  if (t === 'f') {
+    const f = model.faces[+k];
+    return f && {title: f.title, kind: model.uniform ? 'RUN' : 'WORK IN FLIGHT', rows: f.rows, prompt: f.prompt, tone: 'busy',
+      note: f.note || 'Every corner is a machine this work reached.'};
+  }
+  return null;
+}
+
+function paintNodePick(ref) {
+  const el = $('nodemap-pick');
+  if (!el) return;
+  const s = nodemapSubject(ref);
+  if (!s) {
+    el.innerHTML = `<p class="nodemap-hint">${escHtml(NODEMAP_TEXT[_nodemapScale].hint)}</p>`;
+    return;
+  }
+  // The prompt is the text actually handed to the machine, shown whole: a
+  // subtask you cannot read is a subtask you have to take on trust.
+  const prompt = s.prompt
+    ? `<div class="nodemap-pick-prompt"><span class="card-k">PROMPT AS HANDED OUT</span><p>${escHtml(s.prompt)}</p></div>`
+    : '';
+  el.innerHTML = `
+    <div class="nodemap-pick-head"><i class="nm-swatch is-${escHtml(s.tone)}" aria-hidden="true"></i>
+      <span class="nodemap-pick-title">${escHtml(s.title)}</span><span class="card-k">${escHtml(s.kind)}</span>
+      ${_nodemapPinned ? '<button type="button" class="card-clear" data-nodemap-unpin title="Close this panel">close &#10005;</button>' : ''}</div>
+    <div class="nodemap-pick-rows">${s.rows.map(([k, v]) => `<div class="nodemap-pick-row"><span class="card-k">${escHtml(k)}</span>
+      <span class="nodemap-pick-v">${escHtml(v)}</span></div>`).join('')}</div>
+    ${prompt}
+    <p class="nodemap-pick-note">${escHtml(s.note)}</p>`;
+}
+
+function zoomNodeMap(how) {
+  if (how === 'reset') { _nodemapZoom = 1; _nodemapPan = {x: 0, y: 0}; }
+  else _nodemapZoom = Math.max(0.6, Math.min(3, _nodemapZoom * (how === 'in' ? 1.25 : 0.8)));
+  paintNodeMap();
+}
+
+function setNodemapScale(scale) {
+  if (!NODEMAP_TEXT[scale]) return;
+  _nodemapScale = scale;
+  _nodemapZoom = 1;
+  _nodemapPan = {x: 0, y: 0};
+  _nodemapPinned = null;
+  document.querySelectorAll('[data-nodemap-scale]').forEach(b =>
+    b.setAttribute('aria-checked', b.dataset.nodemapScale === scale ? 'true' : 'false'));
+  paintNodeMap();
+}
+
+// ── The thread ───────────────────────────────────────────────────
+/* A pitch is a turn: the ask, then the agent's reply led by the step
+   timeline (HANDOFF-UI §16.2). The timeline's durations are measured from
+   the coordinator's own event timestamps, not from an animation clock, so
+   they are the real time each stage took. A step marker is round because it
+   reports progress; every status lamp in the console is square, and the two
+   must not be confused. */
+const STRATEGY_WORDS = {
+  auto: 'auto', dag: 'plan & split', ensemble: 'several tries', direct: 'one shot',
+};
+let pitchStrategy = 'auto';
+const turns = {};
+
+function fmtDur(ms) {
+  if (ms == null || ms < 0) return '—';
+  const secs = Math.round(ms / 1000);
+  if (secs < 60) return `${secs}s`;
+  return `${Math.floor(secs / 60)}m ${String(secs % 60).padStart(2, '0')}s`;
+}
+
+function turnSteps(t, now) {
+  // A pitch the coordinator never accepted has no stages at all: say that,
+  // rather than drawing a run that attempted anything.
+  if (t.status === 'failed' && !t.jobId) {
+    return [
+      {label: 'PLAN', state: 'stopped', detail: 'the coordinator did not accept this pitch', dur: '—'},
+      {label: 'BUILD', state: 'waiting', detail: 'did not run', dur: '—'},
+      {label: 'REVIEW', state: 'waiting', detail: 'did not run', dur: '—'},
+    ];
+  }
+  const done = t.status === 'complete' || t.status === 'failed';
+  const planned = t.planAt != null;
+  const steps = [];
+  // PLAN. Only the planning strategy decomposes; a finished run with no plan
+  // event attempted the whole task, and says so rather than drawing a step
+  // that never happened.
+  if (planned) {
+    steps.push({label: 'PLAN', state: 'done',
+      detail: `${t.subtasks} ${t.subtasks === 1 ? 'subtask' : 'subtasks'}`,
+      dur: fmtDur(t.planAt - t.startedAt)});
+  } else if (done) {
+    steps.push({label: 'PLAN', state: 'skipped',
+      detail: 'no plan — this run attempted the whole task', dur: '—'});
+  } else {
+    steps.push({label: 'PLAN', state: 'active', detail: 'the planner is working',
+      dur: fmtDur(now - t.startedAt)});
+  }
+  // BUILD.
+  const buildLabel = t.subtasks ? `BUILD ${Math.min(t.builds, t.subtasks)}/${t.subtasks}` : 'BUILD';
+  if (t.reviewAt != null || (done && t.status === 'complete')) {
+    const end = t.reviewAt != null ? t.reviewAt : t.doneAt;
+    steps.push({label: buildLabel, state: 'done',
+      detail: t.subtasks ? `${Math.min(t.builds, t.subtasks)} of ${t.subtasks} built` : 'built',
+      dur: planned ? fmtDur(end - t.planAt) : '—'});
+  } else if (planned && !done) {
+    steps.push({label: buildLabel, state: 'active',
+      detail: t.lastBuilt ? `last built: ${t.lastBuilt}` : 'waiting on the first subtask',
+      dur: fmtDur(now - t.planAt)});
+  } else {
+    steps.push({label: buildLabel, state: done ? 'stopped' : 'waiting',
+      detail: done ? 'stopped before building' : 'waiting for the plan', dur: '—'});
+  }
+  // REVIEW.
+  if (t.reviewAt != null && done) {
+    steps.push({label: 'REVIEW', state: t.status === 'failed' ? 'stopped' : 'done',
+      detail: t.status === 'failed' ? 'stopped during review' : 'assembled and graded',
+      dur: fmtDur(t.doneAt - t.reviewAt)});
+  } else if (t.reviewAt != null) {
+    steps.push({label: 'REVIEW', state: 'active', detail: 'assembling and grading',
+      dur: fmtDur(now - t.reviewAt)});
+  } else {
+    steps.push({label: 'REVIEW', state: done ? (t.status === 'failed' ? 'stopped' : 'done') : 'waiting',
+      detail: done ? (t.status === 'failed' ? 'did not run' : 'graded') : 'waiting for builders', dur: '—'});
+  }
+  return steps;
+}
+
+function stepsHtml(steps) {
+  return steps.map((st, i) => `
+    <li class="step is-${st.state}${i === steps.length - 1 ? ' is-last' : ''}">
+      <span class="step-rail" aria-hidden="true"><i class="step-mark"></i><i class="step-spine"></i></span>
+      <span class="step-body">
+        <span class="step-label">${escHtml(st.label)}</span>
+        <span class="step-detail">${escHtml(st.detail)}</span>
+      </span>
+      <span class="step-dur">${escHtml(st.dur)}</span>
+    </li>`).join('');
+}
+
+function paintTurn(pid) {
+  const t = turns[pid];
+  if (!t) return;
+  const now = Date.now();
+  const stepsEl = $(`pstages-${pid}`);
+  if (stepsEl) stepsEl.innerHTML = stepsHtml(turnSteps(t, now));
+  const meta = $(`pmeta-${pid}`);
+  if (meta) {
+    const parts = [];
+    if (t.jobId) parts.push(t.jobId.replace(/^job_/, 'job ').slice(0, 16));
+    parts.push(STRATEGY_WORDS[t.strategy] || t.strategy);
+    const end = t.doneAt != null ? t.doneAt : now;
+    parts.push(t.doneAt != null ? fmtDur(end - t.startedAt) : `${fmtDur(end - t.startedAt)} elapsed`);
+    meta.textContent = parts.join(' · ');
+  }
+  paintRunPanel();
+}
+
+function turnFromEvent(ev) {
+  // Events carry no pitch id, so they belong to the one turn still open on
+  // this page. Two concurrent pitches from one page would share the stream;
+  // the timeline then shows the newest, and the run page has each exactly.
+  const open = Object.keys(turns).map(Number).filter(k => turns[k].doneAt == null).sort((a, b) => b - a);
+  return open.length ? turns[open[0]] : null;
+}
+
+function noteEventForTurn(ev) {
+  const t = turnFromEvent(ev);
+  if (!t) return;
+  const at = ev.time ? Date.parse(ev.time) : Date.now();
+  if (ev.type === 'plan' && t.planAt == null) {
+    t.planAt = at;
+    t.subtasks = Number.isInteger(ev.subtask_count)
+      ? ev.subtask_count : (Array.isArray(ev.subtasks) ? ev.subtasks.length : 0);
+  } else if (ev.type === 'build') {
+    t.builds += 1;
+    if (ev.subtask) t.lastBuilt = ev.subtask;
+  } else if (ev.type === 'review_start' && t.reviewAt == null) {
+    t.reviewAt = at;
+  }
+  paintTurn(t.pid);
+}
+
+function setStrategy(key) {
+  pitchStrategy = key;
+  document.querySelectorAll('.ov-strategy [data-strategy]').forEach(b =>
+    b.setAttribute('aria-checked', b.dataset.strategy === key ? 'true' : 'false'));
+  paintStrategyNote();
+}
+
+/* Only the planning strategy can carry a project; ensemble and direct reject
+   one outright (execution/service.py). So choosing either detaches the
+   project in front of you, and says so, instead of letting the pair 422
+   after you press Pitch. */
+function paintStrategyNote() {
+  const note = $('ov-strategy-note');
+  const project = $('active-project-id').value;
+  const drops = !!project && (pitchStrategy === 'ensemble' || pitchStrategy === 'direct');
+  note.hidden = !drops;
+  if (drops) {
+    note.textContent = `${STRATEGY_WORDS[pitchStrategy][0].toUpperCase()}${STRATEGY_WORDS[pitchStrategy].slice(1)} `
+      + `cannot carry a project. This pitch runs detached from ${$('project-context-name').textContent}: `
+      + 'nothing in its memory is read, and the result is not filed as one of its iterations.';
   }
 }
 
-// ── Stage bar ────────────────────────────────────────────────────
-function stageBarHtml(planDone, buildDone, reviewDone, buildLabel) {
-  const planClass = planDone ? 'done' : (!planDone && !buildDone && !reviewDone ? 'active' : '');
-  const buildClass = planDone && !buildDone ? 'active' : (buildDone ? 'done' : '');
-  const reviewClass = buildDone && !reviewDone ? 'active' : (reviewDone ? 'done' : '');
-  const planLbl = planClass === 'active' ? 'active' : (planDone ? 'done' : '');
-  const buildLbl = buildClass === 'active' ? 'active' : (buildDone ? 'done' : '');
-  const reviewLbl = reviewClass === 'active' ? 'active' : (reviewDone ? 'done' : '');
-  return `
-    <div class="stage-bar" aria-hidden="true">
-      <div class="stage ${planClass}"></div>
-      <div class="stage ${buildClass}"></div>
-      <div class="stage ${reviewClass}"></div>
-    </div>
-    <div class="stage-labels">
-      <div class="stage-label ${planLbl}">Plan</div>
-      <div class="stage-label ${buildLbl}">${escHtml(buildLabel || 'Build')}</div>
-      <div class="stage-label ${reviewLbl}">Review</div>
-    </div>`;
-}
-
-// ── Pitching ─────────────────────────────────────────────────────
 async function pitchTask() {
   const input = $('pitch-input');
   const btn = $('pitch-btn');
   const task = input.value.trim();
   if (!task) return;
-  const activeProjectId = $('active-project-id').value || null;
+  const projectId = $('active-project-id').value || null;
+  const detached = !!projectId && (pitchStrategy === 'ensemble' || pitchStrategy === 'direct');
+  const projectName = projectId && !detached ? $('project-context-name').textContent : null;
 
   btn.disabled = true;
-  btn.textContent = 'Pitching...';
+  const pid = Date.now();
+  turns[pid] = {pid, task, strategy: pitchStrategy, startedAt: pid, planAt: null, subtasks: 0,
+                builds: 0, reviewAt: null, doneAt: null, status: 'running', jobId: null,
+                lastBuilt: null, projectName};
 
-  const pipelineLog = $('pipeline-log');
-  const pipelineId = Date.now();
-  const _cardStart = Date.now();
-
-  const runningCard = `
-    <div class="pipeline-card running" id="pipeline-${pipelineId}">
-      <div class="pipeline-header">
-        <div class="pipeline-task">${escHtml(task)}</div>
-        <div class="pipeline-head-right">
-          <span class="pipeline-elapsed" id="pelapsed-${pipelineId}">0s</span>
-          <div class="pipeline-status status-running" id="pstatus-${pipelineId}">PLANNING</div>
+  const askMeta = [projectName ? `into ${projectName}` : (detached ? 'detached · no project' : 'no project'),
+                   STRATEGY_WORDS[pitchStrategy], 'pitched just now'].join(' · ');
+  $('ov-empty').hidden = true;
+  $('pipeline-log').insertAdjacentHTML('beforeend', `
+    <article class="turn" id="pipeline-${pid}">
+      <div class="turn-ask"><div class="turn-bubble">
+        <div class="turn-text">${escHtml(task)}</div>
+        <div class="turn-meta">${escHtml(askMeta)}</div>
+      </div></div>
+      <div class="turn-reply">
+        <span class="turn-mark" aria-hidden="true">&#9672;</span>
+        <div class="turn-body">
+          <div class="turn-verdict">
+            <span class="turn-state is-running" id="pstatus-${pid}">RUNNING</span>
+            <span class="turn-runmeta" id="pmeta-${pid}"></span>
+          </div>
+          <ol class="steps" id="pstages-${pid}" aria-label="Where this run is"></ol>
+          <pre class="token-stream" id="token-stream-${pid}" hidden></pre>
+          <div class="turn-result" id="presult-${pid}" hidden></div>
         </div>
       </div>
-      <div id="pstages-${pipelineId}">${stageBarHtml(false, false, false)}</div>
-      <pre class="token-stream" id="token-stream-${pipelineId}" hidden></pre>
-    </div>`;
+    </article>`);
+  paintTurn(pid);
+  $(`pipeline-${pid}`).scrollIntoView({block: 'nearest'});
+  showOvTab('run');
 
-  const elapsedTicker = setInterval(() => {
-    const el = $(`pelapsed-${pipelineId}`);
-    if (!el) { clearInterval(elapsedTicker); return; }
-    const secs = Math.round((Date.now() - _cardStart) / 1000);
-    el.textContent = secs >= 60 ? `${Math.floor(secs / 60)}m ${secs % 60}s` : `${secs}s`;
-  }, 1000);
-
-  const empty = pipelineLog.querySelector('.empty-state');
-  if (empty) pipelineLog.innerHTML = '';
-  pipelineLog.insertAdjacentHTML('afterbegin', runningCard);
-
-  // Watch events to update the stage bar while the request is in flight.
-  // Uses its own cursor so it doesn't conflict with the WebSocket log.
-  let planDone = false, buildDone = false, buildCount = 0, totalSubtasks = 0;
-  let stageCursor = eventCursor;
-  const stageWatcher = setInterval(async () => {
-    try {
-      const d = await apiJson(`/events?since=${stageCursor}`);
-      d.events.forEach(ev => {
-        if (ev.type === 'plan') {
-          planDone = true;
-          totalSubtasks = Number.isInteger(ev.subtask_count)
-            ? ev.subtask_count
-            : (Array.isArray(ev.subtasks) ? ev.subtasks.length : 0);
-        }
-        if (ev.type === 'build') buildCount++;
-        if (ev.type === 'review_start') buildDone = true;
-        if (ev.id && ev.id > stageCursor) stageCursor = ev.id;
-      });
-
-      const statusEl = $(`pstatus-${pipelineId}`);
-      const stagesEl = $(`pstages-${pipelineId}`);
-      if (!statusEl) return;
-
-      const buildLabel = totalSubtasks > 0
-        ? `Build ${Math.min(buildCount, totalSubtasks)}/${totalSubtasks}`
-        : 'Build';
-
-      if (!planDone) {
-        statusEl.textContent = 'PLANNING';
-        stagesEl.innerHTML = stageBarHtml(false, false, false, buildLabel);
-      } else if (!buildDone) {
-        statusEl.textContent = buildLabel.toUpperCase();
-        stagesEl.innerHTML = stageBarHtml(true, false, false, buildLabel);
-      } else {
-        statusEl.textContent = 'REVIEWING';
-        stagesEl.innerHTML = stageBarHtml(true, true, false, buildLabel);
-      }
-    } catch (e) {}
+  const ticker = setInterval(() => {
+    if (!turns[pid] || turns[pid].doneAt != null) { clearInterval(ticker); return; }
+    paintTurn(pid);
   }, 1000);
 
   try {
-    // Always use the async endpoint — returns job_id immediately, live updates
-    // via WebSocket. /pitch/async falls back to /pitch/distributed internally
-    // when nodes are connected.
-    const body = {task};
-    if (activeProjectId) body.project_id = activeProjectId;
+    const body = {task, strategy: pitchStrategy};
+    if (projectId && !detached) body.project_id = projectId;
     const resp = await apiFetch('/pitch/async', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(body),
     });
     const data = await resp.json();
-
-    // Re-key the token stream element so _appendToken can find it by job_id
-    if (data.job_id) {
-      const tsEl = $(`token-stream-${pipelineId}`);
-      if (tsEl) tsEl.id = `token-stream-${data.job_id}`;
+    if (!resp.ok || !data.job_id) {
+      throw new Error(typeof data.detail === 'string' ? data.detail : `the coordinator answered ${resp.status}`);
     }
-
-    if (!data.job_id) throw new Error('Unexpected response: ' + JSON.stringify(data));
-    btn.textContent = 'Running...';
-    await _pollJobCompletion(data.job_id, pipelineId, task, stageWatcher, elapsedTicker);
+    turns[pid].jobId = data.job_id;
+    // Re-key the token stream element so _appendToken can find it by job_id.
+    const tsEl = $(`token-stream-${pid}`);
+    if (tsEl) tsEl.id = `token-stream-${data.job_id}`;
+    paintTurn(pid);
+    input.value = '';
+    await _pollJobCompletion(data.job_id, pid);
   } catch (e) {
-    clearInterval(stageWatcher);
-    clearInterval(elapsedTicker);
-    const card = $(`pipeline-${pipelineId}`);
-    if (card) {
-      card.classList.remove('running');
-      const s = $(`pstatus-${pipelineId}`);
-      if (s) { s.className = 'pipeline-status status-pending'; s.textContent = 'FAILED'; }
-    }
+    finishTurn(pid, {status: 'failed', error: e && e.message ? e.message : 'the pitch was not accepted'});
   }
-
+  clearInterval(ticker);
   btn.disabled = false;
-  btn.textContent = 'Pitch';
-  input.value = '';
 }
 
-async function _pollJobCompletion(jobId, pipelineId, task, stageWatcher, elapsedTicker) {
+async function _pollJobCompletion(jobId, pid) {
   while (true) {
     await new Promise(r => setTimeout(r, 3000));
     try {
       const job = await apiJson(`/jobs/${jobId}`);
       if (job.status === 'complete' || job.status === 'failed') {
-        clearInterval(stageWatcher);
-        clearInterval(elapsedTicker);
-        _showCompletedCard(pipelineId, task, {
+        finishTurn(pid, {
           plan: job.plan || [],
           project_dir: job.project_dir || '',
           rating: job.rating,
@@ -1138,40 +1844,128 @@ async function _pollJobCompletion(jobId, pipelineId, task, stageWatcher, elapsed
   }
 }
 
-function _showCompletedCard(pipelineId, task, result) {
-  const card = $(`pipeline-${pipelineId}`);
-  if (!card) return;
-  card.classList.remove('running');
+function finishTurn(pid, result) {
+  const t = turns[pid];
+  if (!t) return;
+  t.status = result.status === 'failed' ? 'failed' : 'complete';
+  t.doneAt = Date.now();
+  if (!t.subtasks && (result.plan || []).length) t.subtasks = result.plan.length;
+  paintTurn(pid);
 
-  const failed = result.status === 'failed';
-  const statusClass = failed ? 'status-pending' : 'status-complete';
-  const statusText = failed ? 'FAILED' : (result.mode === 'distributed' ? 'DISTRIBUTED' : 'COMPLETE');
-  const badge = failed ? '' : verdictChip(result.rating, result.code_precheck_error);
-
-  let subtasksHtml = '<div class="subtask-list">';
-  (result.plan || []).forEach(st => {
-    subtasksHtml += `
-      <div class="subtask">
-        <span class="subtask-id">${escHtml(String(st.id))}</span>
-        <span class="subtask-title">${escHtml(st.title)}</span>
-        <span class="subtask-check" aria-hidden="true">&#10003;</span>
-      </div>`;
-  });
-  subtasksHtml += '</div>';
-
+  const state = $(`pstatus-${pid}`);
+  if (state) {
+    if (t.status === 'failed') {
+      state.className = 'turn-state is-failed';
+      state.textContent = 'FAILED';
+    } else {
+      // The verdict is the run's own chip: lifecycle and checks are separate
+      // claims, and "completed" is not "passed" (HANDOFF-UI §7).
+      state.outerHTML = verdictChip(result.rating, result.code_precheck_error);
+    }
+  }
   const ts = result.project_dir ? result.project_dir.split(/[\\/]/).pop() : '';
-
-  card.innerHTML = `
-    <div class="pipeline-header">
-      <div class="pipeline-task">${escHtml(task)}</div>
-      <div class="pipeline-head-right">${badge}<div class="pipeline-status ${statusClass}">${statusText}</div></div>
-    </div>
-    ${stageBarHtml(true, true, true)}
-    ${subtasksHtml}
-    ${ts ? `<a class="run-link" href="/run/${encodeURIComponent(ts)}">Open the run page &#8594;</a>` : ''}
-    ${result.error ? `<div class="error-box">${escHtml(result.error)}</div>` : ''}
-  `;
+  const out = $(`presult-${pid}`);
+  if (out) {
+    const plan = (result.plan || []).map(st => `
+      <span class="turn-file" title="${escHtml(st.title || '')}">${escHtml(String(st.id))}
+        <span class="turn-file-k">${escHtml(st.title || '')}</span></span>`).join('');
+    out.innerHTML = `
+      ${result.error ? `<div class="error-box">${escHtml(result.error)}</div>` : ''}
+      ${plan ? `<div class="turn-files">${plan}</div>` : ''}
+      <div class="turn-links">
+        ${ts ? `<button type="button" class="ov-link" data-run="${escHtml(ts)}" title="Open the full run detail">run detail &rarr;</button>
+                <a class="ov-link" href="/run/${encodeURIComponent(ts)}" title="The run's own page, the link to share">run page &#8599;</a>` : ''}
+        <button type="button" class="ov-link" data-template="${escHtml(t.task)}" title="Put this task back in the composer">pitch again</button>
+      </div>`;
+    out.hidden = false;
+  }
+  paintRunPanel();
 }
+
+/* The RUN panel: the newest turn while it runs, and the last one after. The
+   tab is absent when there is nothing to show (§15.5b). */
+function paintRunPanel() {
+  const keys = Object.keys(turns).map(Number).sort((a, b) => b - a);
+  const tab = document.querySelector('.ov-tab[data-ovtab="run"]');
+  const el = $('ov-run-panel');
+  if (!keys.length) { if (tab) tab.hidden = true; return; }
+  if (tab) tab.hidden = false;
+  const t = turns[keys[0]];
+  const now = Date.now();
+  const running = t.doneAt == null;
+  el.innerHTML = `
+    <div class="ov-run-head">
+      <span class="ov-run-k">${running ? 'ACTIVE RUN' : 'LAST RUN'}</span>
+      ${running ? '<span class="ov-run-live"><i aria-hidden="true"></i>running</span>' : ''}
+      <span class="ov-run-elapsed">${escHtml(fmtDur((t.doneAt || now) - t.startedAt))}</span>
+    </div>
+    <div class="ov-run-task">${escHtml(t.task)}</div>
+    <div class="ov-run-meta">${escHtml([t.jobId || 'not accepted yet', STRATEGY_WORDS[t.strategy]].join(' · '))}</div>
+    <ol class="steps is-compact">${stepsHtml(turnSteps(t, now))}</ol>
+    <button type="button" class="ov-link ov-link-row" data-scroll-turn="${t.pid}"
+            title="Scroll the thread to this run">show in thread &rarr;</button>`;
+  paintOvWindowMeta();
+}
+
+// ── The floating window ─────────────────────────────────────────
+let ovTabPref = 'activity';
+function availableOvTabs() {
+  return [...document.querySelectorAll('.ov-tab')].filter(b => !b.hidden).map(b => b.dataset.ovtab);
+}
+function showOvTab(name) {
+  ovTabPref = name;
+  paintOvTabs();
+}
+/* The choice is a preference resolved against what is available, so a panel
+   that disappears (a tab hidden because it has nothing to show) falls back to
+   ACTIVITY instead of leaving the window blank. */
+function paintOvTabs() {
+  const avail = availableOvTabs();
+  const active = avail.indexOf(ovTabPref) !== -1 ? ovTabPref : (avail[0] || 'activity');
+  document.querySelectorAll('.ov-tab').forEach(b =>
+    b.setAttribute('aria-selected', b.dataset.ovtab === active ? 'true' : 'false'));
+  document.querySelectorAll('.ov-panel').forEach(p => { p.hidden = p.dataset.ovpanel !== active; });
+  $('ov-window').classList.toggle('is-activity', active === 'activity');
+  paintOvWindowMeta();
+}
+function paintOvWindowMeta() {
+  const active = (document.querySelector('.ov-tab[aria-selected="true"]') || {}).dataset?.ovtab;
+  let meta = '';
+  if (active === 'activity') meta = wsConnected ? 'websocket · live' : 'reconnecting';
+  else if (active === 'swarm') meta = $('ov-swarm-summary').textContent;
+  else if (active === 'run') meta = '';
+  setText('ov-window-meta', meta);
+}
+function toggleOvWindow() {
+  const w = $('ov-window');
+  const min = w.classList.toggle('is-min');
+  const b = $('ov-window-min');
+  b.setAttribute('aria-expanded', min ? 'false' : 'true');
+  b.title = min ? 'Show the window again' : 'Shrink the window to its title bar';
+  b.textContent = min ? '+' : '\u2013';
+}
+
+/* The SWARM panel: the same /nodes answer the Nodes view renders. */
+function paintSwarmPanel(nodes) {
+  const list = nodes.nodes || [];
+  const building = list.filter(n => n.status === 'busy' || n.current_task).length;
+  setText('ov-swarm-summary', list.length
+    ? `${list.length} online · ${building} building`
+    : 'none connected');
+  $('ov-swarm-list').innerHTML = list.length ? list.map(n => {
+    const busy = n.status === 'busy' || n.current_task;
+    return `
+      <button type="button" class="ov-swarm-row" data-tab="nodes" title="Open Nodes — ${escHtml(n.node_id)}">
+        <span class="ov-swarm-top"><i class="lamp ${busy ? 'is-warn' : 'is-ok'}" aria-hidden="true"></i>
+          <span class="ov-swarm-id">${escHtml(n.node_id)}</span>
+          <span class="ov-swarm-pts">${escHtml(String(n.credits_earned || 0))} pts</span></span>
+        <span class="ov-swarm-spec">${escHtml([n.platform, n.cpu_count ? n.cpu_count + ' CPU' : '', n.ram_gb ? n.ram_gb + ' GB' : ''].filter(Boolean).join(' · '))}</span>
+        <span class="ov-swarm-task${busy ? ' is-busy' : ''}">${busy ? escHtml('▶ ' + (n.current_task || 'building')) : 'waiting for work'}</span>
+      </button>`;
+  }).join('') : '<p class="ov-swarm-none">No machines connected. The coordinator still works: builders run locally, one at a time.</p>';
+  paintOvWindowMeta();
+}
+
 
 let _currentModalTimestamp = null;
 
@@ -1294,6 +2088,7 @@ function appendEvent(ev) {
 
   const label = EVENT_LABELS[ev.type];
   if (!label) return;  // skip unknown events
+  noteEventForTurn(ev);
   const t = new Date(ev.time).toLocaleTimeString();
   let msg = '';
   if (ev.type === 'pitch') {
@@ -1310,13 +2105,18 @@ function appendEvent(ev) {
   else if (ev.type === 'complete') msg = `Pipeline complete → ${escHtml(ev.project_dir)}`;
   else if (ev.type === 'error') msg = `Error: ${escHtml(ev.message || '')}`;
 
+  // Stacked, not a three-column grid: at 316px the grid wrapped every
+  // message (§15.5b). Agent and time on one mono line, the message beneath.
   const log = $('event-log');
+  const empty = $('event-empty');
+  if (empty) empty.remove();
   log.insertAdjacentHTML('beforeend', `<div class="log-entry">
-    <span class="log-time">${t}</span>
-    <span class="log-agent ${label.cls}">${label.agent}</span>
-    <span class="log-event"> ${msg}</span>
+    <div class="log-head"><span class="log-agent ${label.cls}">${label.agent}</span>
+      <span class="log-time">${t}</span></div>
+    <div class="log-event">${msg}</div>
   </div>`);
-  log.scrollTop = log.scrollHeight;
+  const pane = log.closest('.ov-window-body') || log;
+  pane.scrollTop = pane.scrollHeight;
 }
 
 /* Live state on a row. The square, its colour and the word move together —
@@ -1367,7 +2167,7 @@ function _setNodeBlacklisted(nodeId, seconds) {
 function connectWebSocket() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const ws = new WebSocket(`${proto}://${location.host}/ws/events`);
-  ws.onopen = () => { wsConnected = true; };
+  ws.onopen = () => { wsConnected = true; paintOvWindowMeta(); };
   ws.onmessage = (e) => {
     try {
       const ev = JSON.parse(e.data);
@@ -1377,6 +2177,7 @@ function connectWebSocket() {
   };
   ws.onclose = (e) => {
     wsConnected = false;
+    paintOvWindowMeta();
     // 4401 is the server saying this browser has no viewer credential. It will
     // say the same thing every time, so reconnecting is a loop that never ends
     // and never reports anything. Show the locked screen and stop.
@@ -1402,32 +2203,171 @@ async function pollEvents() {
 // ── History ──────────────────────────────────────────────────────
 let _historySearchTimer = null;
 
+let historyRuns = [];
+let runsFilter = 'all';
+let runsSort = {k: 'when', dir: 'desc'};
+
+function runBucket(r) {
+  const v = runVerdict(r.rating, r.code_precheck_error);
+  return v === 'PASS' ? 'passed' : v === 'FAIL' ? 'failed' : 'partial';
+}
+
+/* 20260917_134501 is UTC, as the run directory names it. */
+function runDate(ts) {
+  const m = String(ts).match(/^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/);
+  return m ? new Date(Date.UTC(+m[1], m[2] - 1, +m[3], +m[4], +m[5], +m[6])) : null;
+}
+function dayLabel(d) {
+  if (!d) return 'undated';
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const that = new Date(d); that.setHours(0, 0, 0, 0);
+  const days = Math.round((today - that) / 86400000);
+  if (days === 0) return 'Today';
+  if (days === 1) return 'Yesterday';
+  return d.toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric'});
+}
+
+const VERDICT_RANK = {FAIL: 0, NEEDS_WORK: 1, UNCHECKED: 2, NO_VERDICT: 3, PASS: 4};
+
+function runRowHtml(r) {
+  const v = VERDICTS[runVerdict(r.rating, r.code_precheck_error)];
+  return `
+    <a class="runs-grid runs-row" href="/run/${encodeURIComponent(r.timestamp)}" data-run-row="${escHtml(r.timestamp)}"
+       title="Open this run's detail">
+      <span class="runs-task">${escHtml(r.task)}</span>
+      <span class="runs-verdict ${v.cls}"><i class="lamp" aria-hidden="true"></i>${v.label}
+        ${r.project_id ? `<span class="runs-sub">${escHtml(r.project_id)}</span>` : ''}</span>
+      <span class="mono-cell">${escHtml(String(r.subtask_count))}</span>
+      <span class="mono-cell ${r.mode === 'distributed' ? 'is-dist' : 'is-quiet'}">${escHtml(r.mode || 'local')}</span>
+      <span class="mono-cell is-quiet">${escHtml(relativeTime(r.timestamp))}</span>
+      <span class="runs-go" aria-hidden="true">&rarr;</span>
+    </a>`;
+}
+
+function renderRuns() {
+  const el = $('history-list');
+  const q = ($('history-search')?.value || '').trim();
+  const counts = {all: historyRuns.length, passed: 0, partial: 0, failed: 0};
+  historyRuns.forEach(r => { counts[runBucket(r)] += 1; });
+  Object.keys(counts).forEach(k => setText(`runs-n-${k}`, counts[k]));
+  document.querySelectorAll('[data-runs-filter]').forEach(b =>
+    b.setAttribute('aria-checked', b.dataset.runsFilter === runsFilter ? 'true' : 'false'));
+
+  const shown = historyRuns.filter(r => runsFilter === 'all' || runBucket(r) === runsFilter);
+  const filtered = runsFilter !== 'all' || !!q;
+  $('runs-clear').hidden = !filtered;
+  const cap = historyRuns.length >= 50 ? 'newest 50 loaded' : `${historyRuns.length} loaded`;
+  setText('runs-count', filtered ? `${shown.length} of ${cap}` : `newest first · ${cap}`);
+
+  document.querySelectorAll('[data-runs-sort]').forEach(b => {
+    const on = b.dataset.runsSort === runsSort.k;
+    b.classList.toggle('is-on', on);
+    b.textContent = b.dataset.runsSort.toUpperCase() + (on ? (runsSort.dir === 'desc' ? ' ↓' : ' ↑') : '');
+    b.title = (on ? 'Sorted by ' : 'Sort by ') + b.dataset.runsSort + (on ? ' · click to reverse' : '');
+  });
+
+  if (!historyRuns.length) {
+    el.innerHTML = q
+      ? `<div class="empty-state"><p>Nothing matches “${escHtml(q)}”.</p></div>`
+      : '<div class="empty-state"><p>No past runs yet.<br>A completed pitch lands here with a permanent link you can share.</p></div>';
+    return;
+  }
+  if (!shown.length) {
+    el.innerHTML = '<div class="empty-state"><p>No loaded run matches. The chips count the runs on this page, not every run ever made.</p></div>';
+    return;
+  }
+
+  const dir = runsSort.dir === 'desc' ? -1 : 1;
+  const key = {
+    task: r => r.task.toLowerCase(),
+    verdict: r => VERDICT_RANK[runVerdict(r.rating, r.code_precheck_error)],
+    subtasks: r => r.subtask_count,
+    mode: r => r.mode || 'local',
+    when: r => r.timestamp,
+  }[runsSort.k];
+  const sorted = shown.slice().sort((x, y) => (key(x) < key(y) ? -1 : key(x) > key(y) ? 1 : 0) * dir);
+
+  if (runsSort.k !== 'when') {
+    el.innerHTML = `<div class="runs-day">sorted by ${escHtml(runsSort.k)} · day headings dropped</div>`
+      + sorted.map(runRowHtml).join('');
+    return;
+  }
+  const groups = [];
+  sorted.forEach(r => {
+    const label = dayLabel(runDate(r.timestamp));
+    if (!groups.length || groups[groups.length - 1].label !== label) groups.push({label, runs: []});
+    groups[groups.length - 1].runs.push(r);
+  });
+  el.innerHTML = groups.map(g => {
+    const passed = g.runs.filter(r => runBucket(r) === 'passed').length;
+    return `<div class="runs-day"><span class="runs-day-k">${escHtml(g.label)}</span>
+      <span>${g.runs.length} ${g.runs.length === 1 ? 'run' : 'runs'} · ${passed} passed</span></div>`
+      + g.runs.map(runRowHtml).join('');
+  }).join('');
+}
+
 async function loadHistory() {
   const q = ($('history-search')?.value || '').trim();
   const url = q ? `/history?search=${encodeURIComponent(q)}` : '/history';
   try {
     const data = await apiJson(url);
-    const el = $('history-list');
-
-    if (data.count === 0) {
-      el.innerHTML = q
-        ? `<div class="empty-state"><p>Nothing matches “${escHtml(q)}”.</p></div>`
-        : '<div class="empty-state"><p>No past runs yet.<br>A completed pitch lands here with a permanent link you can share.</p></div>';
-      return;
+    historyRuns = data.runs || [];
+    // /history returns at most 50, so a full page is a lower bound, not a total.
+    if (!q) {
+      const label = data.count >= 50 ? '50+' : String(data.count);
+      const navRuns = $('nav-runs-count');
+      if (navRuns) {
+        navRuns.textContent = label;
+        navRuns.hidden = data.count === 0;
+      }
+      setText('runs-tab-pitched-n', data.count ? label : '');
     }
-
-    el.innerHTML = data.runs.map(r => `
-      <a class="history-card" href="/run/${encodeURIComponent(r.timestamp)}">
-        <span class="history-task">${escHtml(r.task)}</span>
-        <span class="history-meta">
-          ${distBadge(r.mode)}
-          ${verdictChip(r.rating, r.code_precheck_error)}
-          <span class="mono-dim">${r.subtask_count} tasks</span>
-          <span class="mono-dim">${relativeTime(r.timestamp)}</span>
-          <span class="history-view">view &#8594;</span>
-        </span>
-      </a>`).join('');
+    renderRuns();
   } catch (e) {}
+}
+
+/* This machine's work: the ledger rows whose contributor is this
+   coordinator, the same id /metrics names it by. */
+const WORK_KINDS = {
+  compute: {label: 'COMPUTE', cls: 'is-compute'},
+  review: {label: 'REVIEW', cls: 'is-review'},
+  pitch: {label: 'PITCH', cls: 'is-pitch'},
+};
+async function loadMachineWork() {
+  const who = ($('credit-host')?.textContent || '').trim();
+  const list = $('machine-work-list');
+  if (!who || who === 'this coordinator') {
+    list.innerHTML = '<div class="empty-state"><p>Waiting to learn this coordinator’s id from /metrics.</p></div>';
+    return;
+  }
+  try {
+    const data = await apiJson(`/ledger?contributor=${encodeURIComponent(who)}&limit=100`);
+    const entries = (data.entries || []).slice().reverse();
+    const points = entries.reduce((a, e) => a + Number(e.points ?? e.credits ?? 0), 0);
+    setText('runs-tab-machine-n', entries.length || '');
+    setText('machine-work-summary', `${who} · ${entries.length} ${entries.length === 1 ? 'contribution' : 'contributions'} · ${points} points`
+      + (entries.length >= 100 ? ' · newest 100' : ''));
+    list.innerHTML = entries.length ? entries.map(e => {
+      const k = WORK_KINDS[e.type] || {label: String(e.type || 'other').toUpperCase(), cls: 'is-other'};
+      const when = e.timestamp ? relativeTime(new Date(e.timestamp * 1000)) : '—';
+      return `<div class="work-grid work-row">
+        <span class="work-kind ${k.cls}"><i aria-hidden="true"></i>${escHtml(k.label)}</span>
+        <span class="work-what">${escHtml(e.task || e.details || '')}</span>
+        <span class="mono-cell is-num">${escHtml(String(e.points ?? e.credits ?? 0))}</span>
+        <span class="mono-cell is-quiet is-num">${escHtml(when)}</span>
+      </div>`;
+    }).join('') : '<div class="empty-state"><p>No contributions recorded for this coordinator yet.</p></div>';
+  } catch (e) {
+    if (e instanceof ViewerLocked) return;
+    list.innerHTML = '<div class="empty-state"><p>The ledger could not be read.</p></div>';
+  }
+}
+
+function showRunsTab(name) {
+  document.querySelectorAll('[data-runs-tab]').forEach(b =>
+    b.setAttribute('aria-selected', b.dataset.runsTab === name ? 'true' : 'false'));
+  document.querySelectorAll('[data-runs-pane]').forEach(p => { p.hidden = p.dataset.runsPane !== name; });
+  if (name === 'machine') loadMachineWork();
 }
 
 // ── Standings ────────────────────────────────────────────────────
@@ -1442,17 +2382,12 @@ async function loadStandings() {
     }
 
     el.innerHTML = data.standings.map((s, i) => `
-      <div class="node-card">
-        <div class="standing">
-          <div>
-            <div class="node-name">
-              <span class="standing-rank ${i === 0 ? 'is-first' : i === 1 ? 'is-second' : ''}">#${i + 1}</span>
-              ${escHtml(s.contributor)}
-            </div>
-            <div class="node-meta">${s.compute_tasks} tasks / ${s.pitches} pitches</div>
-          </div>
-          <div class="standing-credits">${s.total_credits.toFixed(0)}</div>
-        </div>
+      <div class="guild-grid guild-row">
+        <span class="mono-cell is-quiet">${i + 1}</span>
+        <span class="guild-name mono">${escHtml(s.contributor)}</span>
+        <span class="mono-cell">${escHtml(String(s.compute_tasks))}</span>
+        <span class="mono-cell">${escHtml(String(s.pitches))}</span>
+        <span class="guild-points mono is-num">${escHtml(Number(s.total_credits).toFixed(0))}</span>
       </div>`).join('');
   } catch (e) {}
 }
@@ -1502,6 +2437,107 @@ async function loadConfig() {
   renderStatus();
 }
 
+// ── Evidence ─────────────────────────────────────────────────────
+/* Shadow-only capability observations. Nothing on this view is a claim the
+   route does not make: the routing value is read from the payload, and a rate
+   below the sample floor is shown as the count it is, never as a percentage. */
+function pct(x) { return x == null ? '—' : `${Math.round(x * 100)}%`; }
+function evidenceRate(r, minimum) {
+  if (!r || !r.sample_count) return {v: '—', d: 'no samples'};
+  if (r.sample_count < minimum || r.rate == null) {
+    return {v: `${r.sample_count} of ${minimum}`, d: 'below the sample floor — no rate drawn'};
+  }
+  const w = r.wilson_interval || {};
+  return {v: pct(r.rate), d: `${r.positive_count} of ${r.sample_count} · 95% interval ${pct(w.low)}–${pct(w.high)}`};
+}
+async function loadEvidenceView() {
+  const el = $('evidence-body');
+  let d;
+  try {
+    d = await apiJson('/v1/operator/capability-evidence');
+  } catch (e) {
+    if (e instanceof ViewerLocked) return;
+    el.innerHTML = '<div class="empty-state"><p>The evidence record could not be read.</p></div>';
+    return;
+  }
+  const routing = String(d.affects_routing);
+  const head = `
+    <div class="evd-band">
+      <i aria-hidden="true"></i>
+      <div><div class="evd-band-head">Nothing on this page decides where work goes</div>
+        <div class="evd-band-body">These are things the coordinator watched happen after it had
+          already handed work out: whether a machine came back inside its lease, how long it took,
+          how many bytes it returned, whether the required checks passed. The route that serves them
+          says <span class="mono">affects_routing: ${escHtml(routing)}</span>.</div></div>
+    </div>`;
+  const mode = String(d.mode || 'off');
+  const nav = $('nav-evidence-mode');
+  if (nav) { nav.textContent = mode; nav.hidden = false; }
+  if (mode === 'off') {
+    el.innerHTML = head + `<div class="evd-state"><div class="evd-state-k mono">capability_evidence_mode = off</div>
+      <p>Recording is off, which is the default. Runs work exactly the same; the coordinator simply
+        keeps no per-machine history of how they went, so there is nothing here to read. Turning it
+        on in config.json starts recording and the shadow comparison. Neither changes a placement.</p></div>`;
+    return;
+  }
+  const scopes = d.scopes || [];
+  if (!scopes.length) {
+    el.innerHTML = head + `<div class="evd-state"><div class="evd-state-k mono">no scopes yet</div>
+      <p>Recording is on and no machine has finished a piece of work yet. A scope appears the first
+        time a run settles.</p></div>`;
+    return;
+  }
+  const minimum = Number(d.minimum_samples || 0);
+  const shadow = {decisions: 0, same: 0, different: 0, none: 0};
+  const rows = scopes.map(sc => {
+    const sp = sc.shadow_policy || {};
+    shadow.decisions += Number(sp.decision_count || 0);
+    shadow.same += Number(sp.same_count || 0);
+    shadow.different += Number(sp.different_count || 0);
+    shadow.none += Number(sp.no_preference_count || 0);
+    const dl = evidenceRate(sc.deadline_success, minimum);
+    const cf = evidenceRate(sc.contract_floor, minimum);
+    const lat = sc.latency && sc.latency.recent_median_coordinator_wall_seconds;
+    const thr = sc.throughput && sc.throughput.recent_median_effective_output_bytes_per_second;
+    const metrics = [
+      ['BACK INSIDE ITS LEASE', dl.v, dl.d],
+      ['CHECKS HELD', cf.v, cf.d],
+      ['MEDIAN WALL', lat != null ? `${Number(lat).toFixed(1)}s` : '—', `${(sc.latency || {}).sample_count || 0} samples`],
+      ['MEDIAN OUTPUT RATE', thr != null ? `${Math.round(thr)} B/s` : '—', `${(sc.throughput || {}).sample_count || 0} samples`],
+    ];
+    return `
+      <div class="evd-scope">
+        <div class="evd-scope-head">
+          <i class="evd-dot${sc.insufficient_evidence ? '' : ' is-on'}" aria-hidden="true"></i>
+          <span class="mono evd-node">${escHtml(sc.node_label || sc.enrollment_id || 'unlabelled')}</span>
+          <span class="mono evd-scope-k">${escHtml(sc.enrollment_id || 'no enrolment')}</span>
+          <span class="mono evd-scope-k">${escHtml(sc.task_class || '')}</span>
+          <span class="mono evd-scope-k">${escHtml((sc.model || {}).name || '')}</span>
+        </div>
+        <div class="evd-metrics">${metrics.map(([k, v, dd]) => `
+          <div class="evd-metric"><div class="card-k">${k}</div><div class="evd-metric-v mono">${escHtml(v)}</div>
+            <div class="evd-metric-d">${escHtml(dd)}</div></div>`).join('')}</div>
+        <p class="evd-note">${escHtml(sc.observation_count)} observations${sc.insufficient_evidence ? ', below the floor of ' + minimum : ''}.
+          The checks figure is structural contract assurance, not semantic correctness.</p>
+      </div>`;
+  }).join('');
+  el.innerHTML = head + `
+    <div class="card-tools"><span class="card-summary">${scopes.length} ${scopes.length === 1 ? 'scope' : 'scopes'} · ${escHtml(mode)}</span>
+      <span class="card-count">production role · ${minimum}-sample floor</span></div>
+    ${rows}
+    <div class="card-tools evd-shadow-head"><span class="card-k">SHADOW DECISIONS</span>
+      <span class="card-summary">what a placement policy built on the numbers above would have done differently</span></div>
+    <div class="evd-shadow">${d.shadow_decision_aggregates_available === false
+      ? '<p class="evd-note">The shadow comparison could not be read.</p>'
+      : [['decisions compared', shadow.decisions], ['would have chosen the same machine', shadow.same],
+         ['would have chosen a different one', shadow.different], ['no preference', shadow.none]]
+        .map(([k, v]) => `<div class="evd-metric"><div class="evd-metric-v mono">${escHtml(v)}</div><div class="evd-metric-d">${escHtml(k)}</div></div>`).join('')}</div>
+    <p class="card-note">Why it stays a shadow: the moment a number like this picks the machine, it
+      starts writing its own evidence. Whoever is ahead gets more work, therefore more history,
+      therefore stays ahead, while a new machine never gets the chance to show what it can do.
+      Switching it on would need its own decision.</p>`;
+}
+
 // ── Connect ──────────────────────────────────────────────────────
 /* Built in invite_view.py, the same arrangement as Config: the route reads
    this coordinator's settings for the warning panel and reduces every key to
@@ -1534,24 +2570,66 @@ async function loadProjects() {
   try {
     const data = await apiJson('/projects');
     const el = $('projects-list');
+    const list = data.projects || [];
+    const navProjects = $('nav-project-count');
+    if (navProjects) {
+      navProjects.textContent = list.length;
+      navProjects.hidden = list.length === 0;
+    }
 
-    if (!data.projects || data.projects.length === 0) {
+    if (!list.length) {
+      setText('projects-summary', 'no projects');
       el.innerHTML = '<div class="empty-state"><p>No projects yet.<br>A project carries memory from one pitch to the next.</p></div>';
       return;
     }
+    const iterations = list.reduce((a, p) => a + (Number(p.iteration_count) || 0), 0);
+    setText('projects-summary', `${list.length} ${list.length === 1 ? 'project' : 'projects'} · ${iterations} iterations · memory per project`);
 
-    el.innerHTML = data.projects.map(p => `
-      <div class="node-card">
-        <div class="project-row">
-          <div class="project-main">
-            <div class="node-name">${escHtml(p.name)}</div>
-            <div class="node-meta">${escHtml(p.project_id)}</div>
-            <div class="node-meta">${p.iteration_count} iteration${p.iteration_count !== 1 ? 's' : ''}</div>
+    // The chain is the loaded runs that carry this project's id, newest first.
+    const runsFor = (id) => historyRuns.filter(r => r.project_id === id);
+    el.innerHTML = list.map(p => {
+      const runs = runsFor(p.project_id);
+      const chain = runs.length ? runs.map((r, i) => {
+        const v = VERDICTS[runVerdict(r.rating, r.code_precheck_error)];
+        return `<a class="proj-iter" href="/run/${encodeURIComponent(r.timestamp)}" data-run-row="${escHtml(r.timestamp)}"
+                   title="Open this run's detail">
+          <span class="mono-cell is-quiet">${String(runs.length - i).padStart(2, '0')}</span>
+          <i class="proj-dot ${v.cls}" aria-hidden="true"></i>
+          <span class="proj-task">${escHtml(r.task)}</span>
+          <span class="proj-verdict ${v.cls}">${v.label}</span>
+          <span class="mono-cell is-quiet is-num">${escHtml(relativeTime(r.timestamp))}</span>
+        </a>`;
+      }).join('') : `<p class="proj-none">${Number(p.iteration_count) === 0
+        ? 'No runs yet. Continue to pitch the first one.'
+        : `None of this project's runs are among the ${historyRuns.length} loaded.`}</p>`;
+      return `
+        <section class="proj" data-project="${escHtml(p.project_id)}">
+          <div class="proj-head">
+            <div class="proj-titles">
+              <div class="proj-name">${escHtml(p.name)}</div>
+              <div class="proj-meta mono">${escHtml(p.project_id)} · ${escHtml(String(p.iteration_count))} iteration${p.iteration_count !== 1 ? 's' : ''}</div>
+            </div>
+            <button type="button" class="btn-quiet proj-continue" data-continue-project="${escHtml(p.project_id)}"
+                    data-project-name="${escHtml(p.name)}" title="Pitch the next iteration on this project">Continue &rarr;</button>
           </div>
-          <button type="button" class="btn-accent is-sm" data-continue-project="${escHtml(p.project_id)}"
-                  data-project-name="${escHtml(p.name)}">Continue</button>
-        </div>
-      </div>`).join('');
+          <div class="proj-chain">${chain}</div>
+          <p class="proj-memory" id="proj-memory-${escHtml(p.project_id)}">Reading this project's memory…</p>
+        </section>`;
+    }).join('');
+
+    // The memory each project carries into its next pitch, read from the
+    // project itself rather than described.
+    list.forEach(async (p) => {
+      try {
+        const d = await apiJson(`/projects/${encodeURIComponent(p.project_id)}`);
+        const bytes = new Blob([d.memory_context || '']).size;
+        setText(`proj-memory-${p.project_id}`, bytes
+          ? `${(bytes / 1024).toFixed(1)} KB of memory goes into the prompt of the next pitch on this project.`
+          : 'No memory recorded yet. The first finished run on this project writes it.');
+      } catch (e) {
+        setText(`proj-memory-${p.project_id}`, 'This project’s memory could not be read.');
+      }
+    });
   } catch (e) {}
 }
 
@@ -1575,16 +2653,23 @@ async function promptNewProject() {
 function continueProject(projectId, projectName) {
   $('active-project-id').value = projectId;
   $('project-context-name').textContent = projectName;
-  $('project-context').hidden = false;
+  $('ov-project-dot').classList.add('is-on');
+  setText('ov-memory-note', `${projectId} · its memory goes into the next pitch`);
+  $('clear-project').hidden = false;
   showTab('overview');
-  $('pitch-input').placeholder = `What's next for ${projectName}?`;
+  $('pitch-input').placeholder = `Pitch the next change to ${projectName}`;
+  paintStrategyNote();
   $('pitch-input').focus();
 }
 
 function clearProjectContext() {
   $('active-project-id').value = '';
-  $('project-context').hidden = true;
-  $('pitch-input').placeholder = 'Describe what you want built...';
+  $('project-context-name').textContent = 'No project';
+  $('ov-project-dot').classList.remove('is-on');
+  setText('ov-memory-note', 'no memory carried in');
+  $('clear-project').hidden = true;
+  $('pitch-input').placeholder = 'Describe what you want built';
+  paintStrategyNote();
 }
 
 // ── Gallery ──────────────────────────────────────────────────────
@@ -1600,30 +2685,31 @@ async function loadGallery() {
 
     el.innerHTML = data.cards.map(c => {
       const ts = encodeURIComponent(c.timestamp);
-      const nodesHtml = c.nodes_used > 0
-        ? `<span class="mono-info">${c.nodes_used} node${c.nodes_used > 1 ? 's' : ''}</span>`
-        : '';
+      const v = VERDICTS[runVerdict(c.rating, c.code_precheck_error)];
+      const meta = [`${c.subtask_count} tasks`, c.nodes_used > 0 ? `${c.nodes_used} node${c.nodes_used > 1 ? 's' : ''}` : null,
+                    relativeTime(c.timestamp)].filter(Boolean).join(' · ');
+      const files = (c.code_files || []);
       return `
-        <div class="gallery-card">
-          <a class="gallery-task" href="/run/${ts}">${escHtml(c.task)}</a>
-          <div class="gallery-meta">
-            ${distBadge(c.mode)}${verdictChip(c.rating, c.code_precheck_error)}
-            <span class="mono-dim">${c.subtask_count} tasks</span>
-            ${nodesHtml}
-            <span class="mono-dim">${relativeTime(c.timestamp)}</span>
+        <article class="gallery-card">
+          <div class="gallery-head">
+            <i class="proj-dot ${v.cls}" aria-hidden="true"></i>
+            <span class="proj-verdict ${v.cls}">${v.label}</span>
+            <span class="gallery-meta mono">${escHtml(meta)}</span>
           </div>
-          ${c.preview ? `<div class="gallery-preview">${escHtml(c.preview)}</div>` : ''}
-          ${c.code_files && c.code_files.length
-            ? `<div class="gallery-files">${c.code_files.map(f => `<span class="gallery-file-chip">${escHtml(f)}</span>`).join('')}</div>`
-            : ''}
+          <a class="gallery-task" href="/run/${ts}" title="Open the run page">${escHtml(c.task)}</a>
+          ${c.preview ? `<div class="gallery-code">
+              <div class="gallery-code-head mono">final output · first 300 characters</div>
+              <pre class="gallery-code-body">${escHtml(c.preview)}</pre>
+            </div>` : ''}
+          ${files.length ? `<div class="gallery-files">${files.map(f => `<span class="gallery-file-chip mono">${escHtml(f)}</span>`).join('')}</div>` : ''}
           <div class="gallery-actions">
-            <a class="gallery-btn open" href="/run/${ts}">Open run</a>
-            <button type="button" class="gallery-btn" data-fork="${escHtml(c.task)}"
-                    data-project="${escHtml(c.project_id || '')}">Fork &amp; continue</button>
-            <button type="button" class="gallery-btn share" data-share="${escHtml(c.timestamp)}"
-                    title="Copy a link to this run">Share &#x2197;</button>
+            <button type="button" class="btn-quiet gallery-fork" data-fork="${escHtml(c.task)}"
+                    data-project="${escHtml(c.project_id || '')}" title="Put this task back in the composer, in its project">Fork &amp; continue</button>
+            <a class="ov-link gallery-out" href="/run/${ts}" data-run-row="${escHtml(c.timestamp)}" title="Open the run that produced this">output</a>
+            <button type="button" class="ov-link" data-share="${escHtml(c.timestamp)}"
+                    title="Copy a link to this run's page">share</button>
           </div>
-        </div>`;
+        </article>`;
     }).join('');
   } catch (e) {}
 }
@@ -1673,8 +2759,9 @@ const _TEMPLATES = [
 function renderTemplates() {
   const el = $('task-templates');
   if (!el) return;
-  el.innerHTML = '<span class="template-label">Try:</span>' + _TEMPLATES.map(t =>
-    `<button type="button" class="template-chip" data-template="${escHtml(t)}">${escHtml(t)}</button>`
+  el.innerHTML = _TEMPLATES.map(t =>
+    `<button type="button" class="template-chip" data-template="${escHtml(t)}"
+             title="Put this suggestion in the composer">${escHtml(t)}</button>`
   ).join('');
 }
 
@@ -1733,6 +2820,105 @@ $('statuspill').addEventListener('click', toggleStatusBar);
 $('statusbar-collapse').addEventListener('click', toggleStatusBar);
 
 $('nav-toggle').addEventListener('click', toggleNav);
+$('rail-toggle').addEventListener('click', toggleNav);
+document.querySelectorAll('[data-zoom]').forEach(b =>
+  b.addEventListener('click', () => zoomNodeMap(b.dataset.zoom)));
+document.querySelectorAll('[data-nodemap-scale]').forEach(b =>
+  b.addEventListener('click', () => setNodemapScale(b.dataset.nodemapScale)));
+(function wireNodeMap() {
+  const stage = $('nodemap-stage');
+  if (!stage) return;
+  stage.addEventListener('mouseover', (e) => {
+    const t = e.target.closest('[data-pick]');
+    if (t && !_nodemapPinned) paintNodePick(t.dataset.pick);
+  });
+  stage.addEventListener('mouseleave', () => { if (!_nodemapPinned) paintNodePick(null); });
+  // A line or a ground pins its panel on click; a machine is a link to its page.
+  stage.addEventListener('click', (e) => {
+    const t = e.target.closest('[data-pick]');
+    if (t && !t.closest('a')) { _nodemapPinned = t.dataset.pick; paintNodePick(_nodemapPinned); }
+  });
+  $('nodemap-pick').addEventListener('click', (e) => {
+    if (e.target.closest('[data-nodemap-unpin]')) { _nodemapPinned = null; paintNodePick(null); }
+  });
+  // Drag to pan once zoomed in.
+  let drag = null;
+  stage.addEventListener('mousedown', (e) => { if (e.button === 0 && !e.target.closest('a')) drag = {x: e.clientX, y: e.clientY, p: {..._nodemapPan}}; });
+  window.addEventListener('mousemove', (e) => {
+    if (!drag) return;
+    _nodemapPan = {x: drag.p.x + e.clientX - drag.x, y: drag.p.y + e.clientY - drag.y};
+    paintNodeMap();
+  });
+  window.addEventListener('mouseup', () => { drag = null; });
+})();
+document.querySelectorAll('[data-runs-tab]').forEach(b =>
+  b.addEventListener('click', () => showRunsTab(b.dataset.runsTab)));
+document.querySelectorAll('[data-runs-filter]').forEach(b =>
+  b.addEventListener('click', () => { runsFilter = b.dataset.runsFilter; renderRuns(); }));
+document.querySelectorAll('[data-runs-sort]').forEach(b =>
+  b.addEventListener('click', () => {
+    const k = b.dataset.runsSort;
+    runsSort = runsSort.k === k
+      ? {k, dir: runsSort.dir === 'desc' ? 'asc' : 'desc'}
+      // Task and mode read A to Z; verdict reads worst first; counts and time
+      // read biggest and newest first.
+      : {k, dir: (k === 'task' || k === 'mode' || k === 'verdict') ? 'asc' : 'desc'};
+    renderRuns();
+  }));
+$('runs-clear').addEventListener('click', () => {
+  runsFilter = 'all';
+  const q = $('history-search');
+  if (q.value) { q.value = ''; loadHistory(); } else renderRuns();
+});
+// A plain click opens the run in the console; a modified click still opens
+// the run's own page, because the row is a real link to it.
+['projects-list', 'gallery-grid'].forEach(id => $(id).addEventListener('click', (e) => {
+  const row = e.target.closest('[data-run-row]');
+  if (!row || e.ctrlKey || e.metaKey || e.shiftKey || e.button !== 0) return;
+  e.preventDefault();
+  viewRun(row.dataset.runRow);
+}));
+$('history-list').addEventListener('click', (e) => {
+  const row = e.target.closest('[data-run-row]');
+  if (!row || e.ctrlKey || e.metaKey || e.shiftKey || e.button !== 0) return;
+  e.preventDefault();
+  viewRun(row.dataset.runRow);
+});
+document.querySelectorAll('.ov-strategy [data-strategy]').forEach(b =>
+  b.addEventListener('click', () => setStrategy(b.dataset.strategy)));
+document.querySelectorAll('.ov-tab').forEach(b =>
+  b.addEventListener('click', () => showOvTab(b.dataset.ovtab)));
+$('ov-window-min').addEventListener('click', toggleOvWindow);
+document.addEventListener('click', (e) => {
+  const run = e.target.closest('[data-run]');
+  if (run) { viewRun(run.dataset.run); return; }
+  const turn = e.target.closest('[data-scroll-turn]');
+  if (turn) {
+    const el = $(`pipeline-${turn.dataset.scrollTurn}`);
+    if (el) el.scrollIntoView({block: 'start', behavior: 'smooth'});
+  }
+});
+$('ident-toggle').addEventListener('click', () => setIdentMenu($('ident-menu').hidden));
+$('ident-scrim').addEventListener('click', () => setIdentMenu(false));
+// Every item navigates and closes in one step, so none leaves the menu open
+// behind a view change (§18.3).
+$('ident-menu').addEventListener('click', (e) => {
+  if (e.target.closest('.ident-item, .global-link')) setIdentMenu(false);
+});
+$('statusbar-age').addEventListener('click', () => setStatusDrawer($('statusbar-drawer').hidden));
+$('palette-open').addEventListener('click', openPalette);
+$('palette').addEventListener('click', (e) => {
+  const cmd = e.target.closest('[data-palette]');
+  if (cmd) { runPalette(Number(cmd.dataset.palette)); return; }
+  if (e.target === $('palette')) closePalette();
+});
+$('palette-input').addEventListener('input', () => { _paletteActive = 0; renderPalette(); });
+$('palette-input').addEventListener('keydown', (e) => {
+  const n = paletteMatches().length;
+  if (e.key === 'ArrowDown') { e.preventDefault(); _paletteActive = Math.min(n - 1, _paletteActive + 1); renderPalette(); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); _paletteActive = Math.max(0, _paletteActive - 1); renderPalette(); }
+  else if (e.key === 'Enter') { e.preventDefault(); runPalette(_paletteActive); }
+});
 $('theme-toggle').addEventListener('click', toggleTheme);
 $('focus-pitch').addEventListener('click', focusPitch);
 $('pitch-btn').addEventListener('click', pitchTask);
@@ -1750,7 +2936,14 @@ $('history-search').addEventListener('input', () => {
 });
 
 document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
+    e.preventDefault();
+    if ($('palette').hidden) openPalette(); else closePalette();
+    return;
+  }
   if (e.key !== 'Escape') return;
+  if (!$('palette').hidden) { closePalette(); return; }
+  if (!$('ident-menu').hidden) { setIdentMenu(false); $('ident-toggle').focus(); return; }
   if (anyModalOpen()) { closeModal('output-modal'); closeModal('node-modal'); return; }
   if ($('app').classList.contains('nav-open')) closeDrawer();
 });
@@ -1764,6 +2957,9 @@ window.matchMedia(DRAWER_QUERY).addEventListener?.('change', (e) => {
 // ── Start ────────────────────────────────────────────────────────
 renderTemplates();
 wireLockedScreen();
+$('main').classList.add('is-bleed');
+paintRunPanel();
+paintOvTabs();
 
 // Restore the view from the URL. #run=<ts> opens a run; #gallery selects a
 // view. Before this, reloading on #gallery silently landed on Overview.
@@ -1789,9 +2985,8 @@ connectWebSocket();
 pollStatus();
 pollOperator();
 refresh();
-loadHistory();
+loadHistory().then(loadProjects);
 loadStandings();
-loadProjects();
 
 setInterval(pollStatus, STATUS_POLL_MS);
 setInterval(pollOperator, OPERATOR_POLL_MS);

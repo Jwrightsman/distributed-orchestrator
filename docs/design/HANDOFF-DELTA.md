@@ -960,3 +960,166 @@ sans section labels and 10px corners, but every sentence in it is the one
 §11.2 corrects. Those two style changes belong to the shell pass (that
 handoff's §15.1–15.2), which moves every view's panel labels at once. They are
 left for that pass so this view matches its neighbours until then.
+
+---
+
+## 12. The Sept 18 theme — ported, with six repairs
+
+The Sept 18 handoff (`docs/design/console-2026-09-18/`) says to copy
+`spec/_theme.html` over `templates/_theme.html` as-is. That would have broken
+every page, as the Aug 28 file did (§4.4). `templates/_theme.html` is that file
+with six repairs, each named in its header. The palette, radii, lift, keyframes
+and element rules are the handoff's, and so is every colour value but one.
+
+### 12.1 The repairs
+
+| # | As received | Why it could not ship | Now |
+|---|---|---|---|
+| 1 | Line 2 names the marker as `` `<!-- THEME -->` `` inside the header comment | The same fault as §4.4, reintroduced: HTML comments do not nest, so about forty lines of designer notes rendered as text at the top of every page | "at the THEME marker comment" |
+| 2 | The light block has no `color-scheme` | Scrollbars, form controls and the date picker stay dark on a light page | `color-scheme: light` |
+| 3 | Mono stack `…, Menlo, monospace` | On Windows, without Plex, that falls through to Courier New | The previous stack's `'SF Mono'`, `'Cascadia Code'` and `Consolas` kept, and the sans stack's `Roboto, system-ui` |
+| 4 | The floating theme-switch script is gone | Pages without their own switch (`/status`, `/try`, the landing page) lose any way to change theme | Kept verbatim from the previous file |
+| 5 | `--accent-text: var(--accent)` in both themes | The previous light theme gave text a darker green, `#12692E`. Without it every green label on the accent wash is 4.44:1: the landing page's step numbers and the dashboard's Pitch button | Light block sets `--accent-text: var(--accent-strong)`, which is `#12692E` in the new palette too. No new colour |
+| 6 | Light `--text-faint: #74757A` | 4.21:1 on `--surface` and 4.40:1 on `--bg`, under a header that promises 4.5:1 on both | `#6F7075`: the smallest darkening on the same hue that clears every ground (4.53:1 on `--surface`), and still lighter than `--text-muted` |
+
+Repair 6 is the one colour value changed. `tests/test_theme.py` now computes
+the promise itself: `--text-muted` and `--text-faint` against `--bg`,
+`--surface` and `--bg-elevated`, in both themes. Against the file as received
+it fails on exactly the two light-theme pairs above and passes the other ten.
+
+Separately, `/try`'s INVITE ONLY badge set warning *fill* colour as text:
+4.40:1 in dark on master, 3.74:1 on the lighter Sept 18 surface. It uses
+`--warn-text` now.
+
+### 12.2 The element rules were measured, not assumed
+
+The new file adds page-wide rules the old one did not carry: `body`
+(13.5px, tabular figures), `a`, `a:hover`, form-control font inheritance,
+`::placeholder`, `:focus-visible`, `::selection` and the scrollbar. Every page
+has its own reset and `body` rule, but none of them sets a font size. So on
+`/`, `/try`, `/status` and `/dashboard`, in both themes, every element's
+computed style was recorded with the theme's element rules in place and again
+with them deleted from the live stylesheet:
+
+- **No visible text changes size.** 13.5px reaches containers only. Every
+  element that holds text sets its own size, except a screen-reader-only label.
+- The brand links (`a.brand`, `a.nav-brand`) were the browser's default link
+  blue on master, and the console's icon buttons were Arial. `a { color }` and
+  the form-control inheritance fix both. `a.btn-quiet` loses an underline it was
+  never meant to have.
+- The 2.5px shift in centred columns is the new 10px scrollbar.
+
+### 12.3 Contrast, measured on the served pages
+
+Every visible text element was measured against its composited ground: 1,994
+elements across `/`, `/try`, `/status` and all eight console views, at 1280px,
+in both themes. The theme was set before load, because a colour transition on
+a switched page does not advance in a hidden frame, and the first pass read
+half-transitioned colours as failures on master too.
+
+| | failing | lowest |
+|---|---|---|
+| master | 3 (the INVITE ONLY badge in both themes, the Nodes "MAP" label in light) | 3.85:1 |
+| as received | 6 (repairs 5 and 6, the badge, and the Nodes points footnote) | 3.74:1 |
+| as shipped | **0** | 4.78:1 dark, 4.53:1 light |
+
+There is no sideways scroll at 375px on any page, no leaked comment text, a
+theme switch on every page, and `color-scheme` follows the theme.
+
+### 12.4 Not done here
+
+The shell (the handoff's §15–18: sans section labels, collapsed rail,
+full-bleed Overview, status bar), the node map (§16.6, §19) and the
+per-view restyles. The new radius tokens (8 / 6 / 10 / 16px) move every panel
+that reads `var(--radius*)`; markup with a radius written into it (for
+example `rd-panel`, 5px) moves with its view's port.
+
+---
+
+## 13. The Sept 18 redesign — what was ported, and where it departs
+
+> **Subject:** [`docs/design/console-2026-09-18/`](console-2026-09-18/), a
+> whole-console design received 2026-09-18 and archived unchanged. §12 covers
+> its theme; this section covers everything built on top of that theme.
+
+The design is a set of `.dc.html` component files plus a spec. It is a picture
+of a console, drawn without access to the running server, so it states things
+about this repo that are not true and shows numbers no route returns. It was
+treated the way §0 says to treat a handoff: **non-normative**. Every figure on
+every ported surface now comes from a route, or is labelled as not coming from
+one.
+
+### 13.1 What landed, in order
+
+| Commit | Surface |
+|---|---|
+| `494afa9` | The theme, with the six repairs §12 records |
+| `962373b` | The shell: rail, identity block, contextual topbar, command palette, status bar |
+| `5c81f12` | Overview — the thread, the step timeline, the floating pitch window |
+| `07ee186` | Runs — the hairline table, grouped by day |
+| `f6c4c26` | Nodes — the stats line, the live map, the machine rows |
+| `826cfb1` | Gallery, Projects, Guild |
+| `c532529` | Evals, Config, Connect, run detail |
+| `14184fe` | Evidence — a view the design adds, fed from the operator route |
+| `2c704c6` | The landing page |
+| `690f304` | The Try page, and the share card at `/s/{token}` |
+| `fffbd04` | `/status` and each machine's page |
+| `f9b180e` | The run page's header |
+| `af42c09` | The map's two drawn scales |
+
+### 13.2 Design claims about this repo that are false, and what replaced them
+
+These are the ones worth recording, because each was drawn as a confident fact
+and each would have shipped as one.
+
+| The design says | This repo | What shipped |
+|---|---|---|
+| The circuit breaker holds `/work` at 429 for **45s** | `server_state._BLACKLIST_DURATION = 60`, on `/tasks/next` | "three consecutive failures, so `/tasks/next` answers 429 for 60s" — and `tests/test_node_map.py` now reads both constants |
+| The planner produces **3-5 subtasks** | `prompts/v2.py` *asks* for 3-5; the model may return fewer | "the planner is asked for 3-5 subtasks" — a ceiling, never a count |
+| A quality figure (`~57%`) on the landing page | Nothing measures it | Withdrawn everywhere. Counts, not rates, below the evidence sample floor |
+| `/status` answers "without a sign-in" | It sits behind the viewer key; only `/status.json` is public | The sentence is gone; the page says which of the two is public |
+| Nodes' empty state offers an `http://` join | The edge refuses it | The installer command, and `node.py --server` |
+| A "built" claim on unchecked runs | Assurance is one of five labels | The recent strip takes its verdict from the same derivation as everywhere else |
+
+### 13.3 Deviations from the design, and why
+
+* **The WALL column stays dropped** (§8.1). The design restores it; no route
+  returns wall time per stage that is not the animation clock.
+* **Chips count loaded runs, not totals.** The design's chips read as network
+  totals. `/history` is paged, so they would be wrong the moment a page did not
+  hold everything. They are labelled as loaded.
+* **One derivation, many indicators** (§12.1, §17.2). The design paints verdict,
+  lamp and chip from three different places. They now all read one function, and
+  `tests/test_theme.py` fails a second one.
+* **Points, not credits**, throughout — and no drawn surface carries either.
+* **The map's drawn scales are labelled drawn**, in five places: the switcher,
+  the head, a DATA row on every panel, a dashed outline on every drawn bubble,
+  and the caption in the warning colour. The design labels them once.
+* **The swarm scale draws a federation this repo does not have**, and says so in
+  its own caption rather than leaving it to be inferred from the shape.
+* **No drawn bubble links to `/node/{id}`.** A drawn machine has no page; a link
+  to one would 404 at best.
+
+### 13.4 Measured, not eyeballed
+
+Every ported surface was measured in the browser rather than looked at: contrast
+against the composited ground, `scrollWidth` against the viewport, and the set
+of elements escaping it, per theme, per width (1280 and 375). The harness and
+its two traps are in §12.3 — a hidden frame freezes a colour transition, and a
+fixed element looks guilty in an overflow report until you hide it and re-measure.
+
+Label collision on the map is measured the same way: in screen pixels after pan
+and zoom, against both the names already placed and the bubbles themselves.
+
+### 13.5 Not done here
+
+Two of the bundle's six design files describe surfaces the console does not
+have: `Ledger Chain.dc.html` and `Provenance Envelope.dc.html`. Both back onto
+routes that exist and return JSON — `/v1/operator/ledger-chain` and
+`/v1/executions/{id}/provenance` — but neither has a page in the console, and
+adding one is a view, not a restyle. `Run Detail Surface.dc.html` is a second
+drawing of the run page, kept for reference; `f9b180e` ports its header only.
+
+The design's own hardcoded figures are not ported anywhere. `support.js` in both
+folders is the design tool's React runtime, not data, and nothing in it runs
+here.

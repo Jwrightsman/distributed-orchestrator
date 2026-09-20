@@ -47,7 +47,8 @@ SHARE_SECURITY_HEADERS = {
     "Referrer-Policy": "no-referrer",
     "X-Content-Type-Options": "nosniff",
 }
-_SHARE_TOKEN_PATH = re.compile(r"(/v1/shares/)[^/?#]+")
+# Both forms of the capability: the JSON route and the human share card.
+_SHARE_TOKEN_PATH = re.compile(r"(/v1/shares/|^/s/)[^/?#]+")
 
 
 class _StrictModel(BaseModel):

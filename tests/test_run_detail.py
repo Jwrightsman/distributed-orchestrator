@@ -1108,31 +1108,34 @@ def test_every_state_survives_greyscale():
 def test_overview_and_the_status_bar_never_put_one_word_over_two_numbers(client):
     """The archived handoff had Overview read "running now" and "queued" off
     `/health`. It has no running count at all, and its `tasks_pending` is the
-    *subtask* queue rather than the job queue — so ported as written, one
+    *subtask* queue rather than the job queue -- so ported as written, one
     screen would have carried QUEUED over two different numbers with no way
     for a reader to tell which one was the queue they meant.
 
-    RUNNING and QUEUED are the status bar's, both from `/metrics`, and there
-    is exactly one of each on the page. Overview's cell is named after the
-    number it actually holds.
+    The Sept 18 design puts "running now" and "queued" on Overview's vital
+    line again, and that is sound only because they are the bar's own numbers:
+    one derivation, painted in two places (HANDOFF-UI section 17.2). So the
+    rule is now that each word on the vital line is painted from the very value
+    its bar cell is, and the subtask queue appears under no queue word at all.
     """
     page = dashboard._page("dashboard.html")
     body = page[page.index("<body"):]
-    labels = re.findall(r'class="stat-label">([^<]*)<', body)
     cells = re.findall(r'class="statusbar-k">([^<]*)<', body)
+    vitals = re.findall(r'class="ov-vital-k">([^<]*)<', body)
+    js = (Path(dashboard.__file__).parent / "templates" / "_dashboard.js").read_text(encoding="utf-8")
 
-    assert "Subtasks pending" in labels, (
-        "Overview's subtask queue is not named after the number it holds"
-    )
-    assert "Tasks pending" not in labels, (
-        "a cell called 'Tasks pending' beside a bar cell called QUEUED is two "
-        "labels a reader takes for one thing, over two different numbers"
-    )
     for word in ("RUNNING", "QUEUED"):
-        assert cells.count(word) == 1, f"{word} appears {cells.count(word)} times"
-        assert not any(word.lower() in label.lower() for label in labels), (
-            f"Overview also carries {word}, so the page has two of them"
+        assert cells.count(word) == 1, f"{word} appears {cells.count(word)} times in the bar"
+    assert "running now" in vitals and "queued" in vitals, vitals
+    for cell, vital in (("running", "vital-running"), ("queued", "vital-queued")):
+        assert f"paintCell('cell-{cell}', 'cell-{cell}-v'," in js
+        assert re.search(rf"paintVital\('{vital}', cellState\('{cell}', served\), statusText\.{cell},", js), (
+            f"Overview's {cell} is not painted from the value its bar cell reads"
         )
+    assert "tasks_pending" not in js.split("function paintVital")[0].split("function renderStatus")[-1], (
+        "the subtask queue is back on the vital line"
+    )
+    assert "Subtasks pending" not in body and "Tasks pending" not in body
 
 
 def test_running_and_queued_come_from_the_same_source_as_the_status_bar():

@@ -53,49 +53,117 @@
 <div class="shell">
 <div class="app" id="app">
   <aside class="nav" id="nav">
-    <a class="nav-brand" href="/" title="Mycelium home">
-      <span class="nav-mark" aria-hidden="true"></span>
-      <span class="nav-label nav-brand-name">Mycelium</span>
-    </a>
+    <div class="nav-head">
+      <a class="nav-brand" href="/" title="Mycelium home — the public landing page">
+        <span class="nav-mark" aria-hidden="true"></span>
+        <span class="nav-label nav-brand-name">MYCELIUM</span>
+      </a>
+      <button class="nav-rail-toggle" id="rail-toggle" type="button" aria-controls="nav"
+              aria-expanded="false" title="Expand the rail" aria-label="Expand the rail">&raquo;</button>
+    </div>
     <nav class="nav-items" id="nav-items" aria-label="Dashboard sections">
-      <button class="nav-item" id="tab-overview" type="button" data-tab="overview" aria-current="page" title="Overview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 13h5v8H3zM10 3h5v18h-5zM17 9h4v12h-4z"/></svg><span class="nav-label">Overview</span></button>
-      <button class="nav-item" id="tab-runs" type="button" data-tab="runs" title="Runs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8v4l3 2"/><circle cx="12" cy="12" r="9"/></svg><span class="nav-label">Runs</span></button>
-      <button class="nav-item" id="tab-gallery" type="button" data-tab="gallery" title="Gallery"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span class="nav-label">Gallery</span></button>
-      <button class="nav-item" id="tab-nodes" type="button" data-tab="nodes" title="Nodes"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="18" r="2.2"/><path d="M10.5 6.8 6.5 15.8M13.5 6.8l4 9M7.4 18h9.2"/></svg><span class="nav-label">Nodes</span><span class="nav-badge" id="nav-node-count" hidden></span></button>
-      <button class="nav-item" id="tab-projects" type="button" data-tab="projects" title="Projects"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span class="nav-label">Projects</span></button>
-      <button class="nav-item" id="tab-guild" type="button" data-tab="guild" title="Guild"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l2.6 5.6 6.4.8-4.7 4.3 1.2 6.3L12 17l-5.5 3 1.2-6.3L3 9.4l6.4-.8z"/></svg><span class="nav-label">Guild</span></button>
-      <button class="nav-item" id="tab-evals" type="button" data-tab="evals" title="Evals"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 3h6M10 3v6.5L4.6 18.3A1.8 1.8 0 0 0 6.2 21h11.6a1.8 1.8 0 0 0 1.6-2.7L14 9.5V3M7.5 14h9"/></svg><span class="nav-label">Evals</span></button>
-      <button class="nav-item" id="tab-invite" type="button" data-tab="invite" title="Connect"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="6" width="18" height="12.6" rx="1.8"/><path d="M3.9 7.5 12 13.2l8.1-5.7"/></svg><span class="nav-label">Connect</span></button>
-      <button class="nav-item" id="tab-config" type="button" data-tab="config" title="Config"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></svg><span class="nav-label">Config</span></button>
+      <div class="nav-section" aria-hidden="true">MONITOR</div>
+      <button class="nav-item" id="tab-overview" type="button" data-tab="overview" aria-current="page" title="Overview — pitch work and watch the machines answer" aria-label="Overview"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><path d="M2 9.5h3.2v4.2H2zM6.4 2.3h3.2v11.4H6.4zM10.8 6.3H14v7.4h-3.2z"/></svg><span class="nav-label">Overview</span></button>
+      <button class="nav-item" id="tab-runs" type="button" data-tab="runs" title="Runs — every pipeline this orchestrator has completed" aria-label="Runs"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 5v3.2l2 1.3"/></svg><span class="nav-label">Runs</span><span class="nav-count" id="nav-runs-count" hidden></span></button>
+      <button class="nav-item" id="tab-nodes" type="button" data-tab="nodes" title="Nodes — machines offering compute, and the work moving between them" aria-label="Nodes"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="3.4" r="1.6"/><circle cx="3.2" cy="12.4" r="1.6"/><circle cx="12.8" cy="12.4" r="1.6"/><path d="M6.9 4.7 4.3 10.9M9.1 4.7l2.6 6.2M4.9 12.4h6.2"/></svg><span class="nav-label">Nodes</span><span class="nav-count" id="nav-node-wrap" hidden><i class="nav-lamp" id="nav-node-lamp"></i><span id="nav-node-count"></span></span></button>
+      <div class="nav-section" aria-hidden="true">LIBRARY</div>
+      <button class="nav-item" id="tab-gallery" type="button" data-tab="gallery" title="Gallery — the code past runs produced" aria-label="Gallery"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><rect x="2.2" y="2.2" width="4.8" height="4.8" rx="1"/><rect x="9" y="2.2" width="4.8" height="4.8" rx="1"/><rect x="2.2" y="9" width="4.8" height="4.8" rx="1"/><rect x="9" y="9" width="4.8" height="4.8" rx="1"/></svg><span class="nav-label">Gallery</span></button>
+      <button class="nav-item" id="tab-projects" type="button" data-tab="projects" title="Projects — runs that iterate on each other" aria-label="Projects"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><path d="M2 4.6a1.4 1.4 0 0 1 1.4-1.4h2.8l1.4 1.4h5A1.4 1.4 0 0 1 14 6v5.4a1.4 1.4 0 0 1-1.4 1.4H3.4A1.4 1.4 0 0 1 2 11.4z"/></svg><span class="nav-label">Projects</span><span class="nav-count" id="nav-project-count" hidden></span></button>
+      <button class="nav-item" id="tab-guild" type="button" data-tab="guild" title="Guild standings — points earned per machine" aria-label="Guild"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><path stroke-linejoin="round" d="M8 2.4l1.7 3.7 4.1.5-3 2.8.8 4.1L8 11.5l-3.6 2 .8-4.1-3-2.8 4.1-.5z"/></svg><span class="nav-label">Guild</span></button>
+      <div class="nav-section" aria-hidden="true">QUALITY</div>
+      <button class="nav-item" id="tab-evals" type="button" data-tab="evals" title="Output quality — what the eval harness recorded" aria-label="Evals"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><path d="M2.4 13.2h11.2M4.2 13.2V8.4M7.4 13.2V4.6M10.6 13.2V9.8M13 13.2V6.8"/></svg><span class="nav-label">Evals</span></button>
+      <button class="nav-item" id="tab-evidence" type="button" data-tab="evidence" title="Observed evidence — shadow only, nothing routed" aria-label="Evidence"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><path d="M2.4 13.4h11.2"/><circle cx="4.6" cy="10.4" r="1.3"/><circle cx="8" cy="6.6" r="1.3"/><circle cx="11.6" cy="9" r="1.3"/></svg><span class="nav-label">Evidence</span><span class="nav-count" id="nav-evidence-mode" hidden></span></button>
+      <div class="nav-section" aria-hidden="true">SYSTEM</div>
+      <button class="nav-item" id="tab-invite" type="button" data-tab="invite" title="Connect — how a machine joins, and how an app asks for work" aria-label="Connect"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><rect x="2" y="4" width="12" height="8.4" rx="1.2"/><path d="M2.6 5 8 8.8 13.4 5"/></svg><span class="nav-label">Connect</span></button>
+      <button class="nav-item" id="tab-config" type="button" data-tab="config" title="Configuration — what this coordinator is running with" aria-label="Config"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><path d="M2.4 4.6h11.2M2.4 8h11.2M2.4 11.4h11.2"/></svg><span class="nav-label">Config</span><i class="nav-warn-dot" id="nav-config-dot" hidden title="A key is off"></i></button>
     </nav>
+
+    <!-- The machine identity block. Shaped like the account menu chat apps put
+         in this corner, but Mycelium has no accounts, so it shows the only
+         identity there is: this coordinator. Nothing here is asserted that the
+         repo cannot back -- there is no release feed, so it names the version
+         and never says "up to date". HANDOFF-UI section 18. -->
+    <div class="ident" id="ident">
+      <button class="ident-scrim" id="ident-scrim" type="button" aria-label="Close this menu"
+              title="Close this menu" hidden></button>
+      <div class="ident-menu" id="ident-menu" role="menu" hidden>
+        <div class="ident-menu-head">
+          <div class="ident-menu-name" id="ident-menu-name">this coordinator</div>
+          <div class="ident-menu-origin" id="ident-origin"></div>
+          <p class="ident-menu-note">Mycelium has no accounts. This is the coordinator you are
+            reading, named by the id it records contributions under.</p>
+        </div>
+        <div class="ident-version">
+          <i class="ident-version-dot" aria-hidden="true"></i>
+          <span>
+            <span class="ident-version-title">Version <span class="mono"><!--SLOT:SERVER_VERSION--></span></span>
+            <span class="ident-version-note">Workers declare a protocol version and are refused
+              outside this coordinator's window, so when both need updating, update the
+              coordinator first.</span>
+          </span>
+        </div>
+        <div class="ident-items">
+          <button class="ident-item" type="button" role="menuitem" data-tab="config"
+                  title="Everything this coordinator is running with, as config.json holds it">
+            <span class="ident-icon" aria-hidden="true">&#9881;</span><span class="ident-label">Settings</span>
+            <span class="ident-meta">config.json</span></button>
+          <button class="ident-item" type="button" role="menuitem" data-tab="invite"
+                  title="<!--SLOT:IDENT_INVITE_TITLE-->">
+            <span class="ident-icon" aria-hidden="true">+</span><span class="ident-label">Invite a machine</span>
+            <span class="ident-meta<!--SLOT:IDENT_ENROLL_TONE-->"><!--SLOT:IDENT_ENROLL_META--></span></button>
+          <button class="ident-item" type="button" role="menuitem" data-tab="config"
+                  title="<!--SLOT:IDENT_VIEWER_TITLE-->">
+            <span class="ident-icon" aria-hidden="true">&#9678;</span><span class="ident-label">Viewer key</span>
+            <span class="ident-meta<!--SLOT:IDENT_VIEWER_TONE-->"><!--SLOT:IDENT_VIEWER_META--></span></button>
+          <button class="ident-item" type="button" role="menuitem" data-tab="guild"
+                  title="Points this coordinator has earned, from the contribution ledger">
+            <span class="ident-icon" aria-hidden="true">&#9733;</span><span class="ident-label">Points earned</span>
+            <span class="ident-meta" id="ident-points">&mdash;</span></button>
+          <button class="ident-item theme-toggle" id="theme-toggle" type="button" role="menuitem"
+                  title="Switch between light and dark" aria-label="Switch colour theme">
+            <span class="ident-icon" id="theme-toggle-icon" aria-hidden="true"></span><span class="ident-label">Appearance</span>
+            <span class="ident-meta" id="theme-toggle-label"></span></button>
+        </div>
+        <div class="ident-pages">
+          <div class="ident-pages-head">PUBLIC PAGES</div>
+          <nav class="ident-pages-links" aria-label="Site">
+            <a class="global-link" href="/" title="The public landing page">landing &#8599;</a>
+            <a class="global-link" href="/try" title="The public pitch page — one attempt, on this machine">try &#8599;</a>
+            <a class="global-link" href="/status" title="This coordinator's status page — counts only">status &#8599;</a>
+          </nav>
+        </div>
+      </div>
+
+      <button class="ident-trigger" id="ident-toggle" type="button" aria-expanded="false"
+              aria-controls="ident-menu" title="This coordinator, settings and version">
+        <span class="ident-avatar" id="ident-initials" aria-hidden="true">&middot;</span>
+        <span class="ident-text">
+          <span class="ident-name" id="credit-host">this coordinator</span>
+          <span class="ident-sub">v<!--SLOT:SERVER_VERSION--></span>
+        </span>
+        <span class="ident-chev" id="ident-chev" aria-hidden="true">&#8963;</span>
+      </button>
+    </div>
   </aside>
 
   <div class="app-body">
     <header class="topbar">
-      <button class="icon-btn" id="nav-toggle" type="button" aria-label="Toggle sidebar"
-              aria-controls="nav" aria-expanded="false" title="Toggle sidebar">
+      <button class="icon-btn" id="nav-toggle" type="button" aria-label="Open navigation"
+              aria-controls="nav" aria-expanded="false" title="Open navigation">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
       </button>
-      <h1 class="topbar-title" id="view-title">Overview</h1>
-
-      <!-- Global context: where this page sits in the rest of the site. The
-           sidebar handles in-app sections; these two links are the way out. -->
-      <nav class="global-nav" aria-label="Site">
-        <a class="global-link" href="/">Home</a>
-        <a class="global-link is-secondary" href="/try">Try it</a>
-        <a class="global-link is-secondary" href="/status">Status</a>
-      </nav>
+      <div class="topbar-head">
+        <h1 class="topbar-title" id="view-title">Overview</h1>
+        <p class="topbar-sub" id="view-sub">Pitch work, and watch the machines answer</p>
+      </div>
 
       <div class="topbar-actions">
         <span class="credit-chip" id="credit-chip" title="Contribution points earned by this orchestrator for pitches, local builds and reviews">
-          <span id="credit-host">—</span><span class="credit-sep" aria-hidden="true">·</span><span id="credit-value">0</span> points
+          <span class="credit-k">points</span><span id="credit-value">0</span>
         </span>
-        <button class="btn-primary" id="focus-pitch" type="button">Pitch a task</button>
-        <button class="theme-toggle" id="theme-toggle" type="button"
-                title="Switch between light and dark" aria-label="Switch colour theme">
-          <span id="theme-toggle-icon" aria-hidden="true"></span>
-          <span id="theme-toggle-label"></span>
-        </button>
+        <button class="palette-btn" id="palette-open" type="button"
+                title="Command palette — jump to any view (Ctrl+K)" aria-label="Open the command palette">&#8984;K</button>
+        <button class="btn-primary" id="focus-pitch" type="button" title="Go to Overview and pitch a task">Pitch a task</button>
       </div>
     </header>
 
@@ -118,170 +186,365 @@
     <main class="content" id="main" tabindex="-1">
 
       <!-- ── OVERVIEW ── -->
-      <section id="view-overview" aria-labelledby="tab-overview">
+      <!-- ── OVERVIEW ──
+           Full-bleed (§15.5): a vital line across the top, the thread filling
+           the middle, and a floating window on the right that shows one panel at
+           a time. The thread is the page; the numbers are a quiet line above it.
+
+           The four vitals read the same derived state as the status bar
+           (renderStatus paints both), so the line and the bar cannot disagree
+           (§17.2, "one derivation, three indicators"). -->
+      <section id="view-overview" class="ov" aria-labelledby="tab-overview">
         <h2 class="sr-only">Overview</h2>
 
-        <div class="stats-bar">
-          <div class="stat">
-            <span class="stat-value" id="stat-nodes">0</span>
-            <span class="stat-label">Nodes online</span>
-          </div>
-          <!-- This is /health.tasks_pending, the SUBTASK queue. The status bar
-               30px away carries QUEUED, which is /metrics.jobs_queued, the JOB
-               queue -- a different number. Under two labels a reader could take
-               for the same thing, one of them is always wrong, and the reader
-               has no way to tell which. So the cell is named after the number
-               it actually holds. Not both under one word. -->
-          <div class="stat">
-            <span class="stat-value" id="stat-tasks">0</span>
-            <span class="stat-label">Subtasks pending</span>
-          </div>
-          <div class="stat">
-            <span class="stat-value" id="stat-models">-</span>
-            <span class="stat-label">Models available</span>
-          </div>
-          <div class="stat">
-            <span class="stat-status" id="stat-status"><i aria-hidden="true"></i>checking</span>
-            <span class="stat-label">Ollama</span>
-          </div>
-          <div class="stat">
-            <span class="stat-value" id="stat-done">-</span>
-            <span class="stat-label">Tasks done</span>
-          </div>
-          <div class="stat">
-            <span class="stat-value" id="stat-latency">-</span>
-            <span class="stat-label">Avg latency</span>
-          </div>
+        <div class="ov-vitals">
+          <div class="ov-vital" id="vital-nodes"><i class="ov-vital-dot" aria-hidden="true"></i>
+            <span class="ov-vital-v" id="stat-nodes">&mdash;</span><span class="ov-vital-k">machines online</span></div>
+          <div class="ov-vital" id="vital-inference"><i class="ov-vital-dot" aria-hidden="true"></i>
+            <span class="ov-vital-v" id="vital-inference-v">&mdash;</span><span class="ov-vital-k">inference</span></div>
+          <div class="ov-vital" id="vital-running"><i class="ov-vital-dot" aria-hidden="true"></i>
+            <span class="ov-vital-v" id="vital-running-v">&mdash;</span><span class="ov-vital-k">running now</span></div>
+          <div class="ov-vital" id="vital-queued"><i class="ov-vital-dot" aria-hidden="true"></i>
+            <span class="ov-vital-v" id="vital-queued-v">&mdash;</span><span class="ov-vital-k">queued</span></div>
+          <span class="ov-totals">
+            <span><span class="mono" id="stat-done">&mdash;</span> subtasks built all-time</span>
+            <span><span class="mono" id="stat-latency">&mdash;</span> avg per subtask</span>
+            <a class="ov-totals-link" href="#evals" data-tab="evals"
+               title="Output quality — what the eval harness recorded, beside how much of it is chance">output quality &rarr;</a>
+          </span>
         </div>
 
-        <div class="view-head"><h2>Pitch a task</h2><span class="view-sub">Describe what you want built; the planner splits it up</span></div>
+        <div class="ov-body">
+          <section class="ov-thread" aria-label="Thread">
+            <!-- Context: which project this pitch will carry memory from. -->
+            <div class="ov-context" id="project-context">
+              <button class="ov-project-chip" type="button" data-tab="projects"
+                      title="Open Projects — the work a pitch can carry memory from">
+                <i class="ov-project-dot" id="ov-project-dot" aria-hidden="true"></i>
+                <span id="project-context-name">No project</span>
+              </button>
+              <span class="ov-memory" id="ov-memory-note">no memory carried in</span>
+              <button type="button" class="ov-clear" id="clear-project" hidden
+                      title="Stop carrying this project's memory into the next pitch">detach</button>
+            </div>
+            <input type="hidden" id="active-project-id" value="">
 
-        <!-- Project context — shown when "Continue" is clicked on a project -->
-        <div id="project-context" class="project-context" hidden>
-          <span class="project-context-label">Continuing project: <strong id="project-context-name"></strong></span>
-          <button type="button" class="link-btn" id="clear-project">✕ clear</button>
-        </div>
-        <input type="hidden" id="active-project-id" value="">
+            <div class="ov-stream">
+              <div class="ov-col">
+                <div class="ov-empty" id="ov-empty">
+                  <p class="ov-empty-title">What should the machines build?</p>
+                  <p class="ov-empty-body">Describe it in a sentence. With the planning strategy a
+                    planner breaks it into subtasks, connected machines build them in parallel, and a
+                    reviewer assembles the result. The other two strategies generate complete attempts
+                    instead. One machine is enough.</p>
+                </div>
+                <!-- Each pitch is a turn: the ask, then the agent's reply led by the
+                     step timeline (§16.2). Newest last, like any thread. -->
+                <div id="pipeline-log" class="ov-turns" aria-live="polite" aria-label="Runs pitched from this page"></div>
+              </div>
+            </div>
 
-        <div class="pitch-form">
-          <label class="sr-only" for="pitch-input">Describe what you want built</label>
-          <input type="text" class="pitch-input" id="pitch-input"
-                 placeholder="Describe what you want built...">
-          <button class="pitch-btn" id="pitch-btn" type="button">Pitch</button>
-        </div>
+            <div class="ov-composer-wrap">
+              <div class="ov-col">
+                <div class="ov-composer">
+                  <label class="sr-only" for="pitch-input">Describe what you want built</label>
+                  <input type="text" class="pitch-input" id="pitch-input" autocomplete="off"
+                         placeholder="Describe what you want built">
+                  <div class="ov-composer-row">
+                    <div class="ov-strategy" role="radiogroup" aria-label="How to attempt it">
+                      <button type="button" role="radio" aria-checked="true" data-strategy="auto"
+                              title="Let the coordinator choose, conservatively, and record why">auto</button>
+                      <button type="button" role="radio" aria-checked="false" data-strategy="dag"
+                              title="Decompose into subtasks across machines. The only strategy that can use a project">plan &amp; split</button>
+                      <button type="button" role="radio" aria-checked="false" data-strategy="ensemble"
+                              title="Generate candidates for the whole task and pick one. No project memory">several tries</button>
+                      <button type="button" role="radio" aria-checked="false" data-strategy="direct"
+                              title="One attempt, no planning. No project memory">one shot</button>
+                    </div>
+                    <span class="ov-rate" title="The pitch rate limit, per address"><!--SLOT:PITCH_RATE_NOTE--></span>
+                    <button class="pitch-btn" id="pitch-btn" type="button"
+                            title="Send this to the coordinator · POST /pitch/async">Pitch<span class="pitch-key" aria-hidden="true">&#9166;</span></button>
+                  </div>
+                </div>
+                <p class="ov-note" id="ov-strategy-note" hidden></p>
+                <div class="ov-suggest">
+                  <span class="ov-suggest-k">TEMPLATES</span>
+                  <div id="task-templates" class="template-row"></div>
+                </div>
+              </div>
+            </div>
+          </section>
 
-        <div id="task-templates" class="template-row"></div>
-
-        <!-- The live log is the most convincing thing on this page and the least
-             self-explanatory: PLANNER / BUILDER / REVIEWER mean nothing to a
-             visitor. One line of plain language, above the log, is enough to make
-             the rest readable without turning the page into a tutorial. -->
-        <div class="flow" aria-label="What happens to a task">
-          <div class="flow-step"><span class="flow-dot is-pitch" aria-hidden="true"></span>
-            <b>You pitch</b><i>a task in plain English</i></div>
-          <span class="flow-arrow" aria-hidden="true">→</span>
-          <div class="flow-step"><span class="flow-dot is-plan" aria-hidden="true"></span>
-            <b>Planner</b><i>splits it into smaller jobs</i></div>
-          <span class="flow-arrow" aria-hidden="true">→</span>
-          <div class="flow-step"><span class="flow-dot is-build" aria-hidden="true"></span>
-            <b>Builders</b><i>write the pieces, on separate machines</i></div>
-          <span class="flow-arrow" aria-hidden="true">→</span>
-          <div class="flow-step"><span class="flow-dot is-review" aria-hidden="true"></span>
-            <b>Reviewer</b><i>assembles and grades the result</i></div>
-        </div>
-
-        <h2 id="activity-heading">Live activity</h2>
-        <div id="event-log" class="event-log" role="log" aria-live="polite"
-             aria-relevant="additions" aria-labelledby="activity-heading"></div>
-
-        <h2 id="pipeline-heading">Pipeline runs</h2>
-        <div id="pipeline-log" aria-live="polite" aria-labelledby="pipeline-heading">
-          <div class="empty-state">
-            <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l2.5-6 4 12 2.5-6h5"/></svg></div>
-            <p>No active pipelines.<br>Pitch a task above to see agents work.</p>
+          <!-- The floating window (§15.5b): one panel at a time, chosen by tabs in
+               its own title bar. ACTIVITY is the default because it is the live
+               /ws/events feed. The active tab is a preference resolved against
+               what is available, so the window never goes blank. -->
+          <div class="ov-window-wrap">
+            <aside class="ov-window" id="ov-window" aria-label="Live panels">
+              <div class="ov-window-bar" role="tablist" aria-label="Side panel">
+                <i class="ov-window-mark" aria-hidden="true"></i>
+                <button type="button" role="tab" class="ov-tab" data-ovtab="activity" aria-selected="true"
+                        title="The live event stream from this coordinator">ACTIVITY</button>
+                <button type="button" role="tab" class="ov-tab" data-ovtab="swarm" aria-selected="false"
+                        title="The machines connected to this coordinator">SWARM</button>
+                <button type="button" role="tab" class="ov-tab" data-ovtab="run" aria-selected="false"
+                        title="The run pitched from this page, while it runs">RUN</button>
+                <button type="button" role="tab" class="ov-tab" data-ovtab="how" aria-selected="false"
+                        title="How a pitch becomes code">HOW</button>
+                <span class="ov-window-meta" id="ov-window-meta">connecting</span>
+                <button type="button" class="ov-window-min" id="ov-window-min"
+                        title="Shrink the window to its title bar" aria-expanded="true">&ndash;</button>
+              </div>
+              <div class="ov-window-body" id="ov-window-body">
+                <section class="ov-panel" data-ovpanel="activity" role="tabpanel">
+                  <div id="event-log" class="event-log" role="log" aria-live="polite"
+                       aria-relevant="additions" aria-label="Live activity">
+                    <p class="event-empty" id="event-empty">Waiting for the first event. A pitch
+                      shows up here as it moves through the coordinator.</p>
+                  </div>
+                </section>
+                <section class="ov-panel" data-ovpanel="swarm" role="tabpanel" hidden>
+                  <div class="ov-swarm-summary" id="ov-swarm-summary">none connected</div>
+                  <div id="ov-swarm-list"></div>
+                  <div class="ov-lend">
+                    <div class="ov-lend-k">LEND A MACHINE</div>
+                    <p class="ov-lend-body">The installer runs on the machine being added, and asks
+                      its owner before it downloads or writes anything.</p>
+                    <button class="ov-link" type="button" data-tab="invite"
+                            title="How a machine joins, and what it agrees to">how a machine joins &rarr;</button>
+                  </div>
+                  <button class="ov-link ov-link-row" type="button" data-tab="nodes"
+                          title="Open Nodes — every connected machine">all nodes &rarr;</button>
+                </section>
+                <section class="ov-panel" data-ovpanel="run" role="tabpanel" hidden>
+                  <div id="ov-run-panel"></div>
+                </section>
+                <section class="ov-panel" data-ovpanel="how" role="tabpanel" hidden>
+                  <div class="ov-how">
+                    <div class="ov-how-k">HOW A PITCH BECOMES CODE</div>
+                    <div class="flow">
+                      <div class="flow-step"><span class="flow-dot is-pitch" aria-hidden="true"></span>
+                        <b>you pitch</b><i>a task, in plain English</i></div>
+                      <div class="flow-step"><span class="flow-dot is-plan" aria-hidden="true"></span>
+                        <b>planner</b><i>splits it into smaller jobs, when the strategy plans</i></div>
+                      <div class="flow-step"><span class="flow-dot is-build" aria-hidden="true"></span>
+                        <b>builders</b><i>write the pieces, on separate machines</i></div>
+                      <div class="flow-step"><span class="flow-dot is-review" aria-hidden="true"></span>
+                        <b>reviewer</b><i>assembles and grades the result</i></div>
+                    </div>
+                  </div>
+                </section>
+              </div>
+            </aside>
           </div>
         </div>
       </section>
 
-      <!-- ── RUNS ── -->
+      <!-- ── RUNS ──
+           A hairline table, grouped by day (README, "Screens"). The chips count
+           the runs this page loaded, never a ledger total: /history serves the
+           newest 50 and nothing serves verdict totals, so a chip reading "35"
+           over a page of 50 would be a number with nothing under it. Any sort
+           other than WHEN drops the day headings and says so, because a list
+           grouped by day and ordered by something else is two orderings
+           claiming to be one (HANDOFF-UI section 19.7). WALL stays dropped:
+           HANDOFF-DELTA section 8.1 records the decision. -->
       <section id="view-runs" aria-labelledby="tab-runs" hidden>
         <div class="view-head"><h2>Runs</h2><span class="view-sub">Every pipeline this orchestrator has completed</span></div>
-        <div class="section-head">
-          <h2 id="history-heading">History</h2>
-          <label class="sr-only" for="history-search">Search past runs</label>
-          <input id="history-search" class="search-input" type="search" placeholder="search…">
-        </div>
-        <div id="history-list" aria-labelledby="history-heading">
-          <div class="empty-state">
-            <p>No past runs yet.<br>A completed pitch lands here with a permanent link you can share.</p>
+        <div class="card">
+          <div class="card-tabs" role="tablist" aria-label="Which runs">
+            <button type="button" role="tab" class="card-tab" id="runs-tab-pitched" data-runs-tab="pitched"
+                    aria-selected="true" title="Runs this orchestrator pitched">Pitched here<span class="card-tab-n" id="runs-tab-pitched-n"></span></button>
+            <button type="button" role="tab" class="card-tab" id="runs-tab-machine" data-runs-tab="machine"
+                    aria-selected="false" title="What this coordinator itself computed, read from the ledger">This machine's work<span class="card-tab-n" id="runs-tab-machine-n"></span></button>
+          </div>
+
+          <div class="runs-pane" data-runs-pane="pitched">
+            <div class="card-tools">
+              <div class="seg" role="radiogroup" aria-label="Filter by verdict" id="runs-filters">
+                <button type="button" role="radio" aria-checked="true" data-runs-filter="all"
+                        title="Every loaded run">all <span class="seg-n" id="runs-n-all"></span></button>
+                <button type="button" role="radio" aria-checked="false" data-runs-filter="passed"
+                        title="Loaded runs the reviewer passed and whose mechanical check found nothing">passed <span class="seg-n" id="runs-n-passed"></span></button>
+                <button type="button" role="radio" aria-checked="false" data-runs-filter="partial"
+                        title="Loaded runs that did not pass: needs work, unchecked, or no verdict recorded">partial <span class="seg-n" id="runs-n-partial"></span></button>
+                <button type="button" role="radio" aria-checked="false" data-runs-filter="failed"
+                        title="Loaded runs the reviewer failed">failed <span class="seg-n" id="runs-n-failed"></span></button>
+              </div>
+              <label class="sr-only" for="history-search">Search past runs</label>
+              <input id="history-search" class="search-input" type="search" placeholder="filter runs…"
+                     title="Searches every run's task text on the server · GET /history?search=">
+              <button type="button" class="card-clear" id="runs-clear" hidden
+                      title="Show every loaded run again">clear &#10005;</button>
+              <span class="card-count" id="runs-count"></span>
+            </div>
+            <div class="table-scroll">
+              <div class="runs-grid runs-head" id="runs-head">
+                <button type="button" data-runs-sort="task" title="Sort by task">TASK</button>
+                <button type="button" data-runs-sort="verdict" title="Sort by verdict, worst first">VERDICT</button>
+                <button type="button" data-runs-sort="subtasks" title="Sort by the number of subtasks">SUBTASKS</button>
+                <button type="button" data-runs-sort="mode" title="Sort by placement">MODE</button>
+                <button type="button" data-runs-sort="when" title="Sort by when it ran">WHEN</button>
+                <span aria-hidden="true"></span>
+              </div>
+              <div id="history-list" aria-label="Past runs">
+                <div class="empty-state">
+                  <p>No past runs yet.<br>A completed pitch lands here with a permanent link you can share.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="runs-pane" data-runs-pane="machine" hidden>
+            <div class="card-tools">
+              <span class="card-summary" id="machine-work-summary">&mdash;</span>
+              <button type="button" class="ov-link" data-tab="guild" title="Guild standings — points per machine">guild standings &rarr;</button>
+            </div>
+            <p class="card-note">What this coordinator itself computed, from its rows in the ledger. The
+              grain is one contribution, a builder subtask, a reviewer pass or a pitch, not a whole
+              run, because that is what the ledger records.</p>
+            <div class="table-scroll">
+              <div class="work-grid runs-head">
+                <span>KIND</span><span>WHAT IT DID</span><span class="is-num">POINTS</span><span class="is-num">WHEN</span>
+              </div>
+              <div id="machine-work-list"></div>
+            </div>
           </div>
         </div>
       </section>
 
-      <!-- ── GALLERY ── -->
+      <!-- ── GALLERY ──
+           Previews output, not prose about it: that is what separates Gallery
+           from Runs (README, "Screens"). -->
       <section id="view-gallery" aria-labelledby="tab-gallery" hidden>
-        <div class="view-head"><h2>Swarm gallery</h2><span class="view-sub">Tasks completed by the network — every card has its own page</span></div>
+        <div class="view-head"><h2>Gallery</h2><span class="view-sub">Work the network finished, with the code it produced</span></div>
         <div id="gallery-grid" class="gallery-grid">
           <div class="empty-state is-grid"><p>No completed tasks yet.</p></div>
         </div>
       </section>
 
-      <!-- ── NODES ── -->
+      <!-- ── NODES ──
+           A quiet stats line, the map, then the machines as rows (HANDOFF-UI
+           section 15.3, 16.6, 19). At two to five machines each is read
+           individually, and its status needs to be a sentence, so rows and not
+           a table. -->
       <section id="view-nodes" aria-labelledby="tab-nodes" hidden>
         <h2 class="sr-only">Nodes</h2>
 
-        <!-- The map opens the view: the dashboard's on-camera job is the glance
-             that confirms a second machine connected. Left to right is the
-             pipeline, so the coordinator sits at the edge — planning and review
-             are its work, and the hardware doing the building belongs to other
-             people. Deterministic grid, never a force solve: a layout that
-             settles differently on each open is wrong for something recorded. -->
-        <div class="nodemap" id="nodemap">
-          <div class="nodemap-head">
-            <span class="nodemap-label">MAP</span>
-            <span class="nodemap-meta" id="nodemap-meta">—</span>
+        <div class="nodes-stats" id="nodes-stats">
+          <div class="ov-vital" id="nstat-connected"><i class="ov-vital-dot" aria-hidden="true"></i>
+            <span class="ov-vital-v">&mdash;</span><span class="ov-vital-k">connected</span></div>
+          <div class="ov-vital" id="nstat-building"><i class="ov-vital-dot" aria-hidden="true"></i>
+            <span class="ov-vital-v">&mdash;</span><span class="ov-vital-k">building now</span></div>
+          <div class="ov-vital" id="nstat-enrolled"><i class="ov-vital-dot" aria-hidden="true"></i>
+            <span class="ov-vital-v">&mdash;</span><span class="ov-vital-k">enrolled</span></div>
+          <div class="ov-vital is-idle" id="nstat-cpu"><i class="ov-vital-dot" aria-hidden="true"></i>
+            <span class="ov-vital-v">&mdash;</span><span class="ov-vital-k" title="What the machines say about themselves at registration. Nothing samples it">CPU cores claimed</span></div>
+          <div class="ov-vital is-idle" id="nstat-ram"><i class="ov-vital-dot" aria-hidden="true"></i>
+            <span class="ov-vital-v">&mdash;</span><span class="ov-vital-k" title="What the machines say about themselves at registration. Nothing samples it">memory claimed</span></div>
+        </div>
+
+        <!-- The map, at three scales. Live is this coordinator right now, from
+             /nodes: the coordinator sits at the edge because planning and review
+             are its work, first and last, and a line runs from it to a machine
+             only while that machine holds work, because that is the only path
+             work takes; nothing passes machine to machine.
+
+             The other two are drawn, not measured: one run at its widest, and
+             three runs in a field of 125. They carry no points, no task counts
+             and no rates, every panel on them ends with a DATA row saying what
+             they are, and the caption under the map says so in the warning
+             colour. They are pictures of how work spreads, and the swarm scale
+             draws a federation this repo does not have. -->
+        <div class="card" id="nodemap">
+          <div class="card-tools nodemap-head">
+            <span class="card-k">MAP</span>
+            <span class="nodemap-run" id="nodemap-run"></span>
+            <span class="nodemap-meta" id="nodemap-meta">&mdash;</span>
+            <div class="seg nodemap-scale" role="radiogroup" aria-label="Map scale">
+              <button type="button" role="radio" aria-checked="true" data-nodemap-scale="live"
+                      title="This coordinator right now, from /nodes">live</button>
+              <button type="button" role="radio" aria-checked="false" data-nodemap-scale="demo"
+                      title="One run at its widest, drawn rather than measured">simulated <span class="seg-n">18</span></button>
+              <button type="button" role="radio" aria-checked="false" data-nodemap-scale="swarm"
+                      title="Three runs in a field of 125, drawn rather than measured">swarm <span class="seg-n">125</span></button>
+            </div>
+            <div class="seg nodemap-zoom" role="group" aria-label="Zoom">
+              <button type="button" data-zoom="out" title="Zoom out" aria-label="Zoom out">&minus;</button>
+              <button type="button" data-zoom="reset" id="nodemap-zoom-label" title="Reset the view">100%</button>
+              <button type="button" data-zoom="in" title="Zoom in" aria-label="Zoom in">+</button>
+            </div>
           </div>
           <div class="nodemap-stage" id="nodemap-stage"></div>
           <div class="nodemap-legend" id="nodemap-legend"></div>
+          <div class="nodemap-pick" id="nodemap-pick">
+            <p class="nodemap-hint">Hover a machine or a line to inspect it. Click a machine for its own page;
+              click a line or the ground to keep its panel open.</p>
+          </div>
           <p class="nodemap-note" id="nodemap-note"></p>
         </div>
 
-        <div class="nodes-head">
-          <span class="nodes-summary" id="nodes-summary">—</span>
-          <button class="btn-quiet nodes-invite" type="button" data-tab="invite" title="How a machine joins, and what it agrees to">Invite a machine</button>
-        </div>
-
-        <div id="nodes-list">
-          <div class="empty-state">
-            <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="18" r="2.2"/><path d="M10.5 6.8 6.5 15.8M13.5 6.8l4 9M7.4 18h9.2"/></svg></div>
-            <p>No machines connected yet.<br><button class="link-btn" type="button" data-tab="invite">How a machine joins →</button></p>
+        <div class="card">
+          <div class="card-tools">
+            <span class="card-summary" id="nodes-summary">&mdash;</span>
+            <button class="btn-quiet nodes-invite" type="button" data-tab="invite" title="How a machine joins, and what it agrees to">Invite a machine</button>
           </div>
+          <div id="nodes-list">
+            <div class="empty-state">
+              <p>No machines connected yet.<br><button class="link-btn" type="button" data-tab="invite" title="How a machine joins">How a machine joins &rarr;</button></p>
+            </div>
+          </div>
+          <p class="card-note">Four names, on purpose. The <span class="mono">enr_</span> id is the
+            contributor and outlives everything; the node name is a label; the session is one
+            running copy of the worker and ends with a restart; an attempt is one leased piece of
+            work. That split is why restarting the coordinator loses no points and grants no
+            authority, and why offboarding one machine leaves every other untouched. The hardware
+            and model lines are what the machine says about itself: they decide what it is eligible
+            for, and they are not evidence it has any of it. Nothing here ranks machines.</p>
+          <p class="card-note points-footnote">Points mean a nonempty, attempt-bound worker result was
+            accepted. They do not mean the candidate was selected, that validation passed, or that
+            the output is correct — and they are not money, a token, or a claim on future value.</p>
         </div>
-
-        <p class="points-footnote">Points mean a nonempty, attempt-bound worker result was
-          accepted. They do not mean the candidate was selected, that validation passed, or that
-          the output is correct — and they are not money, a token, or a claim on future value.</p>
       </section>
 
-      <!-- ── PROJECTS ── -->
+      <!-- ── PROJECTS ──
+           The iteration chain, not a count (README, "Screens"): memory across
+           runs is the feature, and a number hides it. The chain is the runs
+           /history carries with this project's id. -->
       <section id="view-projects" aria-labelledby="tab-projects" hidden>
         <div class="view-head"><h2>Projects</h2><span class="view-sub">Work that remembers what it already built</span></div>
-        <div class="section-head">
-          <h2 id="projects-heading">All projects</h2>
-          <button type="button" class="btn-accent is-sm" id="new-project">+ New</button>
-        </div>
-        <div id="projects-list" aria-labelledby="projects-heading">
-          <div class="empty-state">
-            <p>No projects yet.<br>A project carries memory from one pitch to the next.</p>
+        <div class="card">
+          <div class="card-tools">
+            <span class="card-summary" id="projects-summary">&mdash;</span>
+            <button type="button" class="btn-quiet nodes-invite" id="new-project"
+                    title="Start a project · POST /projects">New project</button>
+          </div>
+          <div id="projects-list" class="projects-list" aria-label="Projects">
+            <div class="empty-state">
+              <p>No projects yet.<br>A project carries memory from one pitch to the next.</p>
+            </div>
           </div>
         </div>
       </section>
 
       <!-- ── GUILD ── -->
       <section id="view-guild" aria-labelledby="tab-guild" hidden>
-        <div class="view-head"><h2>Guild standings</h2><span class="view-sub">Points earned for compute, pitches and reviews</span></div>
-        <div id="standings-list">
-          <div class="empty-state"><p>No contributions yet.</p></div>
+        <div class="view-head"><h2>Guild standings</h2><span class="view-sub">Compute contribution points — accepted work, not payment</span></div>
+        <div class="card">
+          <div class="table-scroll">
+            <div class="guild-grid runs-head">
+              <span>#</span><span>CONTRIBUTOR</span><span title="Reviewer passes are logged as compute, so they share this column">COMPUTE + REVIEW</span><span>PITCHES</span><span class="is-num">POINTS</span>
+            </div>
+            <div id="standings-list">
+              <div class="empty-state"><p>No contributions yet.</p></div>
+            </div>
+          </div>
+          <p class="card-note">These are compute contribution points, and they mean one thing: a
+            machine returned work that the server accepted from an attempt it had itself issued. They
+            do not mean the output was chosen, that it passed its checks, or that it was correct, and
+            they are not money, a token, a chain, or a claim on anything later. Reviewer passes are
+            logged as compute, so the two share one column rather than being split into a number the
+            ledger cannot produce.</p>
         </div>
       </section>
 
@@ -293,6 +556,19 @@
         <div class="view-head"><h2>Evals</h2><span class="view-sub">What the eval harness recorded, and how much of it is chance</span></div>
         <div id="evals-body">
           <div class="empty-state"><p>Reading the eval record…</p></div>
+        </div>
+      </section>
+
+      <!-- ── EVIDENCE ──
+           What the coordinator watched happen after it had already handed work
+           out. Shadow only: /v1/operator/capability-evidence serves
+           affects_routing: false, and this view shows that value rather than
+           asserting it. Rates are drawn only above the configured sample floor,
+           each beside its Wilson interval. -->
+      <section id="view-evidence" aria-labelledby="tab-evidence" hidden>
+        <div class="view-head"><h2>Observed evidence</h2><span class="view-sub">What the coordinator watched happen after it handed work out</span></div>
+        <div class="card" id="evidence-body">
+          <div class="empty-state"><p>Reading the evidence record…</p></div>
         </div>
       </section>
 
@@ -330,25 +606,56 @@
      truth and could disagree.
 
      Two kinds of cell:
-       * polled  — INFERENCE, NODES, RUNNING, QUEUED. Each carries a lamp,
-                   because each is a claim about this second.
-       * at-load — MODE, LOCK, TRACING, EVIDENCE. No lamp, on purpose: none of
-                   them can change while the process runs, so a lamp beside
-                   them would be a freshness claim about a constant.
+       * polled  — INFERENCE, NODES, RUNNING, QUEUED. In the strip, each with a
+                   lamp, because each is a claim about this second.
+       * at-load — MODE, LOCK, TRACING, EVIDENCE. In the drawer, with no lamp:
+                   none of them can change while the process runs, so a lamp
+                   would be a freshness claim about a constant. Each carries a
+                   sentence saying what its value means, which is the reason to
+                   show it at all and the reason it no longer fits the strip
+                   (HANDOFF-UI section 17.1).
 
-     The age of the last answer is in the row at all times and is never
-     hidden by a narrow window. There is no utilization figure anywhere:
-     capability descriptors *claim* CPU, memory and GPU at registration and
-     nothing samples them, so a load line here would be a drawing rather than
-     a measurement. -->
+     The age of the last answer is in the strip at all times and is the
+     drawer's toggle: "how old is this" and "where does it come from" are one
+     gesture. There is no utilization figure anywhere: capability descriptors
+     *claim* CPU, memory and GPU at registration and nothing samples them. -->
 <div class="statusbar" id="statusbar">
   <!-- The collapsed form. Same derived state, nothing new. -->
   <button class="statuspill" id="statuspill" type="button"
-          title="Expand the status bar" aria-expanded="false" aria-controls="statusbar">
+          title="Show the status bar" aria-expanded="false" aria-controls="statusbar">
     <i class="lamp is-unknown" id="statuspill-lamp" aria-hidden="true"></i>
     <span class="statuspill-word is-unknown" id="statuspill-word">no answer</span>
     <span class="statuspill-age" id="statuspill-age">no answer for 0s</span>
   </button>
+
+  <div class="statusbar-drawer" id="statusbar-drawer" hidden>
+    <div class="statusbar-source">
+      <span class="statusbar-k">POLLED FROM</span>
+      <span class="statusbar-v">/health &middot; every 5s</span>
+      <span class="statusbar-why">And /v1/operator/health every 30s for the two cells beside
+        this. Every lamp in the strip reads from one derived state, so no two can disagree.</span>
+    </div>
+    <div class="statusbar-cell is-atload">
+      <span class="statusbar-k">MODE</span>
+      <span class="statusbar-v" id="cell-mode-v">&mdash;</span>
+      <span class="statusbar-why" id="cell-mode-why">Read from /v1/operator/health.</span>
+    </div>
+    <div class="statusbar-cell is-atload">
+      <span class="statusbar-k">LOCK</span>
+      <span class="statusbar-v" id="cell-lock-v">&mdash;</span>
+      <span class="statusbar-why" id="cell-lock-why">Read from /v1/operator/health.</span>
+    </div>
+    <div class="statusbar-cell is-atload">
+      <span class="statusbar-k">TRACING</span>
+      <span class="statusbar-v"><!--SLOT:STATUS_TRACING--></span>
+      <span class="statusbar-why"><!--SLOT:STATUS_TRACING_WHY--></span>
+    </div>
+    <div class="statusbar-cell is-atload">
+      <span class="statusbar-k">EVIDENCE</span>
+      <span class="statusbar-v"><!--SLOT:STATUS_EVIDENCE--></span>
+      <span class="statusbar-why"><!--SLOT:STATUS_EVIDENCE_WHY--></span>
+    </div>
+  </div>
 
   <div class="statusbar-severity">
     <i class="lamp is-lg is-unknown" id="statusbar-lamp" aria-hidden="true"></i>
@@ -377,31 +684,15 @@
       <span class="statusbar-k">QUEUED</span>
       <span class="statusbar-v is-quiet" id="cell-queued-v">&mdash;</span>
     </div>
-
-    <!-- No lamp below this line. -->
-    <div class="statusbar-cell is-atload">
-      <span class="statusbar-k">MODE</span>
-      <span class="statusbar-v" id="cell-mode-v">&mdash;</span>
-    </div>
-    <div class="statusbar-cell is-atload">
-      <span class="statusbar-k">LOCK</span>
-      <span class="statusbar-v" id="cell-lock-v">&mdash;</span>
-    </div>
-    <div class="statusbar-cell is-atload">
-      <span class="statusbar-k">TRACING</span>
-      <span class="statusbar-v"><!--SLOT:STATUS_TRACING--></span>
-    </div>
-    <div class="statusbar-cell is-atload">
-      <span class="statusbar-k">EVIDENCE</span>
-      <span class="statusbar-v"><!--SLOT:STATUS_EVIDENCE--></span>
-    </div>
   </div>
 
-  <div class="statusbar-age" id="statusbar-age">
+  <button class="statusbar-age" id="statusbar-age" type="button" aria-expanded="false"
+          aria-controls="statusbar-drawer" title="Where these values come from">
     <span id="statusbar-age-text">no answer for 0s</span>
-    <button class="statusbar-collapse" id="statusbar-collapse" type="button"
-            title="Collapse the status bar" aria-expanded="true" aria-controls="statusbar">&#8964;</button>
-  </div>
+    <span class="statusbar-chev" id="statusbar-chev" aria-hidden="true">&#8963;</span>
+  </button>
+  <button class="statusbar-collapse" id="statusbar-collapse" type="button"
+          title="Collapse to the corner" aria-expanded="true" aria-controls="statusbar">&ndash;</button>
 </div>
 </div>
 
@@ -437,6 +728,22 @@
       </div>
     </div>
     <div id="modal-run-detail"></div>
+  </div>
+</div>
+
+<!-- Command palette. Jumps to a view or runs one of the few actions every
+     view shares. Nothing here is a new capability: each command is a control
+     that already exists somewhere on the page. -->
+<div class="palette" id="palette" role="dialog" aria-modal="true" aria-label="Command palette" hidden>
+  <div class="palette-panel">
+    <div class="palette-head">
+      <span class="palette-prompt" aria-hidden="true">&gt;</span>
+      <label class="sr-only" for="palette-input">Jump to a view or run a command</label>
+      <input class="palette-input" id="palette-input" type="text" autocomplete="off" spellcheck="false"
+             placeholder="Jump to a view, pitch a task, switch theme…">
+      <span class="palette-esc" aria-hidden="true">esc</span>
+    </div>
+    <div class="palette-list" id="palette-list" role="listbox" aria-label="Commands"></div>
   </div>
 </div>
 
