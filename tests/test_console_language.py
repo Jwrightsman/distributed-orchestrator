@@ -33,7 +33,6 @@ the normative source for the first two:
 from __future__ import annotations
 
 import ast
-import json
 import re
 from pathlib import Path
 
@@ -315,49 +314,68 @@ def test_the_run_page_carries_no_prohibited_language(client):
     """The route the served-page rule did not cover, and the one it most needed.
 
     `/run/{id}` is the page whose subject is what a machine earned and whose
-    panels carry the manifest and the envelope — the two records the banned
-    words would overstate. It was not in the parametrised list above, and its
-    module is checked for the banned *words* but not for credits-as-a-unit, so
-    the page shipped "credits" in prose and as a column header sitting under a
-    "Points settled" heading. Both layers missed it; this closes the route.
+    panels carry the manifest and the envelope -- the two records the banned
+    words would overstate. It was absent from the parametrised list above, and
+    its module is checked for the banned *words* but not for credits-as-a-unit,
+    so the page shipped "credits" in prose and as a column header sitting under
+    a "Points settled" heading. Both layers missed it.
 
-    A run is written to disk here rather than fixtured, because what is being
-    checked is what the server actually sends for a real one.
+    The run is published rather than stubbed, because the panel that renders
+    the one permitted occurrence of a banned word only exists on a run that has
+    an envelope. A stub run renders no envelope, and a version of this test
+    written against one passes every assertion below without reaching the row
+    that makes the exemption necessary.
     """
-    run_dir = Path("output") / "20260908_120000"
-    (run_dir / "code").mkdir(parents=True, exist_ok=True)
-    review = "## Quality Rating\nPASS\n\n## Final Output\n```python\nprint('hi')\n```"
-    (run_dir / "full_log.json").write_text(json.dumps({
-        "task": "Add a --since flag",
-        "timestamp": "20260908_120000",
-        "plan": [{"id": 1, "title": "Parse", "description": "d", "depends_on": []}],
-        "results": {"1": "out"},
-        "review": review,
-        "rating": "PASS",
-        "code_files": [],
-        "code_problems": [],
-        "mode": "local",
-        # The itemised branch, which is the one that renders the column.
-        "credits": [
-            {"contributor": "node-7c22", "type": "compute", "credits": 5, "for": "building"},
-        ],
-    }), encoding="utf-8")
-    (run_dir / "review.md").write_text(review, encoding="utf-8")
-    (run_dir / "output.md").write_text("done", encoding="utf-8")
+    from tests.test_run_detail import _published
 
-    response = client.get("/run/20260908_120000")
+    settled = [
+        {"contributor": "node-7c22", "type": "compute", "credits": 5, "for": "building"},
+    ]
+    run = _published(credits=settled)
+    response = client.get(f"/run/{run}")
     assert response.status_code == 200, response.text[:300]
     body = visible_text(response.text)
     lowered = body.lower()
 
-    # The page really did render the settlement, so this is not passing on an
-    # absent section.
+    # Guards, so a failure to render is never mistaken for a clean page.
     assert "Points" in body, "the settlement column did not render"
+    assert "PRODUCED BY" in body, "the envelope panel did not render"
+    assert "RESERVED" in body, "the reserved-slot row did not render"
 
     for phrase in BANNED_PHRASES:
         assert phrase not in lowered, f"/run served the prohibited phrase {phrase!r}"
-    for word, pattern in _WORD.items():
-        found = pattern.search(body)
-        assert not found, f"/run served the prohibited word {found.group(0)!r}"
     assert not CREDITS_AS_A_UNIT.search(body), "/run served 'credits' as a unit"
     assert not QUALITY_PERCENTAGE.search(body), "/run served a quality percentage"
+
+    for word, pattern in _WORD.items():
+        if word == "signature":
+            continue  # asserted exactly, below
+        found = pattern.search(body)
+        assert not found, f"/run served the prohibited word {found.group(0)!r}"
+
+
+def test_the_only_signature_on_the_run_page_is_the_empty_reserved_slot(client):
+    """The one permitted occurrence, pinned rather than waived.
+
+    `provenance.RESERVED_SLOT_FIELD` is the envelope record's own column name,
+    and an opened envelope renders the record's field names -- which is the
+    record speaking, not the surface claiming something. ADR 0017 allows it on
+    that basis alone, so the exemption has to be exactly that narrow: one
+    occurrence, carrying the value that says the slot is empty and the note
+    that denies every reading of the word. A second one anywhere on the page is
+    the surface making the claim after all.
+    """
+    from provenance import RESERVED_SLOT_FIELD, RESERVED_SLOT_VALUE
+    from tests.test_run_detail import _published
+
+    run = _published()
+    body = visible_text(client.get(f"/run/{run}").text)
+
+    occurrences = _WORD["signature"].findall(body)
+    assert len(occurrences) == 1, (
+        f"the run page says {RESERVED_SLOT_FIELD!r} {len(occurrences)} times; "
+        "exactly one is allowed, and only as the record's own field name"
+    )
+    assert RESERVED_SLOT_VALUE in body, "the slot is named without being shown empty"
+    assert "A slot, not a feature" in body, "the denial no longer travels with the row"
+    assert "no key, no key management" in body
