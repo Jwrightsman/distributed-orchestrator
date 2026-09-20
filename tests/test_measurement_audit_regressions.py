@@ -34,6 +34,8 @@ def rows():
              "grading": {"grader_version": "3"}, "model": {"digest": "fixture-model"},
              "graded": True, "passed": item == "one", "wall_clock_seconds": 10,
              "cost_capture_complete": True,
+             "checker_seconds_observed": 1.0, "checker_seconds_total": 1.0,
+             "checker_capture_complete": True,
              "unit_costs": [{"unit_id": f"call-{i}", "inference_seconds": 10,
                              "hardware_id": "fixture-hardware", "tokens": {"prompt": 2, "completion": 3}}
                             for i in range(1 if arm == "direct" else 5)]}
@@ -129,6 +131,36 @@ def test_equal_latency_can_hide_five_times_the_hardware_work():
     assert direct["latency_seconds_total"] == parallel["latency_seconds_total"] == 20
     comparison = summary.compare_costs(direct, parallel, manifest()["budget_policy"])
     assert comparison["ratio"] == 5 and comparison["within_tolerance"] is False
+
+
+def test_superseded_attempt_cost_is_retained_separately_from_selected_outcome():
+    first = deepcopy(rows()[0])
+    first["passed"] = False
+    replacement = deepcopy(rows()[0])
+    replacement["unit_costs"][0]["unit_id"] = "replacement-call"
+    records = [first, replacement]
+    assert summary.outcomes_for(records, "direct") == {"one": True}
+    cost = summary.cost_for(records, "direct")
+    assert cost["runs"] == 2
+    assert cost["hardware_seconds_total"] == 20
+    assert cost["tokens_total"] == 10
+    first["cost_capture_complete"] = False
+    cost = summary.cost_for(records, "direct")
+    assert cost["hardware_seconds_total"] is None
+    assert cost["tokens_total"] is None
+    assert not cost["cost_complete"]
+
+
+def test_incomplete_checker_cost_remains_unknown_with_observed_time_separate():
+    records = rows()
+    records[0]["checker_seconds_observed"] = 0.25
+    records[0]["checker_seconds_total"] = None
+    records[0]["checker_capture_complete"] = False
+    cost = summary.cost_for(records, "direct")
+    assert cost["checker_seconds_observed_total"] == 1.25
+    assert cost["checker_seconds_total"] is None
+    assert cost["checker_capture_missing_runs"] == 1
+    assert cost["checker_cost_complete"] is False
 
 
 @pytest.mark.parametrize("missing", ["timing", "tokens", "hardware", "capture", "latency"])

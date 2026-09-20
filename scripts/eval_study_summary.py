@@ -93,9 +93,19 @@ def cost_for(records: list[dict], arm: str) -> dict:
     Missing measurements suppress totals rather than passing partial sums off
     as complete. Inference seconds are runtime duration, not CPU utilization.
     """
-    latest = runrecord.latest_per_key(records)
-    rows = [row for key, row in sorted(latest.items()) if key[1] == arm]
+    # Supersession selects the quality endpoint, not which work was paid for.
+    # A failed or cancelled attempt still consumes resources after a later
+    # record replaces its outcome. Unknown earlier cost must remain unknown.
+    runrecord.latest_per_key(records)  # Validate all record keys without dropping attempts.
+    rows = [row for row in records if row["arm"] == arm]
     latency = [row["wall_clock_seconds"] for row in rows if _number(row.get("wall_clock_seconds"))]
+    checker_observed = [row["checker_seconds_observed"] for row in rows
+                        if _number(row.get("checker_seconds_observed"))]
+    checker_complete = bool(rows) and all(
+        row.get("checker_capture_complete") is True
+        and _number(row.get("checker_seconds_total"))
+        for row in rows
+    )
     units = []
     missing_units = 0
     for row in rows:
@@ -124,6 +134,20 @@ def cost_for(records: list[dict], arm: str) -> dict:
         "unit_records": len(units),
         "unit_capture_missing_runs": missing_units,
         "cost_complete": timing_complete and tokens_complete and hardware_complete,
+        "checker_seconds_observed_total": (
+            math.fsum(checker_observed) if checker_observed else None
+        ),
+        "checker_observed_missing_runs": len(rows) - len(checker_observed),
+        "checker_seconds_total": (
+            math.fsum(row["checker_seconds_total"] for row in rows)
+            if checker_complete else None
+        ),
+        "checker_capture_missing_runs": sum(
+            row.get("checker_capture_complete") is not True
+            or not _number(row.get("checker_seconds_total"))
+            for row in rows
+        ),
+        "checker_cost_complete": checker_complete,
     }
 
 
@@ -175,6 +199,10 @@ def main() -> int:
         print(f"    aggregate inference hardware-seconds={cost['hardware_seconds_total']}, "
               f"tokens={cost['tokens_total']}, unit records={cost['unit_records']}, "
               f"complete={cost['cost_complete']}")
+        print(f"    checker seconds: total={cost['checker_seconds_total']}, "
+              f"observed={cost['checker_seconds_observed_total']}, "
+              f"missing={cost['checker_capture_missing_runs']}, "
+              f"complete={cost['checker_cost_complete']}")
     if args.paired:
         baseline, candidate = args.paired
         if baseline == candidate or any(a not in arms for a in args.paired):

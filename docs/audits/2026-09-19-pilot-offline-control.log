@@ -1,0 +1,27 @@
+{
+  "kind": "offline_authored_fixture_control",
+  "benchmark_executed": false,
+  "planned_cells": 36,
+  "control_cells": 36,
+  "mock_runtime_calls": 84,
+  "positive_fixture_checks": 36,
+  "broken_fixture_checks": 12,
+  "cost_capture_complete": true,
+  "identities": "synthetic offline controls only",
+  "checker_capture_complete": true,
+  "planned_cell_accounting_proven": true,
+  "budget_rejections_proven": [
+    "generated_tokens",
+    "inference_seconds",
+    "cell_tokens",
+    "cell_inference_seconds",
+    "checker_seconds"
+  ],
+  "repair_input_bounds_proven": [
+    "oversized",
+    "private_diagnostic"
+  ],
+  "private_answer_exclusion_proven": true,
+  "missing_cost_remains_unknown": true,
+  "real_acceptance_checks_exercised": false
+}

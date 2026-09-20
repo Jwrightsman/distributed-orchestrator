@@ -614,6 +614,11 @@ research documents remain unsupported. Results are independent of row order,
 except the documented final-appended-row supersession for the exact same
 item/arm/replicate key.
 
+Supersession applies only to the quality endpoint. Resource summaries retain
+every appended attempt, including superseded failures and cancellations; a
+replacement cannot erase earlier work or turn missing earlier costs into known
+totals.
+
 Elapsed generation latency is not compute. The summarizer reports it separately
 from aggregate per-call inference hardware-seconds and actual tokens. A
 comparable-cost claim requires complete cost capture for all planner, builder,
@@ -622,6 +627,9 @@ hardware policy. Missing costs suppress complete totals/comparison; they are
 not treated as zero. Even matched hardware-seconds are a declared measurement
 policy, not hardware-independent compute or energy. The current legacy runner
 cannot collect all runtime counters and therefore cannot establish that claim.
+Checker work is reported separately: observed wall time remains visible, while
+the complete checker total stays unknown if cleanup or termination was not
+confirmed. An observed partial total is never promoted into a complete cost.
 The [unactivated canonical pilot plan](experiments/2026-09-13-canonical-pilot-plan.md)
 specifies the bounded next experiment and its remaining activation prerequisites.
 

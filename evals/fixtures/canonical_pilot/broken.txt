@@ -1,0 +1,5 @@
+```python
+# Authored offline negative control. Parses but fails the mock acceptance rule.
+import json
+print(json.dumps([{"fixture": "broken"}]))
+```
