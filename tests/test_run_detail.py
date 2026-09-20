@@ -295,6 +295,18 @@ def _surfaces(client, run: str) -> dict[str, str]:
     return {"server": page.text, "console": detail.json()["detail_html"]}
 
 
+def _visible(html: str) -> str:
+    """Roughly what a reader sees: no scripts, styles, comments or markup.
+
+    The same reduction `tests/test_console_language.py` uses, for the same
+    reason: checking raw source for a banned unit trips over the API field
+    name that carries it.
+    """
+    html = re.sub(r"<(script|style).*?</>", " ", html, flags=re.S | re.I)
+    html = re.sub(r"<!--.*?-->", " ", html, flags=re.S)
+    return re.sub(r"<[^>]+>", " ", html)
+
+
 def _panel(html: str, marker: str) -> str:
     """One panel's markup, from its label to the start of the next section."""
     start = html.index(marker)
@@ -415,7 +427,13 @@ def test_lifecycle_validation_and_assurance_are_read_separately(client):
         assert "VALIDATION" in strip and "ASSURANCE" in strip
         assert "completed" in strip, f"{surface}: lifecycle_status is not rendered"
         assert "passed" in strip, f"{surface}: validation_outcome is not rendered"
-        assert "unverified" in strip, f"{surface}: assurance_level is not rendered"
+        # The label, not the enum. `assurance_level` is still read separately
+        # -- which is the whole of what this test is about -- but HANDOFF-UI
+        # section 7 fixes what the reader is shown, and "unverified" is not
+        # one of the five words it allows.
+        assert "Not checked" in strip, (
+            f"{surface}: assurance_level is not rendered"
+        )
         assert "2 checks run" in strip, (
             f"{surface}: the validation note does not come from validation_summary"
         )
@@ -2356,3 +2374,127 @@ def test_the_replay_line_reads_against_the_surface_it_sits_on():
         assert size and float(size.group(1)) >= floor, (
             f"{selector} prints below {floor}px"
         )
+
+
+# ── The three drawn surfaces, checked against the repo ───────────────
+# `docs/design/HANDOFF-DELTA.md` §13.5 records that this page carried the Sept
+# 18 theme but never got the drawing-by-drawing comparison every other view
+# got. These are what that comparison found: three things the drawings state
+# as fact that the repo contradicts, each of which was already rendering.
+
+
+def test_assurance_renders_a_label_and_never_the_raw_contract_enum(client):
+    """`Run Detail Surface.dc.html` draws the ASSURANCE cell as "unverified".
+
+    That is `AssuranceLevelV1`'s storage identifier, not copy. HANDOFF-UI §7
+    fixes five reader-facing labels and the raw enum is none of them: it names
+    the absence of a check as though it were a verdict reached. The four
+    levels the contract has each map to one label; the fifth, "Behavior
+    tested", has no level yet and so cannot appear.
+    """
+    from execution.contracts import AssuranceLevelV1
+    from typing import get_args
+
+    run = _published()
+    server = _surfaces(client, run)["server"]
+
+    assert ">Not checked<" in server or "Not checked" in server, (
+        "the ASSURANCE cell no longer names the level in the reader's words"
+    )
+    assert "unverified" not in server, (
+        "the run page prints the raw contract enum, which the design draws "
+        "and HANDOFF-UI §7 does not allow"
+    )
+
+    # Every level the contract can hold has a label, so no run can reach the
+    # page with a value the map has no word for.
+    for level in get_args(AssuranceLevelV1):
+        assert level in run_detail.ASSURANCE_LABELS, (
+            f"{level!r} is a contract value with no reader-facing label"
+        )
+    assert set(run_detail.ASSURANCE_LABELS.values()) <= {
+        "Not checked", "Structure checked", "Contract validated",
+        "Behavior tested", "AI reviewed",
+    }, "a sixth assurance label appeared"
+
+
+def test_the_share_card_and_the_run_page_name_assurance_the_same_way():
+    """One map, not two copies that drift.
+
+    Both surfaces describe the same axis of the same run. They read the same
+    dict, so a label cannot be changed on one and left on the other.
+    """
+    import routes_share_page
+
+    assert routes_share_page.ASSURANCE_LABELS is run_detail.ASSURANCE_LABELS, (
+        "the share page kept its own copy of the assurance vocabulary"
+    )
+
+
+def test_the_run_page_says_points_and_never_credits(client):
+    """The unit is POINTS, on this route as on the ones already covered.
+
+    `tests/test_console_language.py` holds `/`, `/dashboard` and `/try` to
+    this and never covered `/run/{id}`, so the page shipped "credits" in prose
+    and as a column header sitting under a "Points settled" heading. The
+    ledger's field name is still `credits`; what a reader sees is not.
+    """
+    settled = [
+        {"contributor": "node-7c22", "type": "compute", "credits": 5, "for": "building"},
+        {"contributor": "orchestrator", "type": "review", "credits": 3, "for": "reviewing"},
+    ]
+    run = _published(credits=settled)
+    body = _visible(client.get(f"/run/{run}").text)
+
+    assert "Points" in body, "the settlement column lost its unit"
+    assert not re.search(r"\bcredits\b", body, re.I), (
+        "the run page serves 'credits' as a unit to the reader"
+    )
+    # The figures still come from the ledger's own field, so the rename is a
+    # word on the page and not a change to what is counted.
+    assert "+5" in body and "+3" in body, "the settled rows stopped rendering"
+
+
+def test_the_unitemised_settlement_note_says_points_too(client):
+    """The branch most runs take, and the one that carried the sentence."""
+    run = _published()
+    body = _visible(client.get(f"/run/{run}").text)
+    assert "ledger recorded the points" in body
+    assert not re.search(r"\bcredits\b", body, re.I)
+
+
+def test_an_intact_chain_draws_no_key_for_a_cell_it_does_not_draw(client):
+    """`Ledger Chain.dc.html` lists a "genesis boundary" key on the intact state.
+
+    A ledger with nothing predating the chain draws no hollow cell, so that
+    key points at nothing on screen — and a legend entry with no cell beneath
+    it reads as a state the strip is in rather than one it is not. The key
+    belongs to the two states that do draw the cell.
+    """
+    _seed_chain(4)
+    run = _published()
+    panel = _chain_panel(_surfaces(client, run)["console"])
+
+    assert "link walked" in panel, "the one key the intact strip needs is gone"
+    assert "genesis boundary" not in panel, (
+        "the intact chain advertises a swatch the strip does not draw"
+    )
+    assert "no link recorded" not in panel
+    # The cell that key would have named is genuinely absent, which is what
+    # makes dropping the key right rather than merely tidier.
+    assert run_detail._CHAIN_PRECHAIN not in panel
+
+
+def test_a_chain_with_a_genesis_head_keeps_the_key_and_draws_the_cell(client):
+    """The other half, so the fix above cannot pass by deleting the key outright."""
+    _seed_unchained(3)
+    _seed_chain(4)
+    run = _published()
+    panel = _chain_panel(_surfaces(client, run)["console"])
+
+    assert run_detail._CHAIN_PRECHAIN in panel, (
+        "the genesis cells are not drawn, so this asserts nothing"
+    )
+    assert "no link recorded" in panel, (
+        "the hollow cell is drawn with no key naming it"
+    )
