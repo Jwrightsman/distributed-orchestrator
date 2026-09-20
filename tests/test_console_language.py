@@ -33,6 +33,7 @@ the normative source for the first two:
 from __future__ import annotations
 
 import ast
+import json
 import re
 from pathlib import Path
 
@@ -308,3 +309,55 @@ def test_no_rendering_module_contains_a_banned_phrase(module):
     text = (root / module).read_text(encoding="utf-8").lower()
     for phrase in BANNED_PHRASES:
         assert phrase not in text, f"{module} contains the prohibited phrase {phrase!r}"
+
+
+def test_the_run_page_carries_no_prohibited_language(client):
+    """The route the served-page rule did not cover, and the one it most needed.
+
+    `/run/{id}` is the page whose subject is what a machine earned and whose
+    panels carry the manifest and the envelope — the two records the banned
+    words would overstate. It was not in the parametrised list above, and its
+    module is checked for the banned *words* but not for credits-as-a-unit, so
+    the page shipped "credits" in prose and as a column header sitting under a
+    "Points settled" heading. Both layers missed it; this closes the route.
+
+    A run is written to disk here rather than fixtured, because what is being
+    checked is what the server actually sends for a real one.
+    """
+    run_dir = Path("output") / "20260908_120000"
+    (run_dir / "code").mkdir(parents=True, exist_ok=True)
+    review = "## Quality Rating\nPASS\n\n## Final Output\n```python\nprint('hi')\n```"
+    (run_dir / "full_log.json").write_text(json.dumps({
+        "task": "Add a --since flag",
+        "timestamp": "20260908_120000",
+        "plan": [{"id": 1, "title": "Parse", "description": "d", "depends_on": []}],
+        "results": {"1": "out"},
+        "review": review,
+        "rating": "PASS",
+        "code_files": [],
+        "code_problems": [],
+        "mode": "local",
+        # The itemised branch, which is the one that renders the column.
+        "credits": [
+            {"contributor": "node-7c22", "type": "compute", "credits": 5, "for": "building"},
+        ],
+    }), encoding="utf-8")
+    (run_dir / "review.md").write_text(review, encoding="utf-8")
+    (run_dir / "output.md").write_text("done", encoding="utf-8")
+
+    response = client.get("/run/20260908_120000")
+    assert response.status_code == 200, response.text[:300]
+    body = visible_text(response.text)
+    lowered = body.lower()
+
+    # The page really did render the settlement, so this is not passing on an
+    # absent section.
+    assert "Points" in body, "the settlement column did not render"
+
+    for phrase in BANNED_PHRASES:
+        assert phrase not in lowered, f"/run served the prohibited phrase {phrase!r}"
+    for word, pattern in _WORD.items():
+        found = pattern.search(body)
+        assert not found, f"/run served the prohibited word {found.group(0)!r}"
+    assert not CREDITS_AS_A_UNIT.search(body), "/run served 'credits' as a unit"
+    assert not QUALITY_PERCENTAGE.search(body), "/run served a quality percentage"
