@@ -25,6 +25,7 @@ _WORKER_BOUNDARY_SPANS: tuple[tuple[str, str, str], ...] = (
     ("POST", "/tokens", "mycelium.worker.token_batch"),
     ("POST", "/heartbeat", "mycelium.worker.heartbeat"),
     ("POST", "/drain", "mycelium.worker.drain"),
+    ("POST", "/leave", "mycelium.worker.leave"),
     ("POST", "/nodes/register", "mycelium.worker.registration"),
 )
 

@@ -107,6 +107,7 @@ def test_deliberate_public_get_allowlist(viewer_config, gated_app, path):
         ("POST", "/tasks/task-1/tokens"),
         ("POST", "/nodes/worker-1/heartbeat"),
         ("POST", "/nodes/worker-1/drain"),
+        ("POST", "/nodes/worker-1/leave"),
     ],
 )
 def test_separately_authenticated_protocol_routes_are_not_viewer_gated(
@@ -122,6 +123,7 @@ def test_separately_authenticated_protocol_routes_are_not_viewer_gated(
     [
         ("GET", "/nodes/worker-1/heartbeat"),
         ("POST", "/nodes/worker-1/heartbeat/extra"),
+        ("GET", "/nodes/worker-1/leave"),
         ("GET", "/tasks/task-1/tokens"),
         ("POST", "/tasks/task-1/unknown"),
     ],

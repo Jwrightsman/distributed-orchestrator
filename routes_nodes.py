@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from access_control import require_viewer
 from capability_evidence import (
@@ -127,8 +127,13 @@ def _descriptor_for_session(session_record):
     return parsed
 
 
-def _reclaim_replaced_session(node_id: str, replaced_session_id: str) -> None:
-    """Close and requeue work that belonged to a replaced stale session."""
+def _reclaim_replaced_session(
+    node_id: str,
+    replaced_session_id: str,
+    *,
+    reason: str = "node session was replaced after staleness",
+) -> None:
+    """Close and requeue work that belonged to a replaced or ended session."""
 
     with state._task_queue_lock:
         task_ids = [
@@ -148,7 +153,7 @@ def _reclaim_replaced_session(node_id: str, replaced_session_id: str) -> None:
                     and state.attempt_store.transition_active(
                         attempt_id=attempt_id,
                         state="reclaimed",
-                        reason="assigned node session was replaced after staleness",
+                        reason=f"assigned {reason}",
                         terminal_cause="session_replaced",
                     )
                 )
@@ -176,7 +181,7 @@ def _reclaim_replaced_session(node_id: str, replaced_session_id: str) -> None:
                 "task_id": task_id,
                 "node_id": node_id,
                 "enrollment_id": enrollment_id,
-                "reason": "node session replaced after staleness",
+                "reason": reason,
             })
 
 
@@ -1267,6 +1272,84 @@ async def drain_node(node_id: str, request: Request):
         "session_id": session_record.session_id,
         "draining": True,
         "current_task": nodes[session_record.node_id].get("current_task"),
+    }
+
+
+class NodeLeaveRequest(BaseModel):
+    """Body of `POST /nodes/{node_id}/leave`. Absent means `{}`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    revoke_enrollment: bool = False
+
+
+@router.post("/nodes/{node_id}/leave")
+async def leave_node(
+    node_id: str, request: Request, body: NodeLeaveRequest | None = None
+):
+    """End this worker's session now, and optionally retire its own enrollment.
+
+    Authority is the caller's own current session, exactly as for drain, so a
+    worker can only ever end itself. Without `revoke_enrollment` this is the
+    clean version of closing the window: the session is invalidated, work bound
+    to it is requeued, and the node leaves the online list immediately instead
+    of after the staleness interval. The enrollment stays active, and the same
+    identity file registers again later.
+
+    With `revoke_enrollment` it is what `worker_installer.py uninstall` means by
+    leaving for good: the enrollment is durably revoked through the same store
+    call and reclaim path as the operator's `node_enrollment_admin.py revoke`,
+    history is kept, and the label is never reusable. There is deliberately no
+    self-service undo; re-joining is a new bootstrap under a new label.
+    """
+
+    session_record = _check_node_session(request, node_id)
+    revoke = bool(body is not None and body.revoke_enrollment)
+    tracing.annotate_request(
+        request,
+        node_label=session_record.node_id,
+        session_id=session_record.session_id,
+        enrollment_id=session_record.enrollment_id,
+    )
+    if revoke:
+        if session_record.enrollment_id is None:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "node_not_enrolled",
+                    "message": "this session has no durable enrollment to revoke",
+                },
+            )
+        state.enrollment_store.revoke(
+            session_record.enrollment_id, "revoked by its own worker on leaving"
+        )
+        state.reclaim_enrollment_work(
+            session_record.enrollment_id, "worker left and revoked its enrollment"
+        )
+    else:
+        state.node_sessions.invalidate_node(
+            session_record.node_id, session_id=session_record.session_id
+        )
+        _reclaim_replaced_session(
+            session_record.node_id,
+            session_record.session_id,
+            reason="node session ended by its worker",
+        )
+        state.waiting_nodes.pop(session_record.node_id, None)
+        nodes.pop(session_record.node_id, None)
+    _emit("node_left", {
+        "node_id": session_record.node_id,
+        "enrollment_id": session_record.enrollment_id,
+        "session_id": session_record.session_id,
+        "enrollment_revoked": revoke,
+    })
+    return {
+        "ok": True,
+        "node_id": session_record.node_id,
+        "enrollment_id": session_record.enrollment_id,
+        "session_id": session_record.session_id,
+        "session_ended": True,
+        "enrollment_revoked": revoke,
     }
 
 

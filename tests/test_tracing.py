@@ -598,6 +598,7 @@ def test_the_metrics_surface_is_unchanged(harness):
         ("POST", "/tasks/t0/tokens", "mycelium.worker.token_batch"),
         ("POST", "/nodes/n0/heartbeat", "mycelium.worker.heartbeat"),
         ("POST", "/nodes/n0/drain", "mycelium.worker.drain"),
+        ("POST", "/nodes/n0/leave", "mycelium.worker.leave"),
         ("POST", "/nodes/register", "mycelium.worker.registration"),
         ("GET", "/dashboard", None),
         ("GET", "/metrics", None),

@@ -57,7 +57,7 @@ _PITCH_AUTH_EXACT: set[tuple[str, str]] = {
 }
 
 _WORKER_TASK_POST = re.compile(r"^/tasks/[^/]+/(?:result|stream|tokens)$")
-_WORKER_NODE_POST = re.compile(r"^/nodes/[^/]+/(?:heartbeat|drain)$")
+_WORKER_NODE_POST = re.compile(r"^/nodes/[^/]+/(?:heartbeat|drain|leave)$")
 
 
 def _viewer_key() -> str:
