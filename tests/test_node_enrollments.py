@@ -518,7 +518,9 @@ def test_revocation_is_isolated_rejects_operations_and_reclaims_work(enrolled_se
     assert state.attempt_store.get(stream_task["attempt_id"]).state == "reclaimed"
 
 
-@pytest.mark.parametrize("operation", ["heartbeat", "poll", "drain", "stream", "result"])
+@pytest.mark.parametrize(
+    "operation", ["heartbeat", "poll", "drain", "leave", "stream", "result"]
+)
 def test_each_worker_operation_observes_revocation_before_session_eviction(
     enrolled_server, operation
 ):
@@ -544,6 +546,10 @@ def test_each_worker_operation_observes_revocation_before_session_eviction(
         )
     elif operation == "drain":
         response = client.post("/nodes/worker/drain", headers=headers)
+    elif operation == "leave":
+        response = client.post(
+            "/nodes/worker/leave", headers=headers, json={"revoke_enrollment": True}
+        )
     elif operation == "stream":
         body = _result_body(task, "worker")
         body.pop("output")
@@ -740,3 +746,85 @@ def test_operator_listing_is_protected_and_contains_no_credential_material(
         sql_export = "\n".join(con.iterdump())
     assert CREDENTIAL_C not in sql_export
     assert CREDENTIAL_B not in sql_export
+
+
+# ── A worker ending its own session, or leaving for good ────────────────────
+
+
+def test_leave_ends_the_session_and_requeues_its_work_but_keeps_the_enrollment(
+    enrolled_server,
+):
+    client, _settings, _path = enrolled_server
+    registration = _bootstrap(client, "worker", CREDENTIAL_A)
+    headers = _session_headers(registration)
+    _queue_task("task-leave")
+    task = client.get("/tasks/next", params={"node_id": "worker"}, headers=headers).json()
+
+    response = client.post("/nodes/worker/leave", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()["session_ended"] is True
+    assert response.json()["enrollment_revoked"] is False
+    assert "worker" not in state.nodes, "a worker that left must not still count as online"
+    assert client.post("/nodes/worker/heartbeat", headers=headers).status_code == 401
+    assert state.attempt_store.get(task["attempt_id"]).state == "reclaimed"
+    assert state.task_queue[0]["task_id"] == "task-leave"
+    assert state.enrollment_store.get_by_node("worker").status == "active"
+    assert _returning(client, "worker", CREDENTIAL_A).status_code == 200
+
+
+def test_leave_with_revocation_retires_the_enrollment_and_its_name(enrolled_server):
+    client, _settings, _path = enrolled_server
+    registration = _bootstrap(client, "worker", CREDENTIAL_A)
+    other = _bootstrap(client, "other", CREDENTIAL_B)
+    headers = _session_headers(registration)
+    _queue_task("task-revoke")
+    task = client.get("/tasks/next", params={"node_id": "worker"}, headers=headers).json()
+
+    response = client.post(
+        "/nodes/worker/leave", headers=headers, json={"revoke_enrollment": True}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["enrollment_revoked"] is True
+    assert state.enrollment_store.get_by_node("worker").status == "revoked"
+    assert "worker" not in state.nodes
+    assert state.attempt_store.get(task["attempt_id"]).state == "reclaimed"
+    assert state.task_queue[0]["task_id"] == "task-revoke"
+    returning = _returning(client, "worker", CREDENTIAL_A)
+    assert returning.status_code == 403
+    assert returning.json()["detail"]["code"] == "node_enrollment_revoked"
+    rejoin = _bootstrap(client, "worker", CREDENTIAL_C)
+    assert rejoin.status_code == 403, "a retired name must not be claimable again"
+    assert client.post(
+        "/nodes/other/heartbeat", headers=_session_headers(other)
+    ).status_code == 200, "leaving must not touch any other worker"
+
+
+def test_leave_needs_the_callers_own_session(enrolled_server):
+    client, _settings, _path = enrolled_server
+    a = _bootstrap(client, "worker-a", CREDENTIAL_A)
+    _bootstrap(client, "worker-b", CREDENTIAL_B)
+
+    assert client.post(
+        "/nodes/worker-b/leave", json={"revoke_enrollment": True}
+    ).status_code == 401
+    assert client.post(
+        "/nodes/worker-b/leave",
+        headers=_session_headers(a),
+        json={"revoke_enrollment": True},
+    ).status_code == 401, "one worker's session must never remove another"
+    assert state.enrollment_store.get_by_node("worker-b").status == "active"
+    assert "worker-b" in state.nodes
+
+
+def test_leave_refuses_unknown_body_fields(enrolled_server):
+    client, _settings, _path = enrolled_server
+    registration = _bootstrap(client, "worker", CREDENTIAL_A)
+    response = client.post(
+        "/nodes/worker/leave",
+        headers=_session_headers(registration),
+        json={"revoke_enrollment": True, "node_id": "someone-else"},
+    )
+    assert response.status_code == 422
+    assert state.enrollment_store.get_by_node("worker").status == "active"

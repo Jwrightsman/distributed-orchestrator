@@ -35,7 +35,7 @@ contributor's, and doing any of them quietly is how a machine ends up different
 from the way its owner left it.
 
 Order matters more than it looks. The consent screen comes before the model
-download, not after it, because a 2.5 GB write is itself a thing somebody has
+download, not after it, because a 3.4 GB write is itself a thing somebody has
 to agree to — ROADMAP §2 makes that a permanent constraint and
 `tests/test_worker_installer.py` holds the order in place.
 
@@ -53,6 +53,7 @@ import getpass
 import os
 import platform
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -63,8 +64,10 @@ from rich.console import Console
 from rich.panel import Panel
 
 from config import get as get_config
+from node_sessions import NODE_ID_MAX_LENGTH
 from ollama_client import DEFAULT_MODEL, check_ollama
 from worker_identity import (
+    WorkerIdentity,
     WorkerIdentityError,
     create_worker_identity,
     default_identity_file,
@@ -121,6 +124,16 @@ _MODEL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,127}$")
 
 _HTTP_TIMEOUT = 15.0
 
+#: Pauses between registration attempts after a dropped connection. Retrying is
+#: safe because bootstrap is idempotent for the same enrollment credential: if
+#: the first request did arrive, the retry converges on the enrollment it made.
+_REGISTRATION_RETRY_DELAYS = (2.0, 5.0)
+
+#: Rejections that mean "this name is taken here", as opposed to a bad code.
+_NAME_TAKEN_CODES = frozenset(
+    {"node_enrollment_label_conflict", "node_enrollment_revoked"}
+)
+
 
 class InstallerError(RuntimeError):
     """A step failed for a reason the contributor can be told plainly."""
@@ -176,8 +189,11 @@ def running_privileged() -> bool:
     return False
 
 
-def check_privileges() -> None:
-    _step(1, "Checking that this is not running with administrator rights")
+def check_privileges(*, numbered: bool = True) -> None:
+    # Uninstall runs this check too, and "Step 1/9" there reads as though a
+    # nine-step install were starting.
+    if numbered:
+        _step(1, "Checking that this is not running with administrator rights")
     if running_privileged():
         raise InstallerError(
             "This is running as root or Administrator, and it will not continue.",
@@ -395,9 +411,21 @@ def _read_line(prompt: str) -> str:
             ),
         )
     try:
-        return input(prompt).strip()
+        return _without_control_characters(input(prompt))
     except (EOFError, KeyboardInterrupt):
         raise InstallerError("Cancelled — nothing was changed.", EXIT_INTERRUPTED) from None
+
+
+def _without_control_characters(typed: str) -> str:
+    """What was typed, minus invisible keystrokes, trimmed.
+
+    On a Windows console, Ctrl+V at a prompt can arrive as a literal ^V
+    (U+0016) ahead of the pasted text. At the hidden invitation prompt that is
+    invisible and silently corrupts the code. No address or invitation code
+    contains a control character, so dropping them cannot change a real one.
+    """
+
+    return "".join(ch for ch in typed if ch.isprintable()).strip()
 
 
 def ask_coordinator(supplied: str | None = None) -> str:
@@ -431,11 +459,17 @@ def ask_coordinator(supplied: str | None = None) -> str:
 
 # ── Step 5: plain-language consent ───────────────────────────────────────────
 
-def consent_text(origin: str, model: str, identity_path: Path) -> str:
+def consent_text(
+    origin: str, model: str, identity_path: Path, node_name: str | None = None
+) -> str:
     """The paragraph you would want to read before installing a stranger's software."""
 
+    listed_as = (
+        f"It will be listed there as [bold]{node_name}[/bold].\n\n" if node_name else "\n"
+    )
     return (
-        f"Your computer is about to join [cyan]{origin}[/cyan] as a worker.\n\n"
+        f"Your computer is about to join [cyan]{origin}[/cyan] as a worker.\n"
+        f"{listed_as}"
         "[bold]In ordinary English:[/bold]\n"
         "  Whoever runs that address will send your computer pieces of writing —\n"
         "  prompts — and your computer will run an AI model on them and send the\n"
@@ -449,9 +483,10 @@ def consent_text(origin: str, model: str, identity_path: Path) -> str:
         "  rather finish the piece of work you are holding. One command removes\n"
         "  everything this installer set up. Both are printed at the end.\n\n"
         "[bold]What this costs you:[/bold]\n"
-        f"  - about 2.5 GB of disk for the [bold]{model}[/bold] model, if you do not have it\n"
+        f"  - about 3.4 GB of disk for the [bold]{model}[/bold] model, if you do not have it\n"
         "  - your processor running flat out, in bursts of minutes, while it works\n"
-        "  - 8 GB of memory is the practical minimum\n"
+        "  - 8 GB of memory is the practical minimum; the model itself uses about\n"
+        "    6 GB of it while a piece of work is running\n"
         "  - very little network; a task spends about 2% of its time on the wire\n\n"
         "[bold]What will be written to this computer:[/bold]\n"
         f"  - the model, into Ollama's own store\n"
@@ -466,11 +501,13 @@ def consent_text(origin: str, model: str, identity_path: Path) -> str:
     )
 
 
-def confirm(origin: str, model: str, identity_path: Path) -> None:
+def confirm(
+    origin: str, model: str, identity_path: Path, node_name: str | None = None
+) -> None:
     _step(5, "What is about to happen")
     console.print(
         Panel(
-            consent_text(origin, model, identity_path),
+            consent_text(origin, model, identity_path, node_name),
             title="[bold]Please read this before agreeing[/bold]",
             border_style="yellow",
         )
@@ -532,7 +569,7 @@ def read_invitation(invitation_file: Path | None) -> str:
         "      [dim]Nothing will appear as you type — that is normal.[/dim]"
     )
     try:
-        secret = getpass.getpass("  Invitation code: ").strip()
+        secret = _without_control_characters(getpass.getpass("  Invitation code: "))
     except (EOFError, KeyboardInterrupt):
         raise InstallerError("Cancelled — nothing was changed.", EXIT_INTERRUPTED) from None
     if not secret:
@@ -572,7 +609,7 @@ async def ensure_model(model: str, present: list[str]) -> str | None:
         _ok("already downloaded")
     else:
         console.print(
-            "      [dim]Downloading about 2.5 GB. This can take a while; "
+            "      [dim]Downloading about 3.4 GB. This can take a while; "
             "progress is Ollama's own.[/dim]"
         )
         try:
@@ -588,7 +625,7 @@ async def ensure_model(model: str, present: list[str]) -> str | None:
                 f"Downloading {model} failed.",
                 EXIT_MODEL_FAILED,
                 hint=(
-                    "Check that you are online and have about 3 GB free, then run "
+                    "Check that you are online and have about 4 GB free, then run "
                     f"this again. You can also try it directly: ollama pull {model}"
                 ),
             )
@@ -716,8 +753,10 @@ async def enrol(
     identity_path: Path,
     invitation: str,
     model: str,
+    *,
+    resume: WorkerIdentity | None = None,
 ) -> None:
-    """Create the identity file, then register once, then remember the enrolment."""
+    """Create (or resume) the identity file, register, remember the enrolment."""
 
     _step(8, "Introducing this computer to the coordinator")
 
@@ -751,24 +790,30 @@ async def enrol(
         f"{window.get('node_protocol_min')}–{window.get('node_protocol_max')})"
     )
 
-    try:
-        identity = create_worker_identity(
-            identity_path, coordinator=origin, node_id=node_id
-        )
-    except WorkerIdentityError as exc:
-        raise InstallerError(
-            f"Could not create the identity file: {exc}",
-            EXIT_IDENTITY,
-            hint=(
-                "If you have joined this coordinator from this machine before, "
-                "the file already exists and nothing needs to be done. To start "
-                "over, run 'python worker_installer.py uninstall' first."
-            ),
-        ) from None
-    _ok(f"private identity written to {identity_path}")
+    if resume is not None:
+        identity = resume
+        _ok(f"picking up the unfinished join saved in {identity_path}")
+    else:
+        try:
+            identity = create_worker_identity(
+                identity_path, coordinator=origin, node_id=node_id
+            )
+        except WorkerIdentityError as exc:
+            raise InstallerError(
+                f"Could not create the identity file: {exc}",
+                EXIT_IDENTITY,
+                hint=(
+                    "To start over, run 'python worker_installer.py uninstall' "
+                    "first."
+                ),
+            ) from None
+        _ok(f"private identity written to {identity_path}")
+
+    from node import NodeRegistrationRejected
 
     try:
-        registration = await register(
+        registration = await _register_with_retries(
+            register,
             origin,
             node_id,
             secret=invitation,
@@ -777,6 +822,23 @@ async def enrol(
             enrollment_action="bootstrap",
             enrollment_credential=identity.enrollment_credential,
         )
+    except (httpx.TransportError, NodeRegistrationRejected) as exc:
+        if isinstance(exc, httpx.TransportError) or exc.retryable:
+            # The request may have arrived even though the answer did not. The
+            # file is kept so a rerun retries with the same credential and
+            # converges; deleting it could strand an enrollment nobody holds.
+            raise InstallerError(
+                f"Lost the connection to {origin} partway through joining.",
+                EXIT_UNREACHABLE,
+                hint=(
+                    "This is a network problem, not your invitation code. Your "
+                    "place is saved: run the same command again and it will pick "
+                    "up where it stopped, without creating a second entry.\n"
+                    f"[technical detail: {type(exc).__name__}]"
+                ),
+            ) from None
+        _remove_identity_file(identity_path)
+        raise _rejection_error(exc, node_id, invitation, identity) from None
     except Exception as exc:
         _remove_identity_file(identity_path)
         message = _safe_message(exc, invitation, identity.enrollment_credential)
@@ -784,9 +846,9 @@ async def enrol(
             f"The coordinator did not accept this computer: {message}",
             EXIT_REGISTRATION,
             hint=(
-                "The most common cause is a mistyped invitation code. Nothing was "
-                "left behind — the identity file just created has been removed, so "
-                "running this again starts cleanly."
+                "Nothing was left behind, so running this again starts cleanly. "
+                "If it happens again, send the line above to whoever runs the "
+                "coordinator."
             ),
         ) from None
 
@@ -811,6 +873,117 @@ async def enrol(
             ),
         ) from None
     _ok("registered, and this machine now has its own revocable credential")
+
+    # Registering opened a session, and a session counts as a worker online.
+    # Nothing is going to poll on it, so end it now rather than showing the
+    # operator a phantom worker for the next ninety seconds.
+    await _end_session(origin, node_id, str(registration.get("session_token") or ""))
+
+
+async def _register_with_retries(register, origin: str, node_id: str, **kwargs) -> dict:
+    """Register, retrying a dropped connection or a busy coordinator.
+
+    Only safe because every attempt carries the same enrollment credential:
+    bootstrap is idempotent for it, so a request that did arrive the first time
+    is recognised rather than duplicated.
+    """
+
+    from node import NodeRegistrationRejected
+
+    delays = list(_REGISTRATION_RETRY_DELAYS)
+    while True:
+        try:
+            return await register(origin, node_id, **kwargs)
+        except httpx.TransportError as exc:
+            if not delays:
+                raise
+            delay = delays.pop(0)
+            _info(
+                f"The connection dropped ({type(exc).__name__}); trying again in "
+                f"{delay:.0f}s with the same details."
+            )
+        except NodeRegistrationRejected as exc:
+            if not exc.retryable or not delays:
+                raise
+            delay = delays.pop(0)
+            _info(f"The coordinator is busy; trying again in {delay:.0f}s.")
+        await asyncio.sleep(delay)
+
+
+def _rejection_error(
+    exc: BaseException, node_id: str, invitation: str, identity: WorkerIdentity
+) -> InstallerError:
+    """Say which of the three different things a refusal actually meant."""
+
+    code = getattr(exc, "code", "")
+    status = getattr(exc, "status_code", 0)
+    if code in _NAME_TAKEN_CODES:
+        return InstallerError(
+            f"The name '{node_id}' is already taken on this coordinator.",
+            EXIT_REGISTRATION,
+            hint=(
+                "Every computer needs its own name there, and a name that has been "
+                "used once, even by this computer before it left, cannot be used "
+                "again. Your invitation code was fine. Nothing was left behind; "
+                "run this again with a new name:\n"
+                f"  python worker_installer.py --node-id {default_node_name()}"
+            ),
+        )
+    if status == 401 and code == "node_registration_rejected":
+        return InstallerError(
+            "The coordinator did not accept the invitation code.",
+            EXIT_REGISTRATION,
+            hint=(
+                "Check it with whoever invited you and run this again; one wrong "
+                "character is the usual cause. Nothing was left behind."
+            ),
+        )
+    message = _safe_message(exc, invitation, identity.enrollment_credential)
+    return InstallerError(
+        f"The coordinator did not accept this computer: {message}",
+        EXIT_REGISTRATION,
+        hint=(
+            "Nothing was left behind, so running this again starts cleanly. If it "
+            "happens again, send the line above to whoever runs the coordinator."
+        ),
+    )
+
+
+async def _end_session(origin: str, node_id: str, token: str) -> None:
+    """Close the session registration opened. Best effort and silent.
+
+    A coordinator older than `POST /nodes/{id}/leave` answers 404, and the
+    session then simply goes stale on its own, which is how it always worked.
+    """
+
+    if not token:
+        return
+    try:
+        async with httpx.AsyncClient(
+            timeout=_HTTP_TIMEOUT, trust_env=False, follow_redirects=False
+        ) as client:
+            await client.post(
+                f"{origin}/nodes/{node_id}/leave",
+                headers={"X-Node-Session": token},
+                json={},
+            )
+    except httpx.HTTPError:
+        pass
+
+
+def default_node_name(hostname: str | None = None, suffix: str | None = None) -> str:
+    """The computer's name plus a short random tail, e.g. 'laptop-3f9a'.
+
+    A coordinator never lets a name be used twice, even by the same computer
+    after it has left. A bare hostname therefore made re-joining a dead end, so
+    the default is unique per join instead.
+    """
+
+    raw = (platform.node() if hostname is None else hostname).strip().casefold()
+    base = re.sub(r"[^a-z0-9._:-]+", "-", raw).strip("-._:") or "worker"
+    tail = suffix or secrets.token_hex(2)
+    base = base[: NODE_ID_MAX_LENGTH - len(tail) - 1]
+    return normalize_worker_node_id(f"{base}-{tail}")
 
 
 def _safe_message(error: BaseException, *secrets_to_hide: str) -> str:
@@ -843,25 +1016,30 @@ def _remove_identity_file(identity_path: Path) -> bool:
 
 # ── Step 9: what to do next ──────────────────────────────────────────────────
 
-def print_next_steps(origin: str, identity_path: Path) -> None:
+def _start_command(origin: str) -> str:
+    # node.py reads the enrolled name back from the identity file, so the
+    # command is the same whatever --node-id was used here.
+    return f"python node.py --server {origin}"
+
+
+def print_next_steps(origin: str, node_name: str, identity_path: Path) -> None:
     _step(9, "Done")
     console.print(
         Panel(
-            "[bold green]This computer has joined the network.[/bold green]\n\n"
+            "[bold green]This computer has joined the network[/bold green] "
+            f"as [bold]{node_name}[/bold].\n\n"
             "[bold]To start working:[/bold]\n"
-            f"  [cyan]python node.py --server {origin}[/cyan]\n"
+            f"  [cyan]{_start_command(origin)}[/cyan]\n"
             "  It waits for tasks and shows each one as it arrives. You do not\n"
             "  need the invitation code again — this machine has its own now.\n\n"
             "[bold]To stop:[/bold]\n"
             "  Press [cyan]Ctrl+C[/cyan], or close the window. Work you were holding\n"
-            "  goes back to the network and is given to somebody else.\n\n"
-            "[bold]To stop taking new work but finish what you have (drain):[/bold]\n"
-            "  Press [cyan]Ctrl+C[/cyan] once and let the current task finish, or run\n"
-            "  [cyan]python worker_installer.py uninstall[/cyan], which drains first.\n\n"
-            "[bold]To remove everything this set up:[/bold]\n"
+            "  goes back to the network and is given to somebody else. You stay a\n"
+            "  member, and the same command starts you again later.\n\n"
+            "[bold]To leave for good:[/bold]\n"
             "  [cyan]python worker_installer.py uninstall[/cyan]\n"
-            f"  It tells the coordinator you are leaving and deletes\n"
-            f"  [dim]{identity_path}[/dim].\n"
+            "  It tells the coordinator to remove this computer permanently and\n"
+            f"  deletes [dim]{identity_path}[/dim].\n"
             "  It will not remove Ollama or the model — those are yours, and it\n"
             "  says so rather than deciding for you.",
             title="[bold]You are in[/bold]",
@@ -870,7 +1048,47 @@ def print_next_steps(origin: str, identity_path: Path) -> None:
     )
 
 
+def print_already_joined(origin: str, node_name: str, identity_path: Path) -> None:
+    console.print(
+        Panel(
+            f"This computer has already joined [cyan]{origin}[/cyan] as "
+            f"[bold]{node_name}[/bold]. There is nothing more to set up.\n\n"
+            "[bold]To start working:[/bold]\n"
+            f"  [cyan]{_start_command(origin)}[/cyan]\n\n"
+            "[bold]To leave for good, or to join again under a new name:[/bold]\n"
+            "  [cyan]python worker_installer.py uninstall[/cyan]\n"
+            f"  (this deletes [dim]{identity_path}[/dim])",
+            title="[bold]Already a member[/bold]",
+            border_style="green",
+        )
+    )
+
+
 # ── The install flow ─────────────────────────────────────────────────────────
+
+def _existing_identity(target: Path, origin: str) -> WorkerIdentity | None:
+    """What an earlier run left at `target`, if anything.
+
+    A finished join (enrollment ID recorded) means there is nothing to do. An
+    unfinished one — the connection dropped after the file was written — is
+    resumed with the same credential, which the coordinator recognises if the
+    first attempt did arrive.
+    """
+
+    if not target.exists() and not target.is_symlink():
+        return None
+    try:
+        return load_worker_identity(target, coordinator=origin)
+    except WorkerIdentityError as exc:
+        raise InstallerError(
+            f"There is already an identity file for this address, and it cannot be used: {exc}",
+            EXIT_IDENTITY,
+            hint=(
+                "Run 'python worker_installer.py uninstall' to remove it, then run "
+                "this again."
+            ),
+        ) from None
+
 
 async def install(
     *,
@@ -885,49 +1103,81 @@ async def install(
     origin = ask_coordinator(coordinator)
 
     model = _validate_model_name(str(get_config().get("model") or DEFAULT_MODEL))
+    target = (
+        Path(identity_file).expanduser()
+        if identity_file is not None
+        else default_identity_file(origin)
+    )
+    existing = _existing_identity(target, origin)
+    if existing is not None and existing.enrollment_id is not None:
+        print_already_joined(origin, existing.node_id, target)
+        return EXIT_OK
+
     try:
-        label = normalize_worker_node_id(node_id or platform.node())
-        target = (
-            Path(identity_file).expanduser()
-            if identity_file is not None
-            else default_identity_file(origin)
-        )
+        requested = normalize_worker_node_id(node_id) if node_id else None
     except WorkerIdentityError as exc:
         raise InstallerError(
-            f"This computer's name cannot be used as a node name: {exc}",
+            f"That name cannot be used: {exc}",
             EXIT_IDENTITY,
-            hint="Run again with --node-id and a simple name, such as --node-id laptop.",
+            hint="Use letters, numbers and dashes, such as --node-id laptop.",
         ) from None
+    if existing is not None:
+        label = existing.node_id
+        if requested is not None and requested != label:
+            raise InstallerError(
+                f"An unfinished join as '{label}' is saved on this computer.",
+                EXIT_IDENTITY,
+                hint=(
+                    f"Run this again without --node-id to finish it as '{label}', "
+                    "or run 'python worker_installer.py uninstall' to discard it."
+                ),
+            )
+        _info(f"An unfinished join as '{label}' was found; this run will finish it.")
+    else:
+        label = requested or default_node_name()
 
     # Consent covers the model download as well as the identity file, so it has
     # to come before both. ROADMAP §2: consent before installation, always.
-    confirm(origin, model, target)
+    confirm(origin, model, target, label)
 
     invitation = read_invitation(invitation_file)
     await ensure_model(model, present)
-    await enrol(origin, label, target, invitation, model)
-    print_next_steps(origin, target)
+    await enrol(origin, label, target, invitation, model, resume=existing)
+    print_next_steps(origin, label, target)
     return EXIT_OK
 
 
 # ── Uninstall ────────────────────────────────────────────────────────────────
 
-async def _drain(origin: str, identity_path: Path, model: str) -> str:
-    """Tell the coordinator this machine is leaving. Best effort, and honest.
+async def _leave(origin: str, identity_path: Path, model: str) -> tuple[str, bool]:
+    """Ask the coordinator to remove this machine for good. Best effort, honest.
 
-    Draining needs a live session, and a session only exists after registering,
-    so this registers once with the credential already on disk and then drains
-    that session. If the coordinator cannot be reached, that is reported rather
-    than hidden — and the credential is removed either way, because the
-    contributor asked to leave.
+    Returns what happened and whether the removal is confirmed. Leaving needs a
+    live session, and a session only exists after registering, so this
+    registers once with the credential on disk and then revokes that
+    enrollment through it. If the coordinator cannot be reached, or is too old
+    to offer self-removal, that is reported rather than hidden — and the
+    credential is deleted either way, because the contributor asked to leave.
     """
 
-    from node import build_stock_capability_descriptor, register
+    from node import (
+        NodeRegistrationRejected,
+        build_stock_capability_descriptor,
+        register,
+    )
 
     try:
         identity = load_worker_identity(identity_path, coordinator=origin)
     except WorkerIdentityError as exc:
-        return f"could not read the identity file ({exc}); nothing was sent"
+        return f"could not read the identity file ({exc}); nothing was sent", False
+    if identity.enrollment_id is None:
+        # The first attempt may still have arrived. Without the invitation code
+        # there is no way to ask, so do not claim more than is known.
+        return (
+            "this computer never finished joining, so there is probably nothing "
+            f"to remove; if there is, it is listed as '{identity.node_id}'",
+            False,
+        )
 
     config = get_config()
     try:
@@ -946,29 +1196,74 @@ async def _drain(origin: str, identity_path: Path, model: str) -> str:
             enrollment_action="returning",
             enrollment_credential=identity.enrollment_credential,
         )
+    except NodeRegistrationRejected as exc:
+        if exc.code == "node_enrollment_revoked":
+            return "the coordinator had already removed this computer", True
+        return (
+            f"the coordinator refused to talk to this computer ({exc.code})", False
+        )
     except Exception as exc:
         return (
             "could not reach the coordinator "
-            f"({_safe_message(exc, identity.enrollment_credential)}); "
-            "it will notice this machine is gone within about 90 seconds"
+            f"({_safe_message(exc, identity.enrollment_credential)})",
+            False,
         )
 
     token = str(registration.get("session_token") or "")
     if not token:
-        return "the coordinator did not issue a session, so there was nothing to drain"
+        return "the coordinator did not issue a session, so nothing could be sent", False
+    node = identity.node_id
     try:
         async with httpx.AsyncClient(
             timeout=_HTTP_TIMEOUT, trust_env=False, follow_redirects=False
         ) as client:
             response = await client.post(
-                f"{origin}/nodes/{identity.node_id}/drain",
+                f"{origin}/nodes/{node}/leave",
                 headers={"X-Node-Session": token},
+                json={"revoke_enrollment": True},
             )
+            if response.status_code in {404, 405}:
+                # Older coordinator: stop the work at least, and say plainly
+                # that the membership itself is still there.
+                await client.post(
+                    f"{origin}/nodes/{node}/drain",
+                    headers={"X-Node-Session": token},
+                )
+                return (
+                    "this coordinator runs older software that cannot remove a "
+                    "computer by itself. It has stopped sending work here, but "
+                    f"its operator still has to revoke '{node}' "
+                    f"(enrollment {identity.enrollment_id})",
+                    False,
+                )
     except httpx.HTTPError as exc:
-        return f"the drain request did not arrive ({type(exc).__name__})"
+        return f"the removal request did not arrive ({type(exc).__name__})", False
     if response.status_code != 200:
-        return f"the coordinator refused the drain request (HTTP {response.status_code})"
-    return "drained cleanly; the coordinator has stopped sending work"
+        return (
+            f"the coordinator refused the removal request (HTTP {response.status_code})",
+            False,
+        )
+    return (
+        f"the coordinator has removed '{node}' for good; that name will not be "
+        "used again",
+        True,
+    )
+
+
+def _remove_creation_lock(identity_path: Path) -> None:
+    """Delete the small lock file created next to the identity file.
+
+    It only serialises the first creation of that file, so once the identity is
+    gone it is litter. Refuses anything that is not a plain file, and a lock
+    another process is holding simply stays.
+    """
+
+    lock = identity_path.parent / f".{identity_path.name}.lock"
+    try:
+        if lock.is_file() and not lock.is_symlink():
+            lock.unlink()
+    except OSError:
+        pass
 
 
 async def uninstall(
@@ -978,7 +1273,7 @@ async def uninstall(
     assume_yes: bool = False,
 ) -> int:
     console.print("\n[bold cyan]Leaving the network[/bold cyan]")
-    check_privileges()
+    check_privileges(numbered=False)
 
     if identity_file is not None:
         target = Path(identity_file).expanduser()
@@ -997,6 +1292,7 @@ async def uninstall(
             f"  [yellow]No identity file at[/yellow] [dim]{target}[/dim]\n"
             "  Nothing to remove — this machine is not enrolled there."
         )
+        _remove_creation_lock(target)
         return EXIT_OK
 
     if origin is None:
@@ -1005,28 +1301,54 @@ async def uninstall(
         except WorkerIdentityError:
             origin = None
 
-    console.print(f"  This will delete [dim]{target}[/dim]")
+    console.print(
+        f"  This removes this computer from {origin or 'its coordinator'} for good "
+        f"and deletes [dim]{target}[/dim]\n"
+        "  To take part again later you would run the installer again, under a new name."
+    )
     if not assume_yes:
-        answer = _read_line("  Type 'yes' to remove it, or press Enter to keep it: ").lower()
+        answer = _read_line("  Type 'yes' to leave, or press Enter to stay: ").lower()
         if answer not in {"y", "yes"}:
             console.print("  [dim]Kept. Nothing was changed.[/dim]")
             return EXIT_DECLINED
 
+    confirmed = False
+    outcome = "no coordinator address is recorded, so nothing was sent"
     if origin:
         model = _validate_model_name(str(get_config().get("model") or DEFAULT_MODEL))
         console.print("  Telling the coordinator you are leaving…")
-        console.print(f"  [dim]{await _drain(origin, target, model)}[/dim]")
+        outcome, confirmed = await _leave(origin, target, model)
+        console.print(f"  [dim]{outcome}[/dim]")
 
     removed = _remove_identity_file(target)
+    if removed:
+        _remove_creation_lock(target)
+    membership = (
+        "  - this computer's membership, confirmed by the coordinator\n"
+        if confirmed else
+        ""
+    )
+    unconfirmed = (
+        ""
+        if confirmed else
+        "\n[bold yellow]Not confirmed by the coordinator:[/bold yellow]\n"
+        f"  {outcome}.\n"
+        "  Nothing on this computer can use that membership any more, but it\n"
+        "  stays on the coordinator's list until whoever runs it revokes it.\n"
+        "  Tell them you have left.\n"
+    )
     console.print(
         Panel(
             ("[bold]Removed:[/bold]\n"
-             f"  - your private credential file, [dim]{target}[/dim]\n"
+             + membership
+             + f"  - your private credential file, [dim]{target}[/dim]\n"
              if removed else
-             "[bold]Removed:[/bold]\n  - nothing; the credential file could not be deleted\n")
+             "[bold]Removed:[/bold]\n" + membership
+             + "  - nothing else; the credential file could not be deleted\n")
+            + unconfirmed
             + "\n[bold]Deliberately left alone — these are yours, not ours:[/bold]\n"
             "  - Ollama itself. Remove it the way you installed it.\n"
-            f"  - the downloaded model (about 2.5 GB). To remove it: "
+            f"  - the downloaded model (about 3.4 GB). To remove it: "
             f"[cyan]ollama rm {get_config().get('model') or DEFAULT_MODEL}[/cyan]\n"
             "  - this folder, the project's code, and Python.\n"
             "  - any output files under [dim]output/[/dim].\n\n"

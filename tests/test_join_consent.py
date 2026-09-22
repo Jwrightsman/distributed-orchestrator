@@ -2,7 +2,7 @@
 
 Mycelium is being posted in agent-native communities. The failure this guards
 against is an agent reading "join the swarm", running join.py unattended, and
-committing someone else's machine to downloading a 2.5 GB model and running
+committing someone else's machine to downloading a 3.4 GB model and running
 strangers' workloads at full CPU. That is the machine owner's decision.
 
 The important case is the *unattended* one: no terminal means nobody consented,

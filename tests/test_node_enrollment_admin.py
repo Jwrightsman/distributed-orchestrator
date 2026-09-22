@@ -196,3 +196,19 @@ def test_concurrent_rotation_cannot_overwrite_the_committed_identity(tmp_path):
     authenticated = store.authenticate("node-a", identity.enrollment_credential)
     assert authenticated.enrollment_id == enrollment.enrollment_id
     assert authenticated.credential_version == identity.credential_version == 2
+
+
+def test_a_directory_that_is_not_coordinator_state_is_refused_not_listed_as_empty(
+    tmp_path, capsys
+):
+    """Found by running DEPLOY.md's host command from the repository root."""
+
+    not_state = tmp_path / "somewhere-else"
+    not_state.mkdir()
+
+    assert admin.main(["--state-dir", str(not_state), "list"]) == 1
+
+    err = capsys.readouterr().err
+    assert "not a coordinator state directory" in err
+    assert "No node enrollments" not in err
+    assert not (not_state / "events.db").exists(), "it must not create a stray database"

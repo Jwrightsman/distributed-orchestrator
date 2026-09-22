@@ -93,6 +93,7 @@ ensemble execution over the same local or distributed dispatcher.
 - GET /tasks/next — worker polls for work
 - POST /tasks/{id}/result — worker submits result
 - POST /tasks/{id}/stream — worker submits attempt-bound token batches
+- POST /nodes/{id}/leave — worker ends its own session; with revoke_enrollment, retires itself
 
 ## Instructions for AI assistants working on this codebase
 

@@ -234,18 +234,44 @@ authorities**:
    `data/config.json`, sent through a channel you would send a password over.
    This decides whether they can enrol once they can reach you.
 
+   To read just that value, from the repository directory on the server:
+
+   ```bash
+   python3 -c 'import json; print(json.load(open("data/config.json"))["node_secret"])'
+   ```
+
+   Copy it straight into that channel, then run `clear` so it does not sit in
+   your terminal. It is the same code for everybody you invite; each worker
+   swaps it for its own revocable credential when it joins.
+
 Then send them [JOIN.md](JOIN.md) and the address
 `https://YOUR-HOST.YOUR-TAILNET.ts.net`.
+
+Each machine joins under its own name — the computer's name plus a short
+random tail, such as `laptop-3f9a` — and that is the name you will see in the
+enrollment list.
 
 ### Removing somebody
 
 **Both authorities must be revoked, and neither one does the other's job.**
 
+If they ran `python worker_installer.py uninstall`, their enrollment has
+already revoked itself; `list` shows it as `revoked`. The tailnet step is still
+yours. If they could not reach you when they uninstalled, or their copy
+predates self-removal, it is still `active` and you revoke it here.
+
 ```bash
 # 1. Revoke their Mycelium enrollment (does not touch the tailnet)
-python3 scripts/node_enrollment_admin.py list
-python3 scripts/node_enrollment_admin.py revoke ENROLLMENT-ID --reason "left the project"
+docker compose exec orchestrator python /app/scripts/node_enrollment_admin.py --state-dir /data list
+docker compose exec orchestrator python /app/scripts/node_enrollment_admin.py --state-dir /data \
+    revoke ENROLLMENT-ID --reason "left the project"
 ```
+
+Run these from the repository directory. The script lives at `/app/scripts`
+inside the container, and the state directory is `/data`. A bare
+`python3 scripts/node_enrollment_admin.py` on the host looks in the current
+directory rather than `data/`, and stops with "not a coordinator state
+directory".
 
 ```bash
 # 2. Remove their device from the tailnet (does not touch the enrollment)

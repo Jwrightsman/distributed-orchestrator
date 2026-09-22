@@ -115,7 +115,7 @@ pip install -r requirements.txt
 ollama pull qwen3.5:4b
 ```
 
-`qwen3.5:4b` (~2.5GB) is the best 8GB-CPU-only pick as of August 2026. No qwen3.5? The orchestrator auto-detects down a ladder: qwen3.5 → gemma4 → phi4-mini → qwen3 → gemma3:4b → gemma3:1b.
+`qwen3.5:4b` (~3.4GB) is the best 8GB-CPU-only pick as of August 2026. No qwen3.5? The orchestrator auto-detects down a ladder: qwen3.5 → gemma4 → phi4-mini → qwen3 → gemma3:4b → gemma3:1b.
 
 ### Verify your setup
 
@@ -422,6 +422,7 @@ See **[docs/DEPLOY.md](docs/DEPLOY.md)** for local, private-overlay, and reverse
 | `/v1/operator/ledger-chain` | GET | Private complete chain walk with the age of the walk behind it; `?fresh=1` forces a new one |
 | `/nodes/register` | POST | Worker node registration |
 | `/nodes/{id}/heartbeat`, `/drain` | POST | Session-bound worker liveness and drain control |
+| `/nodes/{id}/leave` | POST | Session-bound: end this worker's own session now; `{"revoke_enrollment": true}` also retires its enrollment |
 | `/tasks/next` | GET | Session-bound worker poll (long-polls 25s) |
 | `/tasks/{id}/result` | POST | Session- and attempt-bound completed task submission |
 | `/tasks/{id}/tokens` | POST | Session- and attempt-bound token batches with cumulative budgets |

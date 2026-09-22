@@ -95,6 +95,14 @@ Existing share links (`/v1/shares/{token}`) are separate capabilities and are
 Use this when one contributor's machine is compromised, sold, or handed on, and
 you do not want to disturb anybody else.
 
+**Where to run these.** Every `node_enrollment_admin.py` command on this page
+needs the coordinator's state directory. Without `--state-dir` it uses
+`MYCELIUM_STATE_DIR` or the current directory, and stops with "not a
+coordinator state directory" if that is wrong. On the Docker deployment in
+[DEPLOY.md](DEPLOY.md), run each one through the container:
+`docker compose exec orchestrator python /app/scripts/node_enrollment_admin.py --state-dir /data …`.
+Run from the host, add `--state-dir data`.
+
 ```bash
 python3 scripts/node_enrollment_admin.py list
 ```

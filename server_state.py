@@ -1705,6 +1705,9 @@ _SAFE_EVENT_FIELDS = {
         {"execution_id", "candidate_id", "verified"}
     ),
     "node_draining": frozenset({"node_id", "enrollment_id", "session_id"}),
+    "node_left": frozenset(
+        {"node_id", "enrollment_id", "session_id", "enrollment_revoked"}
+    ),
     "node_busy": frozenset({"node_id", "enrollment_id", "task_id", "unit_id"}),
     "node_idle": frozenset(
         {

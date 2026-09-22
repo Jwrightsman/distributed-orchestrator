@@ -746,7 +746,7 @@ proxy environment variables so bearer credentials are not silently routed to
 an inherited proxy, and it requires an explicit origin instead of selecting an
 unauthenticated LAN-discovery response.
 
-Poll, heartbeat, drain, stream, token-stream, and result routes require the
+Poll, heartbeat, drain, leave, stream, token-stream, and result routes require the
 current `X-Node-Session`. An enrolled session recovers its enrollment binding
 server-side and does not present `X-Node-Secret` again. Every operation checks
 that the durable enrollment is active, still owns the label, and has the
@@ -755,6 +755,21 @@ invalidates the incarnation, and reclaims active work. Sessions are
 process-local, expire after at most 24 hours, and become invalid on coordinator
 restart. The returning credential obtains a fresh session while keeping the
 same enrollment ID.
+
+`POST /nodes/{id}/leave` lets a worker act on itself, and only on itself: the
+authority is the caller's current session, checked exactly as for drain. The
+optional JSON body is `{"revoke_enrollment": false}` by default and rejects any
+other field. Without revocation the session is invalidated at once, work bound
+to it is reclaimed and requeued, and the node leaves the online registry
+instead of waiting out the 90-second staleness interval; the enrollment stays
+active and the identity file registers again later. With
+`revoke_enrollment: true` the caller's enrollment is durably revoked through the
+same store operation and reclaim path as operator revocation, with the same
+consequences: history is kept, every session bound to it ends, and the label is
+never reusable. There is no self-service undo. The response echoes `node_id`,
+`enrollment_id`, `session_id`, `session_ended: true`, and `enrollment_revoked`.
+A coordinator without the route answers `404`; the stock installer then falls
+back to drain and reports that operator revocation is still required.
 
 An enrolled `bootstrap` or `returning` registration must include a strict
 `capability_descriptor` with `descriptor_version="1"`:
@@ -1302,7 +1317,8 @@ and no third party attesting to anything.
 
 Two optional headers, W3C trace context, on the worker boundary only:
 `/nodes/register`, `/tasks/next`, `/tasks/{id}/result`, `/tasks/{id}/stream`,
-`/tasks/{id}/tokens`, `/nodes/{id}/heartbeat`, `/nodes/{id}/drain`.
+`/tasks/{id}/tokens`, `/nodes/{id}/heartbeat`, `/nodes/{id}/drain`,
+`/nodes/{id}/leave`.
 
 | header | direction | meaning |
 | --- | --- | --- |

@@ -16,6 +16,7 @@ import json
 import os
 import platform
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -65,6 +66,11 @@ _MAX_WORKER_OUTPUT_BYTES = 10_485_760
 _MAX_WORKER_ERROR_BYTES = 2048
 _MAX_CAPABILITY_OVERRIDE_BYTES = 65_536
 _GPU_PROBE_TIMEOUT_SECONDS = 3
+
+#: Process exit status. A worker that cannot start must not report success to
+#: whatever launched it — a shell, a service manager, or a person reading $?.
+EXIT_OK = 0
+EXIT_FAILED = 1
 
 
 class WorkerCapabilityOverrides(CapabilityProtocolModel):
@@ -1083,7 +1089,26 @@ async def poll_and_execute(
             return None
 
 
-async def main(argv: list[str] | None = None, *, admission_secret: str | None = None):
+def _enrolled_node_id(identity_file: Path, server: str) -> str | None:
+    """The label this machine already enrolled under at `server`, if any.
+
+    The installer can enrol under a name other than the hostname (`--node-id`),
+    and the identity file is bound to that name. Starting the worker without
+    repeating it used to fail with "belongs to a different node_id"; reading
+    the name back from the file makes the printed start command just work.
+    A missing or unreadable file is not an error here — the normal load below
+    reports it with its full reason.
+    """
+
+    if not identity_file.exists():
+        return None
+    try:
+        return load_worker_identity(identity_file, coordinator=server).node_id
+    except WorkerIdentityError:
+        return None
+
+
+async def main(argv: list[str] | None = None, *, admission_secret: str | None = None) -> int:
     """Run one worker.
 
     `argv` defaults to this process's own arguments. `admission_secret`, when
@@ -1101,7 +1126,14 @@ async def main(argv: list[str] | None = None, *, admission_secret: str | None = 
             "http:// is refused for every host except loopback"
         ),
     )
-    parser.add_argument("--node-id", default=None, help="Custom node ID (defaults to hostname)")
+    parser.add_argument(
+        "--node-id",
+        default=None,
+        help=(
+            "Custom node ID (defaults to the name this machine enrolled under, "
+            "or the hostname before it has enrolled)"
+        ),
+    )
     parser.add_argument(
         "--identity-file",
         type=Path,
@@ -1136,22 +1168,34 @@ async def main(argv: list[str] | None = None, *, admission_secret: str | None = 
             admission_secret = resolve_from_args(args)
         except AdmissionSecretError as exc:
             console.print(f"[red bold]Cannot read the admission secret:[/red bold] {exc}")
-            return
+            return EXIT_FAILED
 
     config = get_config()
     selected_model = str(args.model or config.get("model") or DEFAULT_MODEL)
 
     try:
-        node_id = normalize_worker_node_id(args.node_id or platform.node())
         server = normalize_coordinator(args.server)
         identity_file = (
             args.identity_file.expanduser()
             if args.identity_file is not None
             else default_identity_file(server)
         )
+        enrolled_name = _enrolled_node_id(identity_file, server)
+        node_id = normalize_worker_node_id(
+            args.node_id or enrolled_name or platform.node()
+        )
     except WorkerIdentityError as exc:
         console.print(f"[red bold]Invalid worker identity configuration:[/red bold] {exc}")
-        return
+        return EXIT_FAILED
+    if enrolled_name is not None and node_id != normalize_worker_node_id(enrolled_name):
+        # The identity file is bound to one label, so this can only fail. Say
+        # which name works instead of the bare "belongs to a different node_id".
+        console.print(
+            f"[red bold]This computer joined {server} as '{enrolled_name}', "
+            f"not '{node_id}'.[/red bold]\n"
+            f"Leave out --node-id, or run it with --node-id {enrolled_name}"
+        )
+        return EXIT_FAILED
     secret = admission_secret
     capabilities = [c.strip() for c in args.capabilities.split(",") if c.strip()] if args.capabilities else None
 
@@ -1159,7 +1203,7 @@ async def main(argv: list[str] | None = None, *, admission_secret: str | None = 
     status = await check_ollama()
     if not status["ok"]:
         console.print(f"[red bold]ERROR:[/red bold] {status['error']}")
-        return
+        return EXIT_FAILED
 
     try:
         capability_descriptor = await build_stock_capability_descriptor(
@@ -1177,7 +1221,7 @@ async def main(argv: list[str] | None = None, *, admission_secret: str | None = 
         console.print(
             f"[red bold]Invalid capability configuration:[/red bold] {exc}"
         )
-        return
+        return EXIT_FAILED
     descriptor_hash = capability_descriptor_digest(capability_descriptor)
 
     try:
@@ -1191,7 +1235,7 @@ async def main(argv: list[str] | None = None, *, admission_secret: str | None = 
         )
     except WorkerIdentityError as exc:
         console.print(f"[red bold]Worker identity unavailable:[/red bold] {exc}")
-        return
+        return EXIT_FAILED
 
     _caps_display = ", ".join(capabilities) if capabilities else "[dim]auto-detect[/dim]"
     console.print(Panel(
@@ -1252,13 +1296,13 @@ async def main(argv: list[str] | None = None, *, admission_secret: str | None = 
     except (NodeRegistrationRejected, WorkerIdentityError) as e:
         console.print(f"[red bold]Could not register with orchestrator at {server}[/red bold]")
         console.print(f"[dim]{e}[/dim]")
-        return
+        return EXIT_FAILED
     except Exception as e:
         console.print(f"[red bold]Could not connect to orchestrator at {server}[/red bold]")
         console.print(f"[dim]{e}[/dim]")
         console.print("\nMake sure the orchestrator is running:")
         console.print("  [dim]python -m uvicorn server:app --host 0.0.0.0 --port 8000[/dim]")
-        return
+        return EXIT_FAILED
 
     console.print("[dim]Waiting for tasks... (Ctrl+C to stop)[/dim]\n")
 
@@ -1341,7 +1385,7 @@ async def main(argv: list[str] | None = None, *, admission_secret: str | None = 
         except NodeRegistrationRejected as exc:
             if not exc.retryable:
                 console.print(f"[red bold]Enrollment rejected:[/red bold] {exc}")
-                break
+                return EXIT_FAILED
             delay = reconnect_delay(attempt)
             attempt += 1
             console.print(
@@ -1352,11 +1396,11 @@ async def main(argv: list[str] | None = None, *, admission_secret: str | None = 
 
         except WorkerIdentityError as exc:
             console.print(f"[red bold]Worker identity rejected:[/red bold] {exc}")
-            break
+            return EXIT_FAILED
 
         except KeyboardInterrupt:
             _print_session_summary(node_id, session)
-            break
+            return EXIT_OK
 
         except Exception as e:
             delay = reconnect_delay(attempt)
@@ -1377,4 +1421,4 @@ def _print_session_summary(node_id: str, session: dict):
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    sys.exit(asyncio.run(main()))

@@ -44,8 +44,8 @@ from config_view import AUTHORITIES, OFF, SHORT, credential_state, duration_word
 # `worker_installer.consent_text` it stands for. `tone` is `cost` for what the
 # owner gives up and `limit` for what the software will not do.
 CONSENT = (
-    ("cost", "About 2.5 GB of disk for the model, if it is not already there.",
-     ("about 2.5 GB of disk",)),
+    ("cost", "About 3.4 GB of disk for the model, if it is not already there.",
+     ("about 3.4 GB of disk",)),
     ("cost", "Their processor at full load, in bursts of minutes, on prompts other "
              "people submit.",
      ("your processor running flat out, in bursts of minutes",)),
