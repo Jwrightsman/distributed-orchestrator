@@ -231,15 +231,20 @@ The installer walks through nine steps and tells you what each one is doing.
    those two come apart; see the Mac section above.
 4. **Asks for the address.** Paste what you were given.
 5. **Shows you exactly what is about to happen**, in plain English, including
-   every file it will write — and waits. Nothing has been downloaded or
-   written yet at this point. Read it. Press Enter to stop.
-6. **Asks for the invitation code.** Nothing appears as you type; that is
-   normal, and it is so the code does not end up on your screen or in your
-   shell history. It is never accepted as part of the command.
+   every file it will write and the name your computer will have on the
+   network — its own name plus a short random tail, such as `laptop-3f9a` — and
+   waits. Nothing has been downloaded or written yet at this point. Read it.
+   Press Enter to stop.
+6. **Asks for the invitation code.** Nothing appears as you type or paste;
+   that is normal, and it is so the code does not end up on your screen or in
+   your shell history. It is never accepted as part of the command.
 7. **Downloads the model** if you do not already have it. This is the slow
    step — 3.4 GB.
 8. **Introduces your computer to the coordinator.** It creates one small
-   private file that identifies your machine, and registers.
+   private file that identifies your machine, and registers. If the
+   connection drops here it tries again by itself; if it still cannot get
+   through, it keeps your place, and running the same command again finishes
+   the job.
 9. **Tells you how to start, how to pause, and how to leave.**
 
 ### Starting work
@@ -250,7 +255,8 @@ python node.py --server https://THE-ADDRESS-YOU-WERE-GIVEN
 
 It waits for tasks and shows each one as it arrives. **You do not need the
 invitation code again** — your machine has its own credential now, and that one
-can be revoked without affecting anybody else.
+can be revoked without affecting anybody else. The command is the same every
+time; it knows your computer's network name from its private file.
 
 ### Stopping
 
@@ -265,8 +271,14 @@ credit you have already earned stays earned.
 python worker_installer.py uninstall
 ```
 
-It tells the coordinator you are going, waits for that to be acknowledged, and
-deletes your private credential file.
+It asks the coordinator to remove your computer for good, says whether the
+coordinator confirmed it, and deletes your private credential file. If the
+coordinator could not be reached — or runs older software that cannot remove
+you itself — it says so plainly; tell whoever invited you that you have left,
+so they can remove you from their list.
+
+Leaving is permanent for that name. If you want to join again later, run
+`python worker_installer.py` again; your computer gets a fresh name.
 
 It deliberately does **not** remove:
 
@@ -310,7 +322,11 @@ Every failure prints a sentence and an exit code, not a wall of red text.
 | "running as root or Administrator" | Close that terminal, open a normal one, run it again. |
 | "Your copy of Mycelium is too old" | Yours to fix: `git pull` and run it again. |
 | "This coordinator is running older software than your copy" | Not yours to fix. Tell the operator; quote both version numbers. |
-| "The coordinator did not accept this computer" | Usually a mistyped invitation code. Nothing was left behind; just run it again. |
+| "The coordinator did not accept the invitation code" | A wrong or mistyped code. Check it with whoever invited you. Nothing was left behind; just run it again. |
+| "The name '…' is already taken on this coordinator" | Your code was fine; that name was used before. Run the `--node-id` command it prints. |
+| "Lost the connection to … partway through joining" | A network hiccup, not your code. Run the same command again; it picks up where it stopped. |
+| "This computer has already joined" | Nothing to do. Start it with the `python node.py` command it shows. |
+| "The coordinator did not accept this computer" | Something else went wrong. Send the whole message to whoever invited you. |
 
 ## The honest part
 

@@ -114,7 +114,7 @@ them:
 | POST | `/nodes/register` | bootstrap: `node_secret` + proposed enrollment credential; returning: enrollment credential |
 | GET | `/tasks/next` | current enrollment-bound node session (legacy compat also requires `node_secret`) |
 | POST | `/tasks/{id}/result`, `/tasks/{id}/stream`, `/tasks/{id}/tokens` | current enrollment-bound session + active-attempt binding (legacy compat also requires `node_secret`) |
-| POST | `/nodes/{id}/heartbeat`, `/nodes/{id}/drain` | current enrollment-bound session (legacy compat also requires `node_secret`) |
+| POST | `/nodes/{id}/heartbeat`, `/nodes/{id}/drain`, `/nodes/{id}/leave` | current enrollment-bound session (legacy compat also requires `node_secret`); `leave` acts only on the caller's own session and enrollment |
 
 If the corresponding pitch or node secret is empty in local mode, its static
 admission check is open even when viewer protection is enabled; node-session
