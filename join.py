@@ -53,7 +53,7 @@ async def ensure_ollama():
     if not any(DEFAULT_MODEL in m for m in status["models"]):
         from worker_installer import ollama_cli_missing_hint
 
-        console.print(f"Model [yellow]{DEFAULT_MODEL}[/yellow] not found. Pulling now (~2-3GB)...")
+        console.print(f"Model [yellow]{DEFAULT_MODEL}[/yellow] not found. Pulling now (~3.4 GB)...")
         try:
             result = subprocess.run(["ollama", "pull", DEFAULT_MODEL], capture_output=False)
         except (FileNotFoundError, NotADirectoryError, PermissionError):
@@ -87,7 +87,7 @@ def confirm_consent(server: str, assume_yes: bool) -> bool:
     console.print(Panel(
         f"You are about to join [cyan]{server}[/cyan] as a worker node.\n\n"
         "[bold]What this will do to THIS computer:[/bold]\n"
-        f"  - Download the [bold]{DEFAULT_MODEL}[/bold] model (~2.5 GB) if it is not already here\n"
+        f"  - Download the [bold]{DEFAULT_MODEL}[/bold] model (~3.4 GB) if it is not already here\n"
         "  - Use your CPU at full load, in bursts of minutes, to build parts of\n"
         "    tasks that [bold]other people[/bold] submit\n"
         "  - Receive assigned task prompts as readable text on this computer\n"
@@ -167,7 +167,7 @@ async def main():
         sys.exit(0)
 
     # After consent, so nobody types an invitation code before being told what
-    # joining costs them, and before ensure_ollama() writes 2.5 GB to disk.
+    # joining costs them, and before ensure_ollama() writes 3.4 GB to disk.
     try:
         secret = resolve_from_args(args, warn=not warned_about_argv)
     except AdmissionSecretError as exc:
@@ -184,8 +184,8 @@ async def main():
     if args.identity_file:
         node_argv += ["--identity-file", args.identity_file]
     from node import main as node_main
-    await node_main(node_argv, admission_secret=secret)
+    return await node_main(node_argv, admission_secret=secret)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    sys.exit(asyncio.run(main()))

@@ -207,7 +207,7 @@ worse for this project than one passing on nothing.
 
 | Resource | Cost |
 | --- | --- |
-| Disk | ~2.5 GB for the model, plus outputs |
+| Disk | ~3.4 GB for the model, plus outputs |
 | RAM | 8 GB practical minimum |
 | CPU | Sustained full-core load, in bursts of minutes, while building a subtask |
 | Network | Outbound only — a node polls the orchestrator and opens no inbound port |
@@ -303,7 +303,7 @@ minute without thinking. Edit the tone freely; keep the honesty.
 
 ### "Why 4B models? Why not something that is actually good?"
 
-> Because the constraint is the point: it has to run on hardware people already own. `qwen3.5:4b` is about 2.5 GB and runs on an 8 GB laptop with no GPU, which is the machine a volunteer actually has.
+> Because the constraint is the point: it has to run on hardware people already own. `qwen3.5:4b` is about 3.4 GB and runs on an 8 GB laptop with no GPU, which is the machine a volunteer actually has.
 >
 > Nothing stops you pointing it at a bigger model — it is Ollama underneath, so whatever you can run, it can use, and a node advertises its model so tasks can be routed to capable machines. The published numbers come from the small model on CPU because that is the honest floor. It gets better from there, not worse.
 
@@ -315,7 +315,7 @@ minute without thinking. Edit the tone freely; keep the honesty.
 
 ### "What actually happens to my machine if I join?"
 
-> It downloads a roughly 2.5 GB model if you do not already have it, then uses your CPU at full load in bursts of a few minutes to build parts of other people's tasks, and sends the resulting text back. It wants about 8 GB of RAM. The connection is outbound only — it opens no inbound port and does not touch your files.
+> It downloads a roughly 3.4 GB model if you do not already have it, then uses your CPU at full load in bursts of a few minutes to build parts of other people's tasks, and sends the resulting text back. It wants about 8 GB of RAM. The connection is outbound only — it opens no inbound port and does not touch your files.
 >
 > Importantly: **your machine never executes code it receives.** It generates text and returns it. Generated code only runs on the machine that asked for it, when that person chooses to run it.
 >

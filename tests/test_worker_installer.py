@@ -45,6 +45,11 @@ class StubCoordinator:
         self.requests: list[httpx.Request] = []
         self.registrations: list[dict] = []
         self.drains: list[httpx.Request] = []
+        self.leaves: list[dict] = []
+        #: 404 plays a coordinator older than `POST /nodes/{id}/leave`.
+        self.leave_status = 200
+        #: Raised by the next N registrations, to play a dropped connection.
+        self.registration_failures: list[type[httpx.TransportError]] = []
         self.window = {
             "node_protocol_min": "1",
             "node_protocol_max": "1",
@@ -101,6 +106,8 @@ class StubCoordinator:
         if path == "/nodes/register":
             body = json.loads(request.content.decode())
             self.registrations.append(body)
+            if self.registration_failures:
+                raise self.registration_failures.pop(0)("dropped", request=request)
             if self.registration_status != 200:
                 return httpx.Response(
                     self.registration_status,
@@ -129,6 +136,18 @@ class StubCoordinator:
                     ),
                 },
             )
+
+        if path.endswith("/leave"):
+            self.leaves.append(
+                {
+                    "path": path,
+                    "session": request.headers.get("X-Node-Session"),
+                    "body": json.loads(request.content.decode() or "{}"),
+                }
+            )
+            if self.leave_status != 200:
+                return httpx.Response(self.leave_status, json={})
+            return httpx.Response(200, json={"ok": True})
 
         if path.endswith("/drain"):
             self.drains.append(request)
@@ -261,6 +280,21 @@ def test_the_invitation_code_reaches_exactly_one_header_and_nowhere_else(
     assert carrying[0].url.path == "/nodes/register"
     assert carrying[0].headers.get("X-Node-Secret") == INVITATION
     assert INVITATION not in carrying[0].content.decode(), "never in a body"
+
+
+def test_a_ctrl_v_keystroke_does_not_corrupt_a_pasted_invitation_code(
+    stub, answers, tmp_path
+):
+    """Windows can deliver Ctrl+V as a literal ^V ahead of the pasted text."""
+
+    answers("\x16yes", invitation="\x16" + INVITATION + "\r")
+    assert _run_install(coordinator=COORDINATOR, node_id="laptop") == worker_installer.EXIT_OK
+    sent = [
+        request.headers["X-Node-Secret"]
+        for request in stub.requests
+        if "X-Node-Secret" in request.headers
+    ]
+    assert sent == [INVITATION]
 
 
 def test_the_identity_credential_is_generated_here_not_supplied(stub, answers, tmp_path):
@@ -472,7 +506,7 @@ def test_declining_leaves_the_machine_untouched(stub, answers, tmp_path, capsys)
 
 
 def test_consent_is_asked_before_the_model_is_downloaded(stub, monkeypatch, tmp_path):
-    """A 2.5 GB download is itself something to agree to. ROADMAP §2."""
+    """A 3.4 GB download is itself something to agree to. ROADMAP §2."""
 
     order: list[str] = []
 
@@ -501,7 +535,7 @@ def test_the_consent_screen_says_what_it_can_and_cannot_see(stub):
         "can",
         "stop at any time",
         "firewall",
-        "2.5 gb",
+        "3.4 gb",
         "inbound port",
     ):
         assert claim in text, f"the consent screen never mentions {claim!r}"
@@ -585,20 +619,47 @@ def _run_uninstall(**kwargs) -> int:
     return asyncio.run(worker_installer.uninstall(**kwargs))
 
 
-def test_uninstall_drains_first_and_leaves_no_credential(stub, answers, tmp_path, capsys):
+def test_uninstall_removes_the_membership_for_good_and_leaves_no_credential(
+    stub, answers, tmp_path, capsys
+):
     identity = _install_then(stub, answers, tmp_path)
     assert identity.exists()
+    stub.leaves.clear()
 
     assert _run_uninstall(coordinator=COORDINATOR, assume_yes=True) == worker_installer.EXIT_OK
 
     assert not identity.exists(), "the credential is still on disk"
     assert not _identity_files(tmp_path / "config")
-    assert stub.drains, "the coordinator was never told this machine is leaving"
-    assert stub.drains[0].headers.get("X-Node-Session"), "drain must carry its session"
+    assert not list((tmp_path / "config").rglob("*.lock")), "the lock file was left behind"
+    assert len(stub.leaves) == 1, "the coordinator was never told this machine is leaving"
+    assert stub.leaves[0]["session"], "leaving must carry its session"
+    assert stub.leaves[0]["body"] == {"revoke_enrollment": True}
+    assert not stub.drains, "a coordinator that can remove the machine needs no drain"
 
-    out = capsys.readouterr().out
+    out = _flat(capsys.readouterr().out)
+    assert "removed 'laptop' for good" in out
+    assert "confirmed by the coordinator" in out
+    assert "Not confirmed" not in out
+    assert "Step 1/9" not in out.split("Leaving the network", 1)[1], (
+        "uninstall must not print the install's step counter"
+    )
     assert "Ollama" in out, "must say what it did not remove"
     assert "ollama rm" in out, "must say how to remove the model"
+
+
+def test_uninstall_against_an_older_coordinator_drains_and_says_it_is_not_confirmed(
+    stub, answers, tmp_path, capsys
+):
+    identity = _install_then(stub, answers, tmp_path)
+    stub.leave_status = 404
+
+    assert _run_uninstall(coordinator=COORDINATOR, assume_yes=True) == worker_installer.EXIT_OK
+
+    assert not identity.exists()
+    assert stub.drains, "an older coordinator must at least stop sending work"
+    out = _flat(capsys.readouterr().out)
+    assert "Not confirmed by the coordinator" in out
+    assert "operator still has to revoke 'laptop'" in out
 
 
 def test_uninstall_still_removes_the_credential_when_the_coordinator_is_gone(
@@ -612,7 +673,11 @@ def test_uninstall_still_removes_the_credential_when_the_coordinator_is_gone(
     stub.override = _refuse
     assert _run_uninstall(coordinator=COORDINATOR, assume_yes=True) == worker_installer.EXIT_OK
     assert not identity.exists(), "leaving must not depend on the other side answering"
-    assert "could not reach the coordinator" in _flat(capsys.readouterr().out)
+    out = _flat(capsys.readouterr().out)
+    assert "could not reach the coordinator" in out
+    assert "Not confirmed by the coordinator" in out, (
+        "an unreachable coordinator must not be reported as a completed removal"
+    )
 
 
 def test_uninstall_on_a_machine_that_never_joined_says_so(stub, tmp_path, capsys):
@@ -625,6 +690,153 @@ def test_uninstall_asks_before_deleting(stub, answers, tmp_path, monkeypatch):
     monkeypatch.setattr("builtins.input", lambda *a: "")
     assert _run_uninstall(coordinator=COORDINATOR) == worker_installer.EXIT_DECLINED
     assert identity.exists(), "declining must keep the credential"
+    assert not any(leave["body"].get("revoke_enrollment") for leave in stub.leaves)
+
+
+# ── Names, retries, and joining again ────────────────────────────────────────
+
+
+def test_the_default_name_is_the_hostname_plus_a_short_unique_tail():
+    assert worker_installer.default_node_name("Jwrightsman", "ab12") == "jwrightsman-ab12"
+    assert worker_installer.default_node_name("My Laptop (2)", "ab12") == "my-laptop-2-ab12"
+    assert worker_installer.default_node_name("", "ab12") == "worker-ab12"
+    long_name = worker_installer.default_node_name("x" * 200, "ab12")
+    assert len(long_name) <= 64 and long_name.endswith("-ab12")
+    assert worker_installer.default_node_name("laptop") != worker_installer.default_node_name(
+        "laptop"
+    ), "two joins from one computer must not collide on the same name"
+
+
+def test_without_node_id_the_join_uses_the_unique_default_and_shows_it(
+    stub, answers, tmp_path, capsys, monkeypatch
+):
+    monkeypatch.setattr(worker_installer.platform, "node", lambda: "Jwrightsman")
+    answers("yes")
+    assert _run_install(coordinator=COORDINATOR) == worker_installer.EXIT_OK
+    name = stub.registrations[0]["node_id"]
+    assert name.startswith("jwrightsman-") and name != "jwrightsman"
+    out = _flat(capsys.readouterr().out)
+    assert f"listed there as {name}" in out, "the consent screen must name the computer"
+    assert f"joined the network as {name}" in out
+
+
+def test_the_printed_start_command_needs_no_node_id(stub, answers, tmp_path, capsys):
+    answers("yes")
+    _run_install(coordinator=COORDINATOR, node_id="laptop")
+    out = _flat(capsys.readouterr().out)
+    assert f"python node.py --server {COORDINATOR}" in out
+    assert "--node-id" not in out.split("You are in", 1)[1]
+
+
+def test_the_installer_ends_the_session_it_opened(stub, answers, tmp_path):
+    answers("yes")
+    _run_install(coordinator=COORDINATOR, node_id="laptop")
+    assert len(stub.leaves) == 1, "the registration session must not linger as a phantom worker"
+    assert stub.leaves[0]["session"] == "session-token-value"
+    assert stub.leaves[0]["body"] == {}, "ending the install session must never revoke"
+
+
+def test_a_taken_name_says_so_and_does_not_blame_the_invitation_code(
+    stub, answers, tmp_path, capsys
+):
+    stub.registration_status = 403
+    stub.registration_detail = {
+        "code": "node_enrollment_revoked",
+        "message": "node enrollment is revoked",
+    }
+    answers("yes")
+    code = worker_installer.run(
+        ["install", "--coordinator", COORDINATOR, "--node-id", "laptop"]
+    )
+    assert code == worker_installer.EXIT_REGISTRATION
+    out = _flat(capsys.readouterr().out)
+    assert "The name 'laptop' is already taken" in out
+    assert "invitation code was fine" in out
+    assert "mistyped" not in out
+    assert "python worker_installer.py --node-id" in out, "must say how to get past it"
+    assert not _identity_files(tmp_path / "config")
+
+
+def test_a_wrong_invitation_code_is_named_as_such(stub, answers, tmp_path, capsys):
+    stub.registration_status = 401
+    stub.registration_detail = None
+    answers("yes")
+
+    def _string_detail(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/nodes/register":
+            stub.registrations.append(json.loads(request.content.decode()))
+            return httpx.Response(
+                401, json={"detail": "Invalid or missing X-Node-Secret header"}
+            )
+        stub.override = None
+        try:
+            return stub.handle(request)
+        finally:
+            stub.override = _string_detail
+
+    stub.override = _string_detail
+    code = worker_installer.run(
+        ["install", "--coordinator", COORDINATOR, "--node-id", "laptop"]
+    )
+    assert code == worker_installer.EXIT_REGISTRATION
+    out = _flat(capsys.readouterr().out)
+    assert "did not accept the invitation code" in out
+    assert INVITATION not in out
+    assert not _identity_files(tmp_path / "config")
+
+
+def test_a_dropped_connection_is_retried_with_the_same_credential(
+    stub, answers, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(worker_installer, "_REGISTRATION_RETRY_DELAYS", (0.0, 0.0))
+    stub.registration_failures = [httpx.ReadError]
+    answers("yes")
+    assert _run_install(coordinator=COORDINATOR, node_id="laptop") == worker_installer.EXIT_OK
+    assert len(stub.registrations) == 2
+    first, second = stub.registrations
+    assert first["enrollment_credential"] == second["enrollment_credential"], (
+        "a retry must reuse the credential so the coordinator can recognise it"
+    )
+
+
+def test_a_join_that_keeps_dropping_is_kept_and_the_next_run_finishes_it(
+    stub, answers, tmp_path, capsys, monkeypatch
+):
+    monkeypatch.setattr(worker_installer, "_REGISTRATION_RETRY_DELAYS", (0.0, 0.0))
+    stub.registration_failures = [httpx.ReadError] * 3
+    answers("yes")
+    code = worker_installer.run(
+        ["install", "--coordinator", COORDINATOR, "--node-id", "laptop"]
+    )
+    assert code == worker_installer.EXIT_UNREACHABLE
+    out = _flat(capsys.readouterr().out)
+    assert "not your invitation code" in out
+    assert "mistyped" not in out
+    pending = _identity_files(tmp_path / "config")
+    assert len(pending) == 1, "an unfinished join must be kept so it can be resumed"
+    assert json.loads(pending[0].read_text(encoding="utf-8"))["enrollment_id"] is None
+    first_credential = stub.registrations[0]["enrollment_credential"]
+
+    answers("yes")
+    assert _run_install(coordinator=COORDINATOR) == worker_installer.EXIT_OK
+    assert stub.registrations[-1]["node_id"] == "laptop", "the resumed join keeps its name"
+    assert stub.registrations[-1]["enrollment_credential"] == first_credential
+    assert len(_identity_files(tmp_path / "config")) == 1
+
+
+def test_running_the_installer_again_after_joining_changes_nothing(
+    stub, answers, tmp_path, capsys
+):
+    _install_then(stub, answers, tmp_path)
+    registrations = len(stub.registrations)
+    capsys.readouterr()
+
+    assert _run_install(coordinator=COORDINATOR) == worker_installer.EXIT_OK
+
+    assert len(stub.registrations) == registrations, "an existing member must not re-enrol"
+    out = _flat(capsys.readouterr().out)
+    assert "already joined" in out and "laptop" in out
+    assert "python node.py --server" in out
 
 
 # ── What it never does ───────────────────────────────────────────────────────

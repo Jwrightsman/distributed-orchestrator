@@ -80,7 +80,7 @@ interactive checks; no historical score has been upgraded or regraded.
 
 | resource | cost |
 | --- | --- |
-| Disk | ~2.5 GB for the default model, plus outputs |
+| Disk | ~3.4 GB for the default model, plus outputs |
 | RAM | 8 GB is the practical minimum |
 | CPU | Sustained full-core load while building a subtask; minutes per task |
 | Network | Small — a real task spends ~2% of its wall time on the network |

@@ -73,7 +73,7 @@ DEFAULTS = {
     # ── Local inference (Ollama) ──────────────────────────────────────
     # Model to use for all agents by default.
     # Good options by RAM (Aug 2026):
-    #   8GB:  qwen3.5:4b (~2.5GB — best quality/size for CPU-only)
+    #   8GB:  qwen3.5:4b (~3.4GB — best quality/size for CPU-only)
     #   8GB:  gemma3:4b or phi4-mini (fallbacks)
     #   16GB: gemma4 e2b/e4b (slower, better quality)
     "model": "qwen3.5:4b",

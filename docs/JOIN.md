@@ -44,7 +44,7 @@ coordinator. No port is opened. Your home router does not need changing.
 
 | | |
 | --- | --- |
-| **Disk** | About 2.5 GB for the AI model, plus a little for its output |
+| **Disk** | About 3.4 GB for the AI model, plus a little for its output |
 | **Memory** | 8 GB is the practical minimum for the whole machine |
 | **Processor** | Full load, in bursts of a few minutes, while it is building something |
 | **Network** | Very little. A real task spends about 2% of its time on the wire |
@@ -237,7 +237,7 @@ The installer walks through nine steps and tells you what each one is doing.
    normal, and it is so the code does not end up on your screen or in your
    shell history. It is never accepted as part of the command.
 7. **Downloads the model** if you do not already have it. This is the slow
-   step — 2.5 GB.
+   step — 3.4 GB.
 8. **Introduces your computer to the coordinator.** It creates one small
    private file that identifies your machine, and registers.
 9. **Tells you how to start, how to pause, and how to leave.**
@@ -271,7 +271,7 @@ deletes your private credential file.
 It deliberately does **not** remove:
 
 - **Ollama** — remove it the way you installed it;
-- **the model** (about 2.5 GB) — `ollama rm qwen3.5:4b` if you want the space
+- **the model** (about 3.4 GB) — `ollama rm qwen3.5:4b` if you want the space
   back;
 - **this folder**, or Python.
 
