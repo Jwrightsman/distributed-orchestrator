@@ -42,7 +42,17 @@ def _database_path(state_dir: Path | str | None) -> Path:
     root = root.expanduser()
     if not root.exists() or not root.is_dir():
         raise EnrollmentAdminError(f"state directory does not exist: {root}")
-    return root / "events.db"
+    database = root / "events.db"
+    if not database.is_file():
+        # Opening the store would create an empty database here and report
+        # "No node enrollments." — a wrong directory must not look like an
+        # empty network, and it must not leave a stray database behind.
+        raise EnrollmentAdminError(
+            f"{root} is not a coordinator state directory (it has no events.db). "
+            "Pass --state-dir: 'data' from the repository directory on the host, "
+            "or '/data' inside the container"
+        )
+    return database
 
 
 def _store(state_dir: Path | str | None):
