@@ -97,9 +97,10 @@ function wirePitchKeyForm() {
     field.value = '';
     storePitchKey(key);
     form.hidden = true;
-    // A task waiting in the composer goes now; with none, the key is kept
-    // for the next Pitch. A refused pitch never clears the composer.
-    if ($('pitch-input').value.trim()) pitchTask();
+    // Saving the key never sends anything. The button that takes a secret
+    // must not also spend compute: a leftover word in the composer went out
+    // as a real run this way in the 2026-09-22 rehearsal. Pitch sends.
+    $('pitch-input').focus();
   });
   if (pitchKeyRequired() && !pitchKeyInMemory) askForPitchKey(false, false);
 }

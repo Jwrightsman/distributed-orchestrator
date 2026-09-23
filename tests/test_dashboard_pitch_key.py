@@ -147,3 +147,15 @@ def test_served_dashboard_needs_no_pitch_key_when_none_is_set(keyed_config, monk
         html = client.get("/dashboard").text
     assert 'data-required="false"' in html
     assert 'data-required="true"' not in html
+
+
+def test_saving_the_pitch_key_never_sends_a_pitch(signed_in):
+    """The button that takes the key must not also spend compute. In the
+    2026-09-22 rehearsal a leftover word in the composer went out as a real
+    run the moment the key was saved."""
+    html = signed_in.get("/dashboard").text
+    start = html.index("function wirePitchKeyForm()")
+    body = html[start:html.index("\nfunction ", start + 1)]
+    assert "storePitchKey(key)" in body
+    assert "pitchTask(" not in body
+    assert '>Save key</button>' in html
