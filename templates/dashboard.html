@@ -267,6 +267,23 @@
                   </div>
                 </div>
                 <p class="ov-note" id="ov-strategy-note" hidden></p>
+                <!-- Pitching is its own authority. The viewer session lets this
+                     page read; spending the machines' compute needs the pitch
+                     key, which is asked for only when the coordinator refuses a
+                     pitch for want of it. It stays in this tab and goes out as
+                     the X-Pitch-Key header, never in a link. -->
+                <form class="ov-pitchkey" id="pitch-key-form" hidden>
+                  <p class="ov-pitchkey-msg" id="pitch-key-msg" role="alert">This coordinator needs its
+                    pitch key to take work. The viewer key only lets this page read.</p>
+                  <div class="ov-pitchkey-row">
+                    <label class="sr-only" for="pitch-key-input">Pitch key</label>
+                    <input class="ov-pitchkey-input" id="pitch-key-input" type="password"
+                           placeholder="pitch key" autocomplete="off" spellcheck="false">
+                    <button class="ov-pitchkey-submit" id="pitch-key-submit" type="submit">Use and pitch</button>
+                  </div>
+                  <p class="ov-pitchkey-note">Kept only in this browser tab and forgotten when you close it.
+                    Ask whoever runs this coordinator for it.</p>
+                </form>
                 <div class="ov-suggest">
                   <span class="ov-suggest-k">TEMPLATES</span>
                   <div id="task-templates" class="template-row"></div>
