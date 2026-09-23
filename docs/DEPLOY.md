@@ -226,10 +226,19 @@ sudo systemctl reload caddy
 Two separate things have to happen, and **they are two independent
 authorities**:
 
-1. **Add their device to your tailnet.** Send them a tailnet invite from
-   [login.tailscale.com/admin/machines](https://login.tailscale.com/admin/machines).
-   They install Tailscale and accept. This decides whether their machine can
-   reach your address at all.
+1. **Share the coordinator machine with them.** In
+   [login.tailscale.com/admin/machines](https://login.tailscale.com/admin/machines),
+   open the coordinator's **…** menu → **Share…**, and send them the link (not
+   reusable) or share by email. They install Tailscale, sign in with any
+   account, and accept. This decides whether their machine can reach your
+   address at all.
+
+   Prefer this to a tailnet invite. A share reaches **only the coordinator**,
+   not your other devices, and it is one-way: the coordinator can answer their
+   worker but cannot open a connection to their machine
+   ([Tailscale: sharing](https://tailscale.com/kb/1084/sharing)). Workers only
+   dial out, so that is all they need. A shared machine resolves only by its
+   full `.ts.net` name, which is the address workers use anyway.
 2. **Send them an invitation code.** That is the `node_secret` from
    `data/config.json`, sent through a channel you would send a password over.
    This decides whether they can enrol once they can reach you.
@@ -245,7 +254,10 @@ authorities**:
    swaps it for its own revocable credential when it joins.
 
 Then send them [JOIN.md](JOIN.md) and the address
-`https://YOUR-HOST.YOUR-TAILNET.ts.net`.
+`https://YOUR-HOST.YOUR-TAILNET.ts.net`. If the repository is private, they
+cannot clone it: send a zip of the commit you run instead.
+[INVITE_KIT.md](INVITE_KIT.md) is the whole checklist, with a message you can
+send them.
 
 Each machine joins under its own name — the computer's name plus a short
 random tail, such as `laptop-3f9a` — and that is the name you will see in the
@@ -274,16 +286,19 @@ directory rather than `data/`, and stops with "not a coordinator state
 directory".
 
 ```bash
-# 2. Remove their device from the tailnet (does not touch the enrollment)
+# 2. Revoke their share of the coordinator, or remove their device if you
+#    invited it into the tailnet (does not touch the enrollment)
 #    Do this in the admin console: login.tailscale.com/admin/machines
 ```
 
-Removing the device from your tailnet stops that machine reaching the address.
+Revoking the share, or removing the device from your tailnet, stops that machine
+reaching the address.
 It does **not** revoke the enrollment credential, which is a bearer token: if
 that machine ever regains tailnet access — a re-invite, a shared account, a
 device they still control — the credential still works. Equally, revoking the
-enrollment does not remove them from your tailnet, where they can still reach
-the address and anything else on it.
+enrollment does not revoke their share or remove them from your tailnet, so
+they can still reach the address (and, with a tailnet invite, anything else on
+it).
 
 Do both. Every time.
 
