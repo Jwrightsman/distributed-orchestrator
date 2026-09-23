@@ -582,6 +582,26 @@ body {
   content: ""; position: absolute; left: 0; top: 6px;
   width: 6px; height: 6px; background: var(--info);
 }
+.ov-pitchkey {
+  margin-top: 10px; padding: 12px 14px;
+  border: 1px solid var(--border-strong); border-radius: 12px; background: var(--surface);
+}
+.ov-pitchkey-msg { font-size: 12.5px; color: var(--danger-text); line-height: 1.55; }
+.ov-pitchkey-row { display: flex; gap: 8px; margin-top: 9px; flex-wrap: wrap; }
+.ov-pitchkey-input {
+  flex: 1 1 180px; min-width: 0; min-height: 36px; box-sizing: border-box;
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--border-strong); border-radius: 8px; padding: 7px 11px;
+  font-family: var(--mono); font-size: 12.5px;
+}
+.ov-pitchkey-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ov-pitchkey-submit {
+  min-height: 36px; background: var(--accent); color: var(--on-accent);
+  border: none; border-radius: 8px; padding: 7px 14px;
+  font-family: var(--sans); font-size: 12.5px; font-weight: 500; cursor: pointer;
+}
+.ov-pitchkey-submit:hover { background: var(--accent-strong); }
+.ov-pitchkey-note { margin-top: 8px; font-size: 11.5px; color: var(--text-muted); line-height: 1.55; }
 .ov-suggest { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 11px; align-items: center; }
 .ov-suggest-k { font-size: 11px; font-weight: 600; letter-spacing: 0.09em; color: var(--text-faint); margin-right: 2px; }
 .template-row { display: contents; }

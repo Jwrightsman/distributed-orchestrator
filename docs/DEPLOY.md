@@ -572,6 +572,16 @@ at least 32 characters and all three must differ.
 Do not reuse one value for two roles. Give each person or machine only the
 authority it needs.
 
+**Pitching from the dashboard needs both keys.** The viewer key unlocks the
+dashboard for reading; it never lets the page submit work. The first time a
+signed-in browser presses **Pitch** on a coordinator with a `pitch_key`, the
+coordinator refuses it and the page asks for the pitch key under the composer
+(the page stays unlocked; it is not a viewer-key problem). The key is kept only
+in that browser tab's session storage, sent as the `X-Pitch-Key` header, never
+put in a URL, and forgotten when the tab closes. A key the coordinator refuses
+is dropped at once. Give the pitch key only to people who may spend the
+machines' compute; someone with just the viewer key can watch but not pitch.
+
 ### How strong they have to be, and why
 
 `deploy.sh` generates each one with `secrets.token_urlsafe(32)` — 32 bytes from
@@ -914,5 +924,6 @@ unaffected by a window change.
 | A typed task excludes a worker | Inspect viewer-protected `/v1/operator/node-enrollments` and use its stable `reason_codes` |
 | Capability evidence shows `insufficient_evidence` | The configured cold-start state, not a negative score |
 | Pitch returns 401 | Send the current `pitch_key` on the pitch route |
+| Dashboard says it needs the pitch key, or that the key was not accepted | The viewer session is fine; enter the current `pitch_key` in the box under the composer. After rotating `pitch_key`, each open tab asks again |
 | Browser logs in but immediately loses the cookie | HTTPS and `viewer_cookie_secure` disagree, or the proxy is not actually serving HTTPS |
 | Compose is reachable only locally | That is correct and deliberate. Reach it through the proxy |

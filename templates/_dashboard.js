@@ -45,6 +45,55 @@ class ViewerLocked extends Error {
   constructor() { super('viewer authentication required'); this.name = 'ViewerLocked'; }
 }
 
+/* The coordinator's exact words when a pitch lacks the pitch key
+   (server_state._check_pitch_key). A viewer 401 says something else. */
+const PITCH_KEY_REFUSED = 'Invalid or missing X-Pitch-Key header';
+class PitchKeyRefused extends Error {
+  constructor() { super('pitch key required'); this.name = 'PitchKeyRefused'; }
+}
+
+/* The pitch key lives in this tab's sessionStorage only: it survives the
+   reload after unlocking, and is gone when the tab closes. It is sent as the
+   X-Pitch-Key header and never put in a URL. */
+const PITCH_KEY_SLOT = 'mycelium-pitch-key';
+function storedPitchKey() {
+  try { return sessionStorage.getItem(PITCH_KEY_SLOT) || ''; } catch (e) { return ''; }
+}
+function storePitchKey(key) {
+  try {
+    if (key) sessionStorage.setItem(PITCH_KEY_SLOT, key);
+    else sessionStorage.removeItem(PITCH_KEY_SLOT);
+  } catch (e) { /* storage blocked: the key lasts until the next reload */ }
+  pitchKeyInMemory = key;
+}
+let pitchKeyInMemory = storedPitchKey();
+
+function askForPitchKey(hadKey) {
+  const form = $('pitch-key-form');
+  if (!form) return;
+  $('pitch-key-msg').textContent = hadKey
+    ? 'That pitch key was not accepted. Nothing was run.'
+    : 'This coordinator needs its pitch key to take work. The viewer key only lets this page read.';
+  form.hidden = false;
+  $('pitch-key-input').focus();
+}
+
+function wirePitchKeyForm() {
+  const form = $('pitch-key-form');
+  if (!form) return;
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const field = $('pitch-key-input');
+    const key = (field.value || '').trim();
+    if (!key) return;
+    field.value = '';
+    storePitchKey(key);
+    form.hidden = true;
+    // The task is still in the composer: a refused pitch never clears it.
+    pitchTask();
+  });
+}
+
 function showLockedScreen() {
   if (viewerLocked) return;          // idempotent: 13 fetches can all 401 at once
   viewerLocked = true;
@@ -68,6 +117,11 @@ function showLockedScreen() {
 async function apiFetch(url, opts) {
   const resp = await fetch(url, Object.assign({credentials: 'same-origin'}, opts || {}));
   if (resp.status === 401) {
+    // Two authorities answer 401 here. Only the viewer's locks the page; a
+    // refused pitch key is about spending, and this browser can still read.
+    let detail = '';
+    try { detail = (await resp.clone().json()).detail || ''; } catch (e) {}
+    if (detail === PITCH_KEY_REFUSED) throw new PitchKeyRefused();
     showLockedScreen();
     throw new ViewerLocked();
   }
@@ -1799,9 +1853,11 @@ async function pitchTask() {
   try {
     const body = {task, strategy: pitchStrategy};
     if (projectId && !detached) body.project_id = projectId;
+    const headers = {'Content-Type': 'application/json'};
+    if (pitchKeyInMemory) headers['X-Pitch-Key'] = pitchKeyInMemory;
     const resp = await apiFetch('/pitch/async', {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+      headers,
       body: JSON.stringify(body),
     });
     const data = await resp.json();
@@ -1816,7 +1872,16 @@ async function pitchTask() {
     input.value = '';
     await _pollJobCompletion(data.job_id, pid);
   } catch (e) {
-    finishTurn(pid, {status: 'failed', error: e && e.message ? e.message : 'the pitch was not accepted'});
+    if (e instanceof PitchKeyRefused) {
+      const hadKey = !!pitchKeyInMemory;
+      storePitchKey('');
+      finishTurn(pid, {status: 'failed', error: hadKey
+        ? 'The coordinator did not accept this tab\'s pitch key, so nothing ran.'
+        : 'The coordinator needs its pitch key before it will run anything. Enter it below the composer.'});
+      askForPitchKey(hadKey);
+    } else {
+      finishTurn(pid, {status: 'failed', error: e && e.message ? e.message : 'the pitch was not accepted'});
+    }
   }
   clearInterval(ticker);
   btn.disabled = false;
@@ -2957,6 +3022,7 @@ window.matchMedia(DRAWER_QUERY).addEventListener?.('change', (e) => {
 // ── Start ────────────────────────────────────────────────────────
 renderTemplates();
 wireLockedScreen();
+wirePitchKeyForm();
 $('main').classList.add('is-bleed');
 paintRunPanel();
 paintOvTabs();
