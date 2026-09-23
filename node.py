@@ -72,6 +72,10 @@ _GPU_PROBE_TIMEOUT_SECONDS = 3
 EXIT_OK = 0
 EXIT_FAILED = 1
 
+#: Upper bound on telling the coordinator this worker is stopping. Long enough
+#: for a slow link, short enough that closing never feels stuck.
+_LEAVE_TIMEOUT_SECONDS = 5.0
+
 
 class WorkerCapabilityOverrides(CapabilityProtocolModel):
     """Strict operator overrides layered over best-effort local detection.
@@ -1109,15 +1113,93 @@ def _enrolled_node_id(identity_file: Path, server: str) -> str | None:
 
 
 async def main(argv: list[str] | None = None, *, admission_secret: str | None = None) -> int:
-    """Run one worker.
+    """Run one worker until it is stopped.
 
     `argv` defaults to this process's own arguments. `admission_secret`, when
     given, is an already-resolved code from a caller that asked for it safely —
     `join.py` does exactly this — so it is never re-read from the argument list
     and never warned about a second time.
+
+    Ctrl+C does not arrive here as KeyboardInterrupt. Since Python 3.11,
+    `asyncio.run` delivers it by cancelling this task and raises
+    KeyboardInterrupt only after the task has finished, so an `except
+    KeyboardInterrupt` inside the loop never ran: the worker died with a
+    traceback and without telling the coordinator. The cancellation is caught
+    here instead and turned into a clean stop.
     """
 
-    parser = argparse.ArgumentParser(description="Join the network as a worker node")
+    worker: dict[str, Any] = {"server": None, "node_id": None, "session": None}
+    try:
+        return await _run_worker(argv, admission_secret, worker)
+    except (asyncio.CancelledError, KeyboardInterrupt):
+        task = asyncio.current_task()
+        if task is not None:
+            # Take the stop back, so the leave request below can still await
+            # and `asyncio.run` returns our exit code instead of raising.
+            while task.uncancel():
+                pass
+    return await _stop_cleanly(worker)
+
+
+async def _stop_cleanly(worker: dict[str, Any]) -> int:
+    """Print the summary and end the session with the coordinator. Exit 0.
+
+    Ending the session is the non-revoking `POST /nodes/{id}/leave`: the node
+    drops off the online list now instead of after the staleness interval, and
+    work it held is requeued for somebody else. The enrollment stays, so the
+    same command joins again later. The request is bounded by
+    `_LEAVE_TIMEOUT_SECONDS`; an unreachable coordinator only means the session
+    goes stale on its own, as it always did. A second Ctrl+C during the request
+    is raised by `asyncio.run` itself and ends the process at once.
+    """
+
+    session = worker["session"]
+    if session is None:
+        console.print("\n[dim]Stopped.[/dim]")
+        return EXIT_OK
+    node_id = worker["node_id"]
+    _print_session_summary(node_id, session)
+    token = str(session.get("session_token") or "")
+    if not token:
+        return EXIT_OK
+    console.print(
+        "[dim]Telling the coordinator this computer is stopping... "
+        "(Ctrl+C again to skip)[/dim]"
+    )
+    if await _end_session(worker["server"], node_id, token):
+        console.print("[dim]Signed off. Any work held here goes back to the network.[/dim]\n")
+    else:
+        console.print(
+            "[dim]The coordinator could not be reached. It will notice this "
+            "computer has gone within a couple of minutes.[/dim]\n"
+        )
+    return EXIT_OK
+
+
+async def _end_session(server: str, node_id: str, token: str) -> bool:
+    """End this session, keeping the enrollment. True when the coordinator agreed."""
+
+    try:
+        async with asyncio.timeout(_LEAVE_TIMEOUT_SECONDS):
+            async with httpx.AsyncClient(
+                timeout=_LEAVE_TIMEOUT_SECONDS, trust_env=False, follow_redirects=False
+            ) as client:
+                response = await client.post(
+                    f"{server}/nodes/{node_id}/leave",
+                    headers=_auth_headers("", token),
+                    json={"revoke_enrollment": False},
+                )
+    except (TimeoutError, httpx.HTTPError):
+        return False
+    return response.status_code == 200
+
+
+async def _run_worker(
+    argv: list[str] | None, admission_secret: str | None, worker: dict[str, Any]
+) -> int:
+    """The worker itself. `worker` is kept current for `_stop_cleanly`."""
+
+    parser =argparse.ArgumentParser(description="Join the network as a worker node")
     parser.add_argument(
         "--server",
         required=True,
@@ -1264,6 +1346,7 @@ async def main(argv: list[str] | None = None, *, admission_secret: str | None = 
         "capability_descriptor_version": capability_descriptor.descriptor_version,
         "capability_descriptor_hash": descriptor_hash,
     }
+    worker.update(server=server, node_id=node_id, session=session)
     try:
         enrollment_action = (
             "returning" if identity.enrollment_id is not None else "bootstrap"
@@ -1285,6 +1368,7 @@ async def main(argv: list[str] | None = None, *, admission_secret: str | None = 
             identity_file=identity_file,
             expected_descriptor=capability_descriptor,
         )
+        worker["node_id"] = node_id
         identity = session["worker_identity"]
         # After registration the server may have added auto-detected caps (model:<name>, etc.)
         # Show what was actually registered so the user knows what the node is offering.
@@ -1346,6 +1430,7 @@ async def main(argv: list[str] | None = None, *, admission_secret: str | None = 
                     identity_file=identity_file,
                     expected_descriptor=capability_descriptor,
                 )
+                worker["node_id"] = node_id
                 console.print(f"[green]Reconnected.[/green] {reg.get('message', '')}\n")
                 registered = True
 
@@ -1398,10 +1483,6 @@ async def main(argv: list[str] | None = None, *, admission_secret: str | None = 
             console.print(f"[red bold]Worker identity rejected:[/red bold] {exc}")
             return EXIT_FAILED
 
-        except KeyboardInterrupt:
-            _print_session_summary(node_id, session)
-            return EXIT_OK
-
         except Exception as e:
             delay = reconnect_delay(attempt)
             attempt += 1
@@ -1420,5 +1501,21 @@ def _print_session_summary(node_id: str, session: dict):
     console.print("[dim]Thanks for contributing to the network.[/dim]\n")
 
 
+def run() -> int:
+    """Process entry point. A Ctrl+C that escapes `main` still exits quietly.
+
+    `main` handles the first Ctrl+C itself. This catches the ones it cannot: a
+    second press while it is signing off, which `asyncio.run` raises directly
+    so that stopping never waits on the network, and one that lands before the
+    event loop has started.
+    """
+
+    try:
+        return asyncio.run(main())
+    except KeyboardInterrupt:
+        console.print("[dim]Stopped.[/dim]")
+        return EXIT_OK
+
+
 if __name__ == "__main__":
-    sys.exit(asyncio.run(main()))
+    sys.exit(run())

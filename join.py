@@ -188,4 +188,10 @@ async def main():
 
 
 if __name__ == "__main__":
-    sys.exit(asyncio.run(main()))
+    # node.main turns the first Ctrl+C into a clean stop; this catches a second
+    # one, or one pressed during setup, so neither ends in a traceback.
+    try:
+        sys.exit(asyncio.run(main()))
+    except KeyboardInterrupt:
+        console.print("[dim]Stopped.[/dim]")
+        sys.exit(0)
