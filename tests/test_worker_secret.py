@@ -291,27 +291,29 @@ async def test_a_secret_file_supplies_the_bootstrap_registration(monkeypatch, tm
 
     async def register(server, node_id, secret="", **kwargs):
         seen.append(secret)
-        raise KeyboardInterrupt
+        # Stop here. Not KeyboardInterrupt: node.main turns that into a clean
+        # exit, which would hide whether registration was reached at all.
+        raise RuntimeError("stop after the registration header is seen")
 
     monkeypatch.setattr(node, "check_ollama", healthy_ollama)
     monkeypatch.setattr(node, "_detect_ollama_metadata", no_runtime_metadata)
     monkeypatch.setattr(node, "register", register)
     monkeypatch.setattr(node.console, "print", lambda *a, **k: None)
 
-    with pytest.raises(KeyboardInterrupt):
-        await node.main(
-            [
-                "--server",
-                "https://coordinator.example",
-                "--node-id",
-                "laptop",
-                "--identity-file",
-                str(tmp_path / "identity.json"),
-                "--secret-file",
-                str(secret_file),
-            ]
-        )
+    code = await node.main(
+        [
+            "--server",
+            "https://coordinator.example",
+            "--node-id",
+            "laptop",
+            "--identity-file",
+            str(tmp_path / "identity.json"),
+            "--secret-file",
+            str(secret_file),
+        ]
+    )
 
+    assert code == node.EXIT_FAILED
     assert seen == [SECRET]
 
 
