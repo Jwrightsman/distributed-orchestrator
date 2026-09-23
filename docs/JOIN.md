@@ -90,13 +90,18 @@ private network that connects a set of machines directly to each other; the
 coordinator has no public address at all, so until your machine is on that
 network the address will simply not resolve.
 
-**What you need:** a **third** thing from whoever invited you — an invitation
-to their tailnet, which arrives as an email or a link.
+**What you need:** a **third** thing from whoever invited you, which arrives
+as an email or a link. Usually it is a **share of their coordinator machine**:
+your Tailscale account can reach that one machine and nothing else of theirs,
+and that machine cannot start a connection to yours. Less often it is an
+invitation into their whole tailnet.
 
 **What you do:**
 
-1. Install Tailscale from [tailscale.com/download](https://tailscale.com/download).
-2. Accept their invitation and sign in.
+1. Install Tailscale from [tailscale.com/download](https://tailscale.com/download),
+   and sign in. Any free account works; it does not need to match the email
+   the invitation was sent to.
+2. Open their link and accept it.
 3. Check it worked:
 
    ```bash
@@ -117,13 +122,13 @@ network, and your invitation code still travels across it.
 - **Two separate permissions.** Being on their tailnet and being enrolled in
   their Mycelium network are different things. They can revoke either one
   without the other.
-- **Tailscale sees more of your machine than Mycelium does.** It is a network
-  layer: while it is running, your machine is reachable by other devices on
-  that tailnet, subject to whatever rules the tailnet owner set. That is a
-  bigger ask than running the worker, and it is a reasonable thing to think
-  about before accepting.
-- **You can leave in either direction.** Uninstall Tailscale, or leave the
-  tailnet from its admin interface, or run
+- **What Tailscale opens depends on what you were sent.** A machine share
+  lets you reach their one machine and does not make yours reachable by them.
+  An invitation into their whole tailnet is a bigger ask: while Tailscale is
+  running, your machine is reachable by other devices on that tailnet, subject
+  to whatever rules its owner set. If you are not sure which you got, ask.
+- **You can leave in either direction.** Uninstall Tailscale, or remove the
+  share (or leave the tailnet) from its admin interface, or run
   `python worker_installer.py uninstall` — any of these stops the work.
   Doing all three is the clean exit.
 
@@ -204,6 +209,20 @@ person who invited you** rather than clicking through it.
 
 ---
 
+## If you were sent a zip
+
+While the project's code is not public, whoever invited you may send it as a
+zip file instead of a `git clone` command. That is fine.
+
+1. Unzip it. You get a folder called `mycelium`.
+2. Open a terminal **inside that folder**. On Windows, open the folder in File
+   Explorer, click the address bar, type `cmd` and press Enter. On a Mac, see
+   "Opening a terminal" above, then type `cd ` (with a space), drag the folder
+   into the window and press Return.
+3. Skip the two `git` lines below and start from `python worker_installer.py`.
+
+On Windows, if `python` says it is not found, try `py` instead, everywhere below.
+
 ## Joining
 
 Get the code, then run the installer from inside it:
@@ -260,10 +279,16 @@ time; it knows your computer's network name from its private file.
 
 ### Stopping
 
-Press **Ctrl+C**, or just close the window. Whatever piece of work you were
-holding goes back to the network and is given to someone else. Your machine
-disappears from the network within about 90 seconds. There is no penalty, and
-credit you have already earned stays earned.
+Press **Ctrl+C** once. It prints a short summary of what your machine did,
+tells the coordinator you are stopping, and says "Signed off." Whatever piece
+of work you were holding goes back to the network straight away, and your
+machine leaves the online list at once. If the coordinator cannot be reached,
+it says so and stops anyway.
+
+Closing the window also works, but then the coordinator only notices after
+about 90 seconds. Either way there is no penalty, credit you have already
+earned stays earned, and you can start again later with the same command.
+Stopping is not leaving: your machine keeps its place until you uninstall.
 
 ## Leaving for good
 
