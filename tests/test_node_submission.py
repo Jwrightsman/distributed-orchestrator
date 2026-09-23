@@ -520,6 +520,14 @@ async def test_worker_automatically_reregisters_after_session_rejection(
     monkeypatch.setattr(node, "register", register)
     monkeypatch.setattr(node, "poll_and_execute", poll)
     monkeypatch.setattr(node.console, "print", lambda *args, **kwargs: None)
+    left = []
+
+    async def end_session(server, node_id, token):
+        # Stopping signs off; keep that off the real network.
+        left.append(token)
+        return True
+
+    monkeypatch.setattr(node, "_end_session", end_session)
     monkeypatch.setattr(
         "sys.argv",
         [
@@ -543,6 +551,7 @@ async def test_worker_automatically_reregisters_after_session_rejection(
     assert registrations[0][4] == registrations[1][4] == node.DEFAULT_MODEL
     assert polled_models == [node.DEFAULT_MODEL, node.DEFAULT_MODEL]
     assert polls == 2
+    assert left == ["token-2"], "the stop must end the current session, not the replaced one"
 
 
 def test_worker_refuses_legacy_downgrade_after_requesting_enrollment(tmp_path):
