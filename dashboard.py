@@ -181,12 +181,18 @@ def identity_at_load() -> dict[str, str]:
 
 
 def composer_at_load() -> dict[str, str]:
-    """Overview's rate note, from the two keys the rate limiter reads."""
+    """Overview's rate note, and whether pitching here needs the pitch key.
+
+    Only the fact that a pitch key is set reaches the page, never the key: a
+    refused pitch says as much already, and saying it up front lets the page
+    ask before the first pitch instead of recording a failed run.
+    """
     settings = get_config()
     count = settings.get("pitch_rate_max", 5)
     window = settings.get("pitch_rate_window", 60)
     per = "min" if window == 60 else ("hour" if window == 3600 else f"{window}s")
-    return {"PITCH_RATE_NOTE": html.escape(f"{count} / {per}")}
+    return {"PITCH_RATE_NOTE": html.escape(f"{count} / {per}"),
+            "PITCH_KEY_REQUIRED": "true" if settings.get("pitch_key") else "false"}
 
 
 @router.get("/", response_class=HTMLResponse)

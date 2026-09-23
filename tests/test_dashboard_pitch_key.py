@@ -128,3 +128,22 @@ def test_served_dashboard_recognises_the_pitch_refusal(signed_in):
     assert "localStorage.setItem(PITCH_KEY_SLOT" not in html
     assert 'id="pitch-key-form"' in html
     assert 'id="pitch-key-input" type="password"' in html
+
+
+def test_served_dashboard_says_up_front_that_a_pitch_key_is_needed(signed_in):
+    """The page asks before the first pitch, so a first try is not a failed
+    run. It learns only that a key is set, never the key."""
+    html = signed_in.get("/dashboard").text
+    assert 'data-required="true"' in html
+    assert PITCH_KEY not in html
+    assert VIEWER_KEY not in html
+
+
+def test_served_dashboard_needs_no_pitch_key_when_none_is_set(keyed_config, monkeypatch):
+    keyed_config["pitch_key"] = ""
+    monkeypatch.setattr(routes_pitch, "run_pipeline", _fake_pipeline)
+    with TestClient(server.app) as client:
+        assert client.post("/v1/viewer/session", json={"viewer_key": VIEWER_KEY}).status_code == 200
+        html = client.get("/dashboard").text
+    assert 'data-required="false"' in html
+    assert 'data-required="true"' not in html
