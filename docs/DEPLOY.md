@@ -576,7 +576,7 @@ authority it needs.
 dashboard for reading; it never lets the page submit work. On a coordinator
 with a `pitch_key`, a signed-in tab that has not been given the pitch key shows
 a box for it under the composer, and **Pitch** sends nothing until it is
-filled in. The page learns only that a key is set, never the key. If the
+filled in. **Save key** only stores the key; press **Pitch** to send a task. The page learns only that a key is set, never the key. If the
 coordinator refuses a key, the page asks again (the page stays unlocked; it is
 not a viewer-key problem). The key is kept only
 in that browser tab's session storage, sent as the `X-Pitch-Key` header, never
