@@ -68,14 +68,22 @@ function storePitchKey(key) {
 }
 let pitchKeyInMemory = storedPitchKey();
 
-function askForPitchKey(hadKey) {
+/* The server says at load whether it has a pitch key (never the key itself),
+   so a tab without one is asked before its first pitch rather than after a
+   refusal that would leave a failed run in the thread. */
+function pitchKeyRequired() {
+  const form = $('pitch-key-form');
+  return !!form && form.dataset.required === 'true';
+}
+
+function askForPitchKey(hadKey, focus = true) {
   const form = $('pitch-key-form');
   if (!form) return;
   $('pitch-key-msg').textContent = hadKey
     ? 'That pitch key was not accepted. Nothing was run.'
     : 'This coordinator needs its pitch key to take work. The viewer key only lets this page read.';
   form.hidden = false;
-  $('pitch-key-input').focus();
+  if (focus) $('pitch-key-input').focus();
 }
 
 function wirePitchKeyForm() {
@@ -89,9 +97,11 @@ function wirePitchKeyForm() {
     field.value = '';
     storePitchKey(key);
     form.hidden = true;
-    // The task is still in the composer: a refused pitch never clears it.
-    pitchTask();
+    // A task waiting in the composer goes now; with none, the key is kept
+    // for the next Pitch. A refused pitch never clears the composer.
+    if ($('pitch-input').value.trim()) pitchTask();
   });
+  if (pitchKeyRequired() && !pitchKeyInMemory) askForPitchKey(false, false);
 }
 
 function showLockedScreen() {
@@ -1680,6 +1690,7 @@ function turnSteps(t, now) {
     ];
   }
   const done = t.status === 'complete' || t.status === 'failed';
+  if (t.tries) return trySteps(t, now, done);
   const planned = t.planAt != null;
   const steps = [];
   // PLAN. Only the planning strategy decomposes; a finished run with no plan
@@ -1723,6 +1734,32 @@ function turnSteps(t, now) {
     steps.push({label: 'REVIEW', state: done ? (t.status === 'failed' ? 'stopped' : 'done') : 'waiting',
       detail: done ? (t.status === 'failed' ? 'did not run' : 'graded') : 'waiting for builders', dur: '—'});
   }
+  return steps;
+}
+
+/* One shot and several tries never plan and are never read by a reviewer:
+   each try answers the whole task, and a mechanical check decides which
+   answer stands. The timeline says that instead of borrowing the planning
+   run's words ("the planner is working", "graded"). */
+function trySteps(t, now, done) {
+  const n = t.subtasks;
+  const failed = t.status === 'failed';
+  const built = n ? `${Math.min(t.builds, n)} of ${n} ${n === 1 ? 'try' : 'tries'} answered` : '';
+  const steps = [{label: 'PLAN', state: 'skipped',
+    detail: 'no plan — each try attempts the whole task', dur: '—'}];
+  if (!done) {
+    steps.push({label: 'BUILD', state: 'active',
+      detail: t.builds ? `${t.builds} answered so far` : 'a machine is answering',
+      dur: fmtDur(now - t.startedAt)});
+    steps.push({label: 'CHECK', state: 'waiting', detail: 'waiting for an answer', dur: '—'});
+    return steps;
+  }
+  steps.push({label: n ? `BUILD ${Math.min(t.builds, n)}/${n}` : 'BUILD',
+    state: failed && !t.builds ? 'stopped' : 'done',
+    detail: built || (failed && !t.builds ? 'no answer came back' : 'answered'),
+    dur: fmtDur(t.doneAt - t.startedAt)});
+  steps.push({label: 'CHECK', state: failed ? 'stopped' : 'done',
+    detail: failed ? 'did not finish' : 'format checked only — no reviewer read it', dur: '—'});
   return steps;
 }
 
@@ -1775,6 +1812,11 @@ function noteEventForTurn(ev) {
   } else if (ev.type === 'build') {
     t.builds += 1;
     if (ev.subtask) t.lastBuilt = ev.subtask;
+  } else if (ev.type === 'candidate_generated') {
+    // One shot and several tries report each finished answer this way, not
+    // as a build; counting only builds drew a run that succeeded as 0 built.
+    t.tries = true;
+    if (ev.status === 'completed') t.builds += 1;
   } else if (ev.type === 'review_start' && t.reviewAt == null) {
     t.reviewAt = at;
   }
@@ -1809,6 +1851,11 @@ async function pitchTask() {
   const btn = $('pitch-btn');
   const task = input.value.trim();
   if (!task) return;
+  if (pitchKeyRequired() && !pitchKeyInMemory) {
+    // Nothing is sent and no turn is drawn: the task waits in the composer.
+    askForPitchKey(false);
+    return;
+  }
   const projectId = $('active-project-id').value || null;
   const detached = !!projectId && (pitchStrategy === 'ensemble' || pitchStrategy === 'direct');
   const projectName = projectId && !detached ? $('project-context-name').textContent : null;
@@ -1816,7 +1863,8 @@ async function pitchTask() {
   btn.disabled = true;
   const pid = Date.now();
   turns[pid] = {pid, task, strategy: pitchStrategy, startedAt: pid, planAt: null, subtasks: 0,
-                builds: 0, reviewAt: null, doneAt: null, status: 'running', jobId: null,
+                builds: 0, tries: pitchStrategy === 'ensemble' || pitchStrategy === 'direct',
+                reviewAt: null, doneAt: null, status: 'running', jobId: null,
                 lastBuilt: null, projectName};
 
   const askMeta = [projectName ? `into ${projectName}` : (detached ? 'detached · no project' : 'no project'),
@@ -1893,7 +1941,10 @@ async function _pollJobCompletion(jobId, pid) {
     try {
       const job = await apiJson(`/jobs/${jobId}`);
       if (job.status === 'complete' || job.status === 'failed') {
+        const tries = job.strategy_selected === 'ensemble' || job.strategy_selected === 'direct';
         finishTurn(pid, {
+          tries,
+          built: tries ? await builtCandidates(job.execution_id) : null,
           plan: job.plan || [],
           project_dir: job.project_dir || '',
           rating: job.rating,
@@ -1909,11 +1960,26 @@ async function _pollJobCompletion(jobId, pid) {
   }
 }
 
+/* How many tries produced an answer, from the execution record. The event
+   stream can close the turn before its last candidate event arrives, so the
+   finished count comes from the record; null keeps the event count. */
+async function builtCandidates(executionId) {
+  if (!executionId) return null;
+  try {
+    const rec = await apiJson(`/v1/executions/${encodeURIComponent(executionId)}`);
+    return (rec.candidates || []).filter(c => c.status !== 'failed').length;
+  } catch (_) {
+    return null;
+  }
+}
+
 function finishTurn(pid, result) {
   const t = turns[pid];
   if (!t) return;
   t.status = result.status === 'failed' ? 'failed' : 'complete';
   t.doneAt = Date.now();
+  if (result.tries) t.tries = true;
+  if (result.built != null) t.builds = result.built;
   if (!t.subtasks && (result.plan || []).length) t.subtasks = result.plan.length;
   paintTurn(pid);
 

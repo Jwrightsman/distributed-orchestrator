@@ -573,10 +573,12 @@ Do not reuse one value for two roles. Give each person or machine only the
 authority it needs.
 
 **Pitching from the dashboard needs both keys.** The viewer key unlocks the
-dashboard for reading; it never lets the page submit work. The first time a
-signed-in browser presses **Pitch** on a coordinator with a `pitch_key`, the
-coordinator refuses it and the page asks for the pitch key under the composer
-(the page stays unlocked; it is not a viewer-key problem). The key is kept only
+dashboard for reading; it never lets the page submit work. On a coordinator
+with a `pitch_key`, a signed-in tab that has not been given the pitch key shows
+a box for it under the composer, and **Pitch** sends nothing until it is
+filled in. The page learns only that a key is set, never the key. If the
+coordinator refuses a key, the page asks again (the page stays unlocked; it is
+not a viewer-key problem). The key is kept only
 in that browser tab's session storage, sent as the `X-Pitch-Key` header, never
 put in a URL, and forgotten when the tab closes. A key the coordinator refuses
 is dropped at once. Give the pitch key only to people who may spend the
