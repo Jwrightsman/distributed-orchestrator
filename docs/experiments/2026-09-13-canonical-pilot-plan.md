@@ -219,3 +219,43 @@ After explicit authorization, on that approved isolated machine:
    missing cells, endpoint distinctions and separate costs. The existing summary
    rejects missing/ungraded cells; it must not be used to conceal an incomplete
    pilot or relabel the fixture controls as benchmark evidence.
+
+## September 24 activation, and the two changes it needed
+
+The owner (Jett Wrightsman) authorized live activation on September 24, 2026.
+`scripts/run_canonical_pilot.py` is that entry point. It observes the runtime
+identity from the local Ollama (version, binary SHA-256, model digest,
+quantization), writes and hashes `rubric.txt` and `blinding-map.json` before the
+first call, and grades with `evals/grading.py`. That grader **runs each generated
+Python script** in a scratch directory with a scrubbed environment and a
+timeout. This is not a sandbox. The owner approves it per run with
+`--i-approve-running-generated-code`. The acceptance judgment is the mechanical
+checker; no human review is part of this run, and the rubric file says so.
+
+A one-cell smoke run (`--smoke 1`, study `SMOKE-NOT-A-RESULT`, not reported)
+found two defects that would have stopped the pilot within its first cell:
+
+1. **Repair could almost never be sent.** Quoting a typical generated script
+   exceeds the 1,000-character canonical task bound, and this plan stopped the
+   pilot on the first oversized repair. `repair_request` now sends the candidate
+   when it fits (`with_candidate`). When it does not fit, the repair is a fresh
+   attempt told only the public diagnostic (`feedback_only`). Each cell records
+   which form it used. The arm is therefore "direct plus one feedback-informed
+   retry", and it must be reported that way.
+2. **The time ceilings did not fit the approved hardware.** The first direct call
+   took 551 s for 497 output tokens. The laptop had 0.28 GB of 7.6 GB RAM free
+   while other applications were open, and the 5.9 GB model was paging. The
+   ceilings became 1,800 s per cell (was 600) and 36,000 s of overall inference
+   (was 21,600). Token ceilings are unchanged. They are what keep the arms
+   comparable; the time ceilings only stop a runaway run.
+
+Run it on a freshly restarted machine with nothing else open:
+
+```powershell
+py scripts/run_canonical_pilot.py --owner "Jett Wrightsman" --i-approve-running-generated-code --output C:\mycelium-pilot\run1
+```
+
+The output folder must be new and outside the repository. Do not edit the
+checkout while the run is going: the source-tree hash is re-checked before every
+model call, so an edit stops the run. The result prints at the end. To reprint it
+later, add `--summary-only` with the same `--output`.

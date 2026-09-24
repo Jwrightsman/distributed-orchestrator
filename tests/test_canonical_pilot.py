@@ -1,8 +1,9 @@
-"""Preflight controls; no real runtime or generated-artifact execution."""
+"""Preflight controls; no real runtime. The one checker test runs an authored script, not generated code."""
 
 import asyncio
 import copy
 import json
+from pathlib import Path
 import time
 
 import httpx
@@ -70,6 +71,51 @@ def test_repair_never_truncates_or_accepts_private_diagnostic_text():
         repair_task("Public task", candidate, "PRIVATE-REFERENCE-ANSWER")
 
 
+def test_repair_that_cannot_quote_its_candidate_becomes_a_labelled_fresh_attempt():
+    from evals.canonical_pilot import repair_request
+
+    text, form = repair_request("Public task", "AUTHORED CANDIDATE", "syntax")
+    assert form == "with_candidate" and "AUTHORED CANDIDATE" in text
+
+    text, form = repair_request("Public task", "x" * 1000, "syntax")
+    assert form == "feedback_only"
+    assert "x" * 50 not in text and len(text) <= 1000
+    assert text.startswith("Public task")
+
+    with pytest.raises(PreflightError, match="allowlisted"):
+        repair_request("Public task", "x" * 1000, "PRIVATE-REFERENCE-ANSWER")
+    with pytest.raises(PreflightError, match="1000-character"):
+        repair_request("t" * 990, "x", "syntax")
+
+
+def test_live_pilot_refuses_to_run_generated_code_without_explicit_approval(tmp_path):
+    import subprocess
+    import sys
+
+    script = Path(__file__).resolve().parents[1] / "scripts" / "run_canonical_pilot.py"
+    proc = subprocess.run([sys.executable, str(script), "--owner", "test",
+                           "--output", str(tmp_path / "out")],
+                          capture_output=True, text=True, timeout=120)
+    assert proc.returncode != 0
+    assert "--i-approve-running-generated-code" in proc.stderr
+    assert not (tmp_path / "out").exists()
+
+
+def test_live_pilot_checker_grades_a_real_script(tmp_path):
+    from scripts.run_canonical_pilot import make_checker
+
+    good = ("```python\nimport csv, json\n"
+            "with open('inventory.csv', newline='') as f:\n"
+            "    for row in csv.DictReader(f):\n"
+            "        print(json.dumps(row))\n```")
+    checker = make_checker(tmp_path)
+    deadline = time.monotonic() + 60
+    assert asyncio.run(checker("transform-csv-to-jsonl", good, deadline_monotonic=deadline)) == (
+        True, "requirement")
+    assert asyncio.run(checker("transform-csv-to-jsonl", "no code here",
+                               deadline_monotonic=deadline))[0] is False
+
+
 def direct_cell():
     return {"item_id": planned_cells()[0]["item_id"], "arm": "direct", "replicate": 0}
 
@@ -90,9 +136,9 @@ async def test_dispatch_stops_before_budget_loss(limit):
     if limit == "tokens":
         ledger.tokens = 147455
     elif limit == "time":
-        ledger.inference_reserved_seconds = 21600
+        ledger.inference_reserved_seconds = BUDGET["inference_seconds"]
     elif limit == "cell_time":
-        ledger.current["inference_reserved_seconds"] = 600
+        ledger.current["inference_reserved_seconds"] = BUDGET["cell_inference_seconds"]
     elif limit == "deadline":
         ledger.current["deadline"] = 0
     else:

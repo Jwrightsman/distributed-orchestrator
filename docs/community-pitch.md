@@ -113,11 +113,11 @@ I know it is ~57% and not the 61% I first got, because I ran the identical set t
 **What makes it different from the usual agent swarm:**
 
 - **Not a cloud product.** `qwen3.5:4b` via Ollama on an 8 GB laptop with no GPU. No API keys, nothing leaves the machines you own.
-- **Multi-machine.** Volunteer hardware joins with one command and picks up builder tasks. Task reclaim, circuit breaker and auto-reconnect are built in, because volunteer laptops close their lids.
+- **Multi-machine.** An invited machine joins with one command and picks up builder tasks. Task reclaim, circuit breaker and auto-reconnect are built in, because other people's laptops close their lids.
 - **Accepted compute contributions are tracked** durably in SQLite, with a JSON compatibility projection. They are not correctness, trust, reputation, routing weight, money, or a token.
 - **Persistent project memory**, auto-summarised as it grows.
 
-[SwarmHarness](https://arxiv.org/abs/2605.28764) (May 2026) describes this design space academically — decentralised, incentive-aligned agent networks without a blockchain — and notes that nobody ships the combination. That is a protocol paper; this is a working implementation.
+**What already exists, so you don't have to tell me:** NVIDIA PAIR routes Ollama requests across the PCs on your LAN, LocalAI and Hyperspace Pods pool machines behind one endpoint, and AI Horde has run a volunteer network with non-sellable credits since 2022. This one is for machines owned by *different* people who each said yes, with a record of whose machine produced what and separate fields for "finished", "passed its checks" and "correct".
 
 Over a transatlantic link (Indiana → Germany) the network costs about **2%** of a task's wall time: 216 ms round trip against inference measured in minutes. Distribution is essentially free, because inference dominates by two orders of magnitude.
 
