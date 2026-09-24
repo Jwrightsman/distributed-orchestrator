@@ -1,6 +1,6 @@
 # Mycelium
 
-**An open orchestration layer for multi-agent task execution across contributor hardware.**
+**Run auditable local-AI jobs across computers you and people you trust own.**
 
 [![CI](https://github.com/Jwrightsman/distributed-orchestrator/actions/workflows/ci.yml/badge.svg)](https://github.com/Jwrightsman/distributed-orchestrator/actions/workflows/ci.yml)
 
@@ -20,7 +20,32 @@ owner's consent.
 
 ## Positioning
 
-Decentralized, incentive-aligned agent networks *without* blockchain are an open lane: [SwarmHarness](https://arxiv.org/abs/2605.28764) (May 2026) maps this exact design space academically and notes that no existing system ships the combination — volunteer consumer hardware, credit-based incentives, no tokens. SwarmHarness is a protocol paper; this repo is a working implementation you can run tonight on two laptops. DePIN GPU marketplaces (token-based) and centralized cloud "agent swarms" are different animals — this is the collectively-owned, local-model one.
+Pooling several computers for local AI is no longer new, and Mycelium does not
+claim it is:
+
+- **[NVIDIA PAIR](https://blogs.nvidia.com/blog/local-ai-ifa-next-gen-agents-nv-pair-rtx-spark/)**
+  (September 2026) sends independent Ollama and LM Studio requests to whichever
+  PC on your home network is free. It covers one owner's recent-GPU machines on
+  one LAN.
+- **[LocalAI federation](https://localai.io/docs/features/distribute/)** and
+  **[Hyperspace Pods](https://github.com/hyperspaceai/agi/blob/main/docs/PODS.md)**
+  pool machines behind one endpoint. Pods is built for a group of friends and
+  splits large models across their GPUs.
+- **[AI Horde](https://github.com/Haidra-Org/AI-Horde)** has run a volunteer
+  network with credits that cannot be sold since 2022.
+
+Mycelium is for the case those leave open: **machines owned by different people,
+each of whom said yes, with a durable record of whose machine produced which
+result under which contract, and honest labels on whether that result was
+checked.** A remote result only counts if it settles the exact attempt the
+coordinator issued. "Finished", "passed its checks" and "correct" are three
+separate fields, never one badge. Contribution points record work; they are not
+money and they do not prove quality. It runs on 8 GB machines with no GPU.
+
+Good fits are a lab, class, club or open-source group with a handful of modest
+machines and batch work that can be checked, where it matters who ran what. It
+is not a public compute market, not trustless, and not faster than one good
+GPU at a single answer.
 
 ## Looking for nodes 🖥️
 

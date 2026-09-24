@@ -35,9 +35,13 @@ ITEM_IDS = (
     "classify-sentiment-keywords", "classify-readings-anomalies", "classify-sales-performance",
 )
 ARMS = ("direct", "direct-with-repair", "dag")
-BUDGET = {"cells": 36, "generated_tokens": 147456, "inference_seconds": 21600,
-          "checker_seconds": 3600, "cell_tokens": 4096, "cell_inference_seconds": 600,
-          "cell_elapsed_seconds": 600}
+# Time ceilings were 600 s per cell and 21,600 s overall until the first live
+# cell on the approved 8 GB CPU machine spent 551 s on one 497-token direct call
+# (September 24, 2026). Token ceilings, which are what keep the arms comparable,
+# are unchanged; the time ceilings only stop a runaway run.
+BUDGET = {"cells": 36, "generated_tokens": 147456, "inference_seconds": 36000,
+          "checker_seconds": 3600, "cell_tokens": 4096, "cell_inference_seconds": 1800,
+          "cell_elapsed_seconds": 1800}
 SETTINGS = {"context_tokens": 8192, "temperature": 0, "seed": 20260913,
             "planner_attempts": 1, "builder_attempts": 1, "schema_retry": False,
             "think": False, "maximum_subtasks": 2, "revision_enabled": False,
@@ -156,6 +160,30 @@ def repair_task(task, candidate, diagnostic):
     return text
 
 
+FEEDBACK_ONLY_REPAIR = "A previous attempt was rejected. Write a new complete answer."
+
+
+def repair_request(task, candidate, diagnostic):
+    """The repair the pilot sends, and which form it took.
+
+    Almost every generated script is longer than the canonical 1000-character
+    task bound leaves room for, so a repair that must quote its candidate would
+    stop the whole pilot at the first rejection. When the candidate cannot fit,
+    the repair is a fresh attempt told only why the last one failed. The form is
+    recorded per cell so the two are never reported as the same arm behaviour.
+    """
+    if diagnostic not in PUBLIC_DIAGNOSTICS:
+        raise PreflightError("repair diagnostic must be an allowlisted public code")
+    try:
+        return repair_task(task, candidate, diagnostic), "with_candidate"
+    except PreflightError:
+        pass
+    text = f"{task}\n\n{FEEDBACK_ONLY_REPAIR} {PUBLIC_DIAGNOSTICS[diagnostic]}"
+    if len(text) > 1000:
+        raise PreflightError("unsupported repair: task and diagnostic exceed canonical 1000-character bound")
+    return text, "feedback_only"
+
+
 class BudgetLedger:
     """Serial runtime admission with conservative reservations, actual cost separate."""
 
@@ -193,7 +221,7 @@ class BudgetLedger:
             raise BudgetStopped("cell already active or planned cells exhausted")
         if cell != planned_cells()[len(self.cells)]:
             raise PreflightError("cell differs from frozen schedule; no replacements or retries")
-        self.current = {**cell, "start": self.clock(), "deadline": self.clock() + 600,
+        self.current = {**cell, "start": self.clock(), "deadline": self.clock() + BUDGET["cell_elapsed_seconds"],
                         "tokens": 0, "reserved_tokens": 0, "inference_reserved_seconds": 0.0,
                         "calls_by_role": {}, "checker_start_seconds": self.checker_seconds,
                         "checker_capture_complete_start": self.checker_capture_complete}
@@ -215,8 +243,8 @@ class BudgetLedger:
             if self.tokens + cap > 147456 or cell["reserved_tokens"] + cap > 4096:
                 raise BudgetStopped("generated token reservation exhausted")
             remaining = min(cell["deadline"] - self.clock(),
-                            600 - cell["inference_reserved_seconds"],
-                            21600 - self.inference_reserved_seconds)
+                            BUDGET["cell_inference_seconds"] - cell["inference_reserved_seconds"],
+                            BUDGET["inference_seconds"] - self.inference_reserved_seconds)
             if remaining <= 0:
                 raise BudgetStopped("inference hardware-time budget exhausted")
             cell["reserved_tokens"] += cap
@@ -246,7 +274,7 @@ class BudgetLedger:
                 charge = max(seconds, record["end_monotonic"] - record["start_monotonic"])
                 self.inference_reserved_seconds += charge
                 cell["inference_reserved_seconds"] += charge
-                if tokens > record["token_ceiling"] or cell["tokens"] > 4096 or self.tokens > 147456 or cell["inference_reserved_seconds"] > 600 or self.inference_reserved_seconds > 21600:
+                if tokens > record["token_ceiling"] or cell["tokens"] > 4096 or self.tokens > 147456 or cell["inference_reserved_seconds"] > BUDGET["cell_inference_seconds"] or self.inference_reserved_seconds > BUDGET["inference_seconds"]:
                     self.stopped = "runtime exceeded frozen budget or per-call ceiling"
             self.event("call_finished", call=record)
         finally:
@@ -373,6 +401,7 @@ class CanonicalPilot:
         executions = []
         candidate = ""
         accepted = None
+        repair_form = None
         try:
             task = item.task
             for attempt in range(2 if cell["arm"] == "direct-with-repair" else 1):
@@ -414,7 +443,7 @@ class CanonicalPilot:
                 if accepted or cell["arm"] != "direct-with-repair" or attempt == 1:
                     outcome = "accepted" if accepted else "rejected"
                     break
-                task = repair_task(item.task, candidate, diagnostic)
+                task, repair_form = repair_request(item.task, candidate, diagnostic)
             if self.collector.dispatch_blocked:
                 self.ledger.stopped = "runtime cost or termination unknown"
         except PreflightError:
@@ -452,7 +481,8 @@ class CanonicalPilot:
                            if call["input_tokens"] is not None and call["output_tokens"] is not None else None}
                           for call in calls]
             self.ledger.event("cell_result", cell=cell, executions=executions,
-                              outcome=outcome, accepted=accepted, unit_costs=calls,
+                              outcome=outcome, accepted=accepted, repair_form=repair_form,
+                              unit_costs=calls,
                               cost_capture_complete=complete,
                               checker_seconds_observed=checker_seconds_observed,
                               checker_seconds_total=checker_seconds_total,
