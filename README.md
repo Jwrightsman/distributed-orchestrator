@@ -1,5 +1,25 @@
 # Mycelium
 
+Mycelium lets a small group pool their own computers to run AI jobs instead of paying for cloud AI. The code is open source, and the project is in private alpha. Jett Wrightsman writes the specs and plans the work, and AI coding agents (Claude Code and Codex) write the code. So far that's 100+ merged pull requests and 2,600+ automated tests.
+
+```mermaid
+flowchart LR
+    job["An AI job"] --> coordinator["Coordinator<br/>hands out the work"]
+    subgraph workers["Worker machines"]
+        laptop1["Laptop"]
+        desktop["Desktop"]
+        laptop2["Laptop"]
+    end
+    coordinator --> laptop1
+    coordinator --> desktop
+    coordinator --> laptop2
+    laptop1 --> results["Results, with a record of<br/>which machine made each one"]
+    desktop --> results
+    laptop2 --> results
+```
+
+---
+
 **Run auditable local-AI jobs across computers you and people you trust own.**
 
 [![CI](https://github.com/Jwrightsman/distributed-orchestrator/actions/workflows/ci.yml/badge.svg)](https://github.com/Jwrightsman/distributed-orchestrator/actions/workflows/ci.yml)
