@@ -1,6 +1,6 @@
 # Mycelium
 
-Mycelium lets a small group pool their own computers to run AI jobs instead of paying for cloud AI. The code is open source, and the project is in private alpha. Jett Wrightsman writes the specs and plans the work, and AI coding agents (Claude Code and Codex) write the code. So far that's 100+ merged pull requests and 2,600+ automated tests.
+Mycelium lets a small group pool their own computers to run AI jobs instead of paying for cloud AI. It runs on everyday laptops and desktops with 8 GB of memory and no GPU. It's in private alpha.
 
 ```mermaid
 flowchart LR
